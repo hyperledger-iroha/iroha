@@ -73,7 +73,7 @@ Sidebar_label: Развертывание Chunker
    جسے `torii.sorafs.discovery.admission.envelopes_dir` обратитесь к کرتا ہے۔
 3. Обнаружение API для рекламы поставщика и распространения для проверки:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Заголовки управления и упражнение по конечным точкам манифеста/плана:
    ```bash

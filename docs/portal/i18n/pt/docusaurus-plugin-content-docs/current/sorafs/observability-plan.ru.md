@@ -84,7 +84,7 @@ em 15 minutos, um aviso de aviso `SorafsProofHealthCooldown`, exceto
 | `sorafs_node_por_failure_total` | Contador | `provider_id` | Монотонный счетчик неуспешных PoR-выборок. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Medidor | `provider` | Medidor Prometheus compatível para uso em baterias, fones de ouvido, PoR em voo. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Medidor | `provider` | É necessário usar um provedor de capacidade/tempo de atividade, instalado no mercado doméstico. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | Глубина backlog mais a lista de pendências do servidor, transferência para o local após `/v2/sorafs/por/ingestion/{manifest}`, питают painel/алерт "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | Глубина backlog mais a lista de pendências do servidor, transferência para o local após `/v1/sorafs/por/ingestion/{manifest}`, питают painel/алерт "PoR Stalls". |
 
 ### Prova de recuperação oportuna (PoTR) e SLA por pedaços
 

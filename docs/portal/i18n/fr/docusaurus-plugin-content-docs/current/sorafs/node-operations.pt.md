@@ -44,7 +44,7 @@ Ce runbook guide les opérateurs pour la validation d'un implant `sorafs-node` i
   ```
 
 - Garanta que le processus Torii aura accès à la lecture/écriture à `data_dir`.
-- Confirmez qu'il n'y a pas d'annonce de capacité attendue via `GET /v2/sorafs/capacity/state` lorsqu'une déclaration d'enregistrement est effectuée.
+- Confirmez qu'il n'y a pas d'annonce de capacité attendue via `GET /v1/sorafs/capacity/state` lorsqu'une déclaration d'enregistrement est effectuée.
 - Lorsque le lissage est activé, les tableaux de bord affichent des contadores GiB·heure/PoR bruts et suavizados pour destacar tendances sem jitter ao lado de valeurs instantanées.
 
 ### Essai à sec de CLI (facultatif)
@@ -81,8 +81,8 @@ La commande émet un résumé JSON (résumé du manifeste, identifiant du fourni
 Ensuite, le Torii est là pour pouvoir récupérer vos objets via HTTP :
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Les points de terminaison sont également des services du travailleur de stockage embauché, portant des tests de fumée de CLI et des sondes de passerelle synchronisées en permanence.
@@ -91,7 +91,7 @@ Les points de terminaison sont également des services du travailleur de stockag
 2. Envie du manifeste avec la base de codage64 :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -100,7 +100,7 @@ Les points de terminaison sont également des services du travailleur de stockag
 3. Vérifiez les données réparées :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -116,7 +116,7 @@ Les points de terminaison sont également des services du travailleur de stockag
 1. Fixe pelo menos um manifest como acima.
 2. Réinitialisez le processus Torii (ou pas intérieurement).
 3. Revenir à la demande de récupération. La charge utile doit être continuellement disponible et le résumé renvoyé doit coïncider avec la valeur antérieure au reinicio.
-4. Inspecione `GET /v2/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifestes persistants après le redémarrage.
+4. Inspecione `GET /v1/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifestes persistants après le redémarrage.
 
 ## 4. Test de rejet de quota
 
@@ -131,7 +131,7 @@ Les points de terminaison sont également des services du travailleur de stockag
 2. Sollicitez un PoR amostra :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -152,7 +152,7 @@ Les points de terminaison sont également des services du travailleur de stockag
 - Les tableaux de bord sont développés pour accompagner :
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
-  - contadores de successo/falha PoR expostos via `/v2/sorafs/capacity/state`
+  - contadores de successo/falha PoR expostos via `/v1/sorafs/capacity/state`
   - tentativas de publicacao de règlement via `sorafs_node_deal_publish_total{result=success|failure}`
 
 Suivez ces exercices garantissant que le travailleur de stockage embutido consiga ingerir dados, sobreviver a reinicios, respeitar quotas configuradas e gerar provas PoR déterministicas avant de o no anunciar capacité para a rede plus ample.

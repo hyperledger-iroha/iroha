@@ -15,8 +15,8 @@ translator: machine-google-reviewed
 Iroha Torii သည် ရွေးချယ်နိုင်သော WalletConnect-စတိုင် WebSocket အဆုံးမှတ်များနှင့် အနည်းငယ်မျှသာ in-node relay ကို ဖော်ထုတ်ပေးသည်
 `connect` Cargo အင်္ဂါရပ်ကို ဖွင့်ထားသောအခါ (မူလ)။ runtime အပြုအမူကို config တွင် ပိတ်ထားသည်-
 
-- ချိတ်ဆက်မှုလမ်းကြောင်းများ (`/v2/connect/*`) အားလုံးကို ပိတ်ရန် `connect.enabled=false` ကို သတ်မှတ်ပါ။
-- WS စက်ရှင်အဆုံးမှတ်များနှင့် `/v2/connect/status` ကိုဖွင့်ရန် ၎င်းကို `true` (မူလ) ထားလိုက်ပါ။
+- ချိတ်ဆက်မှုလမ်းကြောင်းများ (`/v1/connect/*`) အားလုံးကို ပိတ်ရန် `connect.enabled=false` ကို သတ်မှတ်ပါ။
+- WS စက်ရှင်အဆုံးမှတ်များနှင့် `/v1/connect/status` ကိုဖွင့်ရန် ၎င်းကို `true` (မူလ) ထားလိုက်ပါ။
 
 ပတ်ဝန်းကျင်ကို လွှမ်းမိုးထားသည် (အသုံးပြုသူ config → အမှန်တကယ် config):
 
@@ -44,8 +44,8 @@ Iroha Torii သည် ရွေးချယ်နိုင်သော WalletCon
   WebSocket ကို မပိတ်မီ ဆာဗာသည် `ping_miss_tolerance` ဆက်တိုက် လွတ်သွားသော pong များကို သည်းခံပေးပြီး၊
   `connect.ping_miss_total` မက်ထရစ်ကို တိုးစေသည်။
 - runtime (`connect.enabled=false`) တွင် ပိတ်ထားသောအခါ၊ Connect WS နှင့် status routes များသည် မရှိပါ။
-  မှတ်ပုံတင်; `/v2/connect/ws` နှင့် `/v2/connect/status` သို့ တောင်းဆိုချက်များ 404 ပြန်ပေးသည်။
-- ဆာဗာသည် `/v2/connect/session` အတွက် `/v2/connect/session` (base64url သို့မဟုတ် hex၊ 32 bytes) အတွက် client-provided `sid` လိုအပ်သည်။
+  မှတ်ပုံတင်; `/v1/connect/ws` နှင့် `/v1/connect/status` သို့ တောင်းဆိုချက်များ 404 ပြန်ပေးသည်။
+- ဆာဗာသည် `/v1/connect/session` အတွက် `/v1/connect/session` (base64url သို့မဟုတ် hex၊ 32 bytes) အတွက် client-provided `sid` လိုအပ်သည်။
   ၎င်းသည် နောက်ပြန်ဆုတ် `sid` ကို မထုတ်ပေးတော့ပါ။
 
 ကိုလည်းကြည့်ပါ- `crates/iroha_config/src/parameters/{user,actual}.rs` နှင့် ပုံသေများတွင်

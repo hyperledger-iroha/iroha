@@ -22,7 +22,7 @@ summary: Outline for SF-14 timed retrieval probes.
 - Surface PoTR status in routing and gateway headers.
 
 > **Status (Feb 2026):** Torii now exposes `proof_kind=potr` via
-> `/v2/sorafs/proof/stream`, replaying cached receipts and emitting metrics so
+> `/v1/sorafs/proof/stream`, replaying cached receipts and emitting metrics so
 > operators can monitor deadline compliance while SF-14 finalises live probes.
 
 ## Workflow
@@ -69,7 +69,7 @@ summary: Outline for SF-14 timed retrieval probes.
 
 - **Gateway persistence:** Gateways append receipts to a local log (`potr_receipts.log` in NDJSON). Log rotation occurs daily; older logs shipped to centralized storage (S3 bucket) with 90-day retention.
 - **Central aggregation:** Orchestrator publishes validated receipts to the governance DAG as `PotrReceiptRecordV1` containing receipt hash and outcome. Additionally, metrics pipeline ingests receipts into a time-series database (Prometheus) with labels (`provider_id`, `tier`, `status`).
-- **API:** Expose `GET /v2/potr/receipts?provider=<id>&since=<timestamp>` for auditors and reputation engine.
+- **API:** Expose `GET /v1/potr/receipts?provider=<id>&since=<timestamp>` for auditors and reputation engine.
 - **Security:** Receipts include nonces (`request_id`) to prevent replay; orchestrator ensures uniqueness per request.
 
 ## Reputation Oracle Integration

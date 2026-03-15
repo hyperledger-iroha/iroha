@@ -48,7 +48,7 @@ aplican los siguientes requisitos en admision:
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` con `max_span` definido
      - `allow_unknown_capabilities=<true|false>` cuando haya TLVs GREASE
-   - Validar via `/v2/sorafs/providers` y `sorafs_fetch`; warnings por
+   - Validar via `/v1/sorafs/providers` y `sorafs_fetch`; warnings por
      capabilities desconocidas deben triagearse.
 3. **Validar readiness multi-source.**
    - Ejecutar `sorafs_fetch` con `--provider-advert=<path>`; el CLI ahora falla
@@ -185,9 +185,9 @@ antes de enviar cambios para asegurar que la sintaxis pasa `promtool check rules
 - **Mailer semanal de status.** DevRel circula un resumen breve de metricas de
   admision, warnings pendientes y deadlines proximos.
 - **Respuesta a incidentes.** Si disparan alertas `reject`, on-call engineers:
-  1. Obtienen el advert ofensivo via discovery Torii (`/v2/sorafs/providers`).
+  1. Obtienen el advert ofensivo via discovery Torii (`/v1/sorafs/providers`).
   2. Re-ejecutan validacion de advert en el pipeline del provider y comparan con
-     `/v2/sorafs/providers` para reproducir el error.
+     `/v1/sorafs/providers` para reproducir el error.
   3. Coordinar con el provider para rotar el advert antes del proximo deadline
      de refresh.
 - **Congelamientos de cambios.** Ningun cambio de schema de capabilities aterriza

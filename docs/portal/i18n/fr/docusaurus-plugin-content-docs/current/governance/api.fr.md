@@ -16,11 +16,11 @@ Statut : brouillon/esquisse pour accompagner les taches d'implémentation de la 
 - Sinon, les clients assemblent une SignedTransaction avec leur autorité et chain_id, puis signent et POST vers `/transaction`.
 - SDK de couverture :
 - Python (`iroha_python`) : `ToriiClient.get_governance_proposal_typed` renvoie `GovernanceProposalResult` (normaliser le statut/genre des champs), `ToriiClient.get_governance_referendum_typed` renvoie `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` renvoie `GovernanceTally`, `ToriiClient.get_governance_locks_typed` renvoie `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` renvoie `GovernanceUnlockStats`, et `ToriiClient.list_governance_instances_typed` renvoie `GovernanceInstancesPage`, imposant un accès de type sur toute la surface de gouvernance avec des exemples d'utilisation dans le README.
-- Client Python léger (`iroha_torii_client`) : `ToriiClient.finalize_referendum` et `ToriiClient.enact_proposal` renvoient des bundles types `GovernanceInstructionDraft` (qui encapsulent le squelette `tx_instructions` de Torii), évitant le parsing JSON manuel quand les scripts composant des flux Finalize/Enact.- JavaScript (`@iroha/iroha-js`) : `ToriiClient` expose les types d'aides pour les propositions, les référendums, les décomptes, les verrous, les statistiques de déverrouillage, et maintenant `listGovernanceInstances(namespace, options)` plus les endpoints Council (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) afin que les clients Node.js puissent paginer `/v2/gov/instances/{ns}` et piloter des workflows VRF en parallèle du listing d'instances de contrat existant.
+- Client Python léger (`iroha_torii_client`) : `ToriiClient.finalize_referendum` et `ToriiClient.enact_proposal` renvoient des bundles types `GovernanceInstructionDraft` (qui encapsulent le squelette `tx_instructions` de Torii), évitant le parsing JSON manuel quand les scripts composant des flux Finalize/Enact.- JavaScript (`@iroha/iroha-js`) : `ToriiClient` expose les types d'aides pour les propositions, les référendums, les décomptes, les verrous, les statistiques de déverrouillage, et maintenant `listGovernanceInstances(namespace, options)` plus les endpoints Council (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) afin que les clients Node.js puissent paginer `/v1/gov/instances/{ns}` et piloter des workflows VRF en parallèle du listing d'instances de contrat existant.
 
 Points de terminaison
 
-- POSTE `/v2/gov/proposals/deploy-contract`
+- POSTE `/v1/gov/proposals/deploy-contract`
   - Requête (JSON) :
     {
       "espace de noms": "applications",
@@ -35,28 +35,28 @@ Points de terminaison
   - Réponse (JSON) :
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Validation : les noeuds canonisent `abi_hash` pour l'`abi_version` fourni et rejettent les incohérences. Pour `abi_version = "v1"`, la valeur attendue est `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.Contrats API (déploiement)
-- POSTE `/v2/contracts/deploy`
+- POSTE `/v1/contracts/deploy`
   - Requête : { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Comportement : calcule `code_hash` depuis le corps du programme IVM et `abi_hash` depuis l'en-tête `abi_version`, puis soumis `RegisterSmartContractCode` (manifeste) et `RegisterSmartContractBytes` (bytes `.to` complets) pour `authority`.
   - Réponse : { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Mentir :
-    - GET `/v2/contracts/code/{code_hash}` -> renvoyer le manifeste stocke
-    - OBTENIR `/v2/contracts/code-bytes/{code_hash}` -> renvoyer `{ code_b64 }`
-- POSTE `/v2/contracts/instance`
+    - GET `/v1/contracts/code/{code_hash}` -> renvoyer le manifeste stocke
+    - OBTENIR `/v1/contracts/code-bytes/{code_hash}` -> renvoyer `{ code_b64 }`
+- POSTE `/v1/contracts/instance`
   - Requête : { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Comportement : déployer le bytecode fourni et activer immédiatement le mapping `(namespace, contract_id)` via `ActivateContractInstance`.
   - Réponse : { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }Service d'alias
-- POSTE `/v2/aliases/voprf/evaluate`
+- POSTE `/v1/aliases/voprf/evaluate`
   - Requête : { "blinded_element_hex": "..." }
   - Réponse : { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - `backend` reflète l'implémentation de l'évaluateur. Valeur actuelle : `blake2b512-mock`.
   - Notes : évaluateur mock déterministe qui applique Blake2b512 avec séparation de domaine `iroha.alias.voprf.mock.v1`. Prevus pour l'outillage de test jusqu'à ce que le pipeline VOPRF de production soit reposé sur Iroha.
   - Erreurs : HTTP `400` sur input hex mal forme. Torii renvoie une enveloppe Norito `ValidationFail::QueryFailed::Conversion` avec le message d'erreur du décodeur.
-- POSTE `/v2/aliases/resolve`
+- POSTE `/v1/aliases/resolve`
   - Requête : { "alias": "GB82 WEST 1234 5698 7654 32" }
   - Réponse : { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Notes : nécessite le runtime ISO bridge staging (`[iso_bridge.account_aliases]` dans `iroha_config`). Torii normalise les alias en retirant les espaces et en mettant en majuscules avant le lookup. Retourne 404 si l'alias est absent et 503 si le runtime ISO bridge est désactivé.
-- POSTE `/v2/aliases/resolve_index`
+- POSTE `/v1/aliases/resolve_index`
   - Requête : { "index": 0 }
   - Réponse : { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }- Notes : les index d'alias sont attribués deterministiquement selon l'ordre de configuration (basé sur 0). Les clients peuvent mettre en cache hors ligne pour construire des pistes d'audit pour les événements d'attestation d'alias.
 
@@ -64,38 +64,38 @@ Cap de taille de code
 - Paramètre personnalisé : `max_contract_code_bytes` (JSON u64)
   - Contrôler la taille maximale autorisée (en octets) pour le stockage de code de contrat en chaîne.
   - Par défaut : 16 Mio. Les noeuds rejettent `RegisterSmartContractBytes` lorsque la taille de l'image `.to` dépasse le cap avec une erreur d'invariant.
-  - Les opérateurs peuvent régler via `SetParameter(Custom)` avec `id = "max_contract_code_bytes"` et un payload numérique.- POSTE `/v2/gov/ballots/zk`
+  - Les opérateurs peuvent régler via `SetParameter(Custom)` avec `id = "max_contract_code_bytes"` et un payload numérique.- POSTE `/v1/gov/ballots/zk`
   - Requête : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - Réponse : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - Remarques :
     - Quand les entrées publiques du circuit incluent `owner`, `amount` et `duration_blocks`, et que la preuve vérifie contre la VK configurée, le noeud crée ou étend un verrou de gouvernance pour `election_id` avec ce `owner`. La direction reste cachée (`unknown`) ; seuls montant/expiration sont mis à jour. Les re-votes sont monotones : montant et expiration ne font qu'augmenter (le noeud applique max(amount, prev.amount) et max(expiry, prev.expiry)).
     - Les re-votes ZK qui tentent de réduire le montant ou l'expiration sont rejetées côté serveur avec des diagnostics `BallotRejected`.
-    - L'exécution du contrat doit appeler `ZK_VOTE_VERIFY_BALLOT` avant d'enfiler `SubmitBallot` ; les hôtes imposent un verrou une seule fois.- POSTE `/v2/gov/ballots/plain`
+    - L'exécution du contrat doit appeler `ZK_VOTE_VERIFY_BALLOT` avant d'enfiler `SubmitBallot` ; les hôtes imposent un verrou une seule fois.- POSTE `/v1/gov/ballots/plain`
   - Requête : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Oui|Non|S'abstenir" }
   - Réponse : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
-  - Notes : les re-votes sont en extension seule - un nouveau scrutin ne peut pas réduire le montant ou l'expiration du verrou existant. Le `owner` doit égaler l'autorité de la transaction. La durée minimale est `conviction_step_blocks`.- POSTE `/v2/gov/finalize`
+  - Notes : les re-votes sont en extension seule - un nouveau scrutin ne peut pas réduire le montant ou l'expiration du verrou existant. Le `owner` doit égaler l'autorité de la transaction. La durée minimale est `conviction_step_blocks`.- POSTE `/v1/gov/finalize`
   - Requete : { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Réponse : { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Effet on-chain (échafaudage actuel) : enacter une proposition de déploiement approuvee insere un `ContractManifest` minimal cle `code_hash` avec l'`abi_hash` attendu et marque la proposition Enacted. Si un manifeste existe déjà pour le `code_hash` avec un `abi_hash` différent, l'enactment est rejetée.
   - Remarques :
     - Pour les élections ZK, les chemins de contrat doivent appeler `ZK_VOTE_VERIFY_TALLY` avant d'exécuter `FinalizeElection` ; les hôtes imposent un latch à usage unique. `FinalizeReferendum` rejette les référendums ZK tant que le décompte n'est pas finalisé.
     - La clôture automatique a `h_end` emet Approved/Rejected uniquement pour les référendums Plain; les référendums ZK restent fermés jusqu'à ce qu'un décompte final soit soumis et que `FinalizeReferendum` soit exécuté.
-    - Les vérifications de participation utilisent seulement approuver+rejeter; abstain ne compte pas pour le taux de participation.- POSTE `/v2/gov/enact`
+    - Les vérifications de participation utilisent seulement approuver+rejeter; abstain ne compte pas pour le taux de participation.- POSTE `/v1/gov/enact`
   - Requete : { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Réponse : { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Notes : Torii soumet la transaction signée lorsque `authority`/`private_key` sont fournis ; sinon il renvoie un squelette pour signature et soumission client. Le préimage est optionnel et informatif pour l'instant.
 
-- OBTENIR `/v2/gov/proposals/{id}`
+- OBTENIR `/v1/gov/proposals/{id}`
   - Chemin `{id}` : id de proposition hex (64 caractères)
   - Réponse : { "found": bool, "proposal": { ... } ? }
 
-- OBTENIR `/v2/gov/locks/{rid}`
+- OBTENIR `/v1/gov/locks/{rid}`
   - Chemin `{rid}` : identifiant de chaîne du référendum
   - Réponse : { "found": bool, "referendum_id": "rid", "locks": { ... } ? }
 
-- OBTENIR `/v2/gov/council/current`
+- OBTENIR `/v1/gov/council/current`
   - Réponse : { "epoch": N, "members": [{ "account_id": "..." }, ...] }
-  - Notes : renvoyer le conseil persiste si présent ; sinon dérivez un déterministe de secours avec l'actif de mise configuré et les seuils (miroir de la spec VRF jusqu'à ce que les preuves VRF en direct soient persistantes en chaîne).- POST `/v2/gov/council/derive-vrf` (fonctionnalité : gov_vrf)
+  - Notes : renvoyer le conseil persiste si présent ; sinon dérivez un déterministe de secours avec l'actif de mise configuré et les seuils (miroir de la spec VRF jusqu'à ce que les preuves VRF en direct soient persistantes en chaîne).- POST `/v1/gov/council/derive-vrf` (fonctionnalité : gov_vrf)
   - Requete : { "committee_size": 21, "epoch": 123 ? , "candidats": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - Comportement : vérifier la preuve VRF de chaque candidat contre l'entrée canonique dérivée de `chain_id`, `epoch` et du beacon du dernier hash de block ; trie par octets de sortie desc avec tiebreakers; renvoient les meilleurs membres `committee_size`. Ne persiste pas.
   - Réponse : { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "vérified": K }
@@ -163,14 +163,14 @@ Hooks de mise à niveau du runtime
 - Quand le crochet est présent, l'admission du fichier applique la politique métadonnées avant l'entrée de la transaction dans le fichier. Metadata manquante, valeurs vides ou hors liste autorisée produisent une erreur NotPermitte déterministe.
 - La télémétrie trace les résultats via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
 - Les transactions satisfaisant le hook doivent inclure la métadonnée `gov_upgrade_id=<value>` (ou la clé définie par le manifeste) en plus des approbations de validateurs requises par le quorum du manifeste.Endpoint de marchandise
-- POST `/v2/gov/protected-namespaces` - applique `gov_protected_namespaces` directement sur le noeud.
+- POST `/v1/gov/protected-namespaces` - applique `gov_protected_namespaces` directement sur le noeud.
   - Requête : { "espaces de noms": ["apps", "system"] }
   - Réponse : { "ok" : vrai, "appliqué" : 1 }
   - Notes : destiné à l'admin/testing ; nécessite une API de jeton à configurer. Pour la production, préférez une transaction signée avec `SetParameter(Custom)`.CLI d'assistance
 -`iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - Récupérez les instances de contrat pour le namespace et vérifiez que :
     - Torii stocke le bytecode pour chaque `code_hash`, et son digest Blake2b-32 correspond au `code_hash`.
-    - Le manifeste stocke sous `/v2/contracts/code/{code_hash}` rapport des valeurs `code_hash` et `abi_hash` correspondantes.
+    - Le manifeste stocke sous `/v1/contracts/code/{code_hash}` rapport des valeurs `code_hash` et `abi_hash` correspondantes.
     - Une proposition de gouvernance édictée existe pour `(namespace, contract_id, code_hash, abi_hash)` dérivée par le même hachage de proposition-id que le noeud utilise.
   - Trier un rapport JSON avec `results[]` par contrat (issues, CV de manifest/code/proposal) plus un CV en une ligne sauf suppression (`--no-summary`).
   - Utile pour auditer les espaces de noms protégés ou vérifier les workflows de déploiement de contrôles par gouvernance.
@@ -184,7 +184,7 @@ Hooks de mise à niveau du runtime
 -`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Les alias `--lock-amount`/`--lock-duration-blocks` reflètent les noms de flags ZK pour la parité de script.
   - La sortie curriculum vitae reflète l'empreinte `vote --mode zk` en incluant l'empreinte digitale de l'instruction encodee et des champs de vote lisibles (`owner`, `amount`, `duration_blocks`, `direction`), pour une confirmation rapide avant la signature du squelette.Listing d'instances
-- GET `/v2/gov/instances/{ns}` - liste les instances de contrat actives pour un espace de noms.
+- GET `/v1/gov/instances/{ns}` - liste les instances de contrat actives pour un espace de noms.
   - Paramètres de requête :
     - `contains` : filtre par sous-chaine de `contract_id` (sensible à la casse)
     - `hash_prefix` : filtre par préfixe hex de `code_hash_hex` (minuscule)
@@ -192,10 +192,10 @@ Hooks de mise à niveau du runtime
     - `order` : un des `cid_asc` (par défaut), `cid_desc`, `hash_asc`, `hash_desc`
   - Réponse : { "namespace": "ns", "instances": [{ "contract_id": "...", "code_hash_hex": "..." }, ...], "total": N, "offset": n, "limit": m }
   - SDK Helper : `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) ou `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).Balayage d'unlocks (Opérateur/Audit)
-- OBTENIR `/v2/gov/unlocks/stats`
+- OBTENIR `/v1/gov/unlocks/stats`
   - Réponse : { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
   - Notes : `last_sweep_height` reflète la hauteur de bloc la plus récente ou les serrures expirent sur été balayées et persistent. `expired_locks_now` est calculé en scannant les enregistrements de verrouillage avec `expiry_height <= height_current`.
-- POSTE `/v2/gov/ballots/zk-v1`
+- POSTE `/v1/gov/ballots/zk-v1`
   - Requête (style DTO v1) :
     {
       "autorité": "i105...",
@@ -208,7 +208,7 @@ Hooks de mise à niveau du runtime
       "propriétaire": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
-  - Réponse : { "ok": true, "accepted": true, "tx_instructions": [{...}] }- POST `/v2/gov/ballots/zk-v1/ballot-proof` (fonctionnalité : `zk-ballot`)
+  - Réponse : { "ok": true, "accepted": true, "tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (fonctionnalité : `zk-ballot`)
   - Acceptez un JSON `BallotProof` direct et renvoyez un squelette `CastZkBallot`.
   - Demander :
     {
@@ -272,7 +272,7 @@ for (expected, kind) in offences.iter().enumerate() {
 - **InvalidProposal** - un leader propose un bloc qui fait écho à la validation structurelle (ex., violer la règle de lock-chain).
 - **Censure** : les reçus de soumission signés montrent une transaction qui n'a jamais été proposée/engagée.
 
-Les opérateurs et l'outillage peuvent inspecter et rediffuser les charges utiles via :- Torii : `GET /v2/sumeragi/evidence` et `GET /v2/sumeragi/evidence/count`.
+Les opérateurs et l'outillage peuvent inspecter et rediffuser les charges utiles via :- Torii : `GET /v1/sumeragi/evidence` et `GET /v1/sumeragi/evidence/count`.
 - CLI : `iroha ops sumeragi evidence list`, `... count`, et `... submit --evidence-hex <payload>`.
 
 La gouvernance doit traiter les octets de preuve comme preuve canonique :
@@ -280,7 +280,7 @@ La gouvernance doit traiter les octets de preuve comme preuve canonique :
 1. **Collecter le payload** avant qu'il expire. Archiver les octets Norito bruts avec la hauteur/vue des métadonnées.
 2. **Préparer la pénalité** en embarquant le payload dans un référendum ou une instruction sudo (ex., `Unregister::peer`). L'exécution revalide le payload ; preuve mal forme ou stale est rejetée déterministiquement.
 3. **Planifier la topologie de suivi** afin que le validateur fautif ne puisse pas revenir immédiatement. Les flux typiques enfilent `SetParameter(Sumeragi::NextMode)` et `SetParameter(Sumeragi::ModeActivationHeight)` avec le roster mis à jour.
-4. **Auditer les résultats** via `/v2/sumeragi/evidence` et `/v2/sumeragi/status` pour confirmer que le compteur d'évidence a avancé et que la gouvernance a appliqué le retrait.
+4. **Auditer les résultats** via `/v1/sumeragi/evidence` et `/v1/sumeragi/status` pour confirmer que le compteur d'évidence a avancé et que la gouvernance a appliqué le retrait.
 
 ### Séquence du consensus conjoint
 
@@ -293,11 +293,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Le runtime et la CLI exposent les paramètres mis en scène via `/v2/sumeragi/params` et `iroha --output-format text ops sumeragi params`, afin que les opérateurs confirment les hauteurs d'activation et les rosters de validateurs.
+- Le runtime et la CLI exposent les paramètres mis en scène via `/v1/sumeragi/params` et `iroha --output-format text ops sumeragi params`, afin que les opérateurs confirment les hauteurs d'activation et les rosters de validateurs.
 - L'automatisation de gouvernance doit toujours :
   1. Finaliser la décision de retrait (ou réintégration) appuyée par preuve.
   2. Enfiler une reconfiguration de suivi avec `mode_activation_height = h_current + activation_lag_blocks`.
-  3. Surveiller `/v2/sumeragi/status` jusqu'à ce que `effective_consensus_mode` bascule à la hauteur attendue.
+  3. Surveiller `/v1/sumeragi/status` jusqu'à ce que `effective_consensus_mode` bascule à la hauteur attendue.
 
 Tout script qui fait tourner les validateurs ou applique un slashing **ne doit pas** tenter une activation à un lag zéro ou omettre les paramètres de hand-off; ces transactions sont rejetées et laissent le réseau dans le mode précédent.
 

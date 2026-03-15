@@ -67,7 +67,7 @@ Orchestrator 在运行时强制执行。
 
 网关接受镜像广告元数据的确定性 HTTP 请求。
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`
+### `GET /v1/sorafs/storage/car/{manifest_id}`
 
 |要求 |详情 |
 |-------------|---------|
@@ -75,7 +75,7 @@ Orchestrator 在运行时强制执行。
 | **回应** | `206` 与 `Content-Type: application/vnd.ipld.car`、描述服务窗口的 `Content-Range`、`X-Sora-Chunk-Range` 元数据以及回显的分块器/令牌标头。 |
 | **故障模式** | `416` 表示范围未对齐，`401` 表示丢失/无效令牌，`429` 表示超出流/字节预算。 |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 使用相同标头加上确定性块摘要的单块获取。
 当不需要 CAR 切片时，对于重试或取证下载很有用。
@@ -126,7 +126,7 @@ SDK 通过 `sorafs_orchestrator`）：
 - `iroha app sorafs pin list|show`、`alias list` 和 `replication list` 包裹
   pin-registry REST 端点并使用证明块打印原始 Norito JSON
   为审计证据。
-- `iroha app sorafs storage pin` 和 `torii /v2/sorafs/pin/register` 接受 Norito
+- `iroha app sorafs storage pin` 和 `torii /v1/sorafs/pin/register` 接受 Norito
   或 JSON 清单加上可选的别名证明和后继者；格式错误的证明
   提高 `400`，用 `Warning: 110` 证明过时的样张表面 `503`，以及
   硬过期的证明返回 `412`。
@@ -142,8 +142,8 @@ SDK 通过 `sorafs_orchestrator`）：
   仅限于最近的转换。
 - `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` 发出只读信号
   来自本地舱单存储的保留报告作为审计证据。
-- REST 端点（`/v2/sorafs/pin`、`/v2/sorafs/aliases`、
-  `/v2/sorafs/replication`）包括证明结构，以便客户可以
+- REST 端点（`/v1/sorafs/pin`、`/v1/sorafs/aliases`、
+  `/v1/sorafs/replication`）包括证明结构，以便客户可以
   在采取行动之前根据最新的块头验证数据。
 
 ## 参考文献

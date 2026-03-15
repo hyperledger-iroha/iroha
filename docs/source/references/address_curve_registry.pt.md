@@ -58,7 +58,7 @@ fixtures.
 
 ## Anúncio do bitmap de capacidades
 
-`GET /v2/node/capabilities` agora expõe a lista `allowed_curve_ids` e o array
+`GET /v1/node/capabilities` agora expõe a lista `allowed_curve_ids` e o array
 compactado `allowed_curve_bitmap` sob `crypto.curves`. O bitmap é little-endian
 em lanes de 64 bits (até quatro valores para cobrir o espaço de identificadores
 `u8` de 0–255). Um bit `i` ligado significa que o identificador de curva `i` é

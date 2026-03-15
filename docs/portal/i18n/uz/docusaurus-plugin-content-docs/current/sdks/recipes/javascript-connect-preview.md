@@ -6,7 +6,7 @@ source: docs/portal/docs/sdks/recipes/javascript-connect-preview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 translator: machine-google-reviewed
 translation_last_reviewed: 2026-02-07
 ---
@@ -17,7 +17,7 @@ Ushbu retsept `bootstrapConnectPreviewSession` bilan qanday birlashtirishni ko'r
 WebSocket teruvchisi `ToriiClient.openConnectWebSocket()` tomonidan ochilgan. Ssenariy
 JS SDK yo'l xaritasining Connect bo'limini aks ettiradi: u deterministikdir
 URI-larni oldindan ko'rish, navbat chuqurligi telemetriyasini yozib olish va kanonikni ochish
-`/v2/connect/ws` so'nggi nuqtasi `ws` paketidan foydalangan holda Node.js ilovalari
+`/v1/connect/ws` so'nggi nuqtasi `ws` paketidan foydalangan holda Node.js ilovalari
 brauzerlar bilan bir xil oqim.
 
 <Namunani yuklab olish

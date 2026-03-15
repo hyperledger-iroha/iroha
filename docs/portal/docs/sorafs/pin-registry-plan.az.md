@@ -78,7 +78,7 @@ Test:
 
 | Komponent | Tapşırıq | Sahib(lər) |
 |----------|------|----------|
-| Torii Xidmət | `/v2/sorafs/pin` (göndər), `/v2/sorafs/pin/{cid}` (axtarış), `/v2/sorafs/aliases` (siyahı/bağlama), `/v2/sorafs/replication` (sifarişlər/qəbzlər) ifşa edin. Səhifələmə + filtrasiya təmin edin. | Şəbəkə TL / Əsas İnfra |
+| Torii Xidmət | `/v1/sorafs/pin` (göndər), `/v1/sorafs/pin/{cid}` (axtarış), `/v1/sorafs/aliases` (siyahı/bağlama), `/v1/sorafs/replication` (sifarişlər/qəbzlər) ifşa edin. Səhifələmə + filtrasiya təmin edin. | Şəbəkə TL / Əsas İnfra |
 | Attestasiya | Cavablara reyestr hündürlüyünü/heşini daxil edin; SDK-lar tərəfindən istehlak edilən Norito attestasiya strukturunu əlavə edin. | Əsas İnfra |
 | CLI | `sorafs_manifest_stub` və ya yeni `sorafs_pin` CLI-ni `pin submit`, `alias bind`, `order issue`, `registry export` ilə uzadın. | Tooling WG |
 | SDK | Norito sxemindən müştəri bağlamaları (Rust/Go/TS) yaradın; inteqrasiya testləri əlavə edin. | SDK Komandaları |
@@ -135,10 +135,10 @@ Xəbərdarlıqlar:
 SF-4 altında hər bir yol xəritəsi yoxlama siyahısı bəndində irəliləyiş əldə edildikdə bu plana istinad edilməlidir.
 REST fasadı indi təsdiqlənmiş siyahı son nöqtələri ilə göndərilir:
 
-- `GET /v2/sorafs/pin` və `GET /v2/sorafs/pin/{digest}` qaytarılması
+- `GET /v1/sorafs/pin` və `GET /v1/sorafs/pin/{digest}` qaytarılması
   ləqəb bağlamaları, replikasiya sifarişləri və əldə edilən attestasiya obyekti
   son blok hash.
-- `GET /v2/sorafs/aliases` və `GET /v2/sorafs/replication` aktivliyi ifşa edir
+- `GET /v1/sorafs/aliases` və `GET /v1/sorafs/replication` aktivliyi ifşa edir
   ləqəb kataloqu və ardıcıl səhifələşdirmə ilə replikasiya sifarişi və
   status filtrləri.
 

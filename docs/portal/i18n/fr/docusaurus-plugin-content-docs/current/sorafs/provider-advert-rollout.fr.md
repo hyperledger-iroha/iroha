@@ -46,7 +46,7 @@ vivaces.
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` avec un `max_span` défini
      - `allow_unknown_capabilities=<true|false>` quand des TLVs GREASE sont présents
-   - Valideur via `/v2/sorafs/providers` et `sorafs_fetch` ; les avertissements sur des
+   - Valideur via `/v1/sorafs/providers` et `sorafs_fetch` ; les avertissements sur des
      les capacités inconnues doivent être triées.
 3. **Valider la préparation multi-source.**
    - Exécuter `sorafs_fetch` avec `--provider-advert=<path>` ; la CLI échoue
@@ -193,9 +193,9 @@ nécessite la mise à jour de ce fichier et du grand livre dans la même PR.
 - **Mailer hebdomadaire de statut.** DevRel diffuse un bref résumé des métriques
   d'admission, des avertissements en cours et des dates limites à venir.
 - **Réponse incident.** Si les alertes `reject` se déclenchent, l'on-call :
-  1. Récupère l'annonce fautif via Discovery Torii (`/v2/sorafs/providers`).
+  1. Récupère l'annonce fautif via Discovery Torii (`/v1/sorafs/providers`).
   2. Relancer la validation de l'annonce dans le pipeline supplier et comparer avec
-     `/v2/sorafs/providers` pour reproduire l'erreur.
+     `/v1/sorafs/providers` pour reproduire l'erreur.
   3. Coordonnez avec le fournisseur pour faire tourner l'annonce avant la prochaine
      date limite de rafraîchissement.
 - **Gel des changements.** Aucune modification du schéma de capacités pendant

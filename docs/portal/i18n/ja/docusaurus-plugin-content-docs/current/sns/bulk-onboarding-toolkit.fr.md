@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -134,9 +134,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- `POST /v2/sns/registrations` のリクエストとプレミアのサポートを提供します
+- `POST /v1/sns/registrations` のリクエストとプレミアのサポートを提供します
   HTTP でエラーが発生しました。 NDJSON を登録するための応答を返します。
-- `--poll-status` 再質問 `/v2/sns/registrations/{selector}` チャク前
+- `--poll-status` 再質問 `/v1/sns/registrations/{selector}` チャク前
   soumission (jusqu'a `--poll-attempts`、デフォルト 5) 確認者キューを注ぐ
   登録が表示されます。フルニセ `--suffix-map` (`suffix_id` の JSON)
   vers des valeurs "接尾語") pour que l'outilderive les litteraux

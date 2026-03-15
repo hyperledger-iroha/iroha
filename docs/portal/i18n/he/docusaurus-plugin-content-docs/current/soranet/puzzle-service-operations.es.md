@@ -27,17 +27,17 @@ del relay y, cuando esta configurado, intermedia tokens de admision ML-DSA en
 nombre de relays edge. חשיפה של נקודות קצה של cinco HTTP:
 
 - `GET /healthz` - בדיקה דה חיים.
-- `GET /v2/puzzle/config` - devuelve los parametros efectivos de PoW/puzzle
+- `GET /v1/puzzle/config` - devuelve los parametros efectivos de PoW/puzzle
   tomados del JSON del relay (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v2/puzzle/mint` - acuña un ticket Argon2; un body JSON אופציונלי
+- `POST /v1/puzzle/mint` - acuña un ticket Argon2; un body JSON אופציונלי
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   solicita un TTL mas corto (clamp al window de policy), ata el ticket a un
   תמליל hash y devuelve un ticket firmado por el relay + la huella de
   la firma cuando hay claves de firmado configuradas.
-- `GET /v2/token/config` - cuando `pow.token.enabled = true`, devuelve la
+- `GET /v1/token/config` - cuando `pow.token.enabled = true`, devuelve la
   מדיניות הפעלת אסימון הכניסה (טביעת אצבע של המנפיק, מגבלות TTL/הטיית שעון,
   מזהה ממסר y el set de revocacion combinado).
-- `POST /v2/token/mint` - acuña un token de admision ML-DSA ligado al resume
+- `POST /v1/token/mint` - acuña un token de admision ML-DSA ligado al resume
   hash provisto; el body acepta `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Los tickets producidos por el servicio se verifican en la prueba de integracion
@@ -81,9 +81,9 @@ cargo run -p soranet-puzzle-service -- \
 
 `--token-secret-hex` tambien esta disponible cuando el secreto se gestiona por
 una pipeline de tooling out-of-band. El watcher del archivo de revocacion
-mantiene `/v2/token/config` בפועל; coordina actualizaciones con el comando
+mantiene `/v1/token/config` בפועל; coordina actualizaciones con el comando
 `soranet-admission-token revoke` para evitar desfases en el estado de revocacion.Configura `pow.signed_ticket_public_key_hex` en el JSON של ממסר עבור הודעה
-la clave publica ML-DSA-44 usada para אימות כרטיסים PoW firmados; `/v2/puzzle/config`
+la clave publica ML-DSA-44 usada para אימות כרטיסים PoW firmados; `/v1/puzzle/config`
 העתק לה clave y su huella BLAKE3 (`signed_ticket_public_key_fingerprint_hex`)
 para que los clients puedan fijar el verificador. Los tickets firmados se validan
 contra el relay ID y los כריכות תמלול y comparten el mismo store de revocacion;
@@ -91,7 +91,7 @@ los tickets PoW crudos de 74 bytes siguen siendo validos cuando el verificador d
 כרטיס חתום esta configurado. Pasa el secreto del firmante דרך `--signed-ticket-secret-hex`
 o `--signed-ticket-secret-path` אל שירות פאזלים; el arranque rechaza
 pares de claves que no coinciden si el secreto no valida contra `pow.signed_ticket_public_key_hex`.
-`POST /v2/puzzle/mint` acepta `"signed": true` (y אופציונלי `"transcript_hash_hex"`) para
+`POST /v1/puzzle/mint` acepta `"signed": true` (y אופציונלי `"transcript_hash_hex"`) para
 devolver un ticket firmado Norito junto con los bytes del ticket en bruto; לאס
 תשובות כוללות `signed_ticket_b64` y `signed_ticket_fingerprint_hex` עבור איודר
 שידור חוזר של טביעות אצבעות. Las solicitudes con `signed = true` se rechazan
@@ -110,11 +110,11 @@ si el secreto del firmante no esta configurado.
 3. **Preparar el reinicio.** Recarga la unidad systemd o el contenedor una vez
    que governance anuncie el cutover de rotacion. El servicio no soporta חם-טעינה מחדש;
    se requiere reinicio para tomar el nuevo descriptor commit.
-4. **Validar.** Emite un ticket via `POST /v2/puzzle/mint` y confirma que los
+4. **Validar.** Emite un ticket via `POST /v1/puzzle/mint` y confirma que los
    valores `difficulty` y `expires_at` צירוף מקרים של מדיניות נובעת. אל מודיע
    de soak (`docs/source/soranet/reports/pow_resilience.md`) captura los limites
    de latencia esperados como referencia. Cuando los tokens estan habilitados,
-   consulta `/v2/token/config` para asegurar que el מנפיק טביעת אצבע הודעה
+   consulta `/v1/token/config` para asegurar que el מנפיק טביעת אצבע הודעה
    y el conteo de revocaciones coincidan con los valores esperados.
 
 ## הליך חירום
@@ -126,7 +126,7 @@ si el secreto del firmante no esta configurado.
    מיושן mientras la puerta Argon2 esta לא מקוון.
 3. Reinicia el relay y el service para aplicar el cambio.
 4. Monitorea `soranet_handshake_pow_difficulty` para asegurar que la dificultad
-   cae al valor hashcash esperado, y verifica que `/v2/puzzle/config` reporte
+   cae al valor hashcash esperado, y verifica que `/v1/puzzle/config` reporte
    `puzzle = null`.
 
 ## מעקב אחר התראות- **SLO SLO:** Rastrea `soranet_handshake_latency_seconds` y mantén el P95
@@ -136,16 +136,16 @@ si el secreto del firmante no esta configurado.
   para ajustar cooldowns de `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **יישור פאזל:** `soranet_handshake_pow_difficulty` debe coincidir con la
-  dificultad devuelta por `/v2/puzzle/config`. La divergencia indica configuracion
+  dificultad devuelta por `/v1/puzzle/config`. La divergencia indica configuracion
   stale del relay o un reinicio fallido.
-- **מוכנות אסימון:** Alerta si `/v2/token/config` cae a `enabled = false`
+- **מוכנות אסימון:** Alerta si `/v1/token/config` cae a `enabled = false`
   חותמות זמן מיושנות. לוס מפעילים
   deben rotar el archivo de revocaciones Norito דרך CLI cuando se retire un token
   para mantener este נקודת קצה מדויקת.
 - **בריאות השירות:** Sondea `/healthz` en la cadencia habitual de liveness y alerta
-  si `/v2/puzzle/mint` devuelve respuestas HTTP 500 (אינדיקציה אי התאמה של פרמטרים
+  si `/v1/puzzle/mint` devuelve respuestas HTTP 500 (אינדיקציה אי התאמה של פרמטרים
   Argon2 או fallas de RNG). Los errores de token minting aparecen como respuestas
-  HTTP 4xx/5xx en `/v2/token/mint`; trata fallas repetidas como condicion de paging.
+  HTTP 4xx/5xx en `/v1/token/mint`; trata fallas repetidas como condicion de paging.
 
 ## תאימות ורישום ביקורת
 

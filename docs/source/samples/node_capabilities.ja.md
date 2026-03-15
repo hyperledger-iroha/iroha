@@ -11,7 +11,7 @@ translator: manual
 # ノード機能 — ABI サポート（Torii）
 
 エンドポイント
-- `GET /v2/node/capabilities`
+- `GET /v1/node/capabilities`
 
 レスポンス（初回リリース・単一 ABI ポリシー V1）
 ```json
@@ -48,4 +48,4 @@ translator: manual
 - `crypto.curves.allowed_curve_ids` は `iroha_config.crypto.curves.allowed_curve_ids` で設定された [`address_curve_registry`](../references/address_curve_registry.md) 上のカーブ ID を表します。ML‑DSA や GOST、SM コントローラを投入する前に、このリストに必要な ID が含まれているか確認してください。
 
 あわせて参照
-- 簡潔なランタイムメトリクスの JSON を取得するには `GET /v2/runtime/metrics` を利用してください（ABI 数およびアップグレードライフサイクルのカウンターを含みます）。
+- 簡潔なランタイムメトリクスの JSON を取得するには `GET /v1/runtime/metrics` を利用してください（ABI 数およびアップグレードライフサイクルのカウンターを含みます）。

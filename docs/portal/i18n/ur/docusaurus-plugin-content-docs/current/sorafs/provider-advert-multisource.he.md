@@ -73,7 +73,7 @@ Regression coverage یہاں موجود ہے:
 ## Tooling اور fixtures
 
 - Provider advert payloads میں `range_capability`, `stream_budget`, اور `transport_hints` شامل ہونا لازم ہے۔
-  `/v2/sorafs/providers` responses اور admission fixtures کے ذریعے validate کریں؛ JSON summaries میں parsed capability، stream budget، اور hint arrays شامل ہونے چاہئیں تاکہ telemetry ingest ہو سکے۔
+  `/v1/sorafs/providers` responses اور admission fixtures کے ذریعے validate کریں؛ JSON summaries میں parsed capability، stream budget، اور hint arrays شامل ہونے چاہئیں تاکہ telemetry ingest ہو سکے۔
 - `cargo xtask sorafs-admission-fixtures` اپنے JSON artefacts میں stream budgets اور transport hints دکھاتا ہے تاکہ dashboards feature adoption track کر سکیں۔
 - `fixtures/sorafs_manifest/provider_admission/` کے تحت fixtures اب شامل کرتے ہیں:
   - canonical multi-source adverts،
@@ -81,7 +81,7 @@ Regression coverage یہاں موجود ہے:
 
 ## Orchestrator اور Torii انضمام
 
-- Torii `/v2/sorafs/providers` parsed range capability metadata کے ساتھ `stream_budget` اور `transport_hints` واپس کرتا ہے۔
+- Torii `/v1/sorafs/providers` parsed range capability metadata کے ساتھ `stream_budget` اور `transport_hints` واپس کرتا ہے۔
   providers جب نئی metadata چھوڑ دیں تو downgrade warnings چلتے ہیں، اور gateway range endpoints براہ راست clients کے لیے یہی constraints نافذ کرتے ہیں۔
 - Multi-source orchestrator (`sorafs_car::multi_fetch`) اب range limits، capability alignment، اور stream budgets کو work assignment کے دوران enforce کرتا ہے۔ Unit tests میں chunk-too-large، sparse-seek، اور throttling scenarios شامل ہیں۔
 - `sorafs_car::multi_fetch` downgrade signals (alignment failures, throttled requests) stream کرتا ہے تاکہ operators دیکھ سکیں کہ پلاننگ کے دوران مخصوص providers کیوں skip ہوئے۔

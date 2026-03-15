@@ -34,7 +34,7 @@ Norito kodeklaridan foydalaning; hech qanday serde/JSON zaxiralariga ruxsat beri
 ## API yuzasi (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Foydali yuk - Norito kodli `DaIngestRequest`. Javoblardan foydalanish
 | 500 ichki xato | Kutilmagan xatolik (jirga qayd + ogohlantirish). |
 
 ```
-GET /v2/da/proof_policies
+GET /v1/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ to'plam xesh. Majburiyatlar ro'yxati/tasdiqlash yakuniy nuqtalari bir xil to'pla
 isbotni faol siyosat to'plamiga bog'lash uchun qo'shimcha safar kerak emas.
 
 ```
-GET /v2/da/proof_policy_snapshot
+GET /v1/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ ixtiyoriy manifestlarni xeshlash, qismlarga ajratish va tekshirish.
 - `iroha app da get` allaqachon quvvatlangan ko'p manbali orkestr uchun DA-ga yo'naltirilgan taxallusni qo'shadi
   `iroha app sorafs fetch`. Operatorlar uni manifest + chunk-plan artefaktlarida ko'rsatishi mumkin (`--manifest`,
   `--plan`, `--manifest-id`) **yoki** oddiygina `--storage-ticket` orqali Torii saqlash chiptasini o'tkazing. Qachon
-  chipta yo'li ishlatiladi CLI manifestni `/v2/da/manifests/<ticket>` dan tortib oladi, to'plamni saqlaydi
+  chipta yo'li ishlatiladi CLI manifestni `/v1/da/manifests/<ticket>` dan tortib oladi, to'plamni saqlaydi
   `artifacts/da/fetch_<timestamp>/` ostida (`--manifest-cache-dir` bilan bekor qilish), **manifestni chiqaradi
   `--manifest-id` uchun hash** va keyin orkestrni taqdim etilgan `--gateway-provider` bilan boshqaradi
   ro'yxati. Foydali yukni tekshirish hali ham oʻrnatilgan CAR/`blob_hash` dayjestiga tayanadi, shlyuz identifikatori esa
@@ -248,7 +248,7 @@ ixtiyoriy manifestlarni xeshlash, qismlarga ajratish va tekshirish.
   bekor qilish, skorbordni eksport qilish va `--output` yo'llari) va manifest so'nggi nuqtasi orqali bekor qilinishi mumkin
   Maxsus Torii xostlari uchun `--manifest-endpoint`, shuning uchun mavjudligini uchdan-end tekshiruvi to'liq nazorat ostida amalga oshiriladi.
   `da` nom maydoni orkestr mantig'ini takrorlamasdan.
-- `iroha app da get-blob` kanonik manifestlarni to'g'ridan-to'g'ri Torii dan `GET /v2/da/manifests/{storage_ticket}` orqali tortib oladi.
+- `iroha app da get-blob` kanonik manifestlarni to'g'ridan-to'g'ri Torii dan `GET /v1/da/manifests/{storage_ticket}` orqali tortib oladi.
   Buyruq endi artefaktlarni manifest xesh (blob identifikatori), yozish bilan yorliqlaydi
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json` va `chunk_plan_{manifest_hash}.json`
   `artifacts/da/fetch_<timestamp>/` (yoki foydalanuvchi tomonidan taqdim etilgan `--output-dir`) ostida, ayni paytda
@@ -259,7 +259,7 @@ ixtiyoriy manifestlarni xeshlash, qismlarga ajratish va tekshirish.
   `ToriiClient.getDaManifestBundle(...)`. Ikkalasi dekodlangan Norito baytlarini, JSON manifestini, manifest xeshini qaytaradi.SDK qo'ng'iroq qiluvchilar CLI va Swift-ga chiqmasdan orkestr seanslarini namlashi mumkin bo'lgan qismlar rejasi.
   mijozlar qo'shimcha ravishda `fetchDaPayloadViaGateway(...)` raqamiga qo'ng'iroq qilib, ushbu to'plamlarni mahalliy telefon orqali yuborishlari mumkin.
   SoraFS orkestr o'rami.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- `/v2/da/manifests` javoblari endi `manifest_hash` va ikkala CLI + SDK yordamchilari (`iroha app da get`,
+- `/v1/da/manifests` javoblari endi `manifest_hash` va ikkala CLI + SDK yordamchilari (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway` va Swift/JS shlyuz paketlari) bu dayjestni
   o'rnatilgan CAR/blob xeshiga nisbatan foydali yuklarni tekshirishni davom ettirayotganda kanonik manifest identifikatori.
 - `iroha app da rent-quote` taqdim etilgan saqlash hajmi uchun deterministik ijara va rag'batlantiruvchi buzilishlarni hisoblaydi
@@ -277,7 +277,7 @@ ixtiyoriy manifestlarni xeshlash, qismlarga ajratish va tekshirish.
 - PIN ro'yxatga olish kitobi pariteti endi SDK-larga tarqaladi: `ToriiClient.registerSorafsPinManifest(...)`
   JavaScript SDK `iroha app sorafs pin register` tomonidan ishlatiladigan aniq foydali yukni yaratib, kanonik standartlarni qo'llaydi.
   chunker metama'lumotlari, pin siyosatlari, taxallus isbotlari va vorisi dayjestlari
-  `/v2/sorafs/pin/register`. Bu CI botlarini va avtomatlashtirishni qachon CLIga o'tishdan saqlaydi
+  `/v1/sorafs/pin/register`. Bu CI botlarini va avtomatlashtirishni qachon CLIga o'tishdan saqlaydi
   manifest ro'yxatga olishlarini yozib olish va yordamchi DA-8 uchun TypeScript/README qamrovi bilan yuboriladi.
   Rust/Swift bilan bir qatorda JS da “yuborish/olish/isbotlash” asboblar pariteti to‘liq qondirilgan.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:78】
 - `iroha app da prove-availability` yuqoridagilarning barchasini zanjirlaydi: u saqlash chiptasini oladi, yuklab oladi
@@ -334,7 +334,7 @@ Oldin bloklangan barcha qabul qilish TODOlar amalga oshirildi va tasdiqlandi:- *
   noma'lum versiyalar, yangi manifest maketlari yuborilganda deterministik yangilanishlarni kafolatlaydi.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR ilgaklari** — PDP majburiyatlari to'g'ridan-to'g'ri qismlar do'konidan olinadi va saqlanib qoladi
   manifestlardan tashqari, DA-5 rejalashtiruvchilari kanonik ma'lumotlardan namuna olish muammolarini ishga tushirishlari mumkin; the
-  `Sora-PDP-Commitment` sarlavhasi endi `/v2/da/ingest` va `/v2/da/manifests/{ticket}` bilan yetkazib beriladi
+  `Sora-PDP-Commitment` sarlavhasi endi `/v1/da/ingest` va `/v1/da/manifests/{ticket}` bilan yetkazib beriladi
   javoblar shuning uchun SDKlar kelajakdagi tekshiruvlar havola qiladigan imzolangan majburiyatni darhol bilib oladi.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da:4/76】rs.
 - **Shard kursor jurnali** — chiziqli metamaʼlumotlar `da_shard_id` ni koʻrsatishi mumkin (standart `lane_id`) va
   Sumeragi endi `(shard_id, lane_id)` uchun eng yuqori `(epoch, sequence)`ni saqlab qoladi.
@@ -357,7 +357,7 @@ Oldin bloklangan barcha qabul qilish TODOlar amalga oshirildi va tasdiqlandi:- *
   foydali yuk baytlarini ko'rsatish. Takrorlash paytida kvitansiyalar Kura dan hidratlanadi, shuning uchun validatorlar xuddi shu narsani tiklaydi
   keyin maxfiylik metadata qayta ishga tushiriladi.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_rs】core.
 
-## Amalga oshirish bo'yicha eslatmalar- Torii ning `/v2/da/ingest` so'nggi nuqtasi endi foydali yukni siqishni normallashtiradi, takrorlash keshini majburlaydi,
+## Amalga oshirish bo'yicha eslatmalar- Torii ning `/v1/da/ingest` so'nggi nuqtasi endi foydali yukni siqishni normallashtiradi, takrorlash keshini majburlaydi,
   kanonik baytlarni aniq qismlarga ajratadi, `DaManifestV1` ni qayta tiklaydi va kodlangan yukni tushiradi
   kvitansiyani berishdan oldin SoraFS orkestratsiyasi uchun `config.da_ingest.manifest_store_dir` ichiga; the
   ishlov beruvchi, shuningdek, mijozlar kodlangan majburiyatni olishlari uchun `Sora-PDP-Commitment` sarlavhasini biriktiradi.
@@ -370,7 +370,7 @@ Oldin bloklangan barcha qabul qilish TODOlar amalga oshirildi va tasdiqlandi:- *
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` qoplamasi Rust, Python `ToriiClient`
   endi `decode_pdp_commitment_header` eksport qiladi va `IrohaSwift` mos keladigan yordamchilarni juda mobil yuboradi
   mijozlar kodlangan namuna olish jadvalini darhol saqlashi mumkin.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii shuningdek `GET /v2/da/manifests/{storage_ticket}` ni ochib beradi, shuning uchun SDK va operatorlar manifestlarni olishlari mumkin
+- Torii shuningdek `GET /v1/da/manifests/{storage_ticket}` ni ochib beradi, shuning uchun SDK va operatorlar manifestlarni olishlari mumkin
   va tugunning spool katalogiga tegmasdan parcha rejalari. Javob Norito baytlarini qaytaradi
   (base64), renderlangan manifest JSON, `chunk_plan` JSON blobi `sorafs fetch` uchun tayyor, shuningdek, tegishli
   hex dayjestlar (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), shuning uchun quyi oqim asboblari
@@ -388,7 +388,7 @@ Oldin bloklangan barcha qabul qilish TODOlar amalga oshirildi va tasdiqlandi:- *
   `--block-hash` bekor qiling.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【Javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
 
 ### Katta foydali yuk oqimiSozlangan yagona soʻrov chegarasidan kattaroq aktivlarni qabul qilishi kerak boʻlgan mijozlar
-`POST /v2/da/ingest/chunk/start` ga qo'ng'iroq qilish orqali oqim seansi. Torii a bilan javob beradi
+`POST /v1/da/ingest/chunk/start` ga qo'ng'iroq qilish orqali oqim seansi. Torii a bilan javob beradi
 `ChunkSessionId` (BLAKE3 - so'ralgan blob metama'lumotlaridan olingan) va kelishilgan bo'lak hajmi.
 Har bir keyingi `DaIngestChunk` so'rovi quyidagilarni o'z ichiga oladi:
 
@@ -403,7 +403,7 @@ Torii `config.da_ingest.manifest_store_dir/chunks/<session>/` ostida tasdiqlanga
 identifikatorni hurmat qilish uchun takrorlash keshi ichidagi taraqqiyotni qayd qiladi. Yakuniy bo'lak tushganda, Torii
 diskdagi foydali yukni qayta yig'adi (xotiraning keskin o'sishiga yo'l qo'ymaslik uchun chunk katalogi orqali oqim),
 kanonik manifest/kvitansiyani bir martalik yuklashlar kabi hisoblab chiqadi va nihoyat javob beradi.
-Sahnalashtirilgan artefaktni iste'mol qilish orqali `POST /v2/da/ingest`. Muvaffaqiyatsiz seanslar aniq bekor qilinishi mumkin yoki
+Sahnalashtirilgan artefaktni iste'mol qilish orqali `POST /v1/da/ingest`. Muvaffaqiyatsiz seanslar aniq bekor qilinishi mumkin yoki
 `config.da_ingest.replay_cache_ttl` dan keyin axlat yig'iladi. Ushbu dizayn tarmoq formatini saqlaydi
 Norito qulay, mijozga xos qayta tiklanadigan protokollardan qochadi va mavjud manifest quvur liniyasidan qayta foydalanadi
 o'zgarmagan.

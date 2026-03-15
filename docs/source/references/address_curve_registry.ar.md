@@ -51,7 +51,7 @@ description: خريطة معيارية بين معرّفات منحنيات مت
 
 ## إعلان خريطة البِتّات للقدرات
 
-تعرض `GET /v2/node/capabilities` قائمة `allowed_curve_ids` والمصفوفة المعبّأة
+تعرض `GET /v1/node/capabilities` قائمة `allowed_curve_ids` والمصفوفة المعبّأة
 `allowed_curve_bitmap` ضمن `crypto.curves`. الخريطة بصيغة little-endian عبر
 مسارات 64 بت (حتى أربع قيم لتغطية مجال المعرّفات `u8` من 0 إلى 255). تفعيل البت
 `i` يعني أن معرّف المنحنى `i` مسموح به حسب سياسة القبول في العنقود.

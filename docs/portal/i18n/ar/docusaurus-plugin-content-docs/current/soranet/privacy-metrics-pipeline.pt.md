@@ -69,8 +69,8 @@ Sidebar_label: خط أنابيب لمقاييس الخصوصية
 
 ## نقاط نهاية الإدخال do Torii
 
-Torii الآن يعرض نقطتي النهاية HTTP مع بوابة القياس عن بعد حتى تتمكن المرحلات والمجمعات من جمع الملاحظات دون إرسال وسيلة نقل مخصصة:- `POST /v2/soranet/privacy/event` يستخدم الحمولة `RecordSoranetPrivacyEventDto`. يشتمل الجسم على `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. Torii التحقق من صحة الطلب مقابل ملف القياس عن بعد أو التسجيل أو الحدث والرد عبر HTTP `202 Accepted` جنبًا إلى جنب مع المغلف Norito JSON يتنافس على حساب السجل (`bucket_start_unix`، `bucket_duration_secs`) هـ أو طريقة التتابع.
-- `POST /v2/soranet/privacy/share` يستخدم الحمولة `RecordSoranetPrivacyShareDto`. يحمل الجسم `SoranetPrivacyPrioShareV1` ويقال `forwarded_by` اختياريًا حتى يتمكن المشغلون من مراقبة تدفقات المجمعات. يتم إرساله بنجاح مرة أخرى إلى HTTP `202 Accepted` مع مغلف Norito JSON يستعيد أو يُجمّع، ويملأ الجرافة ويحذف القمع؛ تم التحقق من صحة الخريطة لرد القياس عن بعد `Conversion` للحفاظ على تصحيح الأخطاء بين المجمعين. ستصدر حلقة أحداث المنسق هذه المشاركات من خلال إجراء استطلاع للمرحلات، مع الحفاظ على التراكم الأولي لـ Torii المتزامن مع الدلاء بدون مرحل.
+Torii الآن يعرض نقطتي النهاية HTTP مع بوابة القياس عن بعد حتى تتمكن المرحلات والمجمعات من جمع الملاحظات دون إرسال وسيلة نقل مخصصة:- `POST /v1/soranet/privacy/event` يستخدم الحمولة `RecordSoranetPrivacyEventDto`. يشتمل الجسم على `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. Torii التحقق من صحة الطلب مقابل ملف القياس عن بعد أو التسجيل أو الحدث والرد عبر HTTP `202 Accepted` جنبًا إلى جنب مع المغلف Norito JSON يتنافس على حساب السجل (`bucket_start_unix`، `bucket_duration_secs`) هـ أو طريقة التتابع.
+- `POST /v1/soranet/privacy/share` يستخدم الحمولة `RecordSoranetPrivacyShareDto`. يحمل الجسم `SoranetPrivacyPrioShareV1` ويقال `forwarded_by` اختياريًا حتى يتمكن المشغلون من مراقبة تدفقات المجمعات. يتم إرساله بنجاح مرة أخرى إلى HTTP `202 Accepted` مع مغلف Norito JSON يستعيد أو يُجمّع، ويملأ الجرافة ويحذف القمع؛ تم التحقق من صحة الخريطة لرد القياس عن بعد `Conversion` للحفاظ على تصحيح الأخطاء بين المجمعين. ستصدر حلقة أحداث المنسق هذه المشاركات من خلال إجراء استطلاع للمرحلات، مع الحفاظ على التراكم الأولي لـ Torii المتزامن مع الدلاء بدون مرحل.
 
 من خلال نقاط النهاية المؤقتة أو ملف القياس عن بعد: أرسل `503 Service Unavailable` عندما تكون المقاييس غير صالحة. يمكن للعملاء إرسال المجموعة Norito الثنائية (`application/x.norito`) أو Norito JSON (`application/x.norito+json`)؛ يتم تشغيل الخادم تلقائيًا أو تنسيق عبر المستخرجين بواسطة Torii.
 
@@ -143,7 +143,7 @@ cargo xtask soranet-privacy-report \
 
 هناك حاجة إلى إثبات أن التنفيذ التلقائي الأول يتم من خلال قمع الميزانية. هذا المساعد هو `--max-suppression-ratio <0-1>` لكي يفشل CI أو المشغلون بسرعة عندما تتجاوز الدلاء الحد الأقصى المسموح به (افتراضي 10%) أو عندما لا تتجاوز الدلاء. الموصى بها فلوكسو:
 
-1. قم بتصدير NDJSON إلى مسؤول نقاط النهاية ليقوم بالترحيل أو الدفق `/v2/soranet/privacy/event|share` إلى المنسق لـ `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. قم بتصدير NDJSON إلى مسؤول نقاط النهاية ليقوم بالترحيل أو الدفق `/v1/soranet/privacy/event|share` إلى المنسق لـ `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. ركب أو ساعد في ميزانية السياسة:
 
    ```bash

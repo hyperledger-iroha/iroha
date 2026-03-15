@@ -153,7 +153,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/accounts/onboard")
+                .uri("/v1/accounts/onboard")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(body))
                 .unwrap(),

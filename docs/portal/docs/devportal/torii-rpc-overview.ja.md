@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-01
 
 # Norito-RPC 概要
 
-Norito-RPC は Torii API 用のバイナリトランスポートです。`/v2/pipeline` と同じ HTTP パスを再利用しますが、スキーマハッシュとチェックサムを含む Norito 形式のペイロードをやり取りします。決定的で検証済みの応答が必要な場合や、pipeline の JSON 応答がボトルネックになる場合に利用してください。
+Norito-RPC は Torii API 用のバイナリトランスポートです。`/v1/pipeline` と同じ HTTP パスを再利用しますが、スキーマハッシュとチェックサムを含む Norito 形式のペイロードをやり取りします。決定的で検証済みの応答が必要な場合や、pipeline の JSON 応答がボトルネックになる場合に利用してください。
 
 ## なぜ切り替えるのか
 - CRC64 とスキーマハッシュによる決定的なフレーミングでデコードエラーを減らせます。
@@ -21,7 +21,7 @@ Norito-RPC は Torii API 用のバイナリトランスポートです。`/v2/pi
 ## リクエストの送信
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Norito codec (`iroha_client`、SDK ヘルパー、または `norito::to_bytes`) でペイロードをシリアライズします。
@@ -40,7 +40,7 @@ SDK 別のガイド:
 開発者ポータルには Try It プロキシがあり、レビュー担当者が専用スクリプトを書かずに Norito ペイロードを再生できます。
 
 1. [プロキシを起動](./try-it.md#start-the-proxy-locally)し、`TRYIT_PROXY_PUBLIC_URL` を設定してウィジェットが送信先を把握できるようにします。
-2. このページの **Try it** カードか `/reference/torii-swagger` パネルを開き、`POST /v2/pipeline/submit` などのエンドポイントを選択します。
+2. このページの **Try it** カードか `/reference/torii-swagger` パネルを開き、`POST /v1/pipeline/submit` などのエンドポイントを選択します。
    For MCP/agent flows, use `/reference/torii-mcp`.
 3. **Content-Type** を `application/x-norito` に切り替え、**Binary** エディタを選択し、`fixtures/norito_rpc/transfer_asset.norito` をアップロードします（または `fixtures/norito_rpc/transaction_fixtures.manifest.json` に記載の任意のペイロード）。
 4. OAuth device-code ウィジェットまたは手動トークン欄で bearer token を提供します（`TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` を設定するとプロキシは `X-TryIt-Auth` の上書きを許可します）。

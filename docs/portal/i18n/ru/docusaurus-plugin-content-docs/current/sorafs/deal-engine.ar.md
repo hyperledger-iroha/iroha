@@ -58,12 +58,12 @@ Sidebar_label: Дополнительная информация
 تعرض Torii для получения дополнительной информации о том, как это сделать. الاستخدام وتحريك
 Обратите внимание на проводку:
 
-- `POST /v2/sorafs/deal/usage` в приложении `DealUsageReport`.
+- `POST /v1/sorafs/deal/usage` в приложении `DealUsageReport`.
   Установите флажок (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` в النافذة الحالية, ويبث
+- `POST /v1/sorafs/deal/settle` в النافذة الحالية, ويبث
   `DealSettlementRecord` Загрузка данных `DealSettlementV1` в базе base64
   Он был выбран в честь ДАГа.
-- `/v2/events/sse` или Torii в режиме `SorafsGatewayEvent::DealUsage`.
+- `/v1/events/sse` или Torii в режиме `SorafsGatewayEvent::DealUsage`.
   التي تلخص كل إرسال استخدام (эпоха, мир ГиБ المقاسة, عدّادات التذاكر,
   الرسوم الحتمية), وسجلات `SorafsGatewayEvent::DealSettlement`
   Откройте реестр Ledger и создайте файл дайджеста/файла/base64 в BLAKE3.

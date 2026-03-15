@@ -33,7 +33,7 @@ portal auditoriyasi uchun.
 
 | Komponent | Maqsad | Dalil |
 |----------|---------|----------|
-| `sns_settlementd` | Siyosatni qo'llaydi, to'plamlar, yuzalar `/v2/sns/settlements` belgilari. | JSON to'plami + xesh. |
+| `sns_settlementd` | Siyosatni qo'llaydi, to'plamlar, yuzalar `/v1/sns/settlements` belgilari. | JSON to'plami + xesh. |
 | Hisob-kitob navbati & yozuvchi | Idempotent navbat + `iroha_cli app sns settlement ledger` tomonidan boshqariladigan daftar topshiruvchisi. | To‘plam xesh ↔ tx xesh manifesti. |
 | Yarashtirish ishi | `docs/source/sns/reports/` ostida kunlik farq + oylik hisobot. | Markdown + JSON dayjesti. |
 | To'lovni qaytarish stoli | `/settlements/{id}/refund` orqali boshqaruv tomonidan tasdiqlangan toʻlovlar. | `RefundRecordV1` + chipta. |

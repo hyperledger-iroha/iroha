@@ -51,7 +51,7 @@ description: מיפוי קנוני בין מזהי עקומה של בקר חשב
 
 ## פרסום ביטמאפ יכולות
 
-`GET /v2/node/capabilities` חושף כעת את `allowed_curve_ids` ואת המערך הדחוס
+`GET /v1/node/capabilities` חושף כעת את `allowed_curve_ids` ואת המערך הדחוס
 `allowed_curve_bitmap` תחת `crypto.curves`. הביטמאפ הוא little-endian על פני
 מסלולי 64‑ביט (עד ארבעה ערכים לכיסוי מרחב מזהי `u8`‏ 0–255). ביט `i` מופעל
 משמעו שמזהה עקומה `i` מותר לפי מדיניות admission של הקלאסטר.

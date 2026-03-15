@@ -76,7 +76,7 @@ host-side services، fixtures، اور عملیاتی تقاضے شامل ہیں
 
 | جزو | کام | مالک/مالکان |
 |------|-----|-------------|
-| שירות Torii | `/v2/sorafs/pin` (submit)، `/v2/sorafs/pin/{cid}` (lookup)، `/v2/sorafs/aliases` (list/bind)، `/v2/sorafs/replication` (orders/receipts) فراہم کریں۔ pagination + filtering مہیا کریں۔ | Networking TL / Core Infra |
+| שירות Torii | `/v1/sorafs/pin` (submit)، `/v1/sorafs/pin/{cid}` (lookup)، `/v1/sorafs/aliases` (list/bind)، `/v1/sorafs/replication` (orders/receipts) فراہم کریں۔ pagination + filtering مہیا کریں۔ | Networking TL / Core Infra |
 | אישור | responses میں registry height/hash شامل کریں؛ Norito attestation struct شامل کریں جسے SDKs consume کریں۔ | אינפרא ליבה |
 | CLI | `sorafs_manifest_stub` מוצר חדש `sorafs_pin` CLI דגם `pin submit`, Prometheus,000NI00X `order issue`, `registry export` ו. | Tooling WG |
 | SDK | Norito schema سے client bindings (Rust/Go/TS) generate کریں؛ integration tests شامل کریں۔ | צוותי SDK |
@@ -131,9 +131,9 @@ host-side services، fixtures، اور عملیاتی تقاضے شامل ہیں
 SF-4 کے ہر checklist آئٹم میں پیش رفت پر اس منصوبے کا حوالہ ہونا چاہیے۔
 REST facade اب attested listing endpoints کے ساتھ آتی ہے:
 
-- `GET /v2/sorafs/pin` اور `GET /v2/sorafs/pin/{digest}` manifests واپس کرتے ہیں جن میں
+- `GET /v1/sorafs/pin` اور `GET /v1/sorafs/pin/{digest}` manifests واپس کرتے ہیں جن میں
   alias bindings، replication orders، اور تازہ ترین block hash سے ماخوذ attestation object شامل ہے۔
-- `GET /v2/sorafs/aliases` אור `GET /v2/sorafs/replication` קטלוג כינוי של צרפתי
+- `GET /v1/sorafs/aliases` אור `GET /v1/sorafs/replication` קטלוג כינוי של צרפתי
   replication order backlog کو consistent pagination اور status filters کے ساتھ ظاہر کرتے ہیں۔
 
 CLI ان calls کو wrap کرتی ہے (`iroha app sorafs pin list`, `pin show`, `alias list`,

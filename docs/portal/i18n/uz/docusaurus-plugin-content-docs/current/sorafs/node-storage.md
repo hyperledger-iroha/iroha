@@ -165,9 +165,9 @@ foydali yuklar Torii API'lari qo'nmasdan oldin bo'ylab toza.【crates/sorafs_nod
 > Torii shlyuzi endi faqat oʻqish uchun moʻljallangan yordamchilarni ochib beradi.
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — saqlanganni qaytaradi
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — saqlanganni qaytaradi
 > Norito manifest (base64) digest/metadata bilan birga.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — deterministikni qaytaradi
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — deterministikni qaytaradi
 > quyi oqim asboblari uchun JSON (`chunk_fetch_specs`) bo'lak rejasi.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Ushbu so'nggi nuqtalar CLI chiqishini aks ettiradi, shuning uchun quvurlar mahalliydan o'tishlari mumkin
@@ -210,19 +210,19 @@ foydali yuklar Torii API'lari qo'nmasdan oldin bo'ylab toza.【crates/sorafs_nod
      boshqaruv modeli kelishilgan; hozircha dizayn qat'iy kvotalarni o'z zimmasiga oladi va
      operator tashabbusi bilan olib tashlash operatsiyalari.
 
-### Imkoniyatlar deklaratsiyasi va rejalashtirish integratsiyasi- Torii endi `/v2/sorafs/capacity/declare` dan `CapacityDeclarationRecord` yangilanishlarini uzatadi
+### Imkoniyatlar deklaratsiyasi va rejalashtirish integratsiyasi- Torii endi `/v1/sorafs/capacity/declare` dan `CapacityDeclarationRecord` yangilanishlarini uzatadi
   o'rnatilgan `CapacityManager` ga, shuning uchun har bir tugun o'zining xotiradagi ko'rinishini yaratadi
   chunker va yo'laklarni ajratishni amalga oshirdi. Menejer faqat o'qish uchun mo'ljallangan suratlarni ko'rsatadi
-  telemetriya uchun (`GET /v2/sorafs/capacity/state`) va har bir profil yoki har bir qator uchun amal qiladi
+  telemetriya uchun (`GET /v1/sorafs/capacity/state`) va har bir profil yoki har bir qator uchun amal qiladi
   yangi buyurtmalar qabul qilinishidan oldin bandlovlar.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v2/sorafs/capacity/schedule` oxirgi nuqtasi boshqaruv tomonidan chiqarilgan `ReplicationOrderV1` ni qabul qiladi
+- `/v1/sorafs/capacity/schedule` oxirgi nuqtasi boshqaruv tomonidan chiqarilgan `ReplicationOrderV1` ni qabul qiladi
   foydali yuklar. Buyurtma mahalliy provayderga mo'ljallangan bo'lsa, menejer tekshiradi
   takroriy rejalashtirish, chunker/yo'l sig'imini tekshiradi, bo'lakni zahiraga oladi va
   `ReplicationPlan` ni qaytaradi, bu esa qolgan quvvatni tavsiflaydi, shuning uchun orkestrlash vositalari
   yutish bilan davom etishi mumkin. Boshqa provayderlar uchun buyurtmalar a bilan tasdiqlanadi
   Ko'p operatorli ish oqimlarini osonlashtirish uchun `ignored` javobi.【crates/iroha_torii/src/routing.rs:4845】
 - Tugatish ilgaklari (masalan, qabul qilish muvaffaqiyatli bo'lganidan keyin ishga tushiriladi) uriladi
-  `POST /v2/sorafs/capacity/complete` orqali bandlovlarni chiqarish
+  `POST /v1/sorafs/capacity/complete` orqali bandlovlarni chiqarish
   `CapacityManager::complete_order`. Javobda `ReplicationRelease` mavjud
   oniy tasvir (qolgan jami, chunker/bo'lak qoldiqlari), shuning uchun orkestrlash vositalari
   keyingi buyurtmani ovoz berishsiz navbatga qo'ying. Keyingi ishlar buni bo'lakka o'tkazadi

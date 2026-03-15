@@ -35,7 +35,7 @@ DA-3 擴展了 Nexus 塊格式，因此每個通道都嵌入確定性記錄
   狀態，無需諮詢賬外存儲。
 - 提供確定性的成員資格證明，以便輕客戶端可以驗證
   清單哈希在給定塊中最終確定。
-- 公開 Torii 查詢 (`/v2/da/commitments/*`) 和證據，讓中繼，
+- 公開 Torii 查詢 (`/v1/da/commitments/*`) 和證據，讓中繼，
   SDK 和治理自動化審計可用性，無需重放每個
   塊。
 - 通過線程新的來保持現有的 `SignedBlockWire` 信封規範
@@ -50,7 +50,7 @@ DA-3 擴展了 Nexus 塊格式，因此每個通道都嵌入確定性記錄
 3. **持久化/索引**，以便 WSV 可以快速回答承諾查詢
    （`iroha_core/src/wsv/mod.rs`）。
 4. **Torii RPC 添加**，用於列出/查詢/證明端點
-   `/v2/da/commitments`。
+   `/v1/da/commitments`。
 5. **集成測試 + 夾具** 驗證線路佈局和驗證流程
    `integration_tests/tests/da/commitments.rs`。
 
@@ -143,9 +143,9 @@ Torii 公開三個端點：
 
 |路線 |方法|有效負載|筆記|
 |--------|--------|---------|--------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery`（按泳道/紀元/序列、分頁進行範圍過濾）|返回 `DaCommitmentPage` 以及總計數、承諾和塊哈希。 |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest`（通道 + 清單哈希或 `(epoch, sequence)` 元組）。 |響應 `DaCommitmentProof`（記錄 + Merkle 路徑 + 區塊哈希）。 |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` |無狀態助手，重播塊哈希計算並驗證包含；由無法直接鏈接到 `iroha_crypto` 的 SDK 使用。 |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery`（按泳道/紀元/序列、分頁進行範圍過濾）|返回 `DaCommitmentPage` 以及總計數、承諾和塊哈希。 |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest`（通道 + 清單哈希或 `(epoch, sequence)` 元組）。 |響應 `DaCommitmentProof`（記錄 + Merkle 路徑 + 區塊哈希）。 |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |無狀態助手，重播塊哈希計算並驗證包含；由無法直接鏈接到 `iroha_crypto` 的 SDK 使用。 |
 
 所有有效負載均位於 `iroha_data_model::da::commitment` 下。 Torii 路由器安裝座
 現有 DA 攝取端點旁邊的處理程序可重用令牌/mTLS

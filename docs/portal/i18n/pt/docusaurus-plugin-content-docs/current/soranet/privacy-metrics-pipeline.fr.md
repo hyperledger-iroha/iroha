@@ -75,8 +75,8 @@ SNNet-8a implanta coletores duplos que enviam baldes antes de compartilhar segre
 
 ## Endpoints de ingestão Torii
 
-Torii expõe dois pontos de extremidade HTTP protegidos pela telemetria para que os relés e coletores possam transmitir observações sem planejar um transporte sob medida:- `POST /v2/soranet/privacy/event` aceita uma carga útil `RecordSoranetPrivacyEventDto`. O corpo envolve um `SoranetPrivacyEventV1` mais uma etiqueta `source` opcional. Torii valida a solicitação com o perfil de telemetria ativo, registra o evento e responde com HTTP `202 Accepted` acompanhado de um envelope Norito JSON contendo a janela calculada (`bucket_start_unix`, `bucket_duration_secs`) e o modo do relé.
-- `POST /v2/soranet/privacy/share` aceita uma carga útil `RecordSoranetPrivacyShareDto`. O corpo transporta um `SoranetPrivacyPrioShareV1` e um índice `forwarded_by` opcional para que os operadores possam auditar o fluxo de coletores. As mensagens enviadas HTTP `202 Accepted` com um envelope Norito JSON retornam o coletor, a janela do balde e a indicação de supressão; as verificações de validação correspondentes a uma resposta de telefone `Conversion` para preservar um traço de erro determinado entre os colecionadores. A parte de eventos do orquestrador foi desordenada quando os relés foram interceptados, mantendo o acumulador Prio de Torii sincronizado com os baldes no relé.
+Torii expõe dois pontos de extremidade HTTP protegidos pela telemetria para que os relés e coletores possam transmitir observações sem planejar um transporte sob medida:- `POST /v1/soranet/privacy/event` aceita uma carga útil `RecordSoranetPrivacyEventDto`. O corpo envolve um `SoranetPrivacyEventV1` mais uma etiqueta `source` opcional. Torii valida a solicitação com o perfil de telemetria ativo, registra o evento e responde com HTTP `202 Accepted` acompanhado de um envelope Norito JSON contendo a janela calculada (`bucket_start_unix`, `bucket_duration_secs`) e o modo do relé.
+- `POST /v1/soranet/privacy/share` aceita uma carga útil `RecordSoranetPrivacyShareDto`. O corpo transporta um `SoranetPrivacyPrioShareV1` e um índice `forwarded_by` opcional para que os operadores possam auditar o fluxo de coletores. As mensagens enviadas HTTP `202 Accepted` com um envelope Norito JSON retornam o coletor, a janela do balde e a indicação de supressão; as verificações de validação correspondentes a uma resposta de telefone `Conversion` para preservar um traço de erro determinado entre os colecionadores. A parte de eventos do orquestrador foi desordenada quando os relés foram interceptados, mantendo o acumulador Prio de Torii sincronizado com os baldes no relé.
 
 Os dois pontos de extremidade respeitam o perfil de telefonia: o identificador `503 Service Unavailable` quando as métricas são desativadas. Os clientes podem enviar o corpo binário Norito (`application/x.norito`) ou Norito JSON (`application/x.norito+json`) ; o servidor negocia automaticamente o formato por meio dos extratores padrão Torii.
 
@@ -153,7 +153,7 @@ cargo xtask soranet-privacy-report \
 
 O governo exige sempre que a primeira execução seja automatizada e respeite o orçamento de supressão. A ferramenta aceita `--max-suppression-ratio <0-1>` quando o CI ou os operadores podem tocar rapidamente quando os baldes são apagados da janela autorizada (10% por padrão) ou quando algum balde não está mais presente. Fluxo recomendado:
 
-1. Exportador do NDJSON a partir dos endpoints admin do relé mais o fluxo `/v2/soranet/privacy/event|share` do orquestrador versão `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. Exportador do NDJSON a partir dos endpoints admin do relé mais o fluxo `/v1/soranet/privacy/event|share` do orquestrador versão `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Execute a ferramenta com o orçamento político:
 
    ```bash

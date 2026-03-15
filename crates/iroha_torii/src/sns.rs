@@ -721,7 +721,7 @@ fn record_registrar_status<T>(app: &SharedAppState, suffix: &str, outcome: &Resu
     });
 }
 
-/// Handle `POST /v2/sns/registrations`.
+/// Handle `POST /v1/sns/registrations`.
 #[axum::debug_handler(state = SharedAppState)]
 pub async fn handle_register(
     State(app): State<SharedAppState>,
@@ -740,7 +740,7 @@ pub async fn handle_register(
     ))
 }
 
-/// Handle `GET /v2/sns/registrations/{selector}`.
+/// Handle `GET /v1/sns/registrations/{selector}`.
 pub async fn handle_get_registration(
     Path(selector): Path<String>,
     State(app): State<SharedAppState>,
@@ -750,7 +750,7 @@ pub async fn handle_get_registration(
     Ok(JsonBody(record))
 }
 
-/// Handle `POST /v2/sns/registrations/{selector}/renew`.
+/// Handle `POST /v1/sns/registrations/{selector}/renew`.
 pub async fn handle_renew_registration(
     Path(selector): Path<String>,
     State(app): State<SharedAppState>,
@@ -764,7 +764,7 @@ pub async fn handle_renew_registration(
     Ok(JsonBody(record))
 }
 
-/// Handle `POST /v2/sns/registrations/{selector}/transfer`.
+/// Handle `POST /v1/sns/registrations/{selector}/transfer`.
 pub async fn handle_transfer_registration(
     Path(selector): Path<String>,
     State(app): State<SharedAppState>,
@@ -778,7 +778,7 @@ pub async fn handle_transfer_registration(
     Ok(JsonBody(record))
 }
 
-/// Handle `POST /v2/sns/registrations/{selector}/controllers`.
+/// Handle `POST /v1/sns/registrations/{selector}/controllers`.
 pub async fn handle_update_controllers(
     Path(selector): Path<String>,
     State(app): State<SharedAppState>,
@@ -792,7 +792,7 @@ pub async fn handle_update_controllers(
     Ok(JsonBody(record))
 }
 
-/// Handle `POST /v2/sns/registrations/{selector}/freeze`.
+/// Handle `POST /v1/sns/registrations/{selector}/freeze`.
 pub async fn handle_freeze_registration(
     Path(selector): Path<String>,
     State(app): State<SharedAppState>,
@@ -806,7 +806,7 @@ pub async fn handle_freeze_registration(
     Ok(JsonBody(record))
 }
 
-/// Handle `DELETE /v2/sns/registrations/{selector}/freeze`.
+/// Handle `DELETE /v1/sns/registrations/{selector}/freeze`.
 pub async fn handle_unfreeze_registration(
     Path(selector): Path<String>,
     State(app): State<SharedAppState>,
@@ -820,7 +820,7 @@ pub async fn handle_unfreeze_registration(
     Ok(JsonBody(record))
 }
 
-/// Handle `GET /v2/sns/policies/{suffix_id}`.
+/// Handle `GET /v1/sns/policies/{suffix_id}`.
 pub async fn handle_get_policy(
     Path(suffix_id): Path<SuffixId>,
     State(app): State<SharedAppState>,
@@ -830,7 +830,7 @@ pub async fn handle_get_policy(
     Ok(JsonBody(policy))
 }
 
-/// Handle `POST /v2/sns/governance/cases`.
+/// Handle `POST /v1/sns/governance/cases`.
 pub async fn handle_post_case(
     State(app): State<SharedAppState>,
     crate::JsonOnly(payload): crate::JsonOnly<Value>,
@@ -840,7 +840,7 @@ pub async fn handle_post_case(
     Ok(JsonBody(envelope))
 }
 
-/// Handle `GET /v2/sns/governance/cases`.
+/// Handle `GET /v1/sns/governance/cases`.
 pub async fn handle_get_cases(
     State(app): State<SharedAppState>,
     RawQuery(raw): RawQuery,

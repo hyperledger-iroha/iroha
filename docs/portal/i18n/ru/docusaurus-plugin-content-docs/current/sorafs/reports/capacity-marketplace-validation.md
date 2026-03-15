@@ -20,7 +20,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | Проверка | Валидация | Доказательство |
 |-------|------------|----------|
-| Registry принимает канонические декларации емкости | Интеграционный тест выполняет `/v2/sorafs/capacity/declare` через app API, проверяя обработку подписей, захват metadata и передачу в registry ноды. | `crates/iroha_torii/src/routing.rs:7654` |
+| Registry принимает канонические декларации емкости | Интеграционный тест выполняет `/v1/sorafs/capacity/declare` через app API, проверяя обработку подписей, захват metadata и передачу в registry ноды. | `crates/iroha_torii/src/routing.rs:7654` |
 | Smart contract отклоняет несовпадающие payloads | Unit-тест гарантирует, что IDs providers и поля committed GiB совпадают с подписанной декларацией перед сохранением. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI выпускает канонические artefacts онбординга | CLI harness пишет детерминированные Norito/JSON/Base64 выходы и валидирует round-trips, чтобы операторы могли готовить декларации offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Руководство оператора описывает workflow приема и guardrails управления | Документация перечисляет схему декларации, defaults policy и шаги ревью для council. | `../storage-capacity-marketplace.md` |

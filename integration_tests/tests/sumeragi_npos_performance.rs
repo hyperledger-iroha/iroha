@@ -1325,7 +1325,7 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
     let http = reqwest::Client::new();
     let sessions_url = client
         .torii_url
-        .join("v2/sumeragi/rbc/sessions")
+        .join("v1/sumeragi/rbc/sessions")
         .wrap_err("compose RBC sessions URL")?;
     let metrics_url = client
         .torii_url

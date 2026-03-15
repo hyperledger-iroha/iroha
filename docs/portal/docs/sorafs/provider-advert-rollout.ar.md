@@ -52,7 +52,7 @@ title: "خطة طرح وتوافق adverts لمزودي SoraFS"
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` مع `max_span` محدد
      - `allow_unknown_capabilities=<true|false>` عند وجود TLVs من GREASE
-   - تحقق عبر `/v2/sorafs/providers` و`sorafs_fetch`; يجب triage تحذيرات
+   - تحقق عبر `/v1/sorafs/providers` و`sorafs_fetch`; يجب triage تحذيرات
      capabilities غير المعروفة.
 3. **التحقق من جاهزية multi-source.**
    - نفذ `sorafs_fetch` مع `--provider-advert=<path>`؛ يفشل CLI الآن عندما
@@ -192,9 +192,9 @@ groups:
 - **رسالة حالة أسبوعية.** يرسل DevRel ملخصا موجزا لمقاييس القبول والتحذيرات
   والمواعيد القادمة.
 - **استجابة للحوادث.** إذا انطلقت تنبيهات `reject`، يقوم on-call بما يلي:
-  1. جلب advert المخالف عبر discovery في Torii (`/v2/sorafs/providers`).
+  1. جلب advert المخالف عبر discovery في Torii (`/v1/sorafs/providers`).
   2. إعادة تشغيل تحقق advert في pipeline المزود ومقارنة النتائج مع
-     `/v2/sorafs/providers` لإعادة إنتاج الخطأ.
+     `/v1/sorafs/providers` لإعادة إنتاج الخطأ.
   3. التنسيق مع المزود لتدوير advert قبل اقتراب مهلة refresh التالية.
 - **تجميد التغييرات.** لا تغيرات على schema للـ capabilities خلال R1/R2 ما لم
   يوافق عليها فريق rollout؛ يجب جدولة تجارب GREASE ضمن نافذة الصيانة الأسبوعية

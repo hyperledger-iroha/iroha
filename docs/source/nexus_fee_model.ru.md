@@ -22,7 +22,7 @@ translation_last_reviewed: 2026-01-08
   `dislocated`). Эти флаги подаются в settlement router, чтобы итоговая XOR котировка совпадала с
   каноническим TWAP и haircut tier для lane.
 - Транзакции IVM должны содержать метаданные `gas_limit` (`u64`, > 0), чтобы ограничить риск по комиссиям.
-  Эндпоинт `/v2/contracts/call` требует `gas_limit` явно, а некорректные значения отклоняются.
+  Эндпоинт `/v1/contracts/call` требует `gas_limit` явно, а некорректные значения отклоняются.
 - Когда транзакция задает метаданные `fee_sponsor`, спонсор должен выдать вызывающему
   `CanUseFeeSponsor { sponsor }`. Попытки спонсирования без разрешения отклоняются и фиксируются.
 - Каждая транзакция, оплачивающая gas, записывает `LaneSettlementReceipt`. Каждый receipt хранит
@@ -30,7 +30,7 @@ translation_last_reviewed: 2026-01-08
   XOR после haircut, реализованный safety margin (`xor_variance_micro`) и timestamp блока в
   миллисекундах.
 - Исполнение блока агрегирует receipts по lane/dataspace и публикует их через
-  `lane_settlement_commitments` в `/v2/sumeragi/status`. Итоги выставляют `total_local_micro`,
+  `lane_settlement_commitments` в `/v1/sumeragi/status`. Итоги выставляют `total_local_micro`,
   `total_xor_due_micro` и `total_xor_after_haircut_micro`, суммированные по блоку для ночных выгрузок
   reconciliation.
 - Новый счетчик `total_xor_variance_micro` отслеживает, сколько safety margin было израсходовано

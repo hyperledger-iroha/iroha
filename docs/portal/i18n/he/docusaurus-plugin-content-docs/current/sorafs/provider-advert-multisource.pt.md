@@ -66,7 +66,7 @@ A cobertura de regressao vive em
 ## מכשירים אלקטרוניים
 
 - עומסי פרסומות המוכיחים את הפיתוח כוללים מטא נתונים `range_capability`,
-  `stream_budget` e `transport_hints`. תקף דרך respostas de `/v2/sorafs/providers`
+  `stream_budget` e `transport_hints`. תקף דרך respostas de `/v1/sorafs/providers`
   e אביזרי קבלה; קורות חיים בפיתוח JSON כוללים יכולת ניתוח, או זרם
   budget e arrays de hints para ingestao de telemetria.
 - `cargo xtask sorafs-admission-fixtures` תקציבי זרם מוסטרה ותחבורה רמזים dentro
@@ -76,7 +76,7 @@ A cobertura de regressao vive em
   - `multi_fetch_plan.json` para que suites de SDK reproduzam um plano de fetch
     דטרמיניסטי מרובה עמיתים.
 
-## Integracao com מתזמר e Torii- Torii `/v2/sorafs/providers` retorna metadata de range parseada junto com
+## Integracao com מתזמר e Torii- Torii `/v1/sorafs/providers` retorna metadata de range parseada junto com
   `stream_budget` e `transport_hints`. אביזוס דירוג לאחור disparam quando
   מוכיחים להשמיט מטא נתונים חדשניים, ונקודות קצה של טווח לעשות אפליקציית שער כמו
   mesmas restricoes para clientes diretos.

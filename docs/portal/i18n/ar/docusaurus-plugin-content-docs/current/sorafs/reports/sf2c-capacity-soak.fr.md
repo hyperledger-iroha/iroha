@@ -44,7 +44,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ## قابلية الملاحظة
 
 يعرض Torii الاحتفاظ بلقطات موفري الائتمان لأسعار دفاتر الرسوم للوحات المعلومات
-بوابة قوية لفشل الجنود وضربات الجزاء:- الباقي: `GET /v2/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
+بوابة قوية لفشل الجنود وضربات الجزاء:- الباقي: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
   تعكس صفائح دفتر الأستاذ التي تم التحقق منها من خلال اختبار النقع. إستفتاء
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - استيراد Grafana: تتبع الملفات `dashboards/grafana/sorafs_capacity_penalties.json`

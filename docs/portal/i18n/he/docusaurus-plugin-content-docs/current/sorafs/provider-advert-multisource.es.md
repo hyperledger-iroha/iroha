@@ -64,7 +64,7 @@ La cobertura de regresión vive en
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## מתקנים ומכשירים- מטענים פרסומיים של הודעות מוכיחות כוללות מטא נתונים `range_capability`,
-  `stream_budget` y `transport_hints`. Valida via respuestas de `/v2/sorafs/providers` y
+  `stream_budget` y `transport_hints`. Valida via respuestas de `/v1/sorafs/providers` y
   אביזרי כניסה; los resúmenes JSON deben כולל את capacidad parseada,
   el stream budget y los arrays de hints para ingestión de telemetria.
 - `cargo xtask sorafs-admission-fixtures` תקציבי זרם חשיפה ורמזים לתחבורה dentro de
@@ -77,7 +77,7 @@ La cobertura de regresión vive en
 
 ## אינטגרציה עם orquestador y Torii
 
-- Torii `/v2/sorafs/providers` devuelve metadata de capacidad de rango parseada junto con
+- Torii `/v1/sorafs/providers` devuelve metadata de capacidad de rango parseada junto con
   `stream_budget` y `transport_hints`. אין פרסומות להורדת דירוג cuando los
   מוכיח את המטא נתונים של נואבה, ואת נקודות הקצה של ה-rango del gateway aplican las
   מגבלות שונות למנהלי לקוחות.

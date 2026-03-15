@@ -18,9 +18,9 @@ ainsi qu’un relay minimal en nœud lorsque le feature Cargo `connect` est
 activé (par défaut). Le comportement runtime est piloté par la configuration :
 
 - Définir `connect.enabled=false` pour désactiver toutes les routes Connect
-  (`/v2/connect/*`).
+  (`/v1/connect/*`).
 - Laisser `true` (valeur par défaut) pour activer les endpoints de session
-  WebSocket et `/v2/connect/status`.
+  WebSocket et `/v1/connect/status`.
 
 Overrides d’environnement (config utilisateur → config effective) :
 
@@ -48,10 +48,10 @@ Notes :
   tolère `ping_miss_tolerance` pongs consécutifs manquants avant de fermer le
   WebSocket et d’incrémenter la métrique `connect.ping_miss_total`.
 - Lorsque `connect.enabled=false`, les routes WS et de statut Connect ne sont
-  pas enregistrées ; les requêtes vers `/v2/connect/ws` et
-  `/v2/connect/status` renvoient 404.
+  pas enregistrées ; les requêtes vers `/v1/connect/ws` et
+  `/v1/connect/status` renvoient 404.
 - Le serveur exige un `sid` fourni par le client pour
-  `/v2/connect/session` (base64url ou hex, 32 octets). Il ne génère plus de
+  `/v1/connect/session` (base64url ou hex, 32 octets). Il ne génère plus de
   `sid` de secours.
 
 Voir aussi :

@@ -164,7 +164,7 @@ Isso confirma que o instante TEU, os metadonnees de alias e os indicadores de ma
 
 ## 6. Testar os valores padrão dos clientes- **Rust/CLI.** `iroha_cli` e o cliente de caixa Rust omite o campeão `lane_id` quando você não passa por `--lane-id` / `LaneSelector`. O roteador da fila retorna ao `default_lane`. Use os sinalizadores explícitos `--lane-id`/`--dataspace-id` somente quando você abrir uma faixa não padrão.
 - **JS/Swift/Android.** As versões anteriores do SDK apresentam `laneId`/`lane_id` como opções e retornam ao valor anunciado por `/status`. Garanta a política de rota sincronizada entre a preparação e a produção para que os aplicativos móveis não precisem de reconfigurações de emergência.
-- **Testes de pipeline/SSE.** Os filtros de eventos de transações aceitam os predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Conecte-se a `/v2/pipeline/events/transactions` com este filtro para provar que as escrituras enviadas sem a via chegaram explicitamente ao ID da via de fallback.
+- **Testes de pipeline/SSE.** Os filtros de eventos de transações aceitam os predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Conecte-se a `/v1/pipeline/events/transactions` com este filtro para provar que as escrituras enviadas sem a via chegaram explicitamente ao ID da via de fallback.
 
 ## 7. Observabilidade e pontos de avanço de governo
 

@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-01-30
 ## Scope Summary
 
 - Translate the refreshed quickstart sections covering the Norito sample
-  walkthrough, `/v2/pipeline` submission flow, and telemetry toggle explainer.
+  walkthrough, `/v1/pipeline` submission flow, and telemetry toggle explainer.
 - Update localized screenshot captions + callouts; English sources live under
   `docs/assets/android/samples/quickstart/`. Annotated PNG exports are attached
   to the Docs tracker issue `DOCS-L10N-4930`.

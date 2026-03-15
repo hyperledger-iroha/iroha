@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 | მოთხოვნა | დეტალი |
 |-------------|--------|
-| ოქმები | დაისვენეთ `/v2/sns/*` და gRPC სერვისით `sns.v1.Registrar`. ორივე იღებს Norito-JSON (`application/json`) და Norito-RPC ორობით (`application/x-norito`). |
+| ოქმები | დაისვენეთ `/v1/sns/*` და gRPC სერვისით `sns.v1.Registrar`. ორივე იღებს Norito-JSON (`application/json`) და Norito-RPC ორობით (`application/x-norito`). |
 | ავტორიზაცია | `Authorization: Bearer` ჟეტონები ან mTLS სერთიფიკატები გაცემული სუფიქსის სტიუარდზე. მმართველობისადმი მგრძნობიარე საბოლოო წერტილები (გაყინვა/გაყინვა, დაჯავშნილი დავალებები) მოითხოვს `scope=sns.admin`. |
 | განაკვეთის ლიმიტები | რეგისტრატორები იზიარებენ `torii.preauth_scheme_limits` თაიგულებს JSON აბონენტებთან პლუს თითო სუფიქსის ადიდებული ქუდები: `sns.register`, `sns.renew`, `sns.controller`, I18NI000000042X. |
 | ტელემეტრია | Torii ავლენს `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` რეგისტრატორის დამმუშავებლებისთვის (ფილტრი `scheme="norito_rpc"`-ზე); API ასევე ზრდის `sns_registrar_status_total{result, suffix_id}`. |
@@ -110,15 +110,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | ბოლო წერტილი | მეთოდი | ტვირთამწეობა | აღწერა |
 |----------|--------|---------|-------------|
-| `/v2/sns/registrations` | პოსტი | `RegisterNameRequestV1` | დარეგისტრირდით ან ხელახლა გახსენით სახელი. აგვარებს ფასების დონეს, ამოწმებს გადახდის/მმართველობის მტკიცებულებებს, გამოსცემს რეესტრის მოვლენებს. |
-| `/v2/sns/registrations/{selector}/renew` | პოსტი | `RenewNameRequestV1` | ვადის გახანგრძლივება. ახორციელებს მადლი/გამოსყიდვის ფანჯრებს პოლიტიკიდან. |
-| `/v2/sns/registrations/{selector}/transfer` | პოსტი | `TransferNameRequestV1` | მფლობელობის გადაცემა მმართველობის დამტკიცების შემდეგ. |
-| `/v2/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | კონტროლერის ნაკრების შეცვლა; ამოწმებს ხელმოწერილი ანგარიშის მისამართებს. |
-| `/v2/sns/registrations/{selector}/freeze` | პოსტი | `FreezeNameRequestV1` | მეურვის/საბჭოს გაყინვა. მოითხოვს მეურვის ბილეთს და მითითებას მმართველობის დოკუმენტზე. |
-| `/v2/sns/registrations/{selector}/freeze` | წაშლა | `GovernanceHookV1` | გაყინვა რემედიაციის შემდეგ; უზრუნველყოფს საბჭოს უგულებელყოფის ჩაწერას. |
-| `/v2/sns/reserved/{selector}` | პოსტი | `ReservedAssignmentRequestV1` | რეზერვირებული სახელების სტიუარდი/საბჭოს მინიჭება. |
-| `/v2/sns/policies/{suffix_id}` | მიიღეთ | — | მიიღეთ მიმდინარე `SuffixPolicyV1` (ქეშირებადი). |
-| `/v2/sns/registrations/{selector}` | მიიღეთ | — | აბრუნებს მიმდინარე `NameRecordV1` + ეფექტურ მდგომარეობას (აქტიური, Grace და ა.შ.). |
+| `/v1/sns/registrations` | პოსტი | `RegisterNameRequestV1` | დარეგისტრირდით ან ხელახლა გახსენით სახელი. აგვარებს ფასების დონეს, ამოწმებს გადახდის/მმართველობის მტკიცებულებებს, გამოსცემს რეესტრის მოვლენებს. |
+| `/v1/sns/registrations/{selector}/renew` | პოსტი | `RenewNameRequestV1` | ვადის გახანგრძლივება. ახორციელებს მადლი/გამოსყიდვის ფანჯრებს პოლიტიკიდან. |
+| `/v1/sns/registrations/{selector}/transfer` | პოსტი | `TransferNameRequestV1` | მფლობელობის გადაცემა მმართველობის დამტკიცების შემდეგ. |
+| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | კონტროლერის ნაკრების შეცვლა; ამოწმებს ხელმოწერილი ანგარიშის მისამართებს. |
+| `/v1/sns/registrations/{selector}/freeze` | პოსტი | `FreezeNameRequestV1` | მეურვის/საბჭოს გაყინვა. მოითხოვს მეურვის ბილეთს და მითითებას მმართველობის დოკუმენტზე. |
+| `/v1/sns/registrations/{selector}/freeze` | წაშლა | `GovernanceHookV1` | გაყინვა რემედიაციის შემდეგ; უზრუნველყოფს საბჭოს უგულებელყოფის ჩაწერას. |
+| `/v1/sns/reserved/{selector}` | პოსტი | `ReservedAssignmentRequestV1` | რეზერვირებული სახელების სტიუარდი/საბჭოს მინიჭება. |
+| `/v1/sns/policies/{suffix_id}` | მიიღეთ | — | მიიღეთ მიმდინარე `SuffixPolicyV1` (ქეშირებადი). |
+| `/v1/sns/registrations/{selector}` | მიიღეთ | — | აბრუნებს მიმდინარე `NameRecordV1` + ეფექტურ მდგომარეობას (აქტიური, Grace და ა.შ.). |
 
 ** სელექტორის კოდირება:** `{selector}` ბილიკის სეგმენტი იღებს I105 (სასურველია), შეკუმშული (`sora`, მეორე საუკეთესო) ან კანონიკურ ექვსკუთხედს ADDR-5-ზე; Torii ახდენს მის ნორმალიზებას `NameSelectorV1`-ის საშუალებით.
 
@@ -181,7 +181,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` უნდა შეიცავდეს მოქმედ `GovernanceHookV1` ჩანაწერს (წინადადების ID, ხმის ჰეშები, სტიუარდის/მეურვის ხელმოწერები). თითოეული ბრძანება უბრალოდ ასახავს შესაბამის `/v2/sns/registrations/{selector}/…` საბოლოო წერტილს, ასე რომ ბეტა ოპერატორებს შეუძლიათ გაიმეორონ ზუსტი Torii ზედაპირები, რომლებსაც SDK-ები გამოიძახებენ.
+`--governance-json` უნდა შეიცავდეს მოქმედ `GovernanceHookV1` ჩანაწერს (წინადადების ID, ხმის ჰეშები, სტიუარდის/მეურვის ხელმოწერები). თითოეული ბრძანება უბრალოდ ასახავს შესაბამის `/v1/sns/registrations/{selector}/…` საბოლოო წერტილს, ასე რომ ბეტა ოპერატორებს შეუძლიათ გაიმეორონ ზუსტი Torii ზედაპირები, რომლებსაც SDK-ები გამოიძახებენ.
 
 ## 4. gRPC სერვისი
 
@@ -216,7 +216,7 @@ service Registrar {
 
 Torii ამოწმებს მტკიცებულებებს შემოწმებით:
 
-1. წინადადების ID არსებობს მმართველობის ჟურნალში (`/v2/governance/proposals/{id}`) და სტატუსი არის `Approved`.
+1. წინადადების ID არსებობს მმართველობის ჟურნალში (`/v1/governance/proposals/{id}`) და სტატუსი არის `Approved`.
 2. ჰეშები ემთხვევა ჩაწერილი ხმის არტეფაქტებს.
 3. სტიუარდის/მეურვის ხელმოწერები მიუთითებს მოსალოდნელ საჯარო გასაღებებზე `SuffixPolicyV1`-დან.
 
@@ -226,7 +226,7 @@ Torii ამოწმებს მტკიცებულებებს შე
 
 ### 6.1 სტანდარტული რეგისტრაცია
 
-1. კლიენტი ითხოვს `/v2/sns/policies/{suffix_id}` ფასების, მადლისა და ხელმისაწვდომი დონის მისაღებად.
+1. კლიენტი ითხოვს `/v1/sns/policies/{suffix_id}` ფასების, მადლისა და ხელმისაწვდომი დონის მისაღებად.
 2. კლიენტი აშენებს `RegisterNameRequestV1`:
    - `selector` მიღებული სასურველი I105 ან მეორე საუკეთესო შეკუმშული (`sora`) ეტიკეტიდან.
    - `term_years` პოლიტიკის ფარგლებში.
@@ -253,7 +253,7 @@ Grace განახლება მოიცავს სტანდარტ
 
 1. Guardian წარუდგენს `FreezeNameRequestV1` ბილეთის მითითების ინციდენტის ID-ით.
 2. Torii გადააქვს ჩანაწერი `NameStatus::Frozen`-ზე, გამოსცემს `NameFrozen`.
-3. გამოსწორების შემდეგ საკრებულოს საკითხები გადაიჭრება; ოპერატორი აგზავნის DELETE `/v2/sns/registrations/{selector}/freeze`-ს `GovernanceHookV1`-ით.
+3. გამოსწორების შემდეგ საკრებულოს საკითხები გადაიჭრება; ოპერატორი აგზავნის DELETE `/v1/sns/registrations/{selector}/freeze`-ს `GovernanceHookV1`-ით.
 4. Torii ამოწმებს გადაფარვას, გამოსცემს `NameUnfrozen`.
 
 ## 7. ვალიდაციის და შეცდომის კოდები
@@ -271,7 +271,7 @@ Grace განახლება მოიცავს სტანდარტ
 ## 8. განხორციელების შენიშვნები
 
 - Torii ინახავს მომლოდინე აუქციონებს `NameRecordV1.auction` ქვეშ და უარყოფს პირდაპირ რეგისტრაციის მცდელობებს, ხოლო `PendingAuction`.
-- გადახდის დამადასტურებელი საბუთების ხელახლა გამოყენება Norito წიგნში ქვითრები; სახაზინო მომსახურება უზრუნველყოფს დამხმარე API-ებს (`/v2/finance/sns/payments`).
+- გადახდის დამადასტურებელი საბუთების ხელახლა გამოყენება Norito წიგნში ქვითრები; სახაზინო მომსახურება უზრუნველყოფს დამხმარე API-ებს (`/v1/finance/sns/payments`).
 - SDK-ებმა უნდა შეფუთონ ეს ბოლო წერტილები მკაცრად აკრეფილი დამხმარეებით, რათა საფულეებმა წარმოადგინონ შეცდომის აშკარა მიზეზები (`ERR_SNS_RESERVED` და ა.შ.).
 
 ## 9. შემდეგი ნაბიჯები

@@ -63,9 +63,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |------|----------------|-------|----------|
 | Draft | Propietario del dataspace | Clonar fixture, editar permisos/gobernanza, ejecutar `cargo test -p iroha_data_model nexus::manifest`. | Diff de Git, log de tests. |
 | Review | Governance WG | Validar JSON del manifest + bytes Norito, firmar registro de decisión. | Acta firmada, hash del manifest (BLAKE3 + Norito `.to`). |
-| Publish | Lane ops | Enviar vía CLI (`iroha app space-directory manifest publish`) usando un payload Norito `.to` o JSON raw **o** hacer POST a `/v2/space-directory/manifests` con el JSON del manifest + reason opcional, verificar la respuesta de Torii y capturar `SpaceDirectoryEvent`. | Recibo CLI/Torii, log de eventos. |
+| Publish | Lane ops | Enviar vía CLI (`iroha app space-directory manifest publish`) usando un payload Norito `.to` o JSON raw **o** hacer POST a `/v1/space-directory/manifests` con el JSON del manifest + reason opcional, verificar la respuesta de Torii y capturar `SpaceDirectoryEvent`. | Recibo CLI/Torii, log de eventos. |
 | Expire | Lane ops / Gobernanza | Ejecutar `iroha app space-directory manifest expire` (UAID, dataspace, epoch) cuando un manifest llegue al final de su vida útil, verificar `SpaceDirectoryEvent::ManifestExpired`, archivar evidencias de limpieza de bindings. | Salida de CLI, log de eventos. |
-| Revoke | Gobernanza + Lane ops | Ejecutar `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **o** hacer POST a `/v2/space-directory/manifests/revoke` con el mismo payload hacia Torii, verificar `SpaceDirectoryEvent::ManifestRevoked`, actualizar el paquete de evidencias. | Recibo CLI/Torii, log de eventos, nota en el ticket. |
+| Revoke | Gobernanza + Lane ops | Ejecutar `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **o** hacer POST a `/v1/space-directory/manifests/revoke` con el mismo payload hacia Torii, verificar `SpaceDirectoryEvent::ManifestRevoked`, actualizar el paquete de evidencias. | Recibo CLI/Torii, log de eventos, nota en el ticket. |
 | Monitor | SRE/Compliance | Seguir la telemetría + logs de auditoría, configurar alertas para revocaciones/expiración. | Captura de Grafana, logs archivados. |
 | Rotate/Revoke | Lane ops + Gobernanza | Preparar manifest de reemplazo (nuevo epoch), hacer tabletop, abrir incidente (en caso de revoke). | Ticket de rotación, post‑mortem del incidente. |
 
@@ -149,7 +149,7 @@ semántica “deny gana”.
 Los operadores pueden publicar manifests directamente vía Torii, sin depender del CLI.
 
 ```
-POST /v2/space-directory/manifests
+POST /v1/space-directory/manifests
 ```
 
 | Campo | Tipo | Descripción |
@@ -204,7 +204,7 @@ POST directamente a Torii para encolar la instrucción canónica
 `CanPublishSpaceDirectoryManifest { dataspace }`, alineada con el flujo del CLI.
 
 ```
-POST /v2/space-directory/manifests/revoke
+POST /v1/space-directory/manifests/revoke
 ```
 
 | Campo | Tipo | Descripción |

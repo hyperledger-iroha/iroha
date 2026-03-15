@@ -138,8 +138,8 @@ JS4/JS7.
 
 ## გამეორებადი სიები და პაგინაცია
 
-პაგინაციის დამხმარეები ასახავს Python SDK ერგონომიკას `/v2/accounts`-ისთვის,
-`/v2/domains`, `/v2/assets/definitions`, NFTs, ნაშთები, აქტივების მფლობელები და
+პაგინაციის დამხმარეები ასახავს Python SDK ერგონომიკას `/v1/accounts`-ისთვის,
+`/v1/domains`, `/v1/assets/definitions`, NFTs, ნაშთები, აქტივების მფლობელები და
 ანგარიშის ტრანზაქციის ისტორია.
 
 ```ts
@@ -189,7 +189,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) მონიშნეთ შემდეგი ვადა (განახლება → პოლიტიკა
 → სერთიფიკატი) ასე რომ, UI სამკერდე ნიშნებს შეუძლიათ გააფრთხილონ ოპერატორები, როცა შემწეობა აქვს
 <24 საათი დარჩა. SDK
-ასახავს `/v2/offline/allowances`-ის მიერ გამოვლენილ REST ფილტრებს:
+ასახავს `/v1/offline/allowances`-ის მიერ გამოვლენილ REST ფილტრებს:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` და
 `requireVerdict` / `onlyMissingVerdict` ლოგინები. არასწორი კომბინაციები (ამისთვის
@@ -272,8 +272,8 @@ WebSocket საბოლოო წერტილები. ყველა ს
 
 ## Explorer-ის სნეპშოტები და QR დატვირთვები
 
-Explorer ტელემეტრია უზრუნველყოფს აკრეფილ დამხმარეებს `/v2/explorer/metrics`-სთვის და
-`/v2/explorer/accounts/{account_id}/qr` ბოლო წერტილებია, რათა დაფამ შეძლოს მისი ხელახლა დაკვრა
+Explorer ტელემეტრია უზრუნველყოფს აკრეფილ დამხმარეებს `/v1/explorer/metrics`-სთვის და
+`/v1/explorer/accounts/{account_id}/qr` ბოლო წერტილებია, რათა დაფამ შეძლოს მისი ხელახლა დაკვრა
 იგივე კადრები, რომლებიც აძლიერებენ პორტალს. `getExplorerMetrics()` ახდენს ნორმალიზებას
 დატვირთვა და აბრუნებს `null`, როდესაც მარშრუტი გამორთულია. დააწყვილეთ იგი
 `getExplorerAccountQr()` როცა დაგჭირდებათ I105 (სასურველია)/სორა (მეორე საუკეთესო) ლიტერალები პლუს ინლაინ
@@ -382,7 +382,7 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 ### შეაერთეთ WebSocket აკრეფა
 
 `ToriiClient.openConnectWebSocket()` აწყობს კანონიკურს
-`/v2/connect/ws` URL (მათ შორის, `sid`, `role` და ტოკენის პარამეტრები), განახლებები
+`/v1/connect/ws` URL (მათ შორის, `sid`, `role` და ტოკენის პარამეტრები), განახლებები
 `http→ws` / `https→wss` და გადასცემს საბოლოო URL ნებისმიერ WebSocket-ს
 განხორციელებას თქვენ აწვდით. ბრაუზერები ავტომატურად ხელახლა იყენებენ გლობალურს
 `WebSocket`. Node.js აბონენტებმა უნდა გაიარონ ისეთი კონსტრუქტორი, როგორიცაა `ws`:
@@ -464,7 +464,7 @@ async function dialWithTelemetry(client: ToriiClient) {
 
 ## სტრიმინგის დამკვირვებლები და მოვლენის კურსორები
 
-`ToriiClient.streamEvents()` ავლენს `/v2/events/sse`-ს, როგორც ასინქრონულ იტერატორს ავტომატური
+`ToriiClient.streamEvents()` ავლენს `/v1/events/sse`-ს, როგორც ასინქრონულ იტერატორს ავტომატური
 ხელახლა ცდის, ასე რომ Node/Bun CLI-ებს შეუძლიათ მილსადენის აქტივობის კუდში შეყვანა ისევე, როგორც Rust CLI აკეთებს.
 შეინახეთ `Last-Event-ID` კურსორი თქვენი runbook არტეფაქტებთან ერთად, რათა ოპერატორებმა შეძლონ
 განაახლეთ ნაკადი მოვლენების გამოტოვების გარეშე, როდესაც პროცესი განახლდება.
@@ -503,7 +503,7 @@ for await (const event of torii.streamEvents({
   სიგნალი მიიღება; გაიარეთ `STREAM_MAX_EVENTS=25`, როდესაც დაგჭირდებათ მხოლოდ პირველი რამდენიმე ღონისძიება
   კვამლის ტესტისთვის.
 - `ToriiClient.streamSumeragiStatus()` ასახავს იმავე ინტერფეისს
-  `/v2/sumeragi/status/sse` ასე რომ, კონსენსუსის ტელემეტრია შეიძლება ცალ-ცალკე განხორციელდეს და
+  `/v1/sumeragi/status/sse` ასე რომ, კონსენსუსის ტელემეტრია შეიძლება ცალ-ცალკე განხორციელდეს და
   iterator პატივს სცემს `Last-Event-ID`-ს იმავე გზით.
 - იხილეთ `javascript/iroha_js/recipes/streaming.mjs` ანაზრაურების CLI-სთვის (კურსორის გამძლეობა,
   env-var ფილტრის უგულებელყოფა და `extractPipelineStatusKind` logging) გამოიყენება JS4-ში
@@ -610,14 +610,14 @@ JS საგზაო რუკა ასევე მოითხოვს Road
 დაამტკიცეთ, რომ ბლოკი, რომელიც მათ მოიტანა Sumeragi-ით, ემთხვევა მათ მიერ დამოწმებულ ნაწილს.
 გამოიყენეთ ჩაშენებული დამხმარეები იმის ნაცვლად, რომ ააშენოთ ტვირთი ხელით:
 
-1. `getSumeragiRbcSessions()` სარკეები `/v2/sumeragi/rbc/sessions` და
+1. `getSumeragiRbcSessions()` სარკეები `/v1/sumeragi/rbc/sessions` და
    `findRbcSamplingCandidate()` ავტომატურად ირჩევს პირველ მიწოდებულ სესიას ბლოკის ჰეშით
    (ინტეგრაციის კომპლექტი მას უბრუნდება ნებისმიერ დროს
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` არ არის დაყენებული).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` ნორმალიზდება `{blockHash,height,view}`
    პლუს არასავალდებულო `{count,seed,apiToken}` უგულებელყოფს ასე არასწორი თექვსმეტობით ან უარყოფით მთელ რიცხვებს არასოდეს
    მიაღწიეთ Torii.
-3. `sampleRbcChunks()` აგზავნის მოთხოვნას `/v2/sumeragi/rbc/sample`-ზე, აბრუნებს ნაწილაკების მტკიცებულებებს
+3. `sampleRbcChunks()` აგზავნის მოთხოვნას `/v1/sumeragi/rbc/sample`-ზე, აბრუნებს ნაწილაკების მტკიცებულებებს
    და მერკლის ბილიკები (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) უნდა დაარქივოთ
    თქვენი შვილად აყვანის დანარჩენი მტკიცებულებები.
 4. `getSumeragiRbcDelivered(height, view)` იღებს კოჰორტის მიწოდების მეტამონაცემებს, ასე რომ აუდიტორები

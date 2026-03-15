@@ -36,18 +36,18 @@ translator: manual
 
 ## Torii (feature `app_api`)
 
-- **POST `/v2/contracts/deploy`** — גוף: `DeployContractDto` (`authority`, `private_key`, `code_b64`). Torii מחשב hash-ים, בונה מניפסט ושולח `RegisterSmartContractCode` + `RegisterSmartContractBytes` בטרנזקציה אחת. תשובה: `{ ok, code_hash_hex, abi_hash_hex }`.
-- **POST `/v2/contracts/code`** — גוף: `RegisterContractCodeDto` (`authority`, `private_key`, `manifest`). שולח רק את המניפסט.
-- **POST `/v2/contracts/instance`** — גוף: `DeployAndActivateInstanceDto` (`authority`, `private_key`, `namespace`, `contract_id`, `code_b64`, מניפסט אופציונלי). מבצע פריסה והפעלה אטומית. תשובה: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`.
-- **POST `/v2/contracts/instance/activate`** — גוף: `ActivateInstanceDto` (`authority`, `private_key`, `namespace`, `contract_id`, `code_hash`). מפעיל חוזה קיים. תשובה: `{ ok: true }`.
-- **GET `/v2/contracts/code/{code_hash}`** — מחזיר `{ manifest: { code_hash, abi_hash } }`.
-- **GET `/v2/contracts/code-bytes/{code_hash}`** — מחזיר `{ code_b64 }` עם ה-bytecode.
+- **POST `/v1/contracts/deploy`** — גוף: `DeployContractDto` (`authority`, `private_key`, `code_b64`). Torii מחשב hash-ים, בונה מניפסט ושולח `RegisterSmartContractCode` + `RegisterSmartContractBytes` בטרנזקציה אחת. תשובה: `{ ok, code_hash_hex, abi_hash_hex }`.
+- **POST `/v1/contracts/code`** — גוף: `RegisterContractCodeDto` (`authority`, `private_key`, `manifest`). שולח רק את המניפסט.
+- **POST `/v1/contracts/instance`** — גוף: `DeployAndActivateInstanceDto` (`authority`, `private_key`, `namespace`, `contract_id`, `code_b64`, מניפסט אופציונלי). מבצע פריסה והפעלה אטומית. תשובה: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`.
+- **POST `/v1/contracts/instance/activate`** — גוף: `ActivateInstanceDto` (`authority`, `private_key`, `namespace`, `contract_id`, `code_hash`). מפעיל חוזה קיים. תשובה: `{ ok: true }`.
+- **GET `/v1/contracts/code/{code_hash}`** — מחזיר `{ manifest: { code_hash, abi_hash } }`.
+- **GET `/v1/contracts/code-bytes/{code_hash}`** — מחזיר `{ code_b64 }` עם ה-bytecode.
 
 כל נקודות הקצה של מחזור החיים חולקות rate limiter משותף (`torii.deploy_rate_per_origin_per_sec`, `torii.deploy_burst_per_origin`). ברירת המחדל: 4 בקשות לשנייה ו-burst של 8 לכל מקור (`X-API-Token`, כתובת IP, ושם נקודת הקצה). חריגה → HTTP 429 והגדלת `torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}`; שגיאת מעבד → `torii_contract_errors_total{endpoint=…}`.
 
 ## אינטגרציית ממשל וניימספייס מוגנים
 
-- `gov_protected_namespaces` (פרמטר מותאם) מפעיל שער קבלה. Torii מספק `/v2/gov/protected-namespaces`; CLI: `iroha_cli app gov protected set/get`.
+- `gov_protected_namespaces` (פרמטר מותאם) מפעיל שער קבלה. Torii מספק `/v1/gov/protected-namespaces`; CLI: `iroha_cli app gov protected set/get`.
 - הצעות `ProposeDeployContract` מאחסנות `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - לאחר `EnactReferendum` מתקבלות פריסות עם נתונים תואמים ומטא-דאטה `gov_namespace`/`gov_contract_id`.
 

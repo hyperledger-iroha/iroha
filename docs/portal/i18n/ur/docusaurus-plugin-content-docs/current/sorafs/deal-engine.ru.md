@@ -56,12 +56,12 @@ SLO نفاذ. مندرجہ ذیل اقدامات شروع کردہ سلیشنگ 
 ## انضمام Torii
 
 Torii سرشار اختتامی نکات فراہم کرتا ہے تاکہ فراہم کنندہ استعمال اور طرز عمل بھیج سکیں
-خصوصی وائرنگ کے بغیر لین دین کا زندگی کا چکر:- `POST /v2/sorafs/deal/usage` `DealUsageReport` ٹیلی میٹری اور ریٹرن وصول کرتا ہے
+خصوصی وائرنگ کے بغیر لین دین کا زندگی کا چکر:- `POST /v1/sorafs/deal/usage` `DealUsageReport` ٹیلی میٹری اور ریٹرن وصول کرتا ہے
   ڈٹرمینسٹک اکاؤنٹنگ کے نتائج (`UsageOutcome`)۔
-- `POST /v2/sorafs/deal/settle` موجودہ ونڈو کو ختم کرتا ہے ، اسٹریمنگ
+- `POST /v1/sorafs/deal/settle` موجودہ ونڈو کو ختم کرتا ہے ، اسٹریمنگ
   حتمی `DealSettlementRecord` کے ساتھ ساتھ Base64-encoded `DealSettlementV1` ،
   گورننس ڈی اے جی میں اشاعت کے لئے تیار ہیں۔
-- ٹیپ Torii `/v2/events/sse` اب ریکارڈز `SorafsGatewayEvent::DealUsage` کو نشر کرتا ہے ،
+- ٹیپ Torii `/v1/events/sse` اب ریکارڈز `SorafsGatewayEvent::DealUsage` کو نشر کرتا ہے ،
   ہر بھیجنے والے استعمال کا خلاصہ (عہد ، پیمائش شدہ گیب گھنٹے ، ٹکٹ کاؤنٹرز ،
   تعصب کے الزامات) ، اندراجات `SorafsGatewayEvent::DealSettlement` ،
   بشمول کیننیکل اسنیپ شاٹ لیجر کے حساب کتاب کے علاوہ بلیک 3 ڈائجسٹ/سائز/بیس 64

@@ -26,7 +26,7 @@ Ce runbook guide les opérateurs de gouvernance pour présenter les litiges de c
 ## 1. Évaluer l'incident
 
 - **Conditions d'activation :** détection de l'absence de SLA (temps d'activité/chute de PoR), déficit de réplication ou désacuerdo de facturación.
-- **Confirmer la télémétrie :** capture les instantanés de `/v2/sorafs/capacity/state` et `/v2/sorafs/capacity/telemetry` pour le fournisseur.
+- **Confirmer la télémétrie :** capture les instantanés de `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` pour le fournisseur.
 - **Notificar a las partes interesadas :** Équipe de stockage (operaciones del provenedor), Conseil de gouvernance (órgano decisorio), Observabilité (actualisation des tableaux de bord).
 
 ## 2. Préparer le paquet de preuves1. Recopier les artefacts en brut (télémétrie JSON, journaux de CLI, notes d'audit).
@@ -72,7 +72,7 @@ Ce runbook guide les opérateurs de gouvernance pour présenter les litiges de c
    ```
 
 3. Révision `dispute_summary.json` (confirmation du type, résumé des preuves et horodatages).
-4. Envoyez le JSON de la sollicitation au Torii `/v2/sorafs/capacity/dispute` en passant par le colis de transactions d'État. Capturer la valeur de réponse `dispute_id_hex` ; ainsi que les actions de révocation postérieures et les informations de l'auditoire.
+4. Envoyez le JSON de la sollicitation au Torii `/v1/sorafs/capacity/dispute` en passant par le colis de transactions d'État. Capturer la valeur de réponse `dispute_id_hex` ; ainsi que les actions de révocation postérieures et les informations de l'auditoire.
 
 ## 4. Évacuation et révocation1. **Vente de grâce :** notifier au fournisseur la révocation imminente ; permettre l'évacuation des données fijados lorsque la politique le permet.
 2. **Généres `ProviderAdmissionRevocationV1` :**

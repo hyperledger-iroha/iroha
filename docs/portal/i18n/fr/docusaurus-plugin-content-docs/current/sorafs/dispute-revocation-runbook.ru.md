@@ -26,7 +26,7 @@ Ce projet assure la gouvernance des opérateurs en ce qui concerne les activité
 ## 1. Оценить инцидент
 
 - **Déclencheur :** permet de déterminer le SLA (temps de disponibilité/temps de disponibilité), de définir la réplication ou de définir la facturation.
-- **Modifiez le téléphone :** indiquez les instantanés `/v2/sorafs/capacity/state` et `/v2/sorafs/capacity/telemetry` pour le fournisseur.
+- **Modifiez le téléphone :** indiquez les instantanés `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` pour le fournisseur.
 - **Уведомить стейкхолдеров:** Équipe de stockage (операции провайдера), Conseil de gouvernance (орган решения), Observabilité (обновления дашбордов).
 
 ## 2. Ajouter un paquet de documents1. Sélectionnez les éléments d'art sélectionnés (télémétrie JSON, logiciel CLI, paramètres d'auditeur).
@@ -72,7 +72,7 @@ Ce projet assure la gouvernance des opérateurs en ce qui concerne les activité
    ```
 
 3. Vérifiez le `dispute_summary.json` (selon le conseil, résumé des documents et des méthodes).
-4. Déployez JSON dans Torii `/v2/sorafs/capacity/dispute` pour trouver la transition de gouvernance. Téléchargez la réponse `dispute_id_hex` ; Je viens de réaliser mon projet d'écoute et d'écoute.
+4. Déployez JSON dans Torii `/v1/sorafs/capacity/dispute` pour trouver la transition de gouvernance. Téléchargez la réponse `dispute_id_hex` ; Je viens de réaliser mon projet d'écoute et d'écoute.
 
 ## 4. Évacuation et évacuation1. **Окно льготы:** уведомите провайдера о грядущем отзыве; Les mesures d'évacuation sont prises dans le cadre de ces journées, mais c'est une politique double.
 2. **Générez `ProviderAdmissionRevocationV1` :**

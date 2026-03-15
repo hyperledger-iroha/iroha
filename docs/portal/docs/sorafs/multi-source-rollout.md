@@ -22,7 +22,7 @@ It assumes the orchestration stack delivered under SF-6 is already deployed (`so
 ## 1. Pre-flight Validation
 
 1. **Confirm governance inputs.**
-   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v2/sorafs/providers` and compare against the expected capability fields.
+   - All candidate providers must publish `ProviderAdvertV1` envelopes with range capability payloads and stream budgets. Validate via `/v1/sorafs/providers` and compare against the expected capability fields.
    - Telemetry snapshots supplying latency/failure rates should be < 15 minutes old before each canary run.
 2. **Stage configuration.**
    - Persist the orchestrator JSON config in the layered `iroha_config` tree:

@@ -369,8 +369,8 @@ impl DeployArgs {
 
         if let Some(torii_url) = self.torii_url.as_deref() {
             let endpoint_path = match mode {
-                MutationMode::Deploy => "v2/soracloud/deploy",
-                MutationMode::Upgrade => "v2/soracloud/upgrade",
+                MutationMode::Deploy => "v1/soracloud/deploy",
+                MutationMode::Upgrade => "v1/soracloud/upgrade",
             };
             let request = signed_bundle_request(bundle, key_pair)?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -426,8 +426,8 @@ impl UpgradeArgs {
 
         if let Some(torii_url) = self.torii_url.as_deref() {
             let endpoint_path = match mode {
-                MutationMode::Deploy => "v2/soracloud/deploy",
-                MutationMode::Upgrade => "v2/soracloud/upgrade",
+                MutationMode::Deploy => "v1/soracloud/deploy",
+                MutationMode::Upgrade => "v1/soracloud/upgrade",
             };
             let request = signed_bundle_request(bundle, key_pair)?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -457,7 +457,7 @@ pub struct StatusArgs {
     #[arg(long, value_name = "NAME")]
     service_name: Option<String>,
     /// Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query
-    /// `/v2/soracloud/status` from a live control plane.
+    /// `/v1/soracloud/status` from a live control plane.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
     /// Optional API token sent as `x-api-token` when querying Torii.
@@ -534,7 +534,7 @@ impl RollbackArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/rollback",
+                "v1/soracloud/rollback",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -598,7 +598,7 @@ impl RolloutArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/rollout",
+                "v1/soracloud/rollout",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -666,7 +666,7 @@ impl AgentDeployArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/deploy",
+                "v1/soracloud/agent/deploy",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -720,7 +720,7 @@ impl AgentLeaseRenewArgs {
                 signed_agent_lease_renew_request(&self.apartment_name, self.lease_ticks, key_pair)?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/lease/renew",
+                "v1/soracloud/agent/lease/renew",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -766,7 +766,7 @@ impl AgentRestartArgs {
                 signed_agent_restart_request(&self.apartment_name, &self.reason, key_pair)?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/restart",
+                "v1/soracloud/agent/restart",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -880,7 +880,7 @@ impl AgentWalletSpendArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/wallet/spend",
+                "v1/soracloud/agent/wallet/spend",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -933,7 +933,7 @@ impl AgentWalletApproveArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/wallet/approve",
+                "v1/soracloud/agent/wallet/approve",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -986,7 +986,7 @@ impl AgentPolicyRevokeArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/policy/revoke",
+                "v1/soracloud/agent/policy/revoke",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -1047,7 +1047,7 @@ impl AgentMessageSendArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/message/send",
+                "v1/soracloud/agent/message/send",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -1098,7 +1098,7 @@ impl AgentMessageAckArgs {
                 signed_agent_message_ack_request(&self.apartment_name, &self.message_id, key_pair)?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/message/ack",
+                "v1/soracloud/agent/message/ack",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -1209,7 +1209,7 @@ impl AgentArtifactAllowArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/autonomy/allow",
+                "v1/soracloud/agent/autonomy/allow",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -1278,7 +1278,7 @@ impl AgentAutonomyRunArgs {
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
-                "v2/soracloud/agent/autonomy/run",
+                "v1/soracloud/agent/autonomy/run",
                 &request,
                 self.api_token.as_deref(),
                 self.timeout_secs,
@@ -1451,7 +1451,7 @@ impl TrainingJobStartArgs {
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
-            "v2/soracloud/training/job/start",
+            "v1/soracloud/training/job/start",
             &request,
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -1508,7 +1508,7 @@ impl TrainingJobCheckpointArgs {
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
-            "v2/soracloud/training/job/checkpoint",
+            "v1/soracloud/training/job/checkpoint",
             &request,
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -1551,7 +1551,7 @@ impl TrainingJobRetryArgs {
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
-            "v2/soracloud/training/job/retry",
+            "v1/soracloud/training/job/retry",
             &request,
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -1648,7 +1648,7 @@ impl ModelArtifactRegisterArgs {
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
-            "v2/soracloud/model/artifact/register",
+            "v1/soracloud/model/artifact/register",
             &request,
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -1753,7 +1753,7 @@ impl ModelWeightRegisterArgs {
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
-            "v2/soracloud/model/weight/register",
+            "v1/soracloud/model/weight/register",
             &request,
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -1804,7 +1804,7 @@ impl ModelWeightPromoteArgs {
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
-            "v2/soracloud/model/weight/promote",
+            "v1/soracloud/model/weight/promote",
             &request,
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -1851,7 +1851,7 @@ impl ModelWeightRollbackArgs {
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
-            "v2/soracloud/model/weight/rollback",
+            "v1/soracloud/model/weight/rollback",
             &request,
             self.api_token.as_deref(),
             self.timeout_secs,
@@ -5637,8 +5637,8 @@ fn fetch_torii_soracloud_status(
 ) -> Result<(String, norito::json::Value)> {
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v2/soracloud/status")
-        .wrap_err("failed to derive /v2/soracloud/status URL from --torii-url")?;
+        .join("v1/soracloud/status")
+        .wrap_err("failed to derive /v1/soracloud/status URL from --torii-url")?;
 
     if let Some(service_name) = service_name
         && !service_name.is_empty()
@@ -5670,7 +5670,7 @@ fn fetch_torii_soracloud_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v2/soracloud/status returned {}: {}",
+            "Torii /v1/soracloud/status returned {}: {}",
             status,
             body_text
         ));
@@ -5689,8 +5689,8 @@ fn fetch_torii_soracloud_agent_status(
 ) -> Result<(String, norito::json::Value)> {
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v2/soracloud/agent/status")
-        .wrap_err("failed to derive /v2/soracloud/agent/status URL from --torii-url")?;
+        .join("v1/soracloud/agent/status")
+        .wrap_err("failed to derive /v1/soracloud/agent/status URL from --torii-url")?;
     if let Some(apartment_name) = apartment_name
         && !apartment_name.trim().is_empty()
     {
@@ -5721,7 +5721,7 @@ fn fetch_torii_soracloud_agent_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v2/soracloud/agent/status returned {}: {}",
+            "Torii /v1/soracloud/agent/status returned {}: {}",
             status,
             body_text
         ));
@@ -5745,8 +5745,8 @@ fn fetch_torii_soracloud_agent_mailbox_status(
 
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v2/soracloud/agent/mailbox/status")
-        .wrap_err("failed to derive /v2/soracloud/agent/mailbox/status URL from --torii-url")?;
+        .join("v1/soracloud/agent/mailbox/status")
+        .wrap_err("failed to derive /v1/soracloud/agent/mailbox/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
@@ -5773,7 +5773,7 @@ fn fetch_torii_soracloud_agent_mailbox_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v2/soracloud/agent/mailbox/status returned {}: {}",
+            "Torii /v1/soracloud/agent/mailbox/status returned {}: {}",
             status,
             body_text
         ));
@@ -5797,8 +5797,8 @@ fn fetch_torii_soracloud_agent_autonomy_status(
 
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v2/soracloud/agent/autonomy/status")
-        .wrap_err("failed to derive /v2/soracloud/agent/autonomy/status URL from --torii-url")?;
+        .join("v1/soracloud/agent/autonomy/status")
+        .wrap_err("failed to derive /v1/soracloud/agent/autonomy/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
@@ -5825,7 +5825,7 @@ fn fetch_torii_soracloud_agent_autonomy_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v2/soracloud/agent/autonomy/status returned {}: {}",
+            "Torii /v1/soracloud/agent/autonomy/status returned {}: {}",
             status,
             body_text
         ));
@@ -5854,8 +5854,8 @@ fn fetch_torii_soracloud_training_job_status(
 
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v2/soracloud/training/job/status")
-        .wrap_err("failed to derive /v2/soracloud/training/job/status URL from --torii-url")?;
+        .join("v1/soracloud/training/job/status")
+        .wrap_err("failed to derive /v1/soracloud/training/job/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("service_name", service_name)
@@ -5883,7 +5883,7 @@ fn fetch_torii_soracloud_training_job_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v2/soracloud/training/job/status returned {}: {}",
+            "Torii /v1/soracloud/training/job/status returned {}: {}",
             status,
             body_text
         ));
@@ -5912,8 +5912,8 @@ fn fetch_torii_soracloud_model_artifact_status(
 
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v2/soracloud/model/artifact/status")
-        .wrap_err("failed to derive /v2/soracloud/model/artifact/status URL from --torii-url")?;
+        .join("v1/soracloud/model/artifact/status")
+        .wrap_err("failed to derive /v1/soracloud/model/artifact/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("service_name", service_name)
@@ -5941,7 +5941,7 @@ fn fetch_torii_soracloud_model_artifact_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v2/soracloud/model/artifact/status returned {}: {}",
+            "Torii /v1/soracloud/model/artifact/status returned {}: {}",
             status,
             body_text
         ));
@@ -5970,8 +5970,8 @@ fn fetch_torii_soracloud_model_weight_status(
 
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v2/soracloud/model/weight/status")
-        .wrap_err("failed to derive /v2/soracloud/model/weight/status URL from --torii-url")?;
+        .join("v1/soracloud/model/weight/status")
+        .wrap_err("failed to derive /v1/soracloud/model/weight/status URL from --torii-url")?;
     endpoint
         .query_pairs_mut()
         .append_pair("service_name", service_name)
@@ -5999,7 +5999,7 @@ fn fetch_torii_soracloud_model_weight_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v2/soracloud/model/weight/status returned {}: {}",
+            "Torii /v1/soracloud/model/weight/status returned {}: {}",
             status,
             body_text
         ));
@@ -8668,7 +8668,7 @@ mod tests {
             }
         });
         let output = StatusOutput::from_network(
-            "http://127.0.0.1:8080/v2/soracloud/status".to_owned(),
+            "http://127.0.0.1:8080/v1/soracloud/status".to_owned(),
             payload.clone(),
         );
         assert_eq!(output.source, "torii_control_plane");
@@ -9527,7 +9527,7 @@ mod tests {
     fn post_torii_mutation_rejects_invalid_url() {
         let payload = norito::json!({ "noop": true });
         let err =
-            post_torii_soracloud_mutation("not-a-url", "v2/soracloud/deploy", &payload, None, 5)
+            post_torii_soracloud_mutation("not-a-url", "v1/soracloud/deploy", &payload, None, 5)
                 .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
     }

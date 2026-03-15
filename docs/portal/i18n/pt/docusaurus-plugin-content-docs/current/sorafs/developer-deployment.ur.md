@@ -30,7 +30,7 @@ SoraFS determinismo de fluxo de trabalho de empacotamento Existem vários gatewa
 
 ## Configuração do ambiente
 
-- Gateways e endpoint de streaming de prova (`POST /v2/sorafs/proof/stream`) habilitam کرنا ہوگا تاکہ Os resumos de telemetria CLI emitem کر سکے۔
+- Gateways e endpoint de streaming de prova (`POST /v1/sorafs/proof/stream`) habilitam کرنا ہوگا تاکہ Os resumos de telemetria CLI emitem کر سکے۔
 - Política `sorafs_alias_cache` کو padrões `iroha_config` یا auxiliar CLI (`sorafs_cli manifest submit --alias-*`) کے ذریعے configurar کریں۔
 - Tokens de fluxo (credenciais Torii) کو ایک محفوظ gerenciador secreto سے فراہم کریں۔
 - Exportadores de telemetria (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) habilitam کریں اور انہیں اپنے Prometheus/OTel stack میں navio کریں۔

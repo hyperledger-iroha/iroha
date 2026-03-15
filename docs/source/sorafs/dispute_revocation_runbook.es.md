@@ -19,8 +19,8 @@ datos ocurra de forma determinista.
 
 - **Condiciones de disparo:** deteccion de breach de SLA (uptime/falla PoR),
   shortfall de replicacion o desacuerdo de facturacion.
-- **Confirmar telemetria:** capturar snapshots de `/v2/sorafs/capacity/state` y
-  `/v2/sorafs/capacity/telemetry` para el provider.
+- **Confirmar telemetria:** capturar snapshots de `/v1/sorafs/capacity/state` y
+  `/v1/sorafs/capacity/telemetry` para el provider.
 - **Notificar stakeholders:** Storage Team (operaciones de provider), Governance
   Council (cuerpo decisor), Observability (updates de dashboards).
 
@@ -69,7 +69,7 @@ datos ocurra de forma determinista.
    ```
 
 3. Revisar `dispute_summary.json` (confirmar kind, digest de evidencia, timestamps).
-4. Enviar el request JSON a Torii `/v2/sorafs/capacity/dispute` via la cola de
+4. Enviar el request JSON a Torii `/v1/sorafs/capacity/dispute` via la cola de
    transacciones de governance. Capturar el `dispute_id_hex` de respuesta; ancla
    acciones de revocacion y reportes de auditoria.
 

@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for /v2/zk/prover/reports endpoints (`app_api`).
+//! Integration tests for /v1/zk/prover/reports endpoints (`app_api`).
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::similar_names, unused_imports)]
 
@@ -51,7 +51,7 @@ async fn prover_reports_list_get_delete() {
     // Build a minimal router wiring prover endpoints
     let app = Router::new()
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_list_reports(q).await
@@ -59,13 +59,13 @@ async fn prover_reports_list_get_delete() {
             ),
         )
         .route(
-            "/v2/zk/prover/reports/{id}",
+            "/v1/zk/prover/reports/{id}",
             get(|id: axum::extract::Path<String>| async move {
                 iroha_torii::zk_prover::handle_get_report(id).await
             }),
         )
         .route(
-            "/v2/zk/prover/reports/{id}",
+            "/v1/zk/prover/reports/{id}",
             delete(|id: axum::extract::Path<String>| async move {
                 iroha_torii::zk_prover::handle_delete_report(id).await
             }),
@@ -102,7 +102,7 @@ async fn prover_reports_list_get_delete() {
     // List reports
     let req_list = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports")
+        .uri("/v1/zk/prover/reports")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_list = app.clone().oneshot(req_list).await.unwrap();
@@ -117,7 +117,7 @@ async fn prover_reports_list_get_delete() {
     // Get specific report
     let req_get = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/prover/reports/{id}"))
+        .uri(format!("/v1/zk/prover/reports/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get = app.clone().oneshot(req_get).await.unwrap();
@@ -134,7 +134,7 @@ async fn prover_reports_list_get_delete() {
     // Delete the report
     let req_del = http::Request::builder()
         .method("DELETE")
-        .uri(format!("/v2/zk/prover/reports/{id}"))
+        .uri(format!("/v1/zk/prover/reports/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_del = app.clone().oneshot(req_del).await.unwrap();
@@ -143,7 +143,7 @@ async fn prover_reports_list_get_delete() {
     // Getting it again should 404
     let req_get2 = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/prover/reports/{id}"))
+        .uri(format!("/v1/zk/prover/reports/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get2 = app.clone().oneshot(req_get2).await.unwrap();
@@ -159,7 +159,7 @@ async fn prover_reports_zk1_tags_present_for_norito() {
 
     let app = Router::new()
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_list_reports(q).await
@@ -167,7 +167,7 @@ async fn prover_reports_zk1_tags_present_for_norito() {
             ),
         )
         .route(
-            "/v2/zk/prover/reports/{id}",
+            "/v1/zk/prover/reports/{id}",
             get(|id: axum::extract::Path<String>| async move {
                 iroha_torii::zk_prover::handle_get_report(id).await
             }),
@@ -206,7 +206,7 @@ async fn prover_reports_zk1_tags_present_for_norito() {
     // List reports and assert zk1_tags present with ["PROF"]
     let req_list = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports")
+        .uri("/v1/zk/prover/reports")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_list = app.clone().oneshot(req_list).await.unwrap();
@@ -231,7 +231,7 @@ async fn prover_reports_zk1_tags_present_for_norito() {
     // Get specific report and assert zk1_tags again
     let req_get = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/prover/reports/{id}"))
+        .uri(format!("/v1/zk/prover/reports/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get = app.clone().oneshot(req_get).await.unwrap();
@@ -256,7 +256,7 @@ async fn prover_reports_zk1_tags_order_prof_ipak() {
 
     let app = Router::new()
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_list_reports(q).await
@@ -264,7 +264,7 @@ async fn prover_reports_zk1_tags_order_prof_ipak() {
             ),
         )
         .route(
-            "/v2/zk/prover/reports/{id}",
+            "/v1/zk/prover/reports/{id}",
             get(|id: axum::extract::Path<String>| async move {
                 iroha_torii::zk_prover::handle_get_report(id).await
             }),
@@ -308,7 +308,7 @@ async fn prover_reports_zk1_tags_order_prof_ipak() {
     // List and check exact order
     let req_list = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports")
+        .uri("/v1/zk/prover/reports")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_list = app.clone().oneshot(req_list).await.unwrap();
@@ -338,7 +338,7 @@ async fn prover_reports_zk1_tags_order_prof_ipak() {
     // Get and check order again
     let req_get = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/prover/reports/{id}"))
+        .uri(format!("/v1/zk/prover/reports/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get = app.clone().oneshot(req_get).await.unwrap();
@@ -370,7 +370,7 @@ async fn prover_reports_error_for_truncated_tlv() {
 
     let app = Router::new()
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_list_reports(q).await
@@ -378,7 +378,7 @@ async fn prover_reports_error_for_truncated_tlv() {
             ),
         )
         .route(
-            "/v2/zk/prover/reports/{id}",
+            "/v1/zk/prover/reports/{id}",
             get(|id: axum::extract::Path<String>| async move {
                 iroha_torii::zk_prover::handle_get_report(id).await
             }),
@@ -418,7 +418,7 @@ async fn prover_reports_error_for_truncated_tlv() {
     // List and assert error present and ok=false
     let req_list = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports")
+        .uri("/v1/zk/prover/reports")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_list = app.clone().oneshot(req_list).await.unwrap();
@@ -441,7 +441,7 @@ async fn prover_reports_error_for_truncated_tlv() {
     // Get and assert error again
     let req_get = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/prover/reports/{id}"))
+        .uri(format!("/v1/zk/prover/reports/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get = app.clone().oneshot(req_get).await.unwrap();
@@ -458,7 +458,7 @@ async fn prover_reports_error_for_truncated_tlv() {
     // Query errors_only filter should include this report
     let req_errs = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports?errors_only=true")
+        .uri("/v1/zk/prover/reports?errors_only=true")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_errs = app.clone().oneshot(req_errs).await.unwrap();
@@ -473,7 +473,7 @@ async fn prover_reports_error_for_truncated_tlv() {
     // messages_only projection returns array of { id, error }
     let req_msgs = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports?messages_only=true")
+        .uri("/v1/zk/prover/reports?messages_only=true")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_msgs = app.clone().oneshot(req_msgs).await.unwrap();
@@ -500,7 +500,7 @@ async fn prover_reports_server_side_filters() {
     ensure_quota_config();
 
     let app = Router::new().route(
-        "/v2/zk/prover/reports",
+        "/v1/zk/prover/reports",
         get(
             |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                 iroha_torii::zk_prover::handle_list_reports(q).await
@@ -554,7 +554,7 @@ async fn prover_reports_server_side_filters() {
     // Filter: content_type application/x-zk1 and has_tag=PROF
     let req = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports?content_type=application/x-zk1&has_tag=PROF")
+        .uri("/v1/zk/prover/reports?content_type=application/x-zk1&has_tag=PROF")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -571,7 +571,7 @@ async fn prover_reports_server_side_filters() {
     // Filter ids_only
     let req_ids = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports?content_type=application/x-zk1&ids_only=true")
+        .uri("/v1/zk/prover/reports?content_type=application/x-zk1&ids_only=true")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_ids = app.clone().oneshot(req_ids).await.unwrap();
@@ -591,7 +591,7 @@ async fn prover_reports_server_side_paging_limit_since() {
     ensure_quota_config();
 
     let app = Router::new().route(
-        "/v2/zk/prover/reports",
+        "/v1/zk/prover/reports",
         get(
             |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                 iroha_torii::zk_prover::handle_list_reports(q).await
@@ -657,7 +657,7 @@ async fn prover_reports_server_side_paging_limit_since() {
 
     // Query since_ms just after rep1, limit=1 => should return only rep2
     let uri = format!(
-        "/v2/zk/prover/reports?since_ms={}&limit=1",
+        "/v1/zk/prover/reports?since_ms={}&limit=1",
         rep1.processed_ms + 1
     );
     let req = http::Request::builder()
@@ -675,7 +675,7 @@ async fn prover_reports_server_side_paging_limit_since() {
 
     // Query since_ms after rep2, limit=10 => should return rep3 only
     let uri = format!(
-        "/v2/zk/prover/reports?since_ms={}&limit=10",
+        "/v1/zk/prover/reports?since_ms={}&limit=10",
         rep2.processed_ms + 1
     );
     let req = http::Request::builder()
@@ -692,7 +692,7 @@ async fn prover_reports_server_side_paging_limit_since() {
     assert_eq!(got_id, Some(id3.as_str()));
 
     // Order desc, limit=1 should return latest (rep3)
-    let uri = "/v2/zk/prover/reports?order=desc&limit=1";
+    let uri = "/v1/zk/prover/reports?order=desc&limit=1";
     let req = http::Request::builder()
         .method("GET")
         .uri(uri)
@@ -707,7 +707,7 @@ async fn prover_reports_server_side_paging_limit_since() {
     assert_eq!(got_id, Some(id3.as_str()));
 
     // latest=true should also return rep3
-    let uri = "/v2/zk/prover/reports?latest=true";
+    let uri = "/v1/zk/prover/reports?latest=true";
     let req = http::Request::builder()
         .method("GET")
         .uri(uri)
@@ -723,7 +723,7 @@ async fn prover_reports_server_side_paging_limit_since() {
 
     // Query before_ms just before rep2 => should return rep1 only
     let uri = format!(
-        "/v2/zk/prover/reports?before_ms={}",
+        "/v1/zk/prover/reports?before_ms={}",
         rep2.processed_ms.saturating_sub(1)
     );
     let req = http::Request::builder()
@@ -748,7 +748,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
 
     let app = Router::new()
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_list_reports(q).await
@@ -756,7 +756,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
             ),
         )
         .route(
-            "/v2/zk/prover/reports/count",
+            "/v1/zk/prover/reports/count",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_count_reports(q).await
@@ -819,7 +819,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     let _ = iroha_torii::zk_prover::scan_once();
 
     // List with has_tag=PROF and count with same filter should match length
-    let uri_list = "/v2/zk/prover/reports?content_type=application/x-zk1&has_tag=PROF";
+    let uri_list = "/v1/zk/prover/reports?content_type=application/x-zk1&has_tag=PROF";
     let req_list = http::Request::builder()
         .method("GET")
         .uri(uri_list)
@@ -831,7 +831,7 @@ async fn prover_reports_server_side_count_matches_filtered_list() {
     let arr: Vec<norito::json::Value> = norito::json::from_slice(&bytes).unwrap();
     let expected_len = arr.len() as u64;
 
-    let uri_count = "/v2/zk/prover/reports/count?content_type=application/x-zk1&has_tag=PROF";
+    let uri_count = "/v1/zk/prover/reports/count?content_type=application/x-zk1&has_tag=PROF";
     let req_count = http::Request::builder()
         .method("GET")
         .uri(uri_count)
@@ -856,7 +856,7 @@ async fn prover_reports_server_side_bulk_delete() {
 
     let app = Router::new()
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_list_reports(q).await
@@ -864,7 +864,7 @@ async fn prover_reports_server_side_bulk_delete() {
             ),
         )
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             delete(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_delete_reports(q).await
@@ -916,7 +916,7 @@ async fn prover_reports_server_side_bulk_delete() {
     // Delete JSON reports only
     let req_del = http::Request::builder()
         .method("DELETE")
-        .uri("/v2/zk/prover/reports?content_type=application/json")
+        .uri("/v1/zk/prover/reports?content_type=application/json")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_del = app.clone().oneshot(req_del).await.unwrap();
@@ -925,7 +925,7 @@ async fn prover_reports_server_side_bulk_delete() {
     // Verify only Norito report(s) remain
     let req_all = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/prover/reports")
+        .uri("/v1/zk/prover/reports")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_all = app.clone().oneshot(req_all).await.unwrap();
@@ -945,7 +945,7 @@ async fn prover_reports_error_for_oversized_tlv() {
     // Build a minimal router wiring prover endpoints
     let app = Router::new()
         .route(
-            "/v2/zk/prover/reports",
+            "/v1/zk/prover/reports",
             get(
                 |q: iroha_torii::NoritoQuery<iroha_torii::zk_prover::ProverListQuery>| async move {
                     iroha_torii::zk_prover::handle_list_reports(q).await
@@ -953,7 +953,7 @@ async fn prover_reports_error_for_oversized_tlv() {
             ),
         )
         .route(
-            "/v2/zk/prover/reports/{id}",
+            "/v1/zk/prover/reports/{id}",
             get(|id: axum::extract::Path<String>| async move {
                 iroha_torii::zk_prover::handle_get_report(id).await
             }),
@@ -993,7 +993,7 @@ async fn prover_reports_error_for_oversized_tlv() {
     // Fetch report and assert error about payload too large
     let req_get = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/prover/reports/{id}"))
+        .uri(format!("/v1/zk/prover/reports/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get = app.clone().oneshot(req_get).await.unwrap();

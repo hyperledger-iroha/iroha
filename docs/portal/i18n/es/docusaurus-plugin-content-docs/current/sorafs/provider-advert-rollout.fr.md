@@ -46,7 +46,7 @@ vigoroso.
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` con un `max_span` definido
      - `allow_unknown_capabilities=<true|false>` cuando hay TLV GREASE presentes
-   - Validador vía `/v2/sorafs/providers` y `sorafs_fetch`; les advertencias sobre des
+   - Validador vía `/v1/sorafs/providers` y `sorafs_fetch`; les advertencias sobre des
      capacidades inconnues doivent être triés.
 3. **Validar la preparación de múltiples fuentes.**
    - Ejecutor `sorafs_fetch` con `--provider-advert=<path>`; El CLI se hace eco
@@ -188,9 +188,9 @@ Requiert la mise à jour de ce fichier et du ledger dans la même PR.
 ## Comunicación y gestión de incidentes- **Mailer hebdomadaire de statut.** DevRel difunde un breve currículum vitae des métriques
   d'admisión, des advertencias en curso y des plazos à venir.
 - **Respuesta del incidente.** Si las alertas `reject` se debilitan, el guardia :
-  1. Recupere el anuncio fautif vía descubrimiento Torii (`/v2/sorafs/providers`).
+  1. Recupere el anuncio fautif vía descubrimiento Torii (`/v1/sorafs/providers`).
   2. Relance la validación del anuncio en el proveedor de canalización y compare con
-     `/v2/sorafs/providers` para reproducir el error.
+     `/v1/sorafs/providers` para reproducir el error.
   3. Coordonne con el proveedor para hacer el tourner l'advert avant la prochaine
      fecha límite de actualización.
 - **Gel de cambios.** Aucune modificación del esquema de capacidades colgante

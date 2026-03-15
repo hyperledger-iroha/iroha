@@ -28,7 +28,7 @@ translator: machine-google-reviewed
   `sponsor:<uaid>`)፣ የማቆያ ፖሊሲ ቦታ ያዥ እና MIME ይሽራል።
 - ** መቀነስ ***: የ tar ክፍያ ጭነቶች ተሰባብረዋል (ነባሪ 64KiB) እና በያንዳንዱ አንድ ጊዜ ይከማቻሉ
   ሃሽ ከማጣቀሻ ቁጥሮች ጋር; አንድ ጥቅል እየቀነሰ እና የፕሪም ቁርጥራጮች ጡረታ መውጣት።
-- ** አገልግሉ ***: Torii `GET /v2/content/{bundle}/{path}` ያጋልጣል። የምላሾች ዥረት
+- ** አገልግሉ ***: Torii `GET /v1/content/{bundle}/{path}` ያጋልጣል። የምላሾች ዥረት
   በቀጥታ ከ chunk store `ETag` = file hash፣ `Accept-Ranges: bytes`፣
   ክልል ድጋፍ፣ እና መሸጎጫ-ቁጥጥር ከማንፀባረቂያው የተገኘ። ያነባል።
   አንጸባራቂ የድጋፍ ሁነታ፡ ሚና-የተከለለ እና ስፖንሰር-የተከለሉ ምላሾች ቀኖናዊ ያስፈልጋቸዋል

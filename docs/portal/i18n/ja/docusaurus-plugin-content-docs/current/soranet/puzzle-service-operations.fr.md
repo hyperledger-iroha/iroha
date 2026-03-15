@@ -26,17 +26,17 @@ Sidebar_label: パズルのサービスに関する操作
 リレーエッジ。 cinq エンドポイント HTTP を公開します。
 
 - `GET /healthz` - ライブネスを調査します。
-- `GET /v2/puzzle/config` - PoW/パズルの効果に関するパラメータの報告
+- `GET /v1/puzzle/config` - PoW/パズルの効果に関するパラメータの報告
   JSON リレー (`handshake.descriptor_commit_hex`、`pow.*`)。
-- `POST /v2/puzzle/mint` - Argon2 のチケットを入手しました。本体の JSON オプションネル
+- `POST /v1/puzzle/mint` - Argon2 のチケットを入手しました。本体の JSON オプションネル
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   TTL プラス裁判所 (ポリシーの適用窓口) を要求し、国連のチケットを請求する
   リレー + チケット署名の記録ハッシュと記録
   署名を設定するには、署名を設定します。
-- `GET /v2/token/config` - `pow.token.enabled = true`、ポリシーの返却
+- `GET /v1/token/config` - `pow.token.enabled = true`、ポリシーの返却
   d'admission-token active (発行者のフィンガープリント、TTL/クロックスキューの制限、リレー ID、
   取り消しの融合など）。
-- `POST /v2/token/mint` - トークンの承認 ML-DSA 嘘と履歴書のハッシュを取得
+- `POST /v1/token/mint` - トークンの承認 ML-DSA 嘘と履歴書のハッシュを取得
   フォーニ。ファイル本体は `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` を受け入れます。
 
 サービスのチケット製品は統合テストで検証されます
@@ -79,12 +79,12 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` オーストラリアで最も秘密にされている情報
-パイプラインの帯域外。失効ガードの監視者 `/v2/token/config`
+パイプラインの帯域外。失効ガードの監視者 `/v1/token/config`
 1時間。コーディネート レ ミゼス ア ジュール アベック ラ コマンド `soranet-admission-token revoke`
 取り消しを遅らせてください。
 
 JSON 中継アナウンサーによる `pow.signed_ticket_public_key_hex` の定義
-la cle public ML-DSA-44 は、検証者による PoW チケットの署名を利用します。 `/v2/puzzle/config`
+la cle public ML-DSA-44 は、検証者による PoW チケットの署名を利用します。 `/v1/puzzle/config`
 BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) を繰り返します
 クライアントの投稿者は検証者です。チケットは有効ではなく署名されます
 リレー ID とトランスクリプト バインディングとミーム ストアの一部を制御します
@@ -92,7 +92,7 @@ BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) を繰り返します
 署名付きチケットの構成。 `--signed-ticket-secret-hex`経由で秘密の署名を渡します
 ou `--signed-ticket-secret-path` パズル サービスの提供。ル・デマラージュ
 キーペアの矛盾を解消し、秘密を有効にします。
-`pow.signed_ticket_public_key_hex`。 `POST /v2/puzzle/mint` 受け入れます `"signed": true`
+`pow.signed_ticket_public_key_hex`。 `POST /v1/puzzle/mint` 受け入れます `"signed": true`
 (オプションネル `"transcript_hash_hex"`) チケット署名 Norito en を送信してください
 プラス・デ・バイト・デュ・チケット・ブリュット。 `signed_ticket_b64` などを含む応答
 `signed_ticket_fingerprint_hex` 指紋を再生してください。レ
@@ -111,11 +111,11 @@ avec `signed = true` は次のパスの秘密の署名を拒否します
    ガバナンスはローテーションによるカットオーバーを発表します。 Le service ne supporte
    ホットリロードだけでなく。再婚を要求する場合は、プレンドル ル ヌーボーの記述子を注ぐ必要があります
    コミットします。
-4. **有効者** Emettez が `POST /v2/puzzle/mint` 経由でチケットを発行し、確認します
+4. **有効者** Emettez が `POST /v1/puzzle/mint` 経由でチケットを発行し、確認します
    `difficulty` および `expires_at` 特派員の新しいポリシー。ル・ラポール
    ソーク (`docs/source/soranet/reports/pow_resilience.md`) キャプチャ デ ボーンズ
    遅延出席者注ぐ参照。 Lorsque les tokens ソントアクティブ、リセズ
-   `/v2/token/config` 検証者が発行者指紋通知などを送信します
+   `/v1/token/config` 検証者が発行者指紋通知などを送信します
    compte de revocation特派員aux valeurs出席者。
 
 ## 緊急の非活性化手順
@@ -128,7 +128,7 @@ avec `signed = true` は次のパスの秘密の署名を拒否します
 3. リレーやパズルサービス、アップリケなどのレデマレッツ
    変化。
 4. Surveillez `soranet_handshake_pow_difficulty` 検証が困難な場合
-   tombe a la valeur hashcash 出席、有効性確認 `/v2/puzzle/config`
+   tombe a la valeur hashcash 出席、有効性確認 `/v1/puzzle/config`
    ラポール `puzzle = null`。
 
 ## モニタリングとアラート
@@ -140,16 +140,16 @@ avec `signed = true` は次のパスの秘密の署名を拒否します
   メトリクス リレー プール アジャスタ レ クールダウン `pow.quotas` (`soranet_abuse_remote_cooldowns`、
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **パズルの配置:** `soranet_handshake_pow_difficulty` はアラに対応します
-  `/v2/puzzle/config` による帰還は困難です。構成に関する相違点
+  `/v1/puzzle/config` による帰還は困難です。構成に関する相違点
   リレーの失効率と再婚率。
-- **トークンの準備状況:** `/v2/token/config` から `enabled = false` へのアラート
+- **トークンの準備状況:** `/v1/token/config` から `enabled = false` へのアラート
   `revocation_source` タイムスタンプの報告が古くなりました。
   CLI 経由で失効 Norito を操作するフェア ツアーナーの操作
   トークンの復元は、ガーダー セットのエンドポイントの精度を維持します。
 - **サービスの正常性:** Probez `/healthz` ライブの習慣などの平均
-  alertez si `/v2/puzzle/mint` renvoie des reponses HTTP 500 (インデックスの不一致
+  alertez si `/v1/puzzle/mint` renvoie des reponses HTTP 500 (インデックスの不一致
   Argon2 または RNG のパラメータ)。トークン鋳造時のエラー
-  レスポンス HTTP 4xx/5xx sur `/v2/token/mint` 経由で明示的。トレイテズ・レ
+  レスポンス HTTP 4xx/5xx sur `/v1/token/mint` 経由で明示的。トレイテズ・レ
   echecs はページング条件を繰り返します。
 
 ## コンプライアンスと監査ログ

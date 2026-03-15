@@ -46,7 +46,7 @@ Sidebar_label: التعليقات الجديدة رن بک
   ```
 
 - استخدم هذه الأداة Torii التي تستخدم `data_dir` لقراءة/كتابة الرسائل.
-- إعلان التسجيل منذ فترة طويلة بعد `GET /v2/sorafs/capacity/state` بعد التحديث
+- إعلان التسجيل منذ فترة طويلة بعد `GET /v1/sorafs/capacity/state` بعد التحديث
   الإعلان الجديد عن السجل المتوقع جديد.
 - تجانس فعال، كل من النحاس الخام والملسى GiB·hour/PoR دونوں
   تتميز هذه المنتجات بأنها خالية من الارتعاش، مما يؤدي إلى ارتفاع القيم الفورية إلى ما هو أبعد من ذلك.
@@ -96,8 +96,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 تمت الموافقة على Torii بعد أن تم الحصول على عناصر HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 تساعد نقاط النهاية دون تحديد كيفية عمل اختبارات الدخان CLI و
@@ -108,7 +108,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. بيان ترميز Base64 الذي تم جمعه:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -118,7 +118,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. جلب الجلب المثبت:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -135,7 +135,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Torii Pross (أو بورا جديدة) هو جديد.
 3. جلب سجل جمع البيانات مرة أخرى. حمولة بدستور دستیاب و واپس عليها والا
    الملخص هو أعلى قدر ممكن من القوة بما يتوافق مع ذلك.
-4. `GET /v2/sorafs/storage/state` قم بفحص زر صغير `bytes_used`
+4. `GET /v1/sorafs/storage/state` قم بفحص زر صغير `bytes_used`
    بعد استمرار استمرار ظهور كرتا ہے۔
 
 ## 4. كل هذا التسجيل ٹیستٹ
@@ -154,7 +154,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. اختبار عينة PoR:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -177,7 +177,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - كل ما تحتاجه من اللون الوردي:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
-  - `/v2/sorafs/capacity/state` ذريعة لبطاقة PoR/البطاقة الائتمانية
+  - `/v1/sorafs/capacity/state` ذريعة لبطاقة PoR/البطاقة الائتمانية
   - `sorafs_node_deal_publish_total{result=success|failure}` محاولات نشر التسوية
 
 مناورات البيروقراطية أو البيروقراطية التي ستبدأ في استيعابها

@@ -33,13 +33,13 @@ use crate::{CliOutputFormat, Run, RunContext, json_utils};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
-    /// Get recent shielded roots for an asset (JSON). Posts to /v2/zk/roots
+    /// Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
     Roots(RootsArgs),
-    /// Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v2/zk/verify
+    /// Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v1/zk/verify
     Verify(VerifyArgs),
-    /// Submit a ZK proof envelope for later reference/inspection. Posts to /v2/zk/submit-proof
+    /// Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submit-proof
     SubmitProof(SubmitProofArgs),
-    /// Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v2/zk/verify-batch
+    /// Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
     VerifyBatch(VerifyBatchArgs),
     /// Compute the Blake2b-32 hash required for `public_inputs_schema_hash` and print it
     SchemaHash(SchemaHashArgs),
@@ -530,7 +530,7 @@ impl Run for ProverReportsListArgs {
         let arr = value
             .as_array()
             .cloned()
-            .ok_or_else(|| eyre::eyre!("expected array from /v2/zk/prover/reports"))?;
+            .ok_or_else(|| eyre::eyre!("expected array from /v1/zk/prover/reports"))?;
         // Apply filters
         let mut filtered = Vec::new();
         for v in arr.iter() {
@@ -790,7 +790,7 @@ impl Run for ProverReportsCleanupArgs {
         let arr = value
             .as_array()
             .cloned()
-            .ok_or_else(|| eyre::eyre!("expected array from /v2/zk/prover/reports"))?;
+            .ok_or_else(|| eyre::eyre!("expected array from /v1/zk/prover/reports"))?;
         // Server-side deletion path
         if self.server {
             if !self.yes {
@@ -919,13 +919,13 @@ impl Run for ProverReportsDeleteArgs {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum IvmCommand {
-    /// Derive an `IvmProved` payload via `/v2/zk/ivm/derive`
+    /// Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
     Derive(IvmDeriveArgs),
-    /// Submit a prove job for an `IvmProved` payload via `/v2/zk/ivm/prove`
+    /// Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
     Prove(IvmProveArgs),
-    /// Get a prove job status via `/v2/zk/ivm/prove/{job_id}`
+    /// Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
     Get(IvmProveGetArgs),
-    /// Delete a prove job via `/v2/zk/ivm/prove/{job_id}`
+    /// Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
     Delete(IvmProveDeleteArgs),
     /// Derive a proving key (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
     DerivePk(IvmDerivePkArgs),

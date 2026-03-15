@@ -59,12 +59,12 @@ probabilística para que los operadores puedan correlacionar las victorias de mi
 ## אינטגרציה עם Torii
 
 Torii הצגת נקודות קצה dedicados para que los proveedores reporten uso y conduzcan el ciclo
-התאמה אישית של חיווט de vida del acuerdo:- `POST /v2/sorafs/deal/usage` acepta telemetría `DealUsageReport` y retorna
+התאמה אישית של חיווט de vida del acuerdo:- `POST /v1/sorafs/deal/usage` acepta telemetría `DealUsageReport` y retorna
   resultados deterministas de contabilidad (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` finaliza la ventana actual, transmitiendo el
+- `POST /v1/sorafs/deal/settle` finaliza la ventana actual, transmitiendo el
   `DealSettlementRecord` resultante junto con un `DealSettlementV1` en base64
   listo para publicación en el DAG de gobernanza.
-- El feed `/v2/events/sse` de Torii ahora transmite registros `SorafsGatewayEvent::DealUsage`
+- El feed `/v1/events/sse` de Torii ahora transmite registros `SorafsGatewayEvent::DealUsage`
   que resumen cada envío de uso (תקופה, GiB-hora medidos, contadores de tickets,
   cargos deterministas), registros `SorafsGatewayEvent::DealSettlement`
   que incluyen el snapshot canónico del book de liquidación more el digest/tamaño/base64

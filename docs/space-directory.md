@@ -50,9 +50,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |-------|----------|-------|----------|
 | Draft | Dataspace owner | Clone fixture, edit allowances/governance, run `cargo test -p iroha_data_model nexus::manifest`. | Git diff, test log. |
 | Review | Governance WG | Validate manifest JSON + Norito bytes, sign decision log. | Signed minutes, manifest hash (BLAKE3 + Norito `.to`). |
-| Publish | Lane ops | Submit via CLI (`iroha app space-directory manifest publish`) using either a Norito `.to` payload or raw JSON **or** POST `/v2/space-directory/manifests` with the manifest JSON + optional reason, verify Torii response, capture `SpaceDirectoryEvent`. | CLI/Torii receipt, event log. |
+| Publish | Lane ops | Submit via CLI (`iroha app space-directory manifest publish`) using either a Norito `.to` payload or raw JSON **or** POST `/v1/space-directory/manifests` with the manifest JSON + optional reason, verify Torii response, capture `SpaceDirectoryEvent`. | CLI/Torii receipt, event log. |
 | Expire | Lane ops / Governance | Run `iroha app space-directory manifest expire` (UAID, dataspace, epoch) when a manifest reaches its scheduled end-of-life, verify `SpaceDirectoryEvent::ManifestExpired`, archive binding cleanup evidence. | CLI output, event log. |
-| Revoke | Governance + Lane ops | Run `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **or** POST `/v2/space-directory/manifests/revoke` with the same payload to Torii, verify `SpaceDirectoryEvent::ManifestRevoked`, update evidence bundle. | CLI/Torii receipt, event log, ticket note. |
+| Revoke | Governance + Lane ops | Run `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **or** POST `/v1/space-directory/manifests/revoke` with the same payload to Torii, verify `SpaceDirectoryEvent::ManifestRevoked`, update evidence bundle. | CLI/Torii receipt, event log, ticket note. |
 | Monitor | SRE/Compliance | Track telemetry + audit logs, set alerts for revocations/expiry. | Grafana screenshot, archived logs. |
 | Rotate/Revoke | Lane ops + Governance | Stage replacement manifest (new epoch), run tabletop, file incident (if revoke). | Rotation ticket, incident postmortem. |
 
@@ -234,11 +234,11 @@ The canonical UAID ↔ dataspace assignments live inside the new
 stores a UAID, the dataspaces it was granted, and the concrete account IDs that
 belong to that slice. Downstream components use this ledger-backed view:
 
-- Torii’s `GET /v2/accounts/{uaid}/portfolio` groups holdings per dataspace
+- Torii’s `GET /v1/accounts/{uaid}/portfolio` groups holdings per dataspace
   using `uaid_dataspaces`.
 - Host-side allowance enforcement and telemetry can look up the binding without
   reloading manifest JSON.
-- Torii now exposes `GET /v2/space-directory/uaids/{uaid}` for operators and
+- Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
   `canonical I105 output` if you need the I105 literals for QR
   payloads; I105 strings remain the default.【docs/source/torii/portfolio_api.md】
@@ -306,7 +306,7 @@ Torii exposes a read-only manifest inventory so operators can audit the exact
 capability payload bound to a UAID:
 
 ```
-GET /v2/space-directory/uaids/{uaid}/manifests?dataspace={id}
+GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 ```
 
 Use the optional `dataspace` query parameter (u64) to filter the response to a
@@ -373,7 +373,7 @@ accepts a full `AssetPermissionManifest` payload expressed as JSON; an optional
 matching the CLI convenience flag.
 
 ```
-POST /v2/space-directory/manifests
+POST /v1/space-directory/manifests
 ```
 
 | Field | Type | Description |
@@ -428,7 +428,7 @@ instruction. The submitting account must hold
 `CanPublishSpaceDirectoryManifest { dataspace }`, matching the CLI workflow.
 
 ```
-POST /v2/space-directory/manifests/revoke
+POST /v1/space-directory/manifests/revoke
 ```
 
 | Field | Type | Description |
@@ -532,7 +532,7 @@ paths to point at the relevant capability manifests.
    - Run programmable-money tabletop with both manifests.
    - Capture the `nexus_space_directory_revision_total` delta for the evidence
      bundle. Snapshot the Prometheus counter before and after the rotation
-     (e.g., `curl -s "$PROM_URL/api/v2/query?query=nexus_space_directory_revision_total{dataspace=\"cbdc\"}"`)
+     (e.g., `curl -s "$PROM_URL/api/v1/query?query=nexus_space_directory_revision_total{dataspace=\"cbdc\"}"`)
      and store the two values plus their difference in
      `artifacts/nexus/<dataspace>/<timestamp>/telemetry.json`.
 
@@ -566,7 +566,7 @@ surfaces update their lifecycle metadata. Operators should:
    `SpaceDirectoryEvent::ManifestExpired` payload.
 2. Snapshot `nexus_space_directory_revision_total` (or the Grafana panel) before
    and after the expiry and store the delta in the evidence bundle.
-3. Use `GET /v2/space-directory/uaids/{uaid}` to verify the manifest moved to
+3. Use `GET /v1/space-directory/uaids/{uaid}` to verify the manifest moved to
    `status = "Expired"` and that UAID bindings no longer list the dataspace.
 
 Manual CLI expiries are still available when governance needs an override or a

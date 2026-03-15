@@ -894,7 +894,7 @@ DOCS-7 ለመጓዝ የፖርታል ግንባታን፣ OpenAPI spec እና SBOM 
 
 | ስም | ዓላማ |
 |------|--------|
-| `DOCS_SORAFS_TORII_URL` | `/v2/sorafs/pin/register` የሚያጋልጥ Torii አስተናጋጅ። |
+| `DOCS_SORAFS_TORII_URL` | `/v1/sorafs/pin/register` የሚያጋልጥ Torii አስተናጋጅ። |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | ኢፖክ ለዪ ከማስገባት ጋር ተመዝግቧል። |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | ለአንጸባራቂው ማስረከቢያ ስልጣን መፈረም። |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` `true` ሲሆን ከማንፀባረቁ ጋር የታሰረ ተለዋጭ ስም። |

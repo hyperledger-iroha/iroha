@@ -30,7 +30,7 @@ OIDC Sigstore 的憑據。存儲長期秘密（`IROHA_PRIVATE_KEY`，
 
 - 節點 18.18+ 具有 `npm` 或 `pnpm`。
 - `sorafs_cli` 來自 `cargo run -p sorafs_car --features cli --bin sorafs_cli`。
-- Torii 公開 `/v2/sorafs/*` 的 URL 以及授權帳戶/私鑰
+- Torii 公開 `/v1/sorafs/*` 的 URL 以及授權帳戶/私鑰
   可以提交清單和別名。
 - OIDC 發行者（GitHub Actions、GitLab、工作負載身份等）來鑄造
   `SIGSTORE_ID_TOKEN`。
@@ -892,7 +892,7 @@ DOCS-7 需要門戶構建、OpenAPI 規範和 SBOM 工件才能傳輸
 
 |名稱 |目的|
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` |公開 `/v2/sorafs/pin/register` 的 Torii 主機。 |
+| `DOCS_SORAFS_TORII_URL` |公開 `/v1/sorafs/pin/register` 的 Torii 主機。 |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` |與提交一起記錄的紀元標識符。 |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` |清單提交的簽名授權。 |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` |當 `perform_submit` 為 `true` 時，綁定到清單的別名元組。 |

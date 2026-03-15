@@ -113,9 +113,9 @@ LaneCompliancePolicy {
 
 Torii expoe:
 
-- `GET /v2/lane-compliance/policies/{lane_id}` - busca a referencia de politica mais recente.
-- `POST /v2/lane-compliance/policies` - endpoint apenas governanca que espelha os helpers de proposta ISI.
-- `GET /v2/lane-compliance/decisions` - log de auditoria paginado com filtros para
+- `GET /v1/lane-compliance/policies/{lane_id}` - busca a referencia de politica mais recente.
+- `POST /v1/lane-compliance/policies` - endpoint apenas governanca que espelha os helpers de proposta ISI.
+- `GET /v1/lane-compliance/decisions` - log de auditoria paginado com filtros para
   `lane_id`, `decision`, `jurisdiction` e `reason_code`.
 
 Comandos CLI/SDK envolvem essas superficies HTTP para que operadores possam automatizar revisoes
@@ -125,7 +125,7 @@ e obter artefatos (blob de politica assinado + atestacoes de revisores).
 
 1. **Admissao (Torii)**
    - `Torii` baixa a politica ativa quando um manifesto de lane muda ou quando a assinatura em cache expira.
-   - Cada transacao que entra na fila `/v2/pipeline` e marcada com `LaneComplianceContext`
+   - Cada transacao que entra na fila `/v1/pipeline` e marcada com `LaneComplianceContext`
      (ids de participante, UAID, metadados do manifesto de dataspace, policy id e o snapshot mais recente
      de `LanePrivacyRegistry` descrito em `crates/iroha_core/src/interlane/mod.rs`).
    - Autoridades com UAID devem ter um manifesto ativo do Space Directory para o dataspace roteado;

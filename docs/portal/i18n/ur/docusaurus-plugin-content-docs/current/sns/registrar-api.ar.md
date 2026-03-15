@@ -27,7 +27,7 @@ translation_last_reviewed: 2026-02-07
 
 | ضرورت | تفصیلات |
 | --------- | ------------ |
-| پروٹوکول | `/v2/sns/*` اور GRPC سروس `sns.v1.Registrar` کے تحت آرام کریں۔ وہ دونوں Norito-JSON (`application/json`) اور Norito-RPC بائنری (`application/x-norito`) قبول کرتے ہیں۔ |
+| پروٹوکول | `/v1/sns/*` اور GRPC سروس `sns.v1.Registrar` کے تحت آرام کریں۔ وہ دونوں Norito-JSON (`application/json`) اور Norito-RPC بائنری (`application/x-norito`) قبول کرتے ہیں۔ |
 | Auth | `Authorization: Bearer` ٹوکن یا MTLS سرٹیفکیٹ ہر لاحقہ اسٹیورڈ کو جاری کرتے ہیں۔ گورننس حساس اختتامی نکات (منجمد/غیر منقولہ ، محفوظ اسائنمنٹس) کے لئے `scope=sns.admin` کی ضرورت ہوتی ہے۔ |
 | شرح کی حد | رجسٹرارس شیئر بالٹی `torii.preauth_scheme_limits` JSON کالر کے ساتھ ساتھ ہر لاحقہ کے لئے پھٹ جانے والی حدود: `sns.register` ، `sns.renew` ، `sns.controller` ، `sns.freeze`۔ |
 | پیمائش | Torii `torii_request_duration_seconds{scheme}` / Norito رجسٹر پروسیسرز کے لئے (نامزد `scheme="norito_rpc"`) ؛ انٹرفیس `sns_registrar_status_total{result, suffix_id}` میں بھی اضافہ کرتا ہے۔ |
@@ -106,15 +106,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | اختتامی نقطہ | طریقہ | پے لوڈ | تفصیل |
 | ------------- | --------- | --------- | ------- |
-| `/v2/sns/registrations` | پوسٹ | `RegisterNameRequestV1` | کسی نام کو رجسٹر کریں یا دوبارہ کھولیں۔ قیمتوں کا تعین طبقہ حل کرتا ہے ، ادائیگی/گورننس کے ثبوتوں کی تصدیق کرتا ہے ، اور لاگ ان واقعات کو جاری کرتا ہے۔ |
-| `/v2/sns/registrations/{selector}/renew` | پوسٹ | `RenewNameRequestV1` | مدت میں توسیع کرتا ہے۔ پالیسی سے ونڈوز گریس/چھٹکارے کو نافذ کرتا ہے۔ |
-| `/v2/sns/registrations/{selector}/transfer` | پوسٹ | `TransferNameRequestV1` | گورننس کی منظوری سے منسلک ہونے کے بعد ملکیت منتقل کردی جاتی ہے۔ |
-| `/v2/sns/registrations/{selector}/controllers` | put | `UpdateControllersRequestV1` | گروپ کنٹرولرز کی جگہ ؛ دستخط شدہ اکاؤنٹ کے پتے کی توثیق کرتا ہے۔ |
-| `/v2/sns/registrations/{selector}/freeze` | پوسٹ | `FreezeNameRequestV1` | گارڈین/کونسل کو منجمد کریں۔ گارڈین ٹکٹ اور گورننس کتاب کے حوالہ کی ضرورت ہے۔ |
-| `/v2/sns/registrations/{selector}/freeze` | حذف کریں | `GovernanceHookV1` | پروسیسنگ کے بعد ڈیفروسٹنگ ؛ بورڈ کے لئے اوور رائڈ رجسٹریشن کو یقینی بناتا ہے۔ |
-| `/v2/sns/reserved/{selector}` | پوسٹ | `ReservedAssignmentRequestV1` | اسٹیورڈ/کونسل کے ذریعہ محفوظ نام تفویض کرنا۔ |
-| `/v2/sns/policies/{suffix_id}` | حاصل کریں | - | موجودہ `SuffixPolicyV1` (کیچ ایبل) ملتا ہے۔ |
-| `/v2/sns/registrations/{selector}` | حاصل کریں | - | `NameRecordV1` موجودہ + اصل حالت (فعال ، فضل ، وغیرہ) کو لوٹاتا ہے۔ |
+| `/v1/sns/registrations` | پوسٹ | `RegisterNameRequestV1` | کسی نام کو رجسٹر کریں یا دوبارہ کھولیں۔ قیمتوں کا تعین طبقہ حل کرتا ہے ، ادائیگی/گورننس کے ثبوتوں کی تصدیق کرتا ہے ، اور لاگ ان واقعات کو جاری کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/renew` | پوسٹ | `RenewNameRequestV1` | مدت میں توسیع کرتا ہے۔ پالیسی سے ونڈوز گریس/چھٹکارے کو نافذ کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/transfer` | پوسٹ | `TransferNameRequestV1` | گورننس کی منظوری سے منسلک ہونے کے بعد ملکیت منتقل کردی جاتی ہے۔ |
+| `/v1/sns/registrations/{selector}/controllers` | put | `UpdateControllersRequestV1` | گروپ کنٹرولرز کی جگہ ؛ دستخط شدہ اکاؤنٹ کے پتے کی توثیق کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/freeze` | پوسٹ | `FreezeNameRequestV1` | گارڈین/کونسل کو منجمد کریں۔ گارڈین ٹکٹ اور گورننس کتاب کے حوالہ کی ضرورت ہے۔ |
+| `/v1/sns/registrations/{selector}/freeze` | حذف کریں | `GovernanceHookV1` | پروسیسنگ کے بعد ڈیفروسٹنگ ؛ بورڈ کے لئے اوور رائڈ رجسٹریشن کو یقینی بناتا ہے۔ |
+| `/v1/sns/reserved/{selector}` | پوسٹ | `ReservedAssignmentRequestV1` | اسٹیورڈ/کونسل کے ذریعہ محفوظ نام تفویض کرنا۔ |
+| `/v1/sns/policies/{suffix_id}` | حاصل کریں | - | موجودہ `SuffixPolicyV1` (کیچ ایبل) ملتا ہے۔ |
+| `/v1/sns/registrations/{selector}` | حاصل کریں | - | `NameRecordV1` موجودہ + اصل حالت (فعال ، فضل ، وغیرہ) کو لوٹاتا ہے۔ |
 
 ** سلیکٹر انکوڈنگ: ** `{selector}` طبقہ I105 ، ADDR-5 کے مطابق کمپریسڈ یا معیاری ہیکس قبول کرتا ہے۔ Torii اسے `NameSelectorV1` کے ذریعے پرنٹ کرتا ہے۔
 
@@ -175,7 +175,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں ایک درست `GovernanceHookV1` ریکارڈ (تجویز ID ، ووٹ ہیشس ، اسٹیورڈ/سرپرست دستخط) پر مشتمل ہونا ضروری ہے۔ ہر کمانڈ صرف اسی طرح کے `/v2/sns/registrations/{selector}/...` اختتامی نقطہ کی آئینہ دار ہے تاکہ بیٹا پلیئر ورزش کرسکیں جس کو Torii SDKs کو فون کرے گا۔
+`--governance-json` میں ایک درست `GovernanceHookV1` ریکارڈ (تجویز ID ، ووٹ ہیشس ، اسٹیورڈ/سرپرست دستخط) پر مشتمل ہونا ضروری ہے۔ ہر کمانڈ صرف اسی طرح کے `/v1/sns/registrations/{selector}/...` اختتامی نقطہ کی آئینہ دار ہے تاکہ بیٹا پلیئر ورزش کرسکیں جس کو Torii SDKs کو فون کرے گا۔
 
 ## 4. جی آر پی سی سروس
 
@@ -210,7 +210,7 @@ service Registrar {
 
 Torii جانچ پڑتال کرکے شواہد کی تصدیق کرتا ہے:
 
-1. پروپوزل ID گورننس بک (`/v2/governance/proposals/{id}`) میں ہے اور اس کی حیثیت `Approved` ہے۔
+1. پروپوزل ID گورننس بک (`/v1/governance/proposals/{id}`) میں ہے اور اس کی حیثیت `Approved` ہے۔
 2. ہیش ریکارڈ شدہ ووٹنگ کے نشانات سے ملتی ہے۔
 3. اسٹیورڈ/گارڈین کے دستخط `SuffixPolicyV1` سے متوقع عوامی چابیاں کی نشاندہی کرتے ہیں۔
 
@@ -220,7 +220,7 @@ Torii جانچ پڑتال کرکے شواہد کی تصدیق کرتا ہے:
 
 ### 6.1 معیاری ریکارڈنگ
 
-1. قیمتیں ، فضل کی مدت ، اور دستیاب طبقات حاصل کرنے کے لئے کسٹمر `/v2/sns/policies/{suffix_id}` سے پوچھ گچھ کرتا ہے۔
+1. قیمتیں ، فضل کی مدت ، اور دستیاب طبقات حاصل کرنے کے لئے کسٹمر `/v1/sns/policies/{suffix_id}` سے پوچھ گچھ کرتا ہے۔
 2. کلائنٹ بلڈ `RegisterNameRequestV1`:
    - `selector` لیبل I105 (ترجیحی) یا سی ڈی (دوسرا آپشن) سے اخذ کیا گیا ہے۔
    - پالیسی کی حدود میں `term_years`۔
@@ -245,7 +245,7 @@ Torii جانچ پڑتال کرکے شواہد کی تصدیق کرتا ہے:
 
 ### 6.3 گارڈین منجمد اور اوور رائڈ بورڈ1. گارڈین `FreezeNameRequestV1` کو ٹکٹ کے ساتھ بھیجتا ہے جس میں حادثے کی شناخت کی نشاندہی ہوتی ہے۔
 2. Torii رجسٹر کو `NameStatus::Frozen` میں منتقل کرتا ہے ، اور `NameFrozen` کو جاری کرتا ہے۔
-3. پروسیسنگ کے بعد ، بورڈ کو زیربحث ؛ آپریٹر `/v2/sns/registrations/{selector}/freeze` کو `GovernanceHookV1` کے ساتھ حذف کرتا ہے۔
+3. پروسیسنگ کے بعد ، بورڈ کو زیربحث ؛ آپریٹر `/v1/sns/registrations/{selector}/freeze` کو `GovernanceHookV1` کے ساتھ حذف کرتا ہے۔
 4. Torii اوور رائڈ کے لئے چیک کرتا ہے ، اور `NameUnfrozen` کو جاری کرتا ہے۔
 
 ## 7. توثیق اور غلطی کے کوڈز
@@ -263,7 +263,7 @@ Torii جانچ پڑتال کرکے شواہد کی تصدیق کرتا ہے:
 ## 8. نفاذ کے نوٹ
 
 - Torii اسٹورز `NameRecordV1.auction` کے تحت زیر التواء نیلامی اور براہ راست رجسٹریشن کی کوششوں کو مسترد کرتا ہے جبکہ حیثیت `PendingAuction` ہے۔
-- ادائیگی کے ثبوت Norito نوٹ بک کی رسیدیں ؛ ٹریژری سروسز ہیلپ APIs (`/v2/finance/sns/payments`) فراہم کرتی ہے۔
+- ادائیگی کے ثبوت Norito نوٹ بک کی رسیدیں ؛ ٹریژری سروسز ہیلپ APIs (`/v1/finance/sns/payments`) فراہم کرتی ہے۔
 - SDKs کو ان نکات کو مضبوط مددگاروں سے لپیٹنا چاہئے تاکہ بٹوے واضح غلطی کی وجوہات (`ERR_SNS_RESERVED` ، وغیرہ) ظاہر کرسکیں۔
 
 ## 9. اگلے اقدامات

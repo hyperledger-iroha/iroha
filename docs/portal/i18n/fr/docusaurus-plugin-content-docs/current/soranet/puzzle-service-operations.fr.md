@@ -26,17 +26,17 @@ relay et, lorsque configure, orchestre des tokens d'admission ML-DSA pour les
 bord des relais. Il expose cinq points de terminaison HTTP :
 
 - `GET /healthz` - sonde de vivacité.
-- `GET /v2/puzzle/config` - retourne les paramètres PoW/puzzle effectifs issus
+- `GET /v1/puzzle/config` - retourne les paramètres PoW/puzzle effectifs issus
   du relais JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v2/puzzle/mint` - pour obtenir un ticket Argon2 ; un corps JSON optionnel
+- `POST /v1/puzzle/mint` - pour obtenir un ticket Argon2 ; un corps JSON optionnel
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   demander un TTL plus court (clamp au window de politique), lie le ticket a un
   transcript hash et renvoyer un ticket signé par le relay + l'empreinte de
   signature lorsque les clés de signature sont configurées.
-- `GET /v2/token/config` - quand `pow.token.enabled = true`, retourne la politique
+- `GET /v1/token/config` - quand `pow.token.enabled = true`, retourne la politique
   d'admission-token actif (empreinte digitale de l'émetteur, limites TTL/clock-skew, identifiant de relais,
   et l'ensemble de révocation fusionnée).
-- `POST /v2/token/mint` - emet un token d'admission ML-DSA se trouve au CV hash
+- `POST /v1/token/mint` - emet un token d'admission ML-DSA se trouve au CV hash
   fourni; le corps accepte `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Les tickets produits par le service sont vérifiés dans le test d'intégration
@@ -79,10 +79,10 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` est également disponible lorsque le secret est germé par un
-pipeline hors bande. Le watcher du fichier de révocation garde `/v2/token/config`
+pipeline hors bande. Le watcher du fichier de révocation garde `/v1/token/config`
 un jour; coordonnez les mises à jour avec la commande `soranet-admission-token revoke`
 pour éviter un état de révocation en retard.Définissez `pow.signed_ticket_public_key_hex` dans le relais JSON pour annoncer
-la clé publique ML-DSA-44 utilisée pour vérifier les panneaux de tickets PoW ; `/v2/puzzle/config`
+la clé publique ML-DSA-44 utilisée pour vérifier les panneaux de tickets PoW ; `/v1/puzzle/config`
 repete la cle et son empreinte BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) afin
 que les clients peuvent épingler le vérificateur. Les panneaux tickets sont valides
 contre le relay ID et les transcript binds et partager le meme store de
@@ -90,7 +90,7 @@ révocation; les billets PoW bruts de 74 octets restent valides quand le vérifi
 le ticket signé est configuré. Passez le secret de signature via `--signed-ticket-secret-hex`
 ou `--signed-ticket-secret-path` au lancement du service de puzzle; le démarrage
 rejette les keypairs incohérents si le secret ne valide pas contre
-`pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` accepter `"signed": true`
+`pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` accepter `"signed": true`
 (et optionnel `"transcript_hash_hex"`) pour renvoyer un ticket signé Norito fr
 plus des octets du ticket brut; les réponses incluent `signed_ticket_b64` et
 `signed_ticket_fingerprint_hex` pour suivre les empreintes digitales de replay. Les
@@ -111,11 +111,11 @@ configurer.
    fois que la gouvernance annonce le basculement de rotation. Le service ne supporte pas
    pas le hot-reload; un redemarrage est requis pour prendre le nouveau descriptor
    commettre.
-4. **Valider.** Émettez un ticket via `POST /v2/puzzle/mint` et confirmez que
+4. **Valider.** Émettez un ticket via `POST /v1/puzzle/mint` et confirmez que
    `difficulty` et `expires_at` correspondant à la nouvelle politique. Le rapport
    trempage (`docs/source/soranet/reports/pow_resilience.md`) capture des bornes de
    latence attendue pour référence. Lorsque les tokens sont actifs, lisez
-   `/v2/token/config` pour vérifier que l'émetteur d'empreintes digitales annonce et le
+   `/v1/token/config` pour vérifier que l'émetteur d'empreintes digitales annonce et le
    compte de révocation correspondant aux valeurs attendues.
 
 ## Procédure de désactivation d'urgence
@@ -128,7 +128,7 @@ configurer.
 3. Redémarrez à la fois le relais et le service puzzle pour appliquer le
    changement.
 4. Surveillez `soranet_handshake_pow_difficulty` pour vérifier que la difficulté
-   tombe à la valeur hashcash attendue, et validez que `/v2/puzzle/config`
+   tombe à la valeur hashcash attendue, et validez que `/v1/puzzle/config`
    rapport `puzzle = null`.
 
 ## Surveillance et alerte- **Latency SLO:** Suivez `soranet_handshake_latency_seconds` et gardez le P95
@@ -138,16 +138,16 @@ configurer.
   metrics relay pour ajuster les cooldowns `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Alignement du puzzle :** `soranet_handshake_pow_difficulty` doit correspondre à la
-  difficulté retournée par `/v2/puzzle/config`. Une divergence indique une configuration
+  difficulté retournée par `/v1/puzzle/config`. Une divergence indique une configuration
   relais périmé ou un taux de remarrage.
-- **Préparation du jeton :** Alertez si `/v2/token/config` chute à `enabled = false`
+- **Préparation du jeton :** Alertez si `/v1/token/config` chute à `enabled = false`
   de manière inattendue ou si `revocation_source` rapporte des timestamps obsolètes.
   Les opérateurs doivent faire tourner le fichier de révocation Norito via le CLI
   des qu'un token est retiré pour garder cet endpoint précis.
 - **Service santé :** Probez `/healthz` avec la cadence de vivacité habituelle et
-  alertez si `/v2/puzzle/mint` renvoie des réponses HTTP 500 (indiquer un décalage
+  alertez si `/v1/puzzle/mint` renvoie des réponses HTTP 500 (indiquer un décalage
   des paramètres Argon2 ou des résultats RNG). Les erreurs de token minting se
-  se manifeste via des réponses HTTP 4xx/5xx sur `/v2/token/mint`; traitez les
+  se manifeste via des réponses HTTP 4xx/5xx sur `/v1/token/mint`; traitez les
   les echecs se répètent comme une condition de pagination.
 
 ## Journalisation de conformité et d'audit

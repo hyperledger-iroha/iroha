@@ -20,7 +20,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | チェック | 検証 | 証拠 |
 |-------|------------|----------|
-| Registry が正規の容量宣言を受理する | Integration test が app API 経由で `/v2/sorafs/capacity/declare` を実行し、署名処理、metadata の捕捉、ノード registry へのハンドオフを検証する。 | `crates/iroha_torii/src/routing.rs:7654` |
+| Registry が正規の容量宣言を受理する | Integration test が app API 経由で `/v1/sorafs/capacity/declare` を実行し、署名処理、metadata の捕捉、ノード registry へのハンドオフを検証する。 | `crates/iroha_torii/src/routing.rs:7654` |
 | Smart contract が不一致 payload を拒否する | Unit test が provider IDs と committed GiB フィールドが署名済み宣言と一致することを永続化前に保証する。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI が正規のオンボーディング artefacts を生成する | CLI harness が決定論的な Norito/JSON/Base64 出力を生成し、round-trip を検証してオペレーターが宣言を offline で準備できるようにする。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | オペレーターガイドが admission workflow と governance guardrails を記載する | ドキュメントが宣言スキーマ、policy defaults、council のレビュー手順を列挙する。 | `../storage-capacity-marketplace.md` |

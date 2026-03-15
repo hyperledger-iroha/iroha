@@ -119,7 +119,7 @@ alerting remain consistent. The CLI/SDK map them to user-facing error messages a
 ## Transport Decision
 
 - **Primary mechanism: HTTP/2 streaming.**
-  - Gateways expose `POST /v2/proof/stream` accepting `ProofStreamRequestV1` and responding with a
+  - Gateways expose `POST /v1/proof/stream` accepting `ProofStreamRequestV1` and responding with a
     `application/x-ndjson` body (`ProofStreamItemV1` per line). HTTP/2 allows multiplexing alongside chunk
     fetches and integrates with existing gateway infrastructure.
   - Back-pressure is handled via flow control; gateways MUST not buffer more than 64 items before blocking.

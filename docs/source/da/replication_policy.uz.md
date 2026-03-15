@@ -30,7 +30,7 @@ topshiruvchi niyatiga tayanmasdan davrlar va nusxalar soni.
 | _Default (barcha boshqa sinflar)_ | 6 soat | 30 kun | 3 | `warm` | `da.default` |
 
 Bu qiymatlar `torii.da_ingest.replication_policy` ichiga kiritilgan va ularga qo'llaniladi
-barcha `/v2/da/ingest` taqdimotlari. Torii manifestlarni majburiy bilan qayta yozadi
+barcha `/v1/da/ingest` taqdimotlari. Torii manifestlarni majburiy bilan qayta yozadi
 saqlash profili va qo'ng'iroq qiluvchilar mos kelmaydigan qiymatlarni taqdim etganda ogohlantirish chiqaradi
 operatorlar eskirgan SDK larni aniqlay oladi.
 
@@ -150,7 +150,7 @@ SoraFS mos kelmaydigan bloblarni avtomatik ravishda takrorlashi mumkin.
    va PDP dalillari.
 
 Regressiya qamrovi `integration_tests/tests/da/replication_policy.rs` da yashaydi;
-to'plam `/v2/da/ingest` ga mos kelmaydigan saqlash siyosatini taqdim etadi va tekshiradi
+to'plam `/v1/da/ingest` ga mos kelmaydigan saqlash siyosatini taqdim etadi va tekshiradi
 olingan manifest qo'ng'iroq qiluvchining o'rniga majburiy profilni ochib beradi
 niyat.
 

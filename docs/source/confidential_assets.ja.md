@@ -80,7 +80,7 @@ translator: manual
 
 ## フロントエンドとツール
 - CLI には `confidential create-keys`, `confidential send`, `confidential export-view-key`、監査向けメモ復号ツール、`iroha app zk envelope` などを追加。
-- Torii API に `POST /v2/confidential/derive-keyset` を追加し、ウォレットがキー階層を自動取得可能。
+- Torii API に `POST /v1/confidential/derive-keyset` を追加し、ウォレットがキー階層を自動取得可能。
 - アカウントごとのキー階層:
   - `sk_spend` → `nk`（nullifier キー）、`ivk`（incoming viewing key）、`ovk`（outgoing viewing key）、`fvk`
 - ノート暗号化は ECDH 共有鍵を使った AEAD（XChaCha20-Poly1305）。資産ポリシーに応じて監査用ビューキー付与も可能。

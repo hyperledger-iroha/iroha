@@ -45,7 +45,7 @@ Os envelopes de memorandos confidenciais agora são fornecidos com um acessório
 SDKs Swift agora podem emitir instruções de escudo sem cola JSON personalizada: construa um
 `ShieldRequest` com compromisso de nota de 32 bytes, carga útil criptografada e metadados de débito,
 em seguida, ligue para `IrohaSDK.submit(shield:keypair:)` (ou `submitAndWait`) para assinar e retransmitir o
-transação acima de `/v2/pipeline/transactions`. O auxiliar valida a duração do compromisso,
+transação acima de `/v1/pipeline/transactions`. O auxiliar valida a duração do compromisso,
 encadeia `ConfidentialEncryptedPayload` no codificador Norito e espelha o `zk::Shield`
 layout descrito abaixo para que as carteiras permaneçam em sincronia com o Rust.## Compromissos de consenso e controle de capacidade
 - Cabeçalhos de bloco expõem `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; o resumo participa do hash de consenso e deve ser igual à visualização do registro local para aceitação do bloco.
@@ -71,7 +71,7 @@ layout descrito abaixo para que as carteiras permaneçam em sincronia com o Rust
 - Manifestos Genesis e fluxos CLI revelam políticas atuais e pendentes. A lógica de admissão lê a política em tempo de execução para confirmar que cada instrução confidencial é autorizada.
 - Lista de verificação de migração — consulte “Sequenciamento de migração” abaixo para obter o plano de atualização em etapas que o Milestone M0 rastreia.
 
-#### Monitorando transições via ToriiCarteiras e auditores pesquisam `GET /v2/confidential/assets/{definition_id}/transitions` para inspecionar
+#### Monitorando transições via ToriiCarteiras e auditores pesquisam `GET /v1/confidential/assets/{definition_id}/transitions` para inspecionar
 o `AssetConfidentialPolicy` ativo. A carga JSON sempre inclui o canônico
 ID do ativo, a última altura do bloco observada, o `current_mode` da política, o modo que é
 efetivo nessa altura (as janelas de conversão relatam temporariamente `Convertible`), e o
@@ -122,7 +122,7 @@ programado o campo `pending_transition` é `null`.
 ### Sequenciamento de migração
 
 2. **Preparar a transição:** Envie `ScheduleConfidentialPolicyTransition` com um `effective_height` que respeite `policy_transition_delay_blocks`. Ao avançar para `ShieldedOnly`, especifique uma janela de conversão (`window ≥ policy_transition_window_blocks`).
-3. **Publicar orientação do operador:** Registre o `transition_id` retornado e distribua um runbook de rampa de entrada/saída. Carteiras e auditores assinam `/v2/confidential/assets/{id}/transitions` para saber a altura de abertura da janela.
+3. **Publicar orientação do operador:** Registre o `transition_id` retornado e distribua um runbook de rampa de entrada/saída. Carteiras e auditores assinam `/v1/confidential/assets/{id}/transitions` para saber a altura de abertura da janela.
 4. **Aplicação de janela:** Quando a janela é aberta, o tempo de execução alterna a política para `Convertible`, emite `PolicyTransitionWindowOpened { transition_id }` e começa a rejeitar solicitações de governança conflitantes.
 5. **Finalizar ou abortar:** Em `effective_height`, o tempo de execução verifica os pré-requisitos de transição (zero fornecimento transparente, sem retiradas emergenciais, etc.). O sucesso muda a política para o modo solicitado; a falha emite `PolicyTransitionPrerequisiteFailed`, limpa a transição pendente e deixa a política inalterada.
 6. **Atualizações de esquema:** após uma transição bem-sucedida, a governança altera a versão do esquema de ativos (por exemplo, `asset_definition.v2`) e as ferramentas CLI exigem `confidential_policy` ao serializar manifestos. Os documentos de atualização do Genesis instruem os operadores a adicionar configurações de política e impressões digitais de registro antes de reiniciar os validadores.
@@ -238,7 +238,7 @@ passo a passo.
 - Hierarquia de derivação de chave por conta:
   - `sk_spend` → `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - Cargas de notas criptografadas usam AEAD com chaves compartilhadas derivadas de ECDH; chaves opcionais de visão do auditor podem ser anexadas às saídas por política de ativos.
-- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditoria para descriptografar memorandos e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes de memorando Norito offline. Torii expõe o mesmo fluxo de derivação via `POST /v2/confidential/derive-keyset`, retornando os formatos hexadecimal e base64 para que as carteiras possam buscar hierarquias de chaves programaticamente.
+- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditoria para descriptografar memorandos e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes de memorando Norito offline. Torii expõe o mesmo fluxo de derivação via `POST /v1/confidential/derive-keyset`, retornando os formatos hexadecimal e base64 para que as carteiras possam buscar hierarquias de chaves programaticamente.
 
 ## Controles de gás, limites e DoS
 - Cronograma determinístico de gás:

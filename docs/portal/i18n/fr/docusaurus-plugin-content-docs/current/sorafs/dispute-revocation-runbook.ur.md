@@ -26,7 +26,7 @@ Il s'agit d'un produit SoraFS qui est en mesure de fournir une solution à votre
 ## 1. واقعے کا جائزہ
 
 - **Prise en charge :** SLA en cours de fonctionnement (échec de disponibilité/PoR), déficit de réplication, ou désaccord de facturation en cours
-- **ٹیلیمیٹری کی تصدیق:** پرووائیڈر کے لیے `/v2/sorafs/capacity/state` et `/v2/sorafs/capacity/telemetry` snapshots حاصل کریں۔
+- **ٹیلیمیٹری کی تصدیق:** پرووائیڈر کے لیے `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` snapshots حاصل کریں۔
 - **اسٹیک ہولڈرز کو مطلع کریں :** Équipe de stockage (opérations du fournisseur) ، Conseil de gouvernance (organe de décision) ، Observabilité (mises à jour du tableau de bord) ۔
 
 ## 2. شواہد کا پیکج تیار کریں
@@ -72,7 +72,7 @@ Il s'agit d'un produit SoraFS qui est en mesure de fournir une solution à votre
    ```
 
 3. `dispute_summary.json` ریویو کریں (type de résumé de preuves, horodatages)۔
-4. L'application Torii `/v2/sorafs/capacity/dispute` est basée sur JSON. جواب کی قدر `dispute_id_hex` محفوظ کریں؛ یہی بعد کی منسوخی کارروائیوں اور آڈٹ رپورٹس کا اینکر ہے۔
+4. L'application Torii `/v1/sorafs/capacity/dispute` est basée sur JSON. جواب کی قدر `dispute_id_hex` محفوظ کریں؛ یہی بعد کی منسوخی کارروائیوں اور آڈٹ رپورٹس کا اینکر ہے۔
 
 ## 4. انخلا اور منسوخی
 

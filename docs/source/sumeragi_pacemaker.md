@@ -27,7 +27,7 @@ Exposed telemetry (see telemetry.md):
 - Runtime: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=…}`
 - Backpressure: `sumeragi_pacemaker_backpressure_deferrals_by_reason_total{reason=…}`, `sumeragi_pacemaker_backpressure_deferral_age_ms{reason=…}`
 - Tick timings: `sumeragi_pacemaker_eval_ms`, `sumeragi_pacemaker_propose_ms`
-- REST snapshot: `/v2/sumeragi/phases` now includes `ema_ms` alongside the latest
+- REST snapshot: `/v1/sumeragi/phases` now includes `ema_ms` alongside the latest
   per-phase latencies so dashboards can plot the EMA trend without scraping
   Prometheus directly.
 - Config: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`

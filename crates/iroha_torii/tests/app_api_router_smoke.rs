@@ -99,14 +99,14 @@ async fn app_api_router_smoke() {
 
     let app = torii.api_router_for_tests();
 
-    // 1) App API: GET /v2/accounts/{account_id}/assets — use a bogus id to avoid
+    // 1) App API: GET /v1/accounts/{account_id}/assets — use a bogus id to avoid
     // state setup; we only care that the route exists and responds deterministically.
     let resp_assets = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri(Uri::from_static(
-                    "/v2/accounts/bogus_account_id/assets?offset=0",
+                    "/v1/accounts/bogus_account_id/assets?offset=0",
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -121,12 +121,12 @@ async fn app_api_router_smoke() {
             | StatusCode::BAD_REQUEST
     ));
 
-    // 2) App API: GET /v2/events/sse — endpoint exists; allow OK or 429 depending on rate limits
+    // 2) App API: GET /v1/events/sse — endpoint exists; allow OK or 429 depending on rate limits
     let resp_sse = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/events/sse"))
+                .uri(Uri::from_static("/v1/events/sse"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -145,12 +145,12 @@ async fn app_api_router_smoke() {
         assert!(ct.contains("text/event-stream"));
     }
 
-    // 2b) App API: GET /v2/explorer/blocks/stream — endpoint exists; allow OK or 429.
+    // 2b) App API: GET /v1/explorer/blocks/stream — endpoint exists; allow OK or 429.
     let resp_blocks_sse = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/explorer/blocks/stream"))
+                .uri(Uri::from_static("/v1/explorer/blocks/stream"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -169,12 +169,12 @@ async fn app_api_router_smoke() {
         assert!(ct.contains("text/event-stream"));
     }
 
-    // 2c) App API: GET /v2/gov/stream — endpoint exists; allow OK/429.
+    // 2c) App API: GET /v1/gov/stream — endpoint exists; allow OK/429.
     let resp_gov_sse = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/gov/stream"))
+                .uri(Uri::from_static("/v1/gov/stream"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -193,12 +193,12 @@ async fn app_api_router_smoke() {
         assert!(ct.contains("text/event-stream"));
     }
 
-    // 2d) App API: GET /v2/telemetry/live — endpoint exists; allow OK/429/403.
+    // 2d) App API: GET /v1/telemetry/live — endpoint exists; allow OK/429/403.
     let resp_telemetry_live = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/telemetry/live"))
+                .uri(Uri::from_static("/v1/telemetry/live"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -224,12 +224,12 @@ async fn app_api_router_smoke() {
         assert_eq!(resp_telemetry_live.status(), StatusCode::NOT_FOUND);
     }
 
-    // 2e) App API: GET /v2/telemetry/propagation — endpoint exists; allow OK/429/403.
+    // 2e) App API: GET /v1/telemetry/propagation — endpoint exists; allow OK/429/403.
     let resp_telemetry_propagation = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/telemetry/propagation"))
+                .uri(Uri::from_static("/v1/telemetry/propagation"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -247,12 +247,12 @@ async fn app_api_router_smoke() {
         assert_eq!(resp_telemetry_propagation.status(), StatusCode::NOT_FOUND);
     }
 
-    // 3) App API: GET /v2/webhooks — ensure route exists; allow OK or 429
+    // 3) App API: GET /v1/webhooks — ensure route exists; allow OK or 429
     let resp_webhooks = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/webhooks"))
+                .uri(Uri::from_static("/v1/webhooks"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -263,14 +263,14 @@ async fn app_api_router_smoke() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // 4) App API: GET /v2/assets/{definition_id}/holders — use percent-encoded '#'
+    // 4) App API: GET /v1/assets/{definition_id}/holders — use percent-encoded '#'
     // in the definition id (bogus#wonderland) to ensure parsing is exercised.
     let resp_holders = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri(Uri::from_static(
-                    "/v2/assets/bogus%23wonderland/holders?offset=0",
+                    "/v1/assets/bogus%23wonderland/holders?offset=0",
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -285,7 +285,7 @@ async fn app_api_router_smoke() {
             | StatusCode::NOT_FOUND
     ));
 
-    // 5) App API: POST /v2/webhooks — create a webhook (write path)
+    // 5) App API: POST /v1/webhooks — create a webhook (write path)
     let body = r#"{
   "url": "https://example.com/callback",
   "secret": null,
@@ -296,7 +296,7 @@ async fn app_api_router_smoke() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/webhooks"))
+                .uri(Uri::from_static("/v1/webhooks"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(body))
                 .unwrap(),

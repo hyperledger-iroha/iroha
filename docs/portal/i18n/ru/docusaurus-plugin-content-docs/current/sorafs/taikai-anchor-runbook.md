@@ -50,7 +50,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | `taikai_ingest_segment_latency_ms` | Гистограмма CMAF ingest latency по cluster/stream (цель: p95 < 750 ms, p99 < 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | Live-edge drift между encoder и anchor воркерами (paging при p99 > 1.5 s в течение 10 мин). |
 | `taikai_ingest_segment_errors_total{reason}` | Счётчики ошибок по причине (`decode`, `manifest_mismatch`, `lineage_replay`, …). Любой рост триггерит `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Увеличивается при каждом принятии нового TRM через `/v2/da/ingest`; используйте `rate()` для проверки каденции ротации. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Увеличивается при каждом принятии нового TRM через `/v1/da/ingest`; используйте `rate()` для проверки каденции ротации. |
 | `/status → telemetry.taikai_alias_rotations[]` | JSON snapshot с `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` и timestamps для evidence bundles. |
 | `taikai_viewer_*` (rebuffer, возраст CEK rotation, PQ health, alerts) | KPI viewer-стороны, подтверждающие здоровье CEK rotation + PQ circuits во время anchors. |
 

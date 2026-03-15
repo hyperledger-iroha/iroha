@@ -28,7 +28,7 @@ translator: machine-google-reviewed
   `sponsor:<uaid>`)、保留策略占位符和 MIME 覆盖。
 - **重复数据删除**：tar 有效负载被分块（默认 64KiB）并每个存储一次
   带有引用计数的哈希值；退役一个包会减少并修剪块。
-- **服务**：Torii 暴露 `GET /v2/content/{bundle}/{path}`。响应流
+- **服务**：Torii 暴露 `GET /v1/content/{bundle}/{path}`。响应流
   直接来自块存储，`ETag` = 文件哈希，`Accept-Ranges: bytes`，
   范围支持和源自清单的缓存控制。阅读荣誉
   清单身份验证模式：角色门控和赞助商门控响应需要规范

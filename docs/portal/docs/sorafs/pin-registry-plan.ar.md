@@ -80,7 +80,7 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 
 | المكون | المهمة | المالك/المالكون |
 |--------|--------|------------------|
-| خدمة Torii | كشف `/v2/sorafs/pin` (submit)، `/v2/sorafs/pin/{cid}` (lookup)، `/v2/sorafs/aliases` (list/bind)، `/v2/sorafs/replication` (orders/receipts). توفير ترقيم + ترشيح. | Networking TL / Core Infra |
+| خدمة Torii | كشف `/v1/sorafs/pin` (submit)، `/v1/sorafs/pin/{cid}` (lookup)، `/v1/sorafs/aliases` (list/bind)، `/v1/sorafs/replication` (orders/receipts). توفير ترقيم + ترشيح. | Networking TL / Core Infra |
 | الاتستاشن | تضمين ارتفاع/هاش registry في الاستجابات؛ اضافة بنية Norito للاتستاشن تستهلكها SDKs. | Core Infra |
 | CLI | توسيع `sorafs_manifest_stub` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | توليد bindings للعميل (Rust/Go/TS) من مخطط Norito؛ اضافة اختبارات تكامل. | SDK Teams |
@@ -137,9 +137,9 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 يجب ان تشير كل قائمة تحقق ضمن SF-4 الى هذه الخطة عند تسجيل التقدم.
 واجهة REST توفر الان نقاط نهاية قائمة مع اتستاشن:
 
-- `GET /v2/sorafs/pin` و `GET /v2/sorafs/pin/{digest}` تعيدان manifests مع
+- `GET /v1/sorafs/pin` و `GET /v1/sorafs/pin/{digest}` تعيدان manifests مع
   ربط aliases واوامر التكرار وكائن اتستاشن مشتق من هاش اخر كتلة.
-- `GET /v2/sorafs/aliases` و `GET /v2/sorafs/replication` تكشفان كتالوج alias
+- `GET /v1/sorafs/aliases` و `GET /v1/sorafs/replication` تكشفان كتالوج alias
   النشط وتراكم اوامر التكرار بترقيم ثابت ومرشحات حالة.
 
 تغلف CLI هذه الاستدعاءات (`iroha app sorafs pin list`, `pin show`, `alias list`,

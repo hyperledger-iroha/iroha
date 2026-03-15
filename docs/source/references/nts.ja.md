@@ -52,8 +52,8 @@ max_adjust_ms_per_min = 50
 
 ### Torii エンドポイント
 
-- `GET /v2/time/now` → `{ "now": <ms_epoch>, "offset_ms": <i64>, "confidence_ms": <u64> }`
-- `GET /v2/time/status` → 診断情報と RTT ヒストグラム:
+- `GET /v1/time/now` → `{ "now": <ms_epoch>, "offset_ms": <i64>, "confidence_ms": <u64> }`
+- `GET /v1/time/status` → 診断情報と RTT ヒストグラム:
   - `{ "peers": <u64>, "samples": [{"peer","last_offset_ms","last_rtt_ms","count"}, ...], "rtt": {"buckets": [{"le","count"},...], "sum_ms", "count"}, "note": "NTS running" }`
 
 ### テレメトリメトリクス

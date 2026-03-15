@@ -33,7 +33,7 @@ The operator console sample targets validator operators who need a deterministic
 |------|---------|---------------------|
 | Governance transaction builder | Guided composer for role/permission, staking, and treasury instructions with manifest preview | Emits Norito JSON + `.to` artefacts, validates against `iroha_cli schema check`, stores drafts locally with encrypted backups |
 | StrongBox signing | Enforce StrongBox-backed keys with fallback warnings, surface attestation bundle upload to Torii | Shows alias lifecycle, supports re-key, and blocks submission if attestation verification fails |
-| Pipeline inspector | List `/v2/pipeline` pending transactions, retries with exponential backoff, and surfaces `iroha_config.client.pipeline.*` overrides | Metrics feed into `android.telemetry.pipeline.*` counters; UI flags stalled queues |
+| Pipeline inspector | List `/v1/pipeline` pending transactions, retries with exponential backoff, and surfaces `iroha_config.client.pipeline.*` overrides | Metrics feed into `android.telemetry.pipeline.*` counters; UI flags stalled queues |
 | Telemetry & dashboards | Push counters to OTEL collector, link to Grafana dashboards referenced in `docs/source/sdk/android/readiness/dashboard_parity/` | Sample ships default `otel-config.yaml` plus instructions to override endpoints |
 
 ## 3. Architecture & Modules
@@ -210,10 +210,10 @@ Follow these phases whenever you demo the console for operators or auditors.
 
 ### Step 3 — Submit, monitor pipeline, and reconcile telemetry
 
-1. Tap **Sign & Submit**; the console routes the request through the `/v2/pipeline`
+1. Tap **Sign & Submit**; the console routes the request through the `/v1/pipeline`
    client backed by the AND4 networking stack.
 2. The **Pending Queue** panel refreshes automatically and mirrors the same data
-   exposed by `curl "$ANDROID_SAMPLE_TORII_URL/v2/pipeline?limit=20"`.
+   exposed by `curl "$ANDROID_SAMPLE_TORII_URL/v1/pipeline?limit=20"`.
 3. Monitor the sandbox logs while waiting:
 
    ```bash

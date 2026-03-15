@@ -41,7 +41,7 @@ slug: /sorafs/node-operations-ja
   ```
 
 - Torii プロセスが `data_dir` への読み取り/書き込みアクセス権を持っていることを確認します。
-- 宣言が記録されたら、ノードが `GET /v2/sorafs/capacity/state` 経由で予想される容量をアドバタイズしていることを確認します。
+- 宣言が記録されたら、ノードが `GET /v1/sorafs/capacity/state` 経由で予想される容量をアドバタイズしていることを確認します。
 - スムージングが有効な場合、ダッシュボードには生の GiB 時間/PoR カウンターと平滑化された GiB 時間/PoR カウンターの両方が表示され、スポット値とともにジッターのない傾向が強調表示されます。
 
 ### CLI ドライラン (オプション)
@@ -66,8 +66,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 Torii が有効になると、HTTP 経由で同じアーティファクトを取得できます。
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 両方のエンドポイントは組み込みストレージ ワーカーによって提供されるため、CLI スモーク テストとゲートウェイ プローブは同期を保ちます。【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
@@ -78,7 +78,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Base64 エンコードを使用してマニフェストを送信します。
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -87,7 +87,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. 固定されたデータをフェッチします。
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -103,7 +103,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. 上記のように少なくとも 1 つのマニフェストを固定します。
 2. Torii プロセス (またはノード全体) を再起動します。
 3. フェッチ要求を再送信します。ペイロードは引き続き取得可能である必要があり、返されたダイジェストは再起動前の値と一致する必要があります。
-4. `GET /v2/sorafs/storage/state` を調べて、再起動後に永続化されたマニフェストが `bytes_used` に反映されていることを確認します。
+4. `GET /v1/sorafs/storage/state` を調べて、再起動後に永続化されたマニフェストが `bytes_used` に反映されていることを確認します。
 
 ## 4. クォータ拒否テスト
 
@@ -118,7 +118,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. PoR サンプルをリクエストします。
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -139,7 +139,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - ダッシュボードは以下を追跡する必要があります。
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` および `torii_sorafs_storage_fetch_inflight`
-  - `/v2/sorafs/capacity/state` 経由で PoR 成功/失敗カウンターが表示される
+  - `/v1/sorafs/capacity/state` 経由で PoR 成功/失敗カウンターが表示される
   - `sorafs_node_deal_publish_total{result=success|failure}` を介した決済公開試行
 
 これらの訓練に従うことで、ノードがより広範なネットワークに容量をアドバタイズする前に、組み込みストレージ ワーカーがデータを取り込み、再起動に耐え、設定されたクォータを尊重し、決定論的な PoR 証明を生成できることが保証されます。

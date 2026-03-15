@@ -46,13 +46,13 @@ When telemetry is enabled (`telemetry_enabled=true`):
 
 1) Ephemeral default, no override:
 
-POST /v2/query
+POST /v1/query
 Body: Norito-encoded Start request (predicate/selector/params)
 Response: first batch; `cursor=null`
 
 2) Override to stored with gas units:
 
-POST /v2/query?cursor_mode=stored&gas_units=100
+POST /v1/query?cursor_mode=stored&gas_units=100
 Body: Norito-encoded Start request
 Response: first batch; `cursor` present for continuation
 

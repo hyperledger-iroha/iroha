@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 Post-Approval Configuration Snapshots
 
 ပြည်လုံးကျွတ်ဆန္ဒခံယူပွဲ သို့မဟုတ် အုပ်ချုပ်မှုမဲပေးပြီးနောက် `[settlement.repo]`၊
-အပြောင်းအလဲကို စတင်လိုက်ပါပြီ၊ ရွယ်တူတိုင်းမှ `/v2/configuration` လျှပ်တစ်ပြက်ရိုက်ချက်များ
+အပြောင်းအလဲကို စတင်လိုက်ပါပြီ၊ ရွယ်တူတိုင်းမှ `/v1/configuration` လျှပ်တစ်ပြက်ရိုက်ချက်များ
 စာရင်းစစ်များသည် အတည်ပြုထားသောမူဝါဒသည် အစုအဝေးအတွင်း တိုက်ရိုက်ရှိကြောင်း သက်သေပြနိုင်သည် (ကြည့်ရှုပါ။
 အထောက်အထား အလုပ်အသွားအလာအတွက် `docs/source/finance/repo_ops.md` §2.9)။
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v2/configuration \
+curl -fsSL https://peer01.example/v1/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

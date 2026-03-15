@@ -81,7 +81,7 @@ aplicação بڑھنے پر فوری contexto ملے۔
 | `sorafs_node_por_failure_total` | Contador | `provider_id` | amostras PoR com falha کا contador monotônico۔ |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Medidor | `provider` | bytes usados, profundidade da fila e contagens de voo PoR کے لیے موجودہ medidores Prometheus۔ |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Medidor | `provider` | dados de sucesso de capacidade/tempo de atividade do provedor ou painel de capacidade میں دکھایا جاتا ہے۔ |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | profundidade do backlog اور contadores de falhas cumulativas جو ہر `/v2/sorafs/por/ingestion/{manifest}` poll پر exportação ہوتے ہیں, painel/alerta "PoR Stalls" کو feed کرتے ہیں۔ |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | profundidade do backlog اور contadores de falhas cumulativas جو ہر `/v1/sorafs/por/ingestion/{manifest}` poll پر exportação ہوتے ہیں, painel/alerta "PoR Stalls" کو feed کرتے ہیں۔ |
 
 ### Prova de recuperação oportuna (PoTR) e pedaço de SLA
 

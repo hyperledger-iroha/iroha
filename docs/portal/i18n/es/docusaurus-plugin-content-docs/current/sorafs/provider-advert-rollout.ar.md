@@ -46,7 +46,7 @@ Lea los trozos de agua y los trozos. وهي تركز على
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` desde `max_span` desde arriba
      - `allow_unknown_capabilities=<true|false>` Compatible y TLV de GRASA
-   - تحقق عبر `/v2/sorafs/providers` y `sorafs_fetch`; يجب triaje تحذيرات
+   - تحقق عبر `/v1/sorafs/providers` y `sorafs_fetch`; يجب triaje تحذيرات
      capacidades غير المعروفة.
 3. **التحقق من جاهزية de múltiples fuentes.**
    - Aquí `sorafs_fetch` o `--provider-advert=<path>`. يفشل CLI الآن عندما
@@ -177,9 +177,9 @@ Para obtener más información, consulte el enlace `promtool check rules`.
 ## التواصل ومعالجة الحوادث- **رسالة حالة أسبوعية.** يرسل DevRel ملخصا موجزا لمقاييس القبول والتحذيرات
   والمواعيد القادمة.
 - **استجابة للحوادث.** إذا انطلقت تنبيهات `reject`, يقوم de guardia بما يلي:
-  1. جلب anuncio المخالف عبر descubrimiento في Torii (`/v2/sorafs/providers`).
+  1. جلب anuncio المخالف عبر descubrimiento في Torii (`/v1/sorafs/providers`).
   2. إعادة تشغيل تحقق anuncio في tubería المزود ومقارنة النتائج مع
-     `/v2/sorafs/providers` لإعادة إنتاج الخطأ.
+     `/v1/sorafs/providers` لإعادة إنتاج الخطأ.
   3. التنسيق مع المزود لتدوير anuncio قبل اقتراب مهلة actualizar التالية.
 - **تجميد التغييرات.** لا تغيرات على esquema للـ capacidades خلال R1/R2 ما لم
   يوافق عليها فريق lanzamiento؛ يجب جدولة تجارب GREASE ضمن نافذة الصيانة الأسبوعية

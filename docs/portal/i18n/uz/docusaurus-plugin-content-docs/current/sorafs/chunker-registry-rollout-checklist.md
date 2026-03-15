@@ -72,7 +72,7 @@ ushbu bosqichlarni batafsil ko'rib chiqish.
    `torii.sorafs.discovery.admission.envelopes_dir` tomonidan havola qilingan katalog.
 3. Provayder reklamalari Discovery API orqali tarqalishini tekshiring:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Boshqaruv sarlavhalari bilan manifest/reja yakuniy nuqtalarini mashq qiling:
    ```bash

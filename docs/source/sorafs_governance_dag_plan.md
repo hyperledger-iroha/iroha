@@ -112,11 +112,11 @@ This document completes **SF-12 — Governance DAG publishing pipeline** and sup
 - `sorafs governance dag export --since 2025-01-01 --out export.car` – produce CAR snapshot.
 - `sorafs governance dag diff --from <cid1> --to <cid2>` – show difference summary (new payloads, updated policies).
 - REST API (Dashboard backend):
-  - `GET /v2/dag/head`
-  - `GET /v2/dag/blocks?kind=&after=`
-  - `GET /v2/dag/block/{cid}`
-  - `GET /v2/dag/snapshots`
-  - `GET /v2/dag/proofs?manifest_cid=&provider_id=`
+  - `GET /v1/dag/head`
+  - `GET /v1/dag/blocks?kind=&after=`
+  - `GET /v1/dag/block/{cid}`
+  - `GET /v1/dag/snapshots`
+  - `GET /v1/dag/proofs?manifest_cid=&provider_id=`
 
 ## Rollout Plan
 1. Implement ingest/builder/publisher as separate services (Kubernetes deployments). 

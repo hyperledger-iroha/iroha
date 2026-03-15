@@ -44,7 +44,7 @@ slug: /sorafs/node-operations-am
   ```
 
 - የTorii ሂደት የ `data_dir` የማንበብ/የመፃፍ መዳረሻ እንዳለው ያረጋግጡ።
-- መስቀለኛ መንገዱ የሚጠበቀውን አቅም በ`GET /v2/sorafs/capacity/state` በኩል አንድ ጊዜ መግለጫ ከተመዘገበ ያረጋግጡ።
+- መስቀለኛ መንገዱ የሚጠበቀውን አቅም በ`GET /v1/sorafs/capacity/state` በኩል አንድ ጊዜ መግለጫ ከተመዘገበ ያረጋግጡ።
 - ማለስለስ ሲነቃ ዳሽቦርዶች ጥሬውን እና ለስላሳውን የጂቢሆር/PoR ቆጣሪዎችን ከቦታ እሴቶች ጎን ለጎን ከጅት ነፃ የሆኑ አዝማሚያዎችን ለማጉላት ያጋልጣሉ።
 
 ### CLI ደረቅ ሩጫ (አማራጭ)
@@ -69,8 +69,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 አንዴ Torii በቀጥታ ስርጭት ላይ ከዋለ ተመሳሳይ ቅርሶችን በኤችቲቲፒ ማግኘት ይችላሉ፡
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 ሁለቱም የመጨረሻ ነጥቦች የሚቀርቡት በተሰቀለው የማከማቻ ሰራተኛ ነው፣ ስለዚህ የCLI የጭስ ሙከራዎች እና የጌትዌይ ፍተሻዎች ሳይመሳሰሉ ይቀራሉ።【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
@@ -81,7 +81,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. አንጸባራቂውን በbase64 ኢንኮዲንግ ያስገቡ፡-
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -90,7 +90,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. የተሰካውን ውሂብ ያውጡ፡
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -106,7 +106,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. ከላይ እንደተገለጸው ቢያንስ አንድ አንጸባራቂ ይሰኩት።
 2. የ Torii ሂደቱን (ወይም ሙሉውን መስቀለኛ መንገድ) እንደገና ያስጀምሩ.
 3. የማምጣት ጥያቄውን እንደገና ያስገቡ። የተጫነው ጭነት አሁንም ተመልሶ ሊወጣ የሚችል መሆን አለበት እና የተመለሰው የምግብ መፍጫ ከቅድመ-ዳግም ማስጀመር ዋጋ ጋር መዛመድ አለበት።
-4. `bytes_used`ን ለማረጋገጥ `GET /v2/sorafs/storage/state`ን መርምር ከዳግም ማስነሳቱ በኋላ የቆዩትን መገለጫዎች ያንፀባርቃል።
+4. `bytes_used`ን ለማረጋገጥ `GET /v1/sorafs/storage/state`ን መርምር ከዳግም ማስነሳቱ በኋላ የቆዩትን መገለጫዎች ያንፀባርቃል።
 
 ## 4. የኮታ ውድቅ ሙከራ
 
@@ -121,7 +121,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. የPoR ናሙና ጠይቅ፡-
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -142,7 +142,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - ዳሽቦርዶች መከታተል አለባቸው:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` እና `torii_sorafs_storage_fetch_inflight`
-  - የPoR ስኬት/የሽንፈት ቆጣሪዎች በ`/v2/sorafs/capacity/state` በኩል ብቅ አሉ።
+  - የPoR ስኬት/የሽንፈት ቆጣሪዎች በ`/v1/sorafs/capacity/state` በኩል ብቅ አሉ።
   - የመቋቋሚያ ሙከራዎችን በ`sorafs_node_deal_publish_total{result=success|failure}` ያትማል
 
 እነዚህን ልምምዶች መከተል የመስቀለኛ መንገዱ አቅም ለሰፊው አውታረመረብ ከማስተዋወቁ በፊት የተካተተ የማከማቻ ሰራተኛ መረጃን ወደ ውስጥ ማስገባት፣ ዳግም ሲጀመር መትረፍ፣ የተዋቀሩ ኮታዎችን ማክበር እና ቆራጥ የPoR ማረጋገጫዎችን ማመንጨት መቻሉን ያረጋግጣል።

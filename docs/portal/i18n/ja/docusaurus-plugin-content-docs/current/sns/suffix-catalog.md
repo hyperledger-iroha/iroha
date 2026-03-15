@@ -78,7 +78,7 @@ SNS のロードマップは承認済みサフィックス (SN-1/SN-2) をすべ
 ## 自動化メモ
 
 1. JSON snapshot を読み込み、hash/署名してからオペレーターに配布します。
-2. registrar tooling は `/v2/sns/*` にリクエストが来たら、`suffix_id`、期間制限、
+2. registrar tooling は `/v1/sns/*` にリクエストが来たら、`suffix_id`、期間制限、
    価格をカタログから提示するべきです。
 3. DNS/Gateway ヘルパーは GAR テンプレート生成時に予約ラベルのメタデータを読み、
    DNS 応答がガバナンス制御と整合するようにします。

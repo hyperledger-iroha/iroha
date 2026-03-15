@@ -25,7 +25,7 @@ Légende : `◉` entièrement implémenté · `○` en grande partie implément�
 | Diffusion fiable (transport de charge utile DA) | ◉ | Le flux de messages RBC (Init/Chunk/Ready/Deliver) est activé lorsque `da_enabled=true` comme chemin de transport/récupération ; les preuves de disponibilité sont suivies (consultatives) tandis que la validation se déroule de manière indépendante. | status.md:dernier |
 | Valider la liaison racine-état QC | ◉ | Les QC de validation portent `parent_state_root`/`post_state_root` ; il n'y a pas de porte d'exécution-QC séparée. | status.md:dernier |
 | Propagation des preuves et points finaux d'audit | ◉ | ControlFlow::Evidence, les paramètres de preuve Torii et les tests négatifs obtenus. | statut.md:176; statut.md:760-761 |
-| Télémétrie RBC, état de préparation/mesures fournies | ◉ | Points de terminaison `/v2/sumeragi/rbc*` et compteurs/histogramme de télémétrie disponibles pour les opérateurs. | statut.md:283-284 ; statut.md:772 |
+| Télémétrie RBC, état de préparation/mesures fournies | ◉ | Points de terminaison `/v1/sumeragi/rbc*` et compteurs/histogramme de télémétrie disponibles pour les opérateurs. | statut.md:283-284 ; statut.md:772 |
 | Annonce des paramètres de consensus et vérification de la topologie | ◉ | Les nœuds diffusent `(collectors_k, redundant_send_r)` et valident l’égalité entre pairs. | statut.md:255 |
 | Rotation autorisée basée sur le PRF | ◉ | La sélection de leader/collecteur autorisée utilise la graine PRF + la hauteur/vue sur la liste canonique ; La rotation du hachage précédent reste un assistant hérité. | status.md:dernier |
 
@@ -55,7 +55,7 @@ Légende : `◉` entièrement implémenté · `○` en grande partie implément�
 |---------|--------|-------|--------------|
 | Runtime upgrade admission (ABI gating) | ◉ | Ensemble ABI actif appliqué à l'admission avec des erreurs et des tests structurés. | statut.md:196 |
 | Protected namespace deploy gating | ▲ | Deploy metadata requirements and gating wired; politique/UX toujours en évolution. | statut.md:171 |
-| Torii governance read endpoints | ◉ | `/v2/gov/*` lit les API acheminées avec des tests de routeur. | statut.md:212 |
+| Torii governance read endpoints | ◉ | `/v1/gov/*` lit les API acheminées avec des tests de routeur. | statut.md:212 |
 | Verifying-key registry lifecycle & events | ◉ | Enregistrement/mise à jour/obsolète VK, événements, filtres CLI et sémantique de rétention implémentés. | statut.md:236-239 ; statut.md:595; statut.md:603 |
 
 ## Infrastructure sans connaissance
@@ -68,7 +68,7 @@ Légende : `◉` entièrement implémenté · `○` en grande partie implément�
 | Shielded root history gating | ◉ | Instantanés racine intégrés à CoreHost avec un historique limité et une configuration racine vide. | statut.md:303 |
 | Exécution du scrutin ZK et verrouillages de gouvernance | ○ | Dérivation d'annuleur, mises à jour de verrouillage, bascules de vérification mises en œuvre ; cycle de vie complet encore en cours de maturation. | statut.md:126-128 ; statut.md:194-195 |
 | Pré-vérification et déduplication des pièces jointes de preuve | ◉ | La cohérence des balises back-end, la déduplication et les enregistrements de preuve ont persisté avant l'exécution. | statut.md:348; statut.md:602 |
-| ZK Torii point de terminaison de récupération de preuve | ◉ | `/v2/zk/proof/{backend}/{hash}` expose les enregistrements de preuve (statut, hauteur, vk_ref/commitment). | statut.md:94 |
+| ZK Torii point de terminaison de récupération de preuve | ◉ | `/v1/zk/proof/{backend}/{hash}` expose les enregistrements de preuve (statut, hauteur, vk_ref/commitment). | statut.md:94 |
 
 ## Intégration IVM et Kotodama| Fonctionnalité | Statut | Remarques | Preuve |
 |---------|--------|-------|--------------|
@@ -77,7 +77,7 @@ Légende : `◉` entièrement implémenté · `○` en grande partie implément�
 | Validation stricte Pointer-ABI et synchronisation des documents | ◉ | Politique TLV appliquée sur l'hôte/IVM avec des tests dorés et des documents générés. | statut.md:227; statut.md:317; statut.md:344; statut.md:366; statut.md:527 |
 | Contrôle des appels système ZK via CoreHost | ◉ | Les files d'attente per-op contrôlent les enveloppes vérifiées et appliquent la correspondance de hachage avant l'exécution d'ISI. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama pointeur-ABI docs & grammaire | ◉ | Grammaire/docs synchronisés avec les constructeurs en direct et les mappages SCALL. | statut.md:299-301 |
-| Moteur basé sur un schéma ISO 20022 et pont Torii | ◉ | Schémas canoniques ISO 20022 intégrés, analyse XML déterministe et API `/v2/iso20022/status/{MsgId}` exposée. | statut.md:65-70 |
+| Moteur basé sur un schéma ISO 20022 et pont Torii | ◉ | Schémas canoniques ISO 20022 intégrés, analyse XML déterministe et API `/v1/iso20022/status/{MsgId}` exposée. | statut.md:65-70 |
 
 ## Accélération matérielle
 

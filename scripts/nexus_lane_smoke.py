@@ -181,7 +181,7 @@ def parse_args(argv: Optional[Iterable[str]]) -> argparse.Namespace:
     status_group = parser.add_mutually_exclusive_group(required=True)
     status_group.add_argument(
         "--status-url",
-        help="Full Torii status endpoint (e.g., https://host/v2/sumeragi/status)",
+        help="Full Torii status endpoint (e.g., https://host/v1/sumeragi/status)",
     )
     status_group.add_argument(
         "--status-file",

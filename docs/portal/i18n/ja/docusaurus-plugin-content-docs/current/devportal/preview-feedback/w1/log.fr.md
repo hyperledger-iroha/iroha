@@ -29,7 +29,7 @@ rejouer les preuves sans courir apres des ticket externes。
 |パートナー-w1-01 | `DOCS-SORA-Preview-REQ-P01` | OK 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 |テルミネ 2025-04-26 | sorafs-op-01; concentre sur les preuves de parite de docs オーケストレーター。 |
 |パートナー-w1-02 | `DOCS-SORA-Preview-REQ-P02` | OK 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 |テルミネ 2025-04-26 | sorafs-op-02;有効なクロスリンク Norito/telemetrie。 |
 |パートナー-w1-03 | `DOCS-SORA-Preview-REQ-P03` | OK 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 |テルミネ 2025-04-26 | sorafs-op-03;フェイルオーバーマルチソースのドリルを実行します。 |
-|パートナー-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 |テルミネ 2025-04-26 |鳥居-int-01;レビュー ドゥ クックブック Torii `/v2/pipeline` + 試してみましょう。 |
+|パートナー-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 |テルミネ 2025-04-26 |鳥居-int-01;レビュー ドゥ クックブック Torii `/v1/pipeline` + 試してみましょう。 |
 |パートナー-w1-05 | `DOCS-SORA-Preview-REQ-P05` | OK 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 |テルミネ 2025-04-26 |鳥居-int-02; a accompagne la mise a jour de capture 試してみてください (docs-preview/w1 #2)。 |
 |パートナー-w1-06 | `DOCS-SORA-Preview-REQ-P06` | OK 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 |テルミネ 2025-04-26 | SDK-パートナー-01;フィードバック クックブック JS/Swift + サニティ チェック ISO ブリッジ。 |
 |パートナー-w1-07 | `DOCS-SORA-Preview-REQ-P07` | OK 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 |テルミネ 2025-04-26 | SDK-パートナー-02;コンプライアンスは 2025 年 4 月 11 日有効、接続/テレメトリーに関するメモを中心にしています。 |

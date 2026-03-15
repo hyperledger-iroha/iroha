@@ -61,15 +61,15 @@ SF-2c 路線圖項目引入了一個受監管的市場，其中存儲
 - `ReplicationOrderV1` 將清單綁定到具有冗餘目標、SLA 閾值和每個分配保證的治理髮布的分配；驗證器在 Torii 或註冊中心接收訂單之前強制執行規範的分塊句柄、唯一提供者和截止日期約束。 【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` 表示提供費用分配的紀元快照（聲明的與使用的 GiB、複製計數器、正常運行時間/PoR 百分比）。邊界檢查將利用率保持在聲明範圍內，百分比保持在 0 – 100% 範圍內。 【crates/sorafs_manifest/src/capacity.rs:476】
 - 共享助手（`CapacityMetadataEntry`、`PricingScheduleV1`、通道/分配/SLA 驗證器）提供 CI 和下游工具可以重用的確定性密鑰驗證和錯誤報告。 【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` 現在通過 `/v2/sorafs/capacity/state` 呈現鏈上快照，結合確定性 Norito JSON 後面的提供商聲明和費用分類帳條目。 【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` 現在通過 `/v1/sorafs/capacity/state` 呈現鏈上快照，結合確定性 Norito JSON 後面的提供商聲明和費用分類帳條目。 【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 驗證覆蓋範圍執行規範句柄執行、重複檢測、每通道邊界、複製分配保護和遙測範圍檢查，以便回歸立即在 CI 中顯現。 【crates/sorafs_manifest/src/capacity.rs:792】
-- 操作員工具：`sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 將人類可讀的規範轉換為規範的 Norito 有效負載、base64 blob 和 JSON 摘要，以便操作員可以使用本地暫存 `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry` 和復制順序固定裝置驗證。 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】參考夾具位於 `fixtures/sorafs_manifest/replication_order/`（`order_v1.json`、`order_v1.to`）中，並通過 `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 生成。
+- 操作員工具：`sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 將人類可讀的規範轉換為規範的 Norito 有效負載、base64 blob 和 JSON 摘要，以便操作員可以使用本地暫存 `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` 和復制順序固定裝置驗證。 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】參考夾具位於 `fixtures/sorafs_manifest/replication_order/`（`order_v1.json`、`order_v1.to`）中，並通過 `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 生成。
 
 ### 2. 控制平面集成
 
 |任務|所有者 |筆記|
 |------|----------|--------|
-|添加具有 Norito JSON 負載的 `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry`、`/v2/sorafs/capacity/orders` Torii 處理程序。 | Torii 團隊 |鏡像驗證器邏輯；重用 Norito JSON 幫助程序。 |
+|添加具有 Norito JSON 負載的 `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry`、`/v1/sorafs/capacity/orders` Torii 處理程序。 | Torii 團隊 |鏡像驗證器邏輯；重用 Norito JSON 幫助程序。 |
 |將 `CapacityDeclarationV1` 快照傳播到 Orchestrator 記分板元數據和網關獲取計劃中。 |工具工作組/協調器團隊|使用容量參考擴展 `provider_metadata`，以便多源評分遵守通道限制。 |
 |將復制訂單輸入編排器/網關客戶端以驅動分配和故障轉移提示。 |網絡 TL/網關團隊 |記分板構建器使用治理簽名的複制訂單。 |
 | CLI 工具：使用 `capacity declare`、`capacity telemetry`、`capacity orders import` 擴展 `sorafs_cli`。 |工具工作組 |提供確定性 JSON + 記分板輸出。 |
@@ -92,7 +92,7 @@ SF-2c 路線圖項目引入了一個受監管的市場，其中存儲
 |結算管道：將遙測+複製數據轉換為以異或計價的支出，生成可供治理的摘要，並記錄賬本狀態。 |財務/存儲團隊|電匯至交易引擎/金庫出口。 |
 |導出儀表板/警報以測量運行狀況（攝取積壓、過時的遙測）。 |可觀察性|擴展 SF-6/SF-7 引用的 Grafana 包。 |
 
-- Torii 現在公開 `/v2/sorafs/capacity/telemetry` 和 `/v2/sorafs/capacity/state` (JSON + Norito)，以便操作員可以提交紀元遙測快照，檢查員可以檢索規範賬本以進行審計或證據包裝。 【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii 現在公開 `/v1/sorafs/capacity/telemetry` 和 `/v1/sorafs/capacity/state` (JSON + Norito)，以便操作員可以提交紀元遙測快照，檢查員可以檢索規範賬本以進行審計或證據包裝。 【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - `PinProviderRegistry` 集成確保可通過同一端點訪問複製訂單； CLI 助手 (`sorafs_cli capacity telemetry --from-file telemetry.json`) 現在通過確定性哈希和別名解析來驗證/發布來自自動化運行的遙測數據。
 - 計量快照生成固定到 `metering` 快照的 `CapacityTelemetrySnapshot` 條目，Prometheus 導出為 `docs/source/grafana_sorafs_metering.json` 處的準備導入 Grafana 板提供數據，以便計費團隊可以監控預計的 GiB·小時累積情況nano-SORA費用，以及實時SLA合規性。 【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - 啟用計量平滑後，快照包括 `smoothed_gib_hours` 和 `smoothed_por_success_bps`，因此運營商可以將 EMA 趨勢值與治理用於支付的原始計數器進行比較。 【crates/sorafs_node/src/metering.rs:401】
@@ -166,7 +166,7 @@ SF-2c 路線圖項目引入了一個受監管的市場，其中存儲
 ### 提供商入職和退出冒煙測試
 - 使用 `sorafs_manifest_stub capacity ...` 重新生成聲明/遙測工件並重播
   提交前進行 CLI 測試 (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
-- 通過 Torii (`/v2/sorafs/capacity/declare`) 提交，然後捕獲 `/v2/sorafs/capacity/state` 加
+- 通過 Torii (`/v1/sorafs/capacity/declare`) 提交，然後捕獲 `/v1/sorafs/capacity/state` 加
   Grafana 屏幕截圖。按照 `docs/source/sorafs/capacity_onboarding_runbook.md` 中的退出流程進行操作。
 - 將簽名的工件和對賬輸出存檔在內部
   `docs/examples/sorafs_capacity_marketplace_validation/`。

@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 - 时隙到期使用 `nexus.axt.slot_length_ms`（默认 `1`ms，在 `1`ms 和 `600_000`ms 之间验证）加上有界的 `nexus.axt.max_clock_skew_ms`（默认 `0`ms，由时隙长度和`60_000`ms）。主机计算 `current_slot = block.creation_time_ms / slot_length_ms`，应用偏差限额来证明和处理过期检查，并拒绝通告偏差大于配置限制的句柄。
 - 证明缓存 TTL 边界重用：`nexus.axt.proof_cache_ttl_slots`（默认 `1`，经过验证的 `1`–`64`）限制接受或拒绝的证明在主机缓存中保留的时间；一旦 TTL 窗口或证明的 `expiry_slot` 过去，条目就会丢失，因此重放保护保持有限。
 - 重放账本保留：`nexus.axt.replay_retention_slots`（默认 `128`，经过验证的 `1`–`4_096`）设置保留的句柄使用历史记录的最小槽窗口，以便跨对等/重新启动拒绝重放；将其与您期望操作员发出的最长句柄有效性窗口对齐。账本持久保存在 WSV 中，在启动时进行水合，并在保留窗口和句柄到期（以较晚者为准）后确定性地进行修剪，因此对等交换机不会重新打开重播间隙。
-- 调试缓存状态：Torii 公开 `/v2/debug/axt/cache`（遥测/开发人员门）以返回当前 AXT 策略快照版本、最近的拒绝（通道/原因/版本）、缓存的证明（数据空间/状态/清单根/插槽）和拒绝提示（`next_min_handle_era`/`next_min_sub_nonce`）。使用此端点来确认插槽/清单轮换是否反映在缓存状态中，并在故障排除期间确定性地刷新句柄。
+- 调试缓存状态：Torii 公开 `/v1/debug/axt/cache`（遥测/开发人员门）以返回当前 AXT 策略快照版本、最近的拒绝（通道/原因/版本）、缓存的证明（数据空间/状态/清单根/插槽）和拒绝提示（`next_min_handle_era`/`next_min_sub_nonce`）。使用此端点来确认插槽/清单轮换是否反映在缓存状态中，并在故障排除期间确定性地刷新句柄。
 
 ## 时隙时序模型
 
@@ -81,7 +81,7 @@ Client        DS A (public)        DS B (private)        Nexus Lane        Settl
 | `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM 主机 |检查缓存的证明 |缓存证明的计量值是 expiry_slot （应用了倾斜）。 |
 |缺少可用性证据 (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) |车道遥测|如果每个 DS 的交易量 >5%，则发出警报 |意味着证明者或证明是滞后的。 |
 
-`/v2/debug/axt/cache` 镜像 `iroha_axt_proof_cache_state` 仪表，并为操作员提供每个数据空间快照（状态、清单根、已验证/到期槽）。
+`/v1/debug/axt/cache` 镜像 `iroha_axt_proof_cache_state` 仪表，并为操作员提供每个数据空间快照（状态、清单根、已验证/到期槽）。
 
 `iroha_amx_commit_ms` 和 `iroha_ivm_exec_ms` 共享相同的延迟桶
 `iroha_amx_prepare_ms`。中止计数器用通道 ID 标记每次拒绝
@@ -104,7 +104,7 @@ Norito 描述符/句柄/策略快照的固定装置位于 `crates/iroha_data_mod
 
 ### 跨数据空间可组合性清单- 确认空间目录中列出的每个数据空间都有通道条目和活动清单；旋转应该在发出新句柄之前刷新绑定和清单根。归零根意味着句柄将保持被拒绝状态，直到清单出现为止，并且主机/块验证现在拒绝呈现归零清单根的句柄。
 - 启动时和空间目录更改后，策略快照指标上预计会出现一个 `cache_miss`，随后是稳定的 `cache_hit` 事件；持续的错过率表明清单提要已过时或丢失。
-- 当句柄被拒绝时，查看 `iroha_axt_policy_reject_total{lane,reason}` 和快照版本，以决定是否请求刷新句柄 (`expiry`/`era`/`sub_nonce`) 或修复通道/清单绑定（`lane`/`manifest`）。 Torii 调试端点 `/v2/debug/axt/cache` 还返回 `reject_hints` 以及 `dataspace`、`target_lane`、`next_min_handle_era` 和 `next_min_sub_nonce`，以便操作员可以在策略碰撞后确定性地刷新句柄。
+- 当句柄被拒绝时，查看 `iroha_axt_policy_reject_total{lane,reason}` 和快照版本，以决定是否请求刷新句柄 (`expiry`/`era`/`sub_nonce`) 或修复通道/清单绑定（`lane`/`manifest`）。 Torii 调试端点 `/v1/debug/axt/cache` 还返回 `reject_hints` 以及 `dataspace`、`target_lane`、`next_min_handle_era` 和 `next_min_sub_nonce`，以便操作员可以在策略碰撞后确定性地刷新句柄。
 
 ### SDK示例：无令牌出口的远程支出
 
@@ -138,7 +138,7 @@ Norito 描述符/句柄/策略快照的固定装置位于 `crates/iroha_data_mod
 |来源 |捕捉什么 |命令/路径|证据预期|
 |--------|-----------------|----------------|------------------------|
 | Prometheus (`iroha_telemetry`) |插槽和 AMX SLO：`iroha_slot_duration_ms`、`iroha_amx_prepare_ms`、`iroha_amx_commit_ms`、`iroha_da_quorum_ratio`、`iroha_amx_abort_total{stage}` |抓取 `https://$TORII/telemetry/metrics` 或从 `docs/source/telemetry.md` 中描述的仪表板导出。 |将直方图快照（以及触发的警报历史记录）附加到夜间 `status.md` 注释中，以便审核员可以查看 p95/p99 值和警报状态。 |
-| Torii RBC 快照 | DA/RBC 积压：每个会话块积压、视图/高度元数据和 DA 可用性计数器（`sumeragi_da_gate_block_total{reason="missing_local_data"}`；`sumeragi_rbc_da_reschedule_total` 是旧版）。 | `GET /v2/sumeragi/rbc` 和 `GET /v2/sumeragi/rbc/sessions`（有关示例，请参阅 `docs/source/samples/sumeragi_rbc_status.md`）。 |每当 AMX DA 警报触发时，存储 JSON 响应（带有时间戳）；将它们包含在事件包中，以便审核人员可以确认背压与遥测相匹配。 |
+| Torii RBC 快照 | DA/RBC 积压：每个会话块积压、视图/高度元数据和 DA 可用性计数器（`sumeragi_da_gate_block_total{reason="missing_local_data"}`；`sumeragi_rbc_da_reschedule_total` 是旧版）。 | `GET /v1/sumeragi/rbc` 和 `GET /v1/sumeragi/rbc/sessions`（有关示例，请参阅 `docs/source/samples/sumeragi_rbc_status.md`）。 |每当 AMX DA 警报触发时，存储 JSON 响应（带有时间戳）；将它们包含在事件包中，以便审核人员可以确认背压与遥测相匹配。 |
 |证明服务指标| PVO 缓存运行状况：`iroha_pvo_cache_hit_ratio`、缓存填充/逐出计数器、证明队列深度 | `GET /metrics` 在证明服务 (`IROHA_PVO_METRICS_URL`) 上或通过共享 OTLP 收集器。 |导出缓存命中率和队列深度以及 AMX 插槽指标，以便路线图 OA/PVO 门具有确定性的人工制品。 |
 |验收线束|受控抖动下的端到端混合负载（时隙/DA/RBC/PVO）|重新运行 `ci/acceptance/slot_1s.yml`（或 CI 中的相同作业）并将日志包 + 生成的工件存档在 `artifacts/acceptance/slot_1s/<timestamp>/` 中。 |在 GA 之前以及起搏器/DA 设置更改时需要；在操作员移交数据包中包含 YAML 运行摘要以及 Prometheus 快照。 |
 
@@ -146,8 +146,8 @@ Norito 描述符/句柄/策略快照的固定装置位于 `crates/iroha_data_mod
 
 |症状|先检查|建议补救措施|
 |--------|-------------|--------------------------|
-| `iroha_slot_duration_ms` p95 爬行超过 1000ms |从 `/telemetry/metrics` 导出 Prometheus 加上最新的 `/v2/sumeragi/rbc` 快照以确认 DA 延期；与最后一个 `ci/acceptance/slot_1s.yml` 工件进行比较。 |降低 AMX 批量大小或启用额外的 RBC 收集器 (`sumeragi.collectors.k`)，然后重新运行验收工具并捕获新的遥测证据。 |
-|缺少可用性峰值 | `/v2/sumeragi/rbc/sessions` 积压字段（`lane_backlog`、`dataspace_backlog`）以及证明者运行状况仪表板。 |移除不健康的证明者，暂时增加`redundant_send_r`以加快交付速度，并在`status.md`中发布修复说明。积压工作清除后，附上更新的 RBC 快照。 |
+| `iroha_slot_duration_ms` p95 爬行超过 1000ms |从 `/telemetry/metrics` 导出 Prometheus 加上最新的 `/v1/sumeragi/rbc` 快照以确认 DA 延期；与最后一个 `ci/acceptance/slot_1s.yml` 工件进行比较。 |降低 AMX 批量大小或启用额外的 RBC 收集器 (`sumeragi.collectors.k`)，然后重新运行验收工具并捕获新的遥测证据。 |
+|缺少可用性峰值 | `/v1/sumeragi/rbc/sessions` 积压字段（`lane_backlog`、`dataspace_backlog`）以及证明者运行状况仪表板。 |移除不健康的证明者，暂时增加`redundant_send_r`以加快交付速度，并在`status.md`中发布修复说明。积压工作清除后，附上更新的 RBC 快照。 |
 |收据中频繁出现 `PVO_MISSING_OR_EXPIRED` |证明服务缓存指标 + 发行者的 PVO 调度程序日志。 |重新生成过时的 PVO 工件，缩短旋转节奏，并确保每个 SDK 在 `expiry_slot` 之前刷新手柄。在证据包中包含证明服务指标以证明缓存已恢复。 |
 |重复 `AMX_LOCK_CONFLICT` 或 `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`、`iroha_amx_prepare_ms` 以及受影响的交易清单。 |重新运行 Norito 静态分析器，更正读/写选择器（或拆分批次），并发布更新的清单固定装置，以便冲突计数器返回到基线。 |
 | `SETTLEMENT_ROUTER_UNAVAILABLE` 警报 |结算路由器日志 (`docs/settlement-router.md`)、金库缓冲区仪表板和受影响的收据。 |充值 XOR 缓冲区或将通道翻转为仅 XOR 模式，记录财务操作，并重新运行时隙验收测试以证明结算已恢复。 |
@@ -155,7 +155,7 @@ Norito 描述符/句柄/策略快照的固定装置位于 `crates/iroha_data_mod
 ### AXT 拒绝信号
 
 - 原因代码捕获为 `AxtRejectReason`（`lane`、`manifest`、`era`、`sub_nonce`、`expiry`、`missing_policy`、 `policy_denied`、`proof`、`budget`、`replay_cache`、`descriptor`、`duplicate`）。块验证现在显示 `AxtEnvelopeValidationFailed { message, reason, snapshot_version }`，因此事件可以将拒绝固定到特定的策略快照。
-- `/v2/debug/axt/cache` 返回 `{ policy_snapshot_version, last_reject, cache, hints }`，其中 `last_reject` 携带最近主机拒绝的通道/原因/版本，`hints` 提供 `next_min_handle_era`/`next_min_sub_nonce` 刷新指导以及缓存的证明状态。
+- `/v1/debug/axt/cache` 返回 `{ policy_snapshot_version, last_reject, cache, hints }`，其中 `last_reject` 携带最近主机拒绝的通道/原因/版本，`hints` 提供 `next_min_handle_era`/`next_min_sub_nonce` 刷新指导以及缓存的证明状态。
 - 警报模板：当 `iroha_axt_policy_reject_total{reason="manifest"}` 或 `{reason="expiry"}` 在 5 分钟窗口内出现峰值时出现页面，将 `last_reject` 快照 + `policy_snapshot_version` 从 Torii 调试端点附加到事件，并使用提示有效负载在重试之前请求刷新句柄。
 
 ## 证明验证对象 (PVO)
@@ -234,7 +234,7 @@ SDK 团队应在集成测试中镜像这些代码，以便 `iroha_cli`、Android
 
 - Torii 将策略失败显示为 `ValidationFail::AxtReject`（并将块验证显示为 `AxtEnvelopeValidationFailed`），具有稳定原因标签、活动 `snapshot_version`、可选 `lane`/`dataspace` 标识符以及提示字段`next_min_handle_era`/`next_min_sub_nonce`。 SDK 应该向用户冒泡这些字段，以便可以确定性地刷新过时的句柄。
 - Torii 现在还使用 `X-Iroha-Axt-*` 标头标记 HTTP 响应，以便快速分类：`Code`/`Reason`、`Snapshot-Version`、`Dataspace`、`Lane` 和可选`Next-Handle-Era`/`Next-Sub-Nonce`。 ISO 桥接拒绝带有匹配的 `PRTRY:AXT_*` 原因代码和相同的详细字符串，因此仪表板和操作员可以在 AXT 故障类别中键入警报，而无需解码完整的有效负载。
-- 主机使用相同字段记录 `AXT policy rejection recorded` 并通过遥测导出它们：`iroha_axt_policy_reject_total{lane,reason}` 计数拒绝，`iroha_axt_policy_snapshot_version` 跟踪活动快照的哈希值。证明缓存状态仍然可以通过 `/v2/debug/axt/cache`（数据空间/状态/​​清单根/插槽）获得。
+- 主机使用相同字段记录 `AXT policy rejection recorded` 并通过遥测导出它们：`iroha_axt_policy_reject_total{lane,reason}` 计数拒绝，`iroha_axt_policy_snapshot_version` 跟踪活动快照的哈希值。证明缓存状态仍然可以通过 `/v1/debug/axt/cache`（数据空间/状态/​​清单根/插槽）获得。
 - 警报：监视由 `reason` 分组的 `iroha_axt_policy_reject_total` 中的峰值，并从日志/ValidationFail 中使用 `snapshot_version` 进行分页，以确认操作员是否需要轮换清单（通道/清单拒绝）或刷新句柄（era/sub_nonce/expiry）。将警报与证明缓存端点配对，以确认拒绝是与缓存相关还是与策略相关。
 
 ## 测试与证据

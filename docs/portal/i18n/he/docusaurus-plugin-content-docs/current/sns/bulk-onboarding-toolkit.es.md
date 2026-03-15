@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -131,10 +131,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- El helper emite un `POST /v2/sns/registrations` por solicitud y aborta ante el
+- El helper emite un `POST /v1/sns/registrations` por solicitud y aborta ante el
   שגיאת primer HTTP. תשובות לרישום
   NDJSON.
-- `--poll-status` ראה יועץ `/v2/sns/registrations/{selector}` מבטל את
+- `--poll-status` ראה יועץ `/v1/sns/registrations/{selector}` מבטל את
   cada envio (hasta `--poll-attempts`, ברירת מחדל 5) לאישור הרשמה
   זה גלוי. Proporcione `--suffix-map` (JSON de `suffix_id` a valores "סיומת")
   para que la herramienta derive literales `{label}.{suffix}` al hacer polling.

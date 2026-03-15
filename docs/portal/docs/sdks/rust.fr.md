@@ -146,7 +146,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` reflète le JSON `/v2/explorer/accounts/{id}/qr` : identifiant de compte canonique, littéral canonique I105, métadonnées de préfixe/correction d’erreur, dimensions du QR et payload SVG inline.
+`ExplorerAccountQrSnapshot` reflète le JSON `/v1/explorer/accounts/{id}/qr` : identifiant de compte canonique, littéral canonique I105, métadonnées de préfixe/correction d’erreur, dimensions du QR et payload SVG inline.
 
 ## 7. S’abonner aux événements
 

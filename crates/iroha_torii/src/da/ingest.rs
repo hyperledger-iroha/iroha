@@ -94,7 +94,7 @@ impl CanonicalPayload<'_> {
     }
 }
 
-/// HTTP handler for `/v2/da/ingest`.
+/// HTTP handler for `/v1/da/ingest`.
 pub async fn handler_post_da_ingest(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -113,7 +113,7 @@ pub async fn handler_post_da_ingest(
     if !nexus.enabled {
         return Err(ResponseError::from(build_error_response(
             StatusCode::BAD_REQUEST,
-            "/v2/da/ingest requires nexus.enabled=true; lanes are unavailable in Iroha 2 mode",
+            "/v1/da/ingest requires nexus.enabled=true; lanes are unavailable in Iroha 2 mode",
             format,
         )));
     }
@@ -622,7 +622,7 @@ pub struct DaManifestQuery {
     block_hash: Option<String>,
 }
 
-/// HTTP handler for `/v2/da/manifests/{ticket}`.
+/// HTTP handler for `/v1/da/manifests/{ticket}`.
 pub async fn handler_get_da_manifest(
     State(app): State<SharedAppState>,
     AxumPath(ticket_hex): AxumPath<String>,
@@ -636,7 +636,7 @@ pub async fn handler_get_da_manifest(
     if !nexus_enabled {
         return Err(ResponseError::from(build_error_response(
             StatusCode::BAD_REQUEST,
-            "/v2/da/manifests requires nexus.enabled=true; lanes are unavailable in Iroha 2 mode",
+            "/v1/da/manifests requires nexus.enabled=true; lanes are unavailable in Iroha 2 mode",
             format,
         )));
     }

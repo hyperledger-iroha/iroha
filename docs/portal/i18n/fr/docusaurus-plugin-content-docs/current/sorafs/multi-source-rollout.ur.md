@@ -31,7 +31,7 @@ Il s'agit d'une pile d'orchestration SF-6 (`sorafs_orchestrator`, API de gamme d
 > **مزید دیکھیں:** [آرکسٹریٹر آپریشنز رن بک](./orchestrator-ops.md) فی رن طریقۂ کار (capture du tableau de bord, مرحلہ وار bascules de déploiement, et restauration) میں تفصیل دیتی ہے۔ لائیو تبدیلیوں کے دوران دونوں حوالوں کو ساتھ استعمال کریں۔
 
 ## 1. قبل از عمل توثیق1. ** گورننس ان پٹس کی تصدیق کریں۔**
-   - Les capacités de portée des charges utiles et les budgets de flux sont associés aux enveloppes `ProviderAdvertV1` et aux enveloppes `ProviderAdvertV1`. `/v2/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع فیلڈز سے موازنہ کریں۔
+   - Les capacités de portée des charges utiles et les budgets de flux sont associés aux enveloppes `ProviderAdvertV1` et aux enveloppes `ProviderAdvertV1`. `/v1/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع فیلڈز سے موازنہ کریں۔
    - taux de latence/échec par rapport aux instantanés de télémétrie et aux instantanés de télémétrie par Canary 15 minutes de lecture
 2. ** کنفیگریشن اسٹیج کریں۔**
    - La version JSON en couches `iroha_config` est une version en couches :

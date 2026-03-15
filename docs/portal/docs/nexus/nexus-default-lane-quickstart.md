@@ -188,7 +188,7 @@ lane-ingest dashboard.
   reconfigurations.
 - **Pipeline/SSE tests.** The transaction event filters accept
   `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v2/pipeline/events/transactions` with that filter to prove that writes sent
+  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
   without an explicit lane arrive under the fallback lane id.
 
 ## 7. Observability and governance hooks

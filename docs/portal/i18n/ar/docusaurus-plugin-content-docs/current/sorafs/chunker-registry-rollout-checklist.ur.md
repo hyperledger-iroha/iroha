@@ -71,7 +71,7 @@ Sidebar_label: طرح Chunker چیک لٹ
    جسے `torii.sorafs.discovery.admission.envelopes_dir` راجع كرتا ہے.
 3. اكتشاف API موفر إعلانات التحقق من الانتشار:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. رؤوس الحوكمة هي تمرين نقاط نهاية البيان/الخطة:
    ```bash

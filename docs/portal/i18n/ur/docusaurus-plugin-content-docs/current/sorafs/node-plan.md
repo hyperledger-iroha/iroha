@@ -55,7 +55,7 @@ Implementation notes:
 - Torii کے Axum stack کو `norito::json` payloads کے ساتھ استعمال کریں۔
 - responses کے لیے Norito schemas شامل کریں (`PinResultV1`, `FetchErrorV1`, telemetry structs)۔
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` اب backlog depth کے ساتھ oldest epoch/deadline اور ہر provider کے recent success/failure timestamps دکھاتا ہے، جو `sorafs_node::NodeHandle::por_ingestion_status` سے powered ہے، اور Torii dashboards کے لیے `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges record کرتا ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب backlog depth کے ساتھ oldest epoch/deadline اور ہر provider کے recent success/failure timestamps دکھاتا ہے، جو `sorafs_node::NodeHandle::por_ingestion_status` سے powered ہے، اور Torii dashboards کے لیے `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges record کرتا ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Scheduler & quota enforcement
 

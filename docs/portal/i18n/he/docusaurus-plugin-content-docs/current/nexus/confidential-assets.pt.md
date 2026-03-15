@@ -47,7 +47,7 @@ SPDX-License-Identifier: Apache-2.0
 מעטפות תזכיר סודיות agora enviam um fixture canonico em `fixtures/confidential/encrypted_payload_v1.json`. מערך הנתונים של המעטפה v1 חיובי יותר שליליות שליליות לפורמטים של SDKs possam afirmar paridade de parsing. מערכת האשכים עושה דגם נתונים עם Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) וחבילה של Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) קאררגאם או מתקן ניהול, garantindo que o קידוד Norito, as superficies de erro e a copertura de enquanhaccam evolutioni.SDKs Swift agora podem emitir instrucos shield sem glue JSON בהתאמה אישית: construa um
 `ShieldRequest` com o התחייבות של 32 בתים, או מטען מטען ומטא נתונים של חיוב,
 e entao chame `IrohaSDK.submit(shield:keypair:)` (ou `submitAndWait`) עבור assinar e encaminhar a
-transacao דרך `/v2/pipeline/transactions`. הו עוזר תוקף המחויבות,
+transacao דרך `/v1/pipeline/transactions`. הו עוזר תוקף המחויבות,
 הכנס `ConfidentialEncryptedPayload` ללא מקודד Norito, espelha o layout `zk::Shield`
 Descrito abaixo para que ארנקים fiquem alinhadas com Rust.
 
@@ -76,7 +76,7 @@ Descrito abaixo para que ארנקים fiquem alinhadas com Rust.
 - Genesis manifests e fluxos CLI expoem politicas atuais e pendentes. לוגיקה של קבלה לפוליטיקה עם טמפו דה execucao para confirmar que cada instrucao confidencial esta autorisada.
 - Checklist de migracao - עבור "רצף הגירה" abaixo para o plano de upgrade em etapas que o Milestone M0 acompanha.
 
-#### Monitorando transicoes דרך Toriiארנקים וייעוץ רואי חשבון `GET /v2/confidential/assets/{definition_id}/transitions` לבחירת `AssetConfidentialPolicy`. o מטען JSON semper כולל מזהה נכס קנוניק, אולטרה נקודתית, o `current_mode` da politica, o modo efetivo nessa altura (janelas de conversao reportam temporariamente `Convertible`), e ossperadocadores de `vk_set_hash`/פוסידון/פדרסן. קונדו אומה טרנסיקאו של ממשל esta pendente a resposta tambem embute:
+#### Monitorando transicoes דרך Toriiארנקים וייעוץ רואי חשבון `GET /v1/confidential/assets/{definition_id}/transitions` לבחירת `AssetConfidentialPolicy`. o מטען JSON semper כולל מזהה נכס קנוניק, אולטרה נקודתית, o `current_mode` da politica, o modo efetivo nessa altura (janelas de conversao reportam temporariamente `Convertible`), e ossperadocadores de `vk_set_hash`/פוסידון/פדרסן. קונדו אומה טרנסיקאו של ממשל esta pendente a resposta tambem embute:
 
 - `transition_id` - handle de auditoria retornado por `ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -120,7 +120,7 @@ Descrito abaixo para que ארנקים fiquem alinhadas com Rust.
 
 1. **הכנת רישומים:** ativar todas as entradas de verificador e parametros referenciadas pela politica alvo. Nodes anunciam o `conf_features` resultante para que peers verifiquem coerencia.
 2. **סדר יום:** מד משנה `ScheduleConfidentialPolicyTransition` com um `effective_height` que respeite `policy_transition_delay_blocks`. Ao Mover para `ShieldedOnly`, especificar Uma Janela de Conversao (`window >= policy_transition_window_blocks`).
-3. **שירות ציבורי להפעלת:** רשם של `transition_id` רטרנדו e circular um runbook on/off ramp. ארנקים e auditores assinam `/v2/confidential/assets/{id}/transitions` para aprender a altura de abertura da janela.
+3. **שירות ציבורי להפעלת:** רשם של `transition_id` רטרנדו e circular um runbook on/off ramp. ארנקים e auditores assinam `/v1/confidential/assets/{id}/transitions` para aprender a altura de abertura da janela.
 4. **Aplicar janela:** quando a janela abre, o runtime muda a politica para `Convertible`, emite `PolicyTransitionWindowOpened { transition_id }`, e comeca a rejeitar requests de governance conflitantes.
 5. **סיום או ביטול:** ב-`effective_height`, או אימות זמן ריצה של דרישות מוקדמות (אספקת אפס שקוף, סיום חירום וכו'). Sucesso muda a politica para o modo solicitado; falha emite `PolicyTransitionPrerequisiteFailed`, limpa a transicao pendente e deixa a politica inalterada.
 6. **שדרוגי סכימה:** apos uma transicao bem-sucedida, governance aumenta and versao de schema do asset (לדוגמה, `asset_definition.v2`) כלי עבודה CLI exige `confidential_policy` או מניפסטים סדרתיים. Docs de upgrade de genesis instruem מפעיל הגדרות נוספות של פוליטיקה וטביעות אצבעות ברישום לפני אימות חידושים.
@@ -227,7 +227,7 @@ Documente עוקף את locais no runbook de operacoes; politicas de governance 
 - Hierarquia de derivacao por account:
   - `sk_spend` -> `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - מטענים משותפים באמצעות AEAD com מפתחות משותפים נגזרות של ECDH; הצג מפתחות של אודיטור אופציונאי פודם סר אנקסאדות פלטים תואמים נכס פוליטי.
-- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar מזכרים, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes I008NT030X offline. Torii expoe o mesmo fluxo de derivacao via `POST /v2/confidential/derive-keyset`, retornando formas hex e base64 para que wallets busquem hierarquias de chave programaticamente.## גז, מגביל את ה-DoS
+- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar מזכרים, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes I008NT030X offline. Torii expoe o mesmo fluxo de derivacao via `POST /v1/confidential/derive-keyset`, retornando formas hex e base64 para que wallets busquem hierarquias de chave programaticamente.## גז, מגביל את ה-DoS
 - לוח זמנים לקביעת גז:
   - Halo2 (Plonkish): בסיס `250_000` גז + `2_000` גז עבור קלט ציבורי.
   - `5` בתים חסין גז, מטען מבטל (`300`) ומחויבות (`500`).

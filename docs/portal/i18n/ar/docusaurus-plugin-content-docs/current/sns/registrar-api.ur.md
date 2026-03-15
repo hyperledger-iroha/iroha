@@ -26,7 +26,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 1. ٹرانسبورت ووثيقة| شرط | تفاصيل |
 |-----|-------|
-| پروٹوكولز | REST `/v2/sns/*` تحت خدمة gRPC `sns.v1.Registrar`. Norito-JSON (`application/json`) و Norito-RPC باير (`application/x-norito`) يوافق على ذلك. |
+| پروٹوكولز | REST `/v1/sns/*` تحت خدمة gRPC `sns.v1.Registrar`. Norito-JSON (`application/json`) و Norito-RPC باير (`application/x-norito`) يوافق على ذلك. |
 | مصادقة | رموز `Authorization: Bearer` أو شهادات mTLS هي لاحقة مضيفة. نقاط النهاية الحساسة للحوكمة (التجميد/إلغاء التجميد، التعيينات المحجوزة) `scope=sns.admin` مطلوب. |
 | ریٹ حدود | المسجلون `torii.preauth_scheme_limits` مجموعات المتصلين JSON التي يتم تسجيلها بشكل متكرر ولاحقة لأحرف استهلالية متقطعة: `sns.register`، `sns.renew`، `sns.controller`، `sns.freeze`۔ |
 | ٹيليميٹری | Torii معالجات المسجل `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` ظاہر کرتا ہے (مرشح `scheme="norito_rpc"`)؛ API موجود أيضًا `sns_registrar_status_total{result, suffix_id}`. |
@@ -103,15 +103,15 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. نقاط النهاية REST| نقطة النهاية | طريقی | الحمولة | تفاصيل |
 |----------|-------|---------|-------|
-| `/v2/sns/registrations` | مشاركة | `RegisterNameRequestV1` | اسم السجل أو تكرار. حل طبقة التسعير هو إثبات الدفع/الحوكمة، وتصدر أحداث التسجيل هذه البطاقة. |
-| `/v2/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | مدت بڑهاتا ہے۔ نوافذ النعمة/الفداء في باليس هي نافعة للكرتا. |
-| `/v2/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | الموافقات الحكومرانية يتم الحصول عليها بعد انتقال الملكية. |
-| `/v2/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | وحدات تحكم سيلتا بلتا؛ عناوين الحساب الموقعة کی توثیق کرتا ہے۔ |
-| `/v2/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس ۔ تذكرة الوصي وجدول الحوكمة حوالة درکار۔ |
-| `/v2/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | علاج بعد التجميد؛ لقد أدى تجاوز المجلس إلى زيادة كبيرة في عدد التسجيلات. |
-| `/v2/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | الأسماء المحجوزة هي المضيف/المجلس كمهمة مهمة. |
-| `/v2/sns/policies/{suffix_id}` | احصل على | -- | `SuffixPolicyV1` موجود ومتاح (قابل للتخزين المؤقت). |
-| `/v2/sns/registrations/{selector}` | احصل على | -- | موجود `NameRecordV1` + أكثر حالة (نشط، Grace وغيره) واپس کرتا. |
+| `/v1/sns/registrations` | مشاركة | `RegisterNameRequestV1` | اسم السجل أو تكرار. حل طبقة التسعير هو إثبات الدفع/الحوكمة، وتصدر أحداث التسجيل هذه البطاقة. |
+| `/v1/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | مدت بڑهاتا ہے۔ نوافذ النعمة/الفداء في باليس هي نافعة للكرتا. |
+| `/v1/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | الموافقات الحكومرانية يتم الحصول عليها بعد انتقال الملكية. |
+| `/v1/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | وحدات تحكم سيلتا بلتا؛ عناوين الحساب الموقعة کی توثیق کرتا ہے۔ |
+| `/v1/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس ۔ تذكرة الوصي وجدول الحوكمة حوالة درکار۔ |
+| `/v1/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | علاج بعد التجميد؛ لقد أدى تجاوز المجلس إلى زيادة كبيرة في عدد التسجيلات. |
+| `/v1/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | الأسماء المحجوزة هي المضيف/المجلس كمهمة مهمة. |
+| `/v1/sns/policies/{suffix_id}` | احصل على | -- | `SuffixPolicyV1` موجود ومتاح (قابل للتخزين المؤقت). |
+| `/v1/sns/registrations/{selector}` | احصل على | -- | موجود `NameRecordV1` + أكثر حالة (نشط، Grace وغيره) واپس کرتا. |
 
 **ترميز المحدد:** `{selector}` مقطع المسار I105، مضغوط (`sora`) أو سداسي عشري أساسي ADDR-5 کے مطابق مقبول کرتا ہے؛ Torii `NameSelectorV1` تطبيع الكرتا.**نموذج الخطأ:** نقاط النهاية الكاملة Norito JSON `code`, `message`, `details`. تتضمن الرموز `sns_err_reserved` و`sns_err_payment_mismatch` و`sns_err_policy_violation` و`sns_err_governance_missing`.
 
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` صحيح `GovernanceHookV1` تسجيل الدخول (معرف الاقتراح، تجزئات التصويت، توقيعات المضيف/الوصي). هناك علاقة بين نقطة نهاية `/v2/sns/registrations/{selector}/...` ونقطة النهاية التي يتدرب فيها مشغلو بيتا وأسطح Torii على أدوات تطوير البرامج (SDK) الجديدة.
+`--governance-json` صحيح `GovernanceHookV1` تسجيل الدخول (معرف الاقتراح، تجزئات التصويت، توقيعات المضيف/الوصي). هناك علاقة بين نقطة نهاية `/v1/sns/registrations/{selector}/...` ونقطة النهاية التي يتدرب فيها مشغلو بيتا وأسطح Torii على أدوات تطوير البرامج (SDK) الجديدة.
 
 ## 4. خدمة gRPC
 
@@ -205,7 +205,7 @@ service Registrar {
 
 Torii البراهين التي تم إنشاؤها من قبل:
 
-1. دفتر الأستاذ لإدارة معرف الاقتراح (`/v2/governance/proposals/{id}`) موجود وحالته `Approved` .
+1. دفتر الأستاذ لإدارة معرف الاقتراح (`/v1/governance/proposals/{id}`) موجود وحالته `Approved` .
 2. يتم تسجيل التجزئات من خلال تطابق عناصر التصويت مع البطاقة.
 3. توقيعات المضيف/الوصي `SuffixPolicyV1` ستؤدي إلى المفاتيح العامة للإشارة إلى البطاقة.
 
@@ -213,7 +213,7 @@ Torii البراهين التي تم إنشاؤها من قبل:
 
 ## 6. أمثلة على سير العمل
 
-### 6.1 التسجيل القياسي1. العميل `/v2/sns/policies/{suffix_id}` الذي يمكنه الاستعلام عن السعر والتسعير والنعمة ومستويات الأجهزة متاح.
+### 6.1 التسجيل القياسي1. العميل `/v1/sns/policies/{suffix_id}` الذي يمكنه الاستعلام عن السعر والتسعير والنعمة ومستويات الأجهزة متاح.
 2. العميل `RegisterNameRequestV1` بناتا:
    - `selector` ترجیحی I105 أو ثاني أفضل تسمية مضغوطة (`sora`) سے مشتقة ہے۔
    - `term_years` باليسى حدود میں۔
@@ -238,7 +238,7 @@ Torii البراهين التي تم إنشاؤها من قبل:
 
 ### 6.3 تجميد الوصي وتجاوز المجلس1. Guardian `FreezeNameRequestV1` أرسل بطاقة وتذكرة معرّف الحادث کا حوالة دینے وتذكرة ہہے.
 2. سجل Torii الذي ينتقل إلى `NameStatus::Frozen`، `NameFrozen` ينبعث من الكرتا.
-3. الإصلاح بعد تجاوز المجلس للقرار؛ عامل التشغيل DELETE `/v2/sns/registrations/{selector}/freeze` أو `GovernanceHookV1` وهو ما حدث بالفعل.
+3. الإصلاح بعد تجاوز المجلس للقرار؛ عامل التشغيل DELETE `/v1/sns/registrations/{selector}/freeze` أو `GovernanceHookV1` وهو ما حدث بالفعل.
 4. Torii تجاوز التحقق من صحة البطاقة، `NameUnfrozen` ينبعث منها بطاقة.
 
 ## 7. رموز التحقق والخطأ
@@ -256,7 +256,7 @@ Torii البراهين التي تم إنشاؤها من قبل:
 ## 8. ملاحظات التنفيذ
 
 - Torii المزادات المعلقة التي `NameRecordV1.auction` تم رفضها و `PendingAuction` خلال محاولات التسجيل المباشر ورفضت كرتا .
-- إثباتات الدفع Norito إيصالات دفتر الأستاذ المستخدمة مرة أخرى؛ واجهات برمجة التطبيقات (API) المساعدة لخدمات الخزانة (`/v2/finance/sns/payments`)
+- إثباتات الدفع Norito إيصالات دفتر الأستاذ المستخدمة مرة أخرى؛ واجهات برمجة التطبيقات (API) المساعدة لخدمات الخزانة (`/v1/finance/sns/payments`)
 - SDKs هي نقاط نهاية ومساعدات مكتوبة بقوة، التفاف المحفظة توضح أسباب الخطأ (`ERR_SNS_RESERVED`، وغیرہ) دکھا سکیں.## 9. الخطوات التالية
 
 - مزادات SN-3 التي تتبع معالجات Torii هي عقد التسجيل الأصلي عبر الأسلاك.

@@ -73,7 +73,7 @@ Nombre del producto: `crates/sorafs_manifest/src/pin_registry.rs` Norito en Rust
 
 ## واجهة الخدمة (تكامل Torii/SDK)| المكون | المهمة | المالك/المالكون |
 |--------|--------|------------------|
-| Módulo Torii | Aquí `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (búsqueda), `/v2/sorafs/aliases` (listar/enlazar), `/v2/sorafs/replication` (pedidos/recibos). توفير ترقيم + ترشيح. | Redes TL / Core Infraestructura |
+| Módulo Torii | Aquí `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (listar/enlazar), `/v1/sorafs/replication` (pedidos/recibos). توفير ترقيم + ترشيح. | Redes TL / Core Infraestructura |
 | الاتستاشن | تضمين ارتفاع/هاش registro في الاستجابات؛ Utilice Norito para instalar SDK. | Infraestructura básica |
 | CLI | Utilice `sorafs_manifest_stub` y CLI para seleccionar `sorafs_pin` o `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
 | SDK | Enlaces de última generación (Rust/Go/TS) desde Norito؛ اضافة اختبارات تكامل. | Equipos SDK |
@@ -126,9 +126,9 @@ Otros artículos:
 يجب ان تشير كل قائمة تحقق ضمن SF-4 الى هذه الخطة عند تسجيل التقدم.
 Y REST توفر الان نقاط نهاية قائمة مع اتستاشن:
 
-- `GET /v2/sorafs/pin` y `GET /v2/sorafs/pin/{digest}` se manifiestan aquí
+- `GET /v1/sorafs/pin` y `GET /v1/sorafs/pin/{digest}` se manifiestan aquí
   ربط alias واوامر التكرار وكائن اتستاشن مشتق من هاش اخر كتلة.
-- `GET /v2/sorafs/aliases` y `GET /v2/sorafs/replication` تكشفان كتالوج alias
+- `GET /v1/sorafs/aliases` y `GET /v1/sorafs/replication` تكشفان كتالوج alias
   النشط وتراكم اوامر التكرار بترقيم ثابت ومرشحات حالة.
 
 Utilice CLI para acceder a (`iroha app sorafs pin list`, `pin show`, `alias list`,

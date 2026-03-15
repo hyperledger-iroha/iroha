@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 Les SDK Swift peuvent désormais émettre des instructions pour la colle sans colle JSON sur mesure : construire un
 `ShieldRequest` avec l'engagement de 32 octets, la charge utile encryptée et les métadonnées de débit,
 et entao chame `IrohaSDK.submit(shield:keypair:)` (ou `submitAndWait`) pour assassiner et encaminhar a
-transacao via `/v2/pipeline/transactions`. O helper valida comprimentos de engagement,
+transacao via `/v1/pipeline/transactions`. O helper valida comprimentos de engagement,
 insérer `ConfidentialEncryptedPayload` sans encodeur Norito, et afficher la disposition `zk::Shield`
 décrit abaixo pour que les portefeuilles soient adaptés à Rust.## Engagements de consensus et contrôle des capacités
 - En-têtes de bloco expoem `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` ; Le résumé participe au hachage de consensus et doit être similaire au visa local du registre pour l'acitacao de bloco.
@@ -71,7 +71,7 @@ décrit abaixo pour que les portefeuilles soient adaptés à Rust.## Engagements
 - Genesis manifeste et fluxos CLI expoem politicas atuais e pendentes. La logique d'admission de la politique dans le temps d'exécution pour confirmer que chaque instruction confidentielle est autorisée.
 - Liste de contrôle de migration - voir "Séquençage de la migration" disponible pour le plan de mise à niveau dans les étapes que le Milestone M0 accompagne.
 
-#### Monitorando transicoes via ToriiPortefeuilles et auditeurs consultent `GET /v2/confidential/assets/{definition_id}/transitions` pour inspecter ou `AssetConfidentialPolicy` ativo. La charge utile JSON inclut toujours l'identifiant d'actif canonique, la dernière hauteur de bloc observée, le `current_mode` de la politique, le mode d'effet de cette hauteur (les nouvelles de conversation rapportent temporairement `Convertible`), et les identifiants attendus de `vk_set_hash`/Poséidon/Pedersen. Quand une transition de gouvernance est en attente de réponse, elle s'engage également :
+#### Monitorando transicoes via ToriiPortefeuilles et auditeurs consultent `GET /v1/confidential/assets/{definition_id}/transitions` pour inspecter ou `AssetConfidentialPolicy` ativo. La charge utile JSON inclut toujours l'identifiant d'actif canonique, la dernière hauteur de bloc observée, le `current_mode` de la politique, le mode d'effet de cette hauteur (les nouvelles de conversation rapportent temporairement `Convertible`), et les identifiants attendus de `vk_set_hash`/Poséidon/Pedersen. Quand une transition de gouvernance est en attente de réponse, elle s'engage également :
 
 - `transition_id` - poignée de salle retournée par `ScheduleConfidentialPolicyTransition`.
 -`previous_mode`/`new_mode`.
@@ -113,7 +113,7 @@ Transicoes nao listadas acima sao rejeitadas lors de la soumission de la gouvern
 
 ### Séquence de migration1. **Préparer les registres :** indiquer toutes les entrées du vérificateur et les paramètres référencés par la politique d'alvo. Les nœuds annoncent le résultat `conf_features` pour que les pairs vérifient la cohérence.
 2. **Agenda du transfert :** sous-mètre `ScheduleConfidentialPolicyTransition` avec `effective_height` qui répond à `policy_transition_delay_blocks`. Pour déménager pour `ShieldedOnly`, précisez une personne de conversation (`window >= policy_transition_window_blocks`).
-3. **Guide public pour les opérateurs :** registraire du `transition_id` renvoyé et circulaire d'un runbook sur/de sortie. Portefeuilles et auditeurs assinam `/v2/confidential/assets/{id}/transitions` pour ouvrir la hauteur d'ouverture de Janela.
+3. **Guide public pour les opérateurs :** registraire du `transition_id` renvoyé et circulaire d'un runbook sur/de sortie. Portefeuilles et auditeurs assinam `/v1/confidential/assets/{id}/transitions` pour ouvrir la hauteur d'ouverture de Janela.
 4. **Appliquer janvier :** lorsque janvier ouvre, le runtime change la politique pour `Convertible`, émet `PolicyTransitionWindowOpened { transition_id }`, et vient rejeter les demandes de gouvernance conflictuelles.
 5. **Finaliser ou abandonner :** dans `effective_height`, ou vérifier à l'exécution les prérequis (fournir zéro transparent, sans retrait d'urgence, etc.). Réussir la politique pour le mode sollicité ; falha émet `PolicyTransitionPrerequisiteFailed`, nettoie le transit pendant et deixa la politique inaltérée.
 6. **Mises à niveau du schéma :** après une transition bien réussie, la gouvernance augmente la conversion du schéma d'actif (par exemple, `asset_definition.v2`) et l'outil CLI exige `confidential_policy` pour sérialiser les manifestes. Les documents de mise à niveau de Genesis instruisent les opérateurs sur les paramètres politiques et les empreintes digitales du registre avant de réinitialiser les validateurs.Des nouvelles qui ont commencé avec la confidentialité habilitée à codifier la politique voulue directement dans la genèse. Ainda assim seguem a checklist acima quando mudam modos pos-launch para que janelas de conversation sejam déterministas e wallets tenham tempo de ajustar.
@@ -206,7 +206,7 @@ Les grands livres confidentiels doivent être suffisamment historiques pour prou
 - Hiérarchie de dérivation par compte :
   - `sk_spend` -> `nk` (clé d'annulation), `ivk` (clé de visualisation entrante), `ovk` (clé de visualisation sortante), `fvk`.
 - Charges utiles de notes encriptadas usam AEAD avec clés partagées dérivées de ECDH ; voir les clés de l'auditeur opcionais peut être anexadas a sorties conformes à la politique des actifs.
-- Ajout de la CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, outils d'auditeur pour la description des mémos, et l'assistant `iroha app zk envelope` pour produire/inspecter les enveloppes Norito hors ligne. Torii expose le même flux de dérivation via `POST /v2/confidential/derive-keyset`, en restituant les formats hexadécimaux et base64 pour que les portefeuilles recherchent des hiérarchies de paiement par programme.## Gas, limites et contrôles DoS
+- Ajout de la CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, outils d'auditeur pour la description des mémos, et l'assistant `iroha app zk envelope` pour produire/inspecter les enveloppes Norito hors ligne. Torii expose le même flux de dérivation via `POST /v1/confidential/derive-keyset`, en restituant les formats hexadécimaux et base64 pour que les portefeuilles recherchent des hiérarchies de paiement par programme.## Gas, limites et contrôles DoS
 - Calendrier de gaz déterministe :
   - Halo2 (Plonkish) : base `250_000` gaz + `2_000` gaz par entrée publique.
   - `5` gas por proof byte, mais cargos por nullifier (`300`) et por engagement (`500`).

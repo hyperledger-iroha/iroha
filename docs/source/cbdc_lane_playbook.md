@@ -228,7 +228,7 @@ directory so auditors and regulators can replay the exact bytes later.
 
 1. **Lane manifests:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **Scheduler quotas:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Manual smoke:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` with manifest directory pointing to the CBDC files, then hit `/v2/sumeragi/status` and verify `lane_governance.manifest_ready=true` for the CBDC lane.
+3. **Manual smoke:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` with manifest directory pointing to the CBDC files, then hit `/v1/sumeragi/status` and verify `lane_governance.manifest_ready=true` for the CBDC lane.
 4. **Whitelist consistency test:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` exercises `integration_tests/tests/nexus/cbdc_whitelist.rs`, parsing `fixtures/space_directory/profile/cbdc_lane_profile.json` and the referenced capability manifests to ensure every whitelist entry’s UAID, dataspace, activation epoch, and allowance list matches the Norito manifests under `fixtures/space_directory/capability/`. Attach the test log to the NX-6 evidence bundle whenever the whitelist or manifests change.
 
 ### 2.2 CLI snippets
@@ -238,7 +238,7 @@ directory so auditors and regulators can replay the exact bytes later.
 - Publish via HTTP if the ops desk is running remote automation:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -254,7 +254,7 @@ directory so auditors and regulators can replay the exact bytes later.
 - Emergency revocation can be issued remotely by POSTing to Torii:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

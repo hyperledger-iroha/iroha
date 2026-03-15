@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```## 3. Atualização automática
 
@@ -131,9 +131,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Ajuda para definir `POST /v2/sns/registrations` para proteção e instalação por conta própria
+- Ajuda para definir `POST /v1/sns/registrations` para proteção e instalação por conta própria
   usando a opção HTTP. Você será criado no log como uma descrição do NDJSON.
-- `--poll-status` conjunto completo `/v2/sns/registrations/{selector}` dispositivo
+- `--poll-status` conjunto completo `/v1/sns/registrations/{selector}` dispositivo
   каждой отправки (para `--poll-attempts`, em умолчанию 5), чтобы подтвердить
   видимость записи. Baixe `--suffix-map` (mapeamento JSON `suffix_id` na configuração
   "sufixo"), este instrumento pode ser usado `{label}.{suffix}` para votação.

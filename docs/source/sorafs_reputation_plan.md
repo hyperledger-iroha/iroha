@@ -121,11 +121,11 @@ CREATE TABLE reputation_snapshots (
 
 ## APIs & SDK
 - REST endpoints:
-  - `GET /v2/reputation/latest` → full snapshot metadata + provider scores.
-  - `GET /v2/reputation/{provider_id}` → provider entry with Merkle proof.
-  - `GET /v2/reputation/snapshots/{snapshot_id}` → historical snapshot.
-  - `GET /v2/reputation/events?since=` → list incremental updates.
-  - `GET /v2/reputation/weights` → current configuration.
+  - `GET /v1/reputation/latest` → full snapshot metadata + provider scores.
+  - `GET /v1/reputation/{provider_id}` → provider entry with Merkle proof.
+  - `GET /v1/reputation/snapshots/{snapshot_id}` → historical snapshot.
+  - `GET /v1/reputation/events?since=` → list incremental updates.
+  - `GET /v1/reputation/weights` → current configuration.
 - WebSocket `/ws/reputation` broadcasting score/delta events.
 - SDK helpers:
   - Rust: `ReputationClient::latest()`, `::provider(provider_id)`, `verify_provider_record`.

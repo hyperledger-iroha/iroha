@@ -156,7 +156,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` သည် `/v2/explorer/accounts/{id}/qr` JSON ကို မှန်သည်
+`ExplorerAccountQrSnapshot` သည် `/v1/explorer/accounts/{id}/qr` JSON ကို မှန်သည်
 မျက်နှာပြင်- ၎င်းတွင် canonical account id ပါ၀င်သည်၊ ပကတိနှင့်ပြန်ဆိုထားသော
 စံ I105 literal၊ ကွန်ရက်ရှေ့ဆက်/အမှား-ပြင်ပေးသည့် မက်တာဒေတာ၊ QR အတိုင်းအတာနှင့်
 ပိုက်ဆံအိတ်/ရှာဖွေသူများ တိုက်ရိုက်ထည့်သွင်းနိုင်သော အတွင်းလိုင်း SVG ပေးဆောင်မှု။ ချန်လှပ်ပါ။

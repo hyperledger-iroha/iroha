@@ -31,7 +31,7 @@ It assumes the orchestration stack delivered under SF-6 is already deployed
 1. **Confirm governance inputs.**
    - All candidate providers must publish `ProviderAdvertV1` envelopes with
      range capability payloads and stream budgets. Validate via
-     `/v2/sorafs/providers` and compare against the expected capability fields.
+     `/v1/sorafs/providers` and compare against the expected capability fields.
    - Telemetry snapshots supplying latency/failure rates should be < 15 minutes
      old before each canary run.
 2. **Stage configuration.**

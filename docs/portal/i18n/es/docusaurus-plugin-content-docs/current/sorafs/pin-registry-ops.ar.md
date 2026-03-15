@@ -21,7 +21,7 @@ Nombre `docs/source/sorafs/runbooks/pin_registry_ops.md`. حافظ على الن
 
 ## نظرة عامة
 
-Utilice el registro de PIN y el registro de PIN SoraFS y establezca los requisitos de seguridad (SLA). Utilice el `iroha_torii` y el Prometheus y el `torii_sorafs_*`. يقوم Torii بأخذ عينات من حالة registro كل 30 ثانية في الخلفية, لذا تبقى لوحات المعلومات محدثة حتى عند عدم قيام المشغلين باستدعاء نقاط النهاية `/v2/sorafs/pin/*`. استورد لوحة التحكم المنقحة (`docs/source/grafana_sorafs_pin_registry.json`) للحصول على تخطيط Grafana جاهز الاستخدام يطابق الأقسام أدناه مباشرة.
+Utilice el registro de PIN y el registro de PIN SoraFS y establezca los requisitos de seguridad (SLA). Utilice el `iroha_torii` y el Prometheus y el `torii_sorafs_*`. يقوم Torii بأخذ عينات من حالة registro كل 30 ثانية في الخلفية, لذا تبقى لوحات المعلومات محدثة حتى عند عدم قيام المشغلين باستدعاء نقاط النهاية `/v1/sorafs/pin/*`. استورد لوحة التحكم المنقحة (`docs/source/grafana_sorafs_pin_registry.json`) للحصول على تخطيط Grafana جاهز الاستخدام يطابق الأقسام أدناه مباشرة.
 
 ## مرجع المقاييس| المقياس | Etiquetas | الوصف |
 | ------ | ------ | ----- |
@@ -110,7 +110,7 @@ groups:
 
 ## سير عمل الفرز1. **تحديد السبب**
    - اذا زادت اخفاقات SLA بينما بقي التراكم منخفضا، ركز على اداء proveedores (فشل PoR، الاكتمال المتاخر).
-   - اذا زاد التراكم مع اخفاقات مستقرة، افحص القبول (`/v2/sorafs/pin/*`) لتاكيد manifiesta التي تنتظر موافقة المجلس.
+   - اذا زاد التراكم مع اخفاقات مستقرة، افحص القبول (`/v1/sorafs/pin/*`) لتاكيد manifiesta التي تنتظر موافقة المجلس.
 2. **التحقق من حالة proveedores**
    - شغّل `iroha app sorafs providers list` وتاكد ان القدرات المعلن عنها تطابق متطلبات التكرار.
    - Medidores de calibre `torii_sorafs_capacity_*` para GiB y PoR.
@@ -129,7 +129,7 @@ groups:
 2. **Ejecución en seco de la puesta en escena**
    - انشر تغيير الاعدادات على عنقود puesta en escena يعكس طوبولوجيا الانتاج.
    - `cargo xtask sorafs-pin-fixtures` incluye accesorios y alias de ida y vuelta. اي عدم تطابق يعني drift في المنبع يجب معالجته اولا.
-   - Los puntos finales `/v2/sorafs/pin/{digest}` e `/v2/sorafs/aliases` contienen ventanas nuevas y de actualización, caducadas y caducadas. Utilice HTTP y encabezados (`Sora-Proof-Status`, `Retry-After`, `Warning`) y archivos JSON.
+   - Los puntos finales `/v1/sorafs/pin/{digest}` e `/v1/sorafs/aliases` contienen ventanas nuevas y de actualización, caducadas y caducadas. Utilice HTTP y encabezados (`Sora-Proof-Status`, `Retry-After`, `Warning`) y archivos JSON.
 3. **التفعيل في الانتاج**
    - اطرح الاعدادات الجديدة في نافذة التغيير القياسية. Utilice Torii para configurar las puertas de enlace/SDK del SDK y configurarlos para su instalación.
    - استورد `docs/source/grafana_sorafs_pin_registry.json` الى Grafana (او حدّث اللوحات الموجودة) وثبت لوحات تحديث caché للـ alias في مساحة عمل NOC.

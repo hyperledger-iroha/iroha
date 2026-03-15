@@ -85,7 +85,7 @@ PoR/PoTR qoidalari kuchayganda.
 | `sorafs_node_por_failure_total` | Hisoblagich | `provider_id` | Muvaffaqiyatsiz PoR namunalari uchun monotonik hisoblagich. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | O'lchagich | `provider` | Ishlatilgan baytlar uchun mavjud Prometheus o'lchagichlari, navbat chuqurligi, PoR parvoz soni. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | O'lchagich | `provider` | Imkoniyatlar panelida provayder sig‘imi/ish vaqti muvaffaqiyati haqidagi ma’lumotlar paydo bo‘ldi. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | O'lchagich | `provider`, `manifest` | `/v2/sorafs/por/ingestion/{manifest}` so'rovi o'tkazilganda, "PoR Stalls" paneli/ogohlantirishni ta'minlovchi orqaga qo'yish chuqurligi va yig'ilgan nosozlik hisoblagichlari eksport qilinadi. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | O'lchagich | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}` so'rovi o'tkazilganda, "PoR Stalls" paneli/ogohlantirishni ta'minlovchi orqaga qo'yish chuqurligi va yig'ilgan nosozlik hisoblagichlari eksport qilinadi. |
 
 ### Ta'mirlash va SLA
 

@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-02-07
 
 ## የአካባቢ ውቅር
 
-- መተላለፊያ መንገዶች የማረጋገጫ ዥረት መጨረሻ ነጥብ (`POST /v2/sorafs/proof/stream`) ማንቃት አለባቸው
+- መተላለፊያ መንገዶች የማረጋገጫ ዥረት መጨረሻ ነጥብ (`POST /v1/sorafs/proof/stream`) ማንቃት አለባቸው
   ስለዚህ CLI የቴሌሜትሪ ማጠቃለያዎችን ሊያወጣ ይችላል።
 በ ውስጥ ያሉትን ነባሪዎች በመጠቀም የ`sorafs_alias_cache` ፖሊሲን ያዋቅሩ
   `iroha_config` ወይም የ CLI አጋዥ (`sorafs_cli manifest submit --alias-*`)።

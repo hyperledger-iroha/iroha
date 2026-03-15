@@ -76,13 +76,13 @@ slug: /sorafs/staging-manifest-playbook-ba
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. Асыу ос нөктәһен һорап, рекламаның канонлы псевдонимдар менән барлыҡҡа килгәнен раҫлау:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    `profile_aliases` X-та беренсе яҙма булараҡ `"sorafs.sf1@1.0.0"` инә.

@@ -53,7 +53,7 @@ qəbul zamanı aşağıdakı tələblər yerinə yetirilir:
      - `profile_id=sorafs.sf1@1.0.0`
      - müəyyən edilmiş `max_span` ilə `capability=chunk_range_fetch`
      - GREASE TLV-ləri mövcud olduqda `allow_unknown_capabilities=<true|false>`
-   - `/v2/sorafs/providers` və `sorafs_fetch` vasitəsilə doğrulayın; bilinməyənlərə dair xəbərdarlıqlar
+   - `/v1/sorafs/providers` və `sorafs_fetch` vasitəsilə doğrulayın; bilinməyənlərə dair xəbərdarlıqlar
      imkanları sınaqdan keçirilməlidir.
 3. **Çox mənbəli hazırlığı təsdiq edin.**
    - `sorafs_fetch`-i `--provider-advert=<path>` ilə icra edin; CLI indi uğursuz olur
@@ -189,9 +189,9 @@ sintaksisin `promtool check rules` keçməsini təmin etmək üçün dəyişikli
 - **Həftəlik status poçtu.** DevRel qəbulun qısa xülasəsini təqdim edir
   ölçülər, gözlənilməz xəbərdarlıqlar və qarşıdan gələn son tarixlər.
 - **Hadisə cavabı.** Əgər `reject` yanğın xəbərdar edirsə, çağırış üzrə mühəndislər:
-  1. Təhqiredici reklamı Torii kəşfi (`/v2/sorafs/providers`) vasitəsilə əldə edin.
+  1. Təhqiredici reklamı Torii kəşfi (`/v1/sorafs/providers`) vasitəsilə əldə edin.
   2. Provayder boru kəmərində reklamın yoxlanmasını yenidən işə salın və onunla müqayisə edin
-     Xətanı təkrarlamaq üçün `/v2/sorafs/providers`.
+     Xətanı təkrarlamaq üçün `/v1/sorafs/providers`.
   3. Növbəti yeniləmədən əvvəl reklamı çevirmək üçün provayderlə koordinasiya edin
      son tarix.
 - **Dəyişiklik donur.** Heç bir qabiliyyət sxemi R1/R2 zamanı torpağı dəyişdirmir

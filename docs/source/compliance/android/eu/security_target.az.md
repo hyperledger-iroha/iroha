@@ -55,7 +55,7 @@ Fərziyyələr:
 | Təhlükəli konfiqurasiya | `ClientConfig` tətbiq etməzdən əvvəl manifestləri (hesh + sxem) doğrulayır və `android.telemetry.config.reload` vasitəsilə rədd edilmiş yenidən yükləmələri qeyd edir. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | İmza açarlarının kompromisi | StrongBox üçün tələb olunan siyasətlər, sertifikatlaşdırma alətləri və cihaz matrisi auditləri sürüşməni müəyyən edir; hadisəyə görə sənədləşdirilən üstələyir. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | Telemetriyada PII sızması | Blake2b-hashed səlahiyyətlilər, paketlənmiş cihaz profilləri, daşıyıcının buraxılması, qeydi ləğv edin. | `docs/source/sdk/android/telemetry_redaction.md`; Dəstək Playbook §8. |
-| Torii RPC |-də təkrar oxuyun və ya səviyyəsini azaldın `/v2/pipeline` sorğu qurucusu TLS sancma, səs-küy kanalı siyasəti və heş edilmiş səlahiyyət konteksti ilə yenidən cəhd büdcələrini tətbiq edir. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (planlaşdırılıb). |
+| Torii RPC |-də təkrar oxuyun və ya səviyyəsini azaldın `/v1/pipeline` sorğu qurucusu TLS sancma, səs-küy kanalı siyasəti və heş edilmiş səlahiyyət konteksti ilə yenidən cəhd büdcələrini tətbiq edir. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (planlaşdırılıb). |
 | İmzasız və ya təkrar olunmayan buraxılışlar | CycloneDX SBOM + AND6 yoxlama siyahısı ilə təsdiqlənmiş Sigstore sertifikatları; buraxılış RFC-ləri `docs/source/release/provenance/android/`-də sübut tələb edir. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Natamam hadisələrin idarə edilməsi | Runbook + playbook overrides, xaos təlimləri və eskalasiya ağacını müəyyən edir; telemetriya ləğvi üçün imzalanmış Norito sorğuları tələb olunur. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ Fərziyyələr:
 | 7.4 Girişə nəzarət | StrongBox siyasətləri + imzalanmış Norito artefaktları tələb edən iş axınını ləğv edin. |
 | 7.5 Kriptoqrafik nəzarət | AND2-dən açarın yaradılması, saxlanması və sertifikatlaşdırma tələbləri (əsas idarəetmə təlimatı). |
 | 7.6 Əməliyyatların təhlükəsizliyi | Telemetriya heşinqi, xaos məşqləri, insidentlərə reaksiya və sübutların buraxılması. |
-| 7.7 Rabitə təhlükəsizliyi | `/v2/pipeline` TLS siyasəti + hashed səlahiyyətlilər (telemetriya redaksiya sənədi). |
+| 7.7 Rabitə təhlükəsizliyi | `/v1/pipeline` TLS siyasəti + hashed səlahiyyətlilər (telemetriya redaksiya sənədi). |
 | 7.8 Sistemin əldə edilməsi / inkişafı | AND5/AND6 planlarında təkrarlanan Gradle konstruksiyaları, SBOM-lar və mənşəli qapılar. |
 | 7.9 Təchizatçı əlaqələri | Buildkite + Sigstore sertifikatları üçüncü tərəfdən asılılıq SBOM-ları ilə birlikdə qeydə alınıb. |
 | 7.10 Hadisələrin idarə edilməsi | Runbook/Playbook eskalasiyası, qeydi ləğv etmək, telemetriya uğursuz sayğacları. |

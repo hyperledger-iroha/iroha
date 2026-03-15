@@ -60,7 +60,7 @@ bu gün də öhdəlik yükü vasitəsilə eyni hashı yoxlayın.
 MMR zirvələri soldan sağa sıralanır. Zirvələri yığmaqla `mmr_root`-i yenidən hesablayın
 sağdan sola: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Doğrulama əsas sübuta bənzəyir: `block_hash`-i yenidən hesablayın
 başlıq, öhdəlik-sertifikat imzalarını yoxlayın və öhdəliyi yoxlayın
@@ -103,10 +103,10 @@ deterministik səhvlərlə diapazon/qeyri-kafi imzalar.
 
 ## API səthi
 
-- `GET /v2/bridge/finality/{height}` - üçün `BridgeFinalityProof` qaytarır
+- `GET /v1/bridge/finality/{height}` - üçün `BridgeFinalityProof` qaytarır
   tələb olunan blok hündürlüyü. `Accept` vasitəsilə məzmun danışıqları Norito və ya dəstəkləyir
   JSON.
-- `GET /v2/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` qaytarır
+- `GET /v1/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` qaytarır
   tələb olunan hündürlük üçün (öhdəlik + əsaslandırma + başlıq/sertifikat).
 
 ## Qeydlər və təqiblər

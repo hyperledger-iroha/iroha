@@ -27,7 +27,7 @@ Norito ko'prigi/Stekni Xcode loyihalariga ulash, qarang `docs/connect_swift_inte
    muhitingizga mos keladigan qadriyatlar. Ilova ishga tushganda ushbu o'zgaruvchilarni o'qiydi:
    - `TORII_NODE_URL` — asosiy REST URL (WebSocket URL manzillari undan olingan).
    - `CONNECT_SESSION_ID` — 32 baytlik seans identifikatori (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` - `/v2/connect/session` tomonidan qaytarilgan tokenlar.
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` - `/v1/connect/session` tomonidan qaytarilgan tokenlar.
    - `CONNECT_CHAIN_ID` — qoʻl siqish paytida eʼlon qilingan zanjir identifikatori.
    - `CONNECT_ROLE` - UIda oldindan tanlangan standart rol (`app` yoki `wallet`).
    - Qo'lda test qilish uchun qo'shimcha yordamchilar: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
@@ -74,7 +74,7 @@ Interaktiv bo'lmagan CI ishlari uchun `--exit-after-ready`.
 2. Xcode'da `NoritoDemoXcode` loyihasini oching.
 3. `NoritoDemo` sxemasini tanlang va iOS simulyatori yoki qurilmasini belgilang.
 4. `.env` fayliga sxemaning muhit oʻzgaruvchilari orqali havola qilinganligiga ishonch hosil qiling.
-   `/v2/connect/session` tomonidan eksport qilingan `CONNECT_*` qiymatlarini toʻldiring, shunda foydalanuvchi interfeysi boʻladi.
+   `/v1/connect/session` tomonidan eksport qilingan `CONNECT_*` qiymatlarini toʻldiring, shunda foydalanuvchi interfeysi boʻladi.
    ilova ishga tushirilganda oldindan to'ldirilgan.
 5. Uskuna tezlashuvining standart sozlamalarini tekshiring: `App.swift` chaqiruvlari
    `DemoAccelerationConfig.load().apply()`, shuning uchun demo ikkalasini ham tanlaydi

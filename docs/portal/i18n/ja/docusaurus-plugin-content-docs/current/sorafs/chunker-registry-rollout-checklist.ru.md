@@ -75,7 +75,7 @@ Sidebar_label: ロールアウト チャンカーのロールアウト
    `torii.sorafs.discovery.admission.envelopes_dir` です。
 3. プロバイダー広告のディスカバリー API:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. エンドポイントのマニフェスト/プランとガバナンス ヘッダーを設定します。
    ```bash

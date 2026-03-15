@@ -68,7 +68,7 @@ Les opérateurs doivent :1. **Enregistrez le système blockchain** auprès du B
 1. **Documentations**
    - Ajouter une annexe de conformité à `docs/source/crypto/sm_program.md` notant le statut de la cryptographie commerciale de l'État, les attentes en matière de dépôt et les points de contact.
    - Publier un champ manifeste Norito (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) que les opérateurs peuvent utiliser lors de la préparation des dépôts.
-   - Assurez-vous que la publicité Torii `/v2/node/capabilities` (et l'alias CLI `iroha runtime capabilities`) est livrée avec chaque version afin que les opérateurs puissent capturer l'instantané du manifeste `crypto.sm` pour les preuves MLPS/密评.
+   - Assurez-vous que la publicité Torii `/v1/node/capabilities` (et l'alias CLI `iroha runtime capabilities`) est livrée avec chaque version afin que les opérateurs puissent capturer l'instantané du manifeste `crypto.sm` pour les preuves MLPS/密评.
    - Fournir un démarrage rapide de la conformité bilingue (EN/ZH) résumant les obligations.
 2. **Libérer les artefacts**
    - Expédiez les fichiers SBOM/CycloneDX pour les versions compatibles SM.

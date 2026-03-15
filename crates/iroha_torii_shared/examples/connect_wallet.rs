@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect WS as wallet
     let ws_url = format!(
-        "{}/v2/connect/ws?sid={}&role=wallet",
+        "{}/v1/connect/ws?sid={}&role=wallet",
         node.replace("http", "ws"),
         sid_b64
     );

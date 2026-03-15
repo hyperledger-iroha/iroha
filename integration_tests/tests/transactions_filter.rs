@@ -102,7 +102,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     // POST to the endpoint
     let url = client
         .torii_url
-        .join(&format!("/v2/accounts/{alice_id_str}/transactions/query"))
+        .join(&format!("/v1/accounts/{alice_id_str}/transactions/query"))
         .unwrap();
     let http = reqwest::Client::new();
     let resp = http

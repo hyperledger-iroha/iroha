@@ -85,7 +85,7 @@ PoR/PoTR tətbiqi gücləndikdə.
 | `sorafs_node_por_failure_total` | Sayğac | `provider_id` | Uğursuz PoR nümunələri üçün monotonik sayğac. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Ölçü | `provider` | Mövcud Prometheus istifadə olunan baytlar, növbə dərinliyi, PoR uçuş sayları üçün ölçülər. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Ölçü | `provider` | Provayderin tutumu/iş vaxtı uğuru məlumatları tutum panelində üzə çıxdı. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Ölçü | `provider`, `manifest` | `/v2/sorafs/por/ingestion/{manifest}` sorğusu keçirildikdə, “PoR Stalls” panelini/xəbərdarlığını qidalandıraraq, ehtiyat işlərinin dərinliyi üstəgəl ixrac edilən məcmu uğursuzluq sayğacları. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Ölçü | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}` sorğusu keçirildikdə, “PoR Stalls” panelini/xəbərdarlığını qidalandıraraq, ehtiyat işlərinin dərinliyi üstəgəl ixrac edilən məcmu uğursuzluq sayğacları. |
 
 ### Təmir və SLA
 

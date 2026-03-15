@@ -23,7 +23,7 @@ from shell exports.
 
 - Node 18.18+ with `npm` or `pnpm`.
 - `sorafs_cli` from `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- Torii URL that exposes `/v2/sorafs/*` plus an authority account/private key
+- Torii URL that exposes `/v1/sorafs/*` plus an authority account/private key
   that can submit manifests and aliases.
 - OIDC issuer (GitHub Actions, GitLab, workload identity, etc.) to mint a
   `SIGSTORE_ID_TOKEN`.
@@ -891,7 +891,7 @@ Configure the following repository secrets/variables before triggering the job:
 
 | Name | Purpose |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | Torii host that exposes `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Torii host that exposes `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Epoch identifier recorded with submissions. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Signing authority for the manifest submission. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Alias tuple bound to the manifest when `perform_submit` is `true`. |

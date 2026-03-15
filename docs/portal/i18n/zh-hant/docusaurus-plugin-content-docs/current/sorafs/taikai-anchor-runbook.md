@@ -53,7 +53,7 @@ translation_last_reviewed: 2026-02-07
 | `taikai_ingest_segment_latency_ms` |每個集群/流的 CMAF 攝取延遲直方圖（目標：p95<750ms，p99<900ms）。 |
 | `taikai_ingest_live_edge_drift_ms` |編碼器和錨定工作人員之間的實時邊緣漂移（p99>1.5 秒的頁面持續 10 分鐘）。 |
 | `taikai_ingest_segment_errors_total{reason}` |按原因列出的錯誤計數器（`decode`、`manifest_mismatch`、`lineage_replay`，...）。任何增加都會觸發 `TaikaiIngestFailure`。 |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` |每當 `/v2/da/ingest` 接受別名的新 TRM 時遞增；使用 `rate()` 驗證旋轉節奏。 |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` |每當 `/v1/da/ingest` 接受別名的新 TRM 時遞增；使用 `rate()` 驗證旋轉節奏。 |
 | `/status → telemetry.taikai_alias_rotations[]` |包含 `window_start_sequence`、`window_end_sequence`、`manifest_digest_hex`、`rotations_total` 和證據包時間戳的 JSON 快照。 |
 | `taikai_viewer_*`（再緩衝、CEK 輪換年齡、PQ 運行狀況、警報）|查看器端 KPI，確保 CEK 輪換 + PQ 電路在錨定期間保持健康。 |
 

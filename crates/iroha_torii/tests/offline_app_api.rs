@@ -510,7 +510,7 @@ async fn submit_replay_fixture_with_harness(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -527,7 +527,7 @@ async fn submit_replay_fixture_with_harness(
                 Request::builder()
                     .method(axum::http::Method::GET)
                     .uri(format!(
-                        "/v2/pipeline/transactions/status?hash={queued_tx_hash_hex}"
+                        "/v1/pipeline/transactions/status?hash={queued_tx_hash_hex}"
                     ))
                     .body(Body::empty())
                     .expect("pipeline status request"),
@@ -628,7 +628,7 @@ async fn query_settlement_record_by_bundle(harness: &Harness, bundle_id_hex: &st
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements/query")
+                .uri("/v1/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -1513,7 +1513,7 @@ async fn offline_spend_receipts_submit_returns_poseidon_root() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/spend-receipts")
+                .uri("/v1/offline/spend-receipts")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1562,7 +1562,7 @@ async fn offline_allowances_issue_returns_certificate_id() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/allowances")
+                .uri("/v1/offline/allowances")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1606,7 +1606,7 @@ async fn offline_build_claims_issue_returns_signed_claim_accepted_by_settlement(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/build-claims/issue")
+                .uri("/v1/offline/build-claims/issue")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(claim_body))
                 .expect("request"),
@@ -1668,7 +1668,7 @@ async fn offline_build_claims_issue_returns_signed_claim_accepted_by_settlement(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(submit_body))
                 .expect("request"),
@@ -1704,7 +1704,7 @@ async fn offline_build_claims_issue_uses_legacy_operator_key_when_primary_rotate
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/build-claims/issue")
+                .uri("/v1/offline/build-claims/issue")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(claim_body))
                 .expect("request"),
@@ -1770,7 +1770,7 @@ async fn offline_settlements_submit_auto_issues_missing_build_claims() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(submit_body))
                 .expect("request"),
@@ -1842,7 +1842,7 @@ async fn offline_settlements_submit_rejects_missing_build_claim_when_issuer_disa
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1890,7 +1890,7 @@ async fn offline_settlements_submit_accepts_missing_build_claim_when_verificatio
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1936,7 +1936,7 @@ async fn offline_settlements_submit_rejects_android_multi_package_without_overri
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2001,7 +2001,7 @@ async fn offline_settlements_submit_uses_override_for_android_multi_package() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2070,7 +2070,7 @@ async fn offline_settlements_submit_rejects_unknown_build_claim_override_tx_id()
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2136,7 +2136,7 @@ async fn offline_settlements_submit_rejects_duplicate_build_claim_override_tx_id
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2191,7 +2191,7 @@ async fn offline_settlements_submit_rejects_override_for_existing_claim_without_
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2243,7 +2243,7 @@ async fn offline_settlements_submit_keeps_invalid_existing_claim_without_repair(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2304,7 +2304,7 @@ async fn offline_settlements_submit_repairs_existing_claim_when_requested() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2355,7 +2355,7 @@ async fn offline_settlements_submit_returns_bundle_id_and_transaction_hash() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2387,7 +2387,7 @@ async fn offline_settlements_submit_returns_bundle_id_and_transaction_hash() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::GET)
-                .uri(format!("/v2/pipeline/transactions/status?hash={tx_hash}"))
+                .uri(format!("/v1/pipeline/transactions/status?hash={tx_hash}"))
                 .body(Body::empty())
                 .expect("pipeline status request"),
         )
@@ -2430,7 +2430,7 @@ async fn pipeline_transaction_status_unknown_hash_surfaces_not_found_error_paylo
             Request::builder()
                 .method(axum::http::Method::GET)
                 .uri(format!(
-                    "/v2/pipeline/transactions/status?hash={unknown_hash}"
+                    "/v1/pipeline/transactions/status?hash={unknown_hash}"
                 ))
                 .body(Body::empty())
                 .expect("request"),
@@ -2497,7 +2497,7 @@ async fn offline_settlements_submit_persists_settled_record() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2564,7 +2564,7 @@ async fn offline_settlements_submit_persists_settled_record() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements/query")
+                .uri("/v1/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -2621,7 +2621,7 @@ async fn offline_settlements_submit_persists_settled_record_for_android_build_cl
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2686,7 +2686,7 @@ async fn offline_settlements_submit_persists_settled_record_for_android_build_cl
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements/query")
+                .uri("/v1/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -2757,7 +2757,7 @@ async fn offline_settlements_submit_persists_rejected_record_for_platform_signat
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2831,7 +2831,7 @@ async fn offline_settlements_submit_persists_rejected_record_for_offline_error()
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2897,7 +2897,7 @@ async fn offline_settlements_submit_persists_rejected_record_for_offline_error()
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements/query")
+                .uri("/v1/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -2967,7 +2967,7 @@ async fn offline_settlements_submit_rejects_duplicate_bundle_with_reject_code() 
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements")
+                .uri("/v1/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -3051,7 +3051,7 @@ async fn offline_settlements_query_includes_rejected_record_with_reason() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements/query")
+                .uri("/v1/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -3113,7 +3113,7 @@ async fn offline_settlements_query_includes_rejected_record_with_reason() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/settlements/query")
+                .uri("/v1/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(status_body))
                 .expect("request"),
@@ -3194,7 +3194,7 @@ async fn offline_allowances_renew_returns_new_certificate_id() {
     );
     let body = json::to_vec(&Value::Object(map)).expect("serialize request");
 
-    let uri = format!("/v2/offline/allowances/{old_id_hex}/renew");
+    let uri = format!("/v1/offline/allowances/{old_id_hex}/renew");
     let resp = harness
         .app
         .clone()
@@ -3251,7 +3251,7 @@ async fn offline_certificates_revoke_returns_verdict_id() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/certificates/revoke")
+                .uri("/v1/offline/certificates/revoke")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),

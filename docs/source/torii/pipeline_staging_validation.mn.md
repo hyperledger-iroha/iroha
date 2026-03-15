@@ -7,33 +7,33 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e271232f49afd9e7a5b55bac7fac4223341d0591b73b2243e6fc35b2dda716f
 source_last_modified: "2026-01-16T03:44:45.429433+00:00"
 translation_last_reviewed: 2026-02-07
-title: Torii `/v2/pipeline` Staging Validation
+title: Torii `/v1/pipeline` Staging Validation
 summary: Checklist for Torii owners to prove the pipeline endpoints, telemetry, and SSE observers behave deterministically before IOS2-WB2 closes.
 ---
 
 # 1. Scope & Owners
 
-- **Roadmap items:** IOS2-WB2 (Swift `/v2/pipeline` adoption) and NRPC-2 (Torii rollout plan) both gate on Torii providing evidence that the staging cluster exercises the pipeline routes with the same behaviour exposed to SDKs.【roadmap.md:1268】【docs/source/torii/norito_rpc_rollout_plan.md:1】
+- **Roadmap items:** IOS2-WB2 (Swift `/v1/pipeline` adoption) and NRPC-2 (Torii rollout plan) both gate on Torii providing evidence that the staging cluster exercises the pipeline routes with the same behaviour exposed to SDKs.【roadmap.md:1268】【docs/source/torii/norito_rpc_rollout_plan.md:1】
 - **Owners:** Torii Platform TL (primary), SDK Program Lead (witness), Swift/Android parity reps (consumers), Observability TL (telemetry capture).
 
 # 2. Pre-flight Requirements
 
 | Item | Details | Evidence |
 |------|---------|----------|
-| Staging cluster config | `torii.pipeline.enabled = true`, `/v2/pipeline` aliases exposed through the ingress, NRPC feature flag enabled so both transports can be exercised. Configuration is referenced from the same `iroha_config` bundle that Swift uses for parity tests.【iroha_config::parameters::actual::Torii#pipeline_enabled】 | Attach staged `config.toml` plus `GET /v2/configuration` output before running validation. |
+| Staging cluster config | `torii.pipeline.enabled = true`, `/v1/pipeline` aliases exposed through the ingress, NRPC feature flag enabled so both transports can be exercised. Configuration is referenced from the same `iroha_config` bundle that Swift uses for parity tests.【iroha_config::parameters::actual::Torii#pipeline_enabled】 | Attach staged `config.toml` plus `GET /v1/configuration` output before running validation. |
 | Test fixtures | Signed transaction envelopes encoded as Norito binaries (e.g., `fixtures/norito_rpc/transfer_asset.norito`) with known hashes. | Store the `.norito` payload + hash in `artifacts/torii/pipeline_validation/<timestamp>/`. |
 | Authentication | API token or mTLS credentials that match staging access policy. | Include the token id / client cert fingerprint in the evidence log. |
 | Observability | Access to Prometheus / OTLP exporters for Torii so `pipeline_*` counters in `docs/source/telemetry.md` can be sampled during the run (e.g., `pipeline_stage_ms`, `pipeline_layer_count`, `pipeline_total_ms`). | Export a Grafana snapshot or the raw Prometheus queries listed below. |
 
 # 3. Validation Steps
 
-## 3.1 Submit & Poll (`/v2/pipeline/transactions`)
+## 3.1 Submit & Poll (`/v1/pipeline/transactions`)
 
 1. Compute or reuse the transaction hash for the envelope under test (e.g., `transfer_asset.norito`). This is required because Torii responds with an empty body for successful submits. The transaction hash is canonical and matches the entrypoint hash for external transactions.
 2. Submit the envelope over HTTPS with Norito content type:
 
 ```bash
-curl -sS -X POST "$TORII_BASE/v2/pipeline/transactions" \
+curl -sS -X POST "$TORII_BASE/v1/pipeline/transactions" \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: Bearer $API_TOKEN" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
@@ -43,30 +43,30 @@ curl -sS -X POST "$TORII_BASE/v2/pipeline/transactions" \
 3. Poll the status endpoint until the transaction reaches a terminal state. The response mirrors the DTO consumed by Swift’s `ToriiClient.getTransactionStatus` helpers.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:5299】
 
 ```bash
-curl -sS -G "$TORII_BASE/v2/pipeline/transactions/status" \
+curl -sS -G "$TORII_BASE/v1/pipeline/transactions/status" \
   -H "Authorization: Bearer $API_TOKEN" \
   --data-urlencode "hash=$TX_HASH" | jq .
 ```
 
 ✅ Acceptance: the submit request returns `202` / `204`, status transitions through `Queued → Approved/Committed/Applied`, and the timeline aligns with the retry budgets documented in the Swift adoption guide.【docs/source/sdk/swift/pipeline_adoption_guide.md:33】
 
-## 3.2 Recovery Sidecar (`/v2/pipeline/recovery/{height}`)
+## 3.2 Recovery Sidecar (`/v1/pipeline/recovery/{height}`)
 
-1. Record the height that finalized while the test transaction was processed (from `/v2/pipeline/transactions/status`).
+1. Record the height that finalized while the test transaction was processed (from `/v1/pipeline/transactions/status`).
 2. Fetch the recovery snapshot and verify it embeds the expected DAG fingerprint and footprint metadata:
 
 ```bash
-curl -sS "$TORII_BASE/v2/pipeline/recovery/$HEIGHT" \
+curl -sS "$TORII_BASE/v1/pipeline/recovery/$HEIGHT" \
   -H "Authorization: Bearer $API_TOKEN" | jq .
 ```
 
 3. The response must advertise `format = "pipeline.recovery.v1"` as enforced by `handler_pipeline_recovery`. Missing heights must return `404` exactly as covered by `crates/iroha_torii/tests/pipeline_recovery_endpoint.rs`. Capture both the populated and missing responses in the evidence bundle.
 
-## 3.3 SSE Bridge (`/v2/events/sse`)
+## 3.3 SSE Bridge (`/v1/events/sse`)
 
 
 ```bash
-curl -sS -N "$TORII_BASE/v2/events/sse?topic=pipeline&status=queued,applied" \
+curl -sS -N "$TORII_BASE/v1/events/sse?topic=pipeline&status=queued,applied" \
   -H "Authorization: Bearer $API_TOKEN" \
   -H "Accept: text/event-stream" | tee artifacts/torii/pipeline_validation/sse.log
 ```
@@ -78,7 +78,7 @@ The stream must emit `event: pipeline` entries with a JSON body matching `Pipeli
 Use the NRPC transport (`POST /transaction` with Norito payload wrapped in the RPC envelope) to submit the same transaction and ensure:
 
 - The RPC response matches the HTTP status path (no additional error codes).
-- `/v2/pipeline/transactions/status` reflects both submissions identically.
+- `/v1/pipeline/transactions/status` reflects both submissions identically.
 
 Document the RPC request/response in the evidence bundle and reference the schema anchored in `docs/source/torii/nrpc_spec.md`.
 
@@ -110,4 +110,4 @@ Store artefacts under `artifacts/torii/pipeline_validation/<timestamp>/`:
 3. File a short summary in `docs/source/sdk/swift/status/swift_weekly_digest.md` noting which hashes were exercised and whether any retries or SSE gaps were observed.
 4. If validation fails, open an incident in the Torii tracker referencing the metric/log that breached expectations and rerun the checklist after remediation.
 
-Completion of these steps constitutes “/v2/pipeline staging validation” for the IOS2 milestone; subsequent runs should repeat the same artefact layout so governance can diff evidence across releases.
+Completion of these steps constitutes “/v1/pipeline staging validation” for the IOS2 milestone; subsequent runs should repeat the same artefact layout so governance can diff evidence across releases.

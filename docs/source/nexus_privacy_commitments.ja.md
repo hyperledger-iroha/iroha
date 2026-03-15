@@ -192,7 +192,7 @@ LanePrivacyCommitment::snark(id, circuit)
 
 ### オペレータ可視性
 
-Torii の `/v2/sumeragi/status` エンドポイントは `lane_governance[].privacy_commitments` 配列を公開し、
+Torii の `/v1/sumeragi/status` エンドポイントは `lane_governance[].privacy_commitments` 配列を公開し、
 オペレータと SDK が公開済み manifests と live registry を bundle を再読することなく比較できる。
 Snapshot は `crates/iroha_core/src/sumeragi/status.rs` 内で生成され、Torii の REST/JSON handlers
 (`crates/iroha_torii/src/routing.rs`) からエクスポートされ、各クライアント

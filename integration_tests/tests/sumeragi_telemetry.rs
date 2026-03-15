@@ -3,7 +3,7 @@
 //!
 //! This integration test spins up an `NPoS` network with redundant collector fan-out,
 //! injects large RBC payloads with deterministic chunk loss, and then cross-checks
-//! `/v2/sumeragi/telemetry` snapshots against the Prometheus metrics surface over
+//! `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface over
 //! multiple block heights. The goal is to ensure operators can rely on the telemetry
 //! payload even when collectors need redundant fan-out to make progress.
 
@@ -151,7 +151,7 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
     let http = HttpClient::new();
     let telemetry_url = client
         .torii_url
-        .join("v2/sumeragi/telemetry")
+        .join("v1/sumeragi/telemetry")
         .wrap_err("compose telemetry URL")?;
     let metrics_url = client
         .torii_url

@@ -103,7 +103,7 @@ forma segura.
 El gateway ahora expone envelopes JSON concretos que mapean uno‑a‑uno a los
 tipos Norito implementados en `crates/iroha_data_model::fraud`:
 
-- **Entrada de riesgo** – `POST /v2/fraud/query` acepta el esquema
+- **Entrada de riesgo** – `POST /v1/fraud/query` acepta el esquema
   `RiskQuery`:
   - `query_id` (`[u8; 32]`, codificado en hex)
   - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
@@ -115,7 +115,7 @@ tipos Norito implementados en `crates/iroha_data_model::fraud`:
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; incluye `tenant_id`, `session_id` opcional y
     `reason` opcional)
-- **Decisión de riesgo** – `POST /v2/fraud/assessment` consume el payload
+- **Decisión de riesgo** – `POST /v1/fraud/assessment` consume el payload
   `FraudAssessment` (también reflejado en los exports de gobernanza):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (enum `AssessmentDecision`), `rule_outcomes`

@@ -23,7 +23,7 @@ ejecuciones locales pueden cargarlos desde exports del shell.
 
 ##Requisitos previos- Nodo 18.18+ con `npm` o `pnpm`.
 - `sorafs_cli` desde `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL de Torii que exponen `/v2/sorafs/*` mas una cuenta/clave privada de autoridad que pueda enviar manifiestos y alias.
+- URL de Torii que exponen `/v1/sorafs/*` mas una cuenta/clave privada de autoridad que pueda enviar manifiestos y alias.
 - Emisor OIDC (GitHub Actions, GitLab, identidad de carga de trabajo, etc.) para emitir un `SIGSTORE_ID_TOKEN`.
 - Opcional: `examples/sorafs_cli_quickstart.sh` para simulacros y `docs/source/sorafs_ci_templates.md` para scaffolding de flujos de trabajo de GitHub/GitLab.
 - Configura las variables OAuth de Try it (`DOCS_OAUTH_*`) y ejecuta la
@@ -802,7 +802,7 @@ Configure los siguientes secretos/variables del repositorio antes de disparar el
 
 | Nombre | propuesta |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Host Torii que exponen `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Host Torii que exponen `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificador de época registrado con presentaciones. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autoridad de firma para el sometimiento del manifiesto. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Tupla de alias enlazado al manifiesto cuando `perform_submit` es `true`. |

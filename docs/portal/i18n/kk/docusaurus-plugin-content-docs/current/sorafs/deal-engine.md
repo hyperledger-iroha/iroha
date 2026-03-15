@@ -56,12 +56,12 @@ SF-8 жол картасы трегі SoraFS мәміле қозғалтқышы
 Torii арнайы соңғы нүктелерді көрсетеді, осылайша провайдерлер пайдалану туралы есеп бере алады және
 тапсырыс беру сымдарынсыз қызмет ету мерзімі:
 
-- `POST /v2/sorafs/deal/usage` `DealUsageReport` телеметриясын қабылдайды және қайтарады
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` телеметриясын қабылдайды және қайтарады
   детерминирленген бухгалтерлік есеп нәтижелері (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` ағынмен ағымдағы терезені аяқтайды
+- `POST /v1/sorafs/deal/settle` ағынмен ағымдағы терезені аяқтайды
   нәтижесінде `DealSettlementRecord` base64 кодталған `DealSettlementV1` жанында
   басқару DAG басылымына дайын.
-- Torii `/v2/events/sse` арнасы қазір `SorafsGatewayEvent::DealUsage` таратады
+- Torii `/v1/events/sse` арнасы қазір `SorafsGatewayEvent::DealUsage` таратады
   әрбір пайдалануды қорытындылайтын жазбалар (дәуір, өлшенген ГиБ-сағат, билет
   есептегіштер, детерминирленген зарядтар), `SorafsGatewayEvent::DealSettlement`
   канондық есеп айырысу журналының суретін қосатын жазбалар

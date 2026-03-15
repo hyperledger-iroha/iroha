@@ -55,7 +55,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` עם `max_span` מוגדר
      - `allow_unknown_capabilities=<true|false>` כאשר קיימים TLVs של GREASE
-   - בדקו דרך `/v2/sorafs/providers` ו-`sorafs_fetch`; יש לבצע triage לאזהרות על
+   - בדקו דרך `/v1/sorafs/providers` ו-`sorafs_fetch`; יש לבצע triage לאזהרות על
      capabilities לא מוכרות.
 3. **אימות מוכנות multi-source.**
    - הריצו `sorafs_fetch` עם `--provider-advert=<path>`; ה-CLI נכשל כעת כאשר
@@ -194,9 +194,9 @@ groups:
 - **דיווח סטטוס שבועי.** DevRel מפיץ סיכום קצר של מדדי admission, אזהרות פתוחות
   ו-deadlines קרובים.
 - **תגובה לאירועים.** כאשר alerts של `reject` מופעלים, אנשי on-call:
-  1. שולפים את ה-advert הבעייתי דרך Torii discovery (`/v2/sorafs/providers`).
+  1. שולפים את ה-advert הבעייתי דרך Torii discovery (`/v1/sorafs/providers`).
   2. מריצים מחדש את בדיקת ה-advert ב-pipeline של הספק ומשווים עם
-     `/v2/sorafs/providers` כדי לשחזר את התקלה.
+     `/v1/sorafs/providers` כדי לשחזר את התקלה.
   3. מתאמים עם הספק את החלפת ה-advert לפני refresh deadline הבא.
 - **קפיאת שינויים.** אין שינויים בסכימת capabilities במהלך R1/R2 ללא אישור ועדת
   rollout; ניסויי GREASE חייבים להתבצע בחלון התחזוקה השבועי ולהירשם ב-migration ledger.

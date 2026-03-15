@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 يعرض Torii الآن لقطات رصيد المزوّدين جنبًا إلى جنب ععرض المزيد لوحات المتابعة
 В случае с пенальти:
 
-- REST: `GET /v2/sorafs/capacity/state` в режиме `credit_ledger[*]`
+- REST: `GET /v1/sorafs/capacity/state` в режиме `credit_ledger[*]`
   Создал бухгалтерскую книгу, в которой он находится в замачивании. راجع
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana импорт: `dashboards/grafana/sorafs_capacity_penalties.json` يرسم

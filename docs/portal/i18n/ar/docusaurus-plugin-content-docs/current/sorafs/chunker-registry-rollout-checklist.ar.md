@@ -71,7 +71,7 @@ Sidebar_label: قائمة تحقق طموحها
    `torii.sorafs.discovery.admission.envelopes_dir`.
 3. تحقق من انتشار إعلانات المنظم عبر واجهة الاكتشاف:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. اختبر نقاط/خطة البيان/الشبكة:
    ```bash

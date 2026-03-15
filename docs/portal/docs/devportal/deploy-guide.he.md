@@ -26,7 +26,7 @@ translation_last_reviewed: 2026-01-01
 
 - Node 18.18+ עם `npm` או `pnpm`.
 - `sorafs_cli` מתוך `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- כתובת Torii שחושפת `/v2/sorafs/*` וכן חשבון/מפתח פרטי של רשות שיכולה להגיש
+- כתובת Torii שחושפת `/v1/sorafs/*` וכן חשבון/מפתח פרטי של רשות שיכולה להגיש
   מניפסטים ו-aliasים.
 - מנפיק OIDC (GitHub Actions, GitLab, workload identity, וכו') כדי להנפיק
   `SIGSTORE_ID_TOKEN`.
@@ -864,7 +864,7 @@ Gateway למעלה. לאחר הצמדת המניפסט:
 
 | שם | מטרה |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | שרת Torii שחושף `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | שרת Torii שחושף `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | מזהה epoch שנרשם עם submissions. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | סמכות חתימה להגשת המניפסט. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | צמד alias שנקשר למניפסט כאשר `perform_submit` הוא `true`. |

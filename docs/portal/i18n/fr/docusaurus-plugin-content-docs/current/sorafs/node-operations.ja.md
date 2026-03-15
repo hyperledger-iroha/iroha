@@ -48,7 +48,7 @@ Ce runbook guide les opérateurs pour valider un déploiement `sorafs-node` emba
   ```
 
 - Assurez-vous que le processus Torii dispose d’un accès lecture/écriture à `data_dir`.
-- Confirmez que le nœud annonce la capacité attendue via `GET /v2/sorafs/capacity/state` une fois la déclaration enregistrée.
+- Confirmez que le nœud annonce la capacité attendue via `GET /v1/sorafs/capacity/state` une fois la déclaration enregistrée.
 - Lorsque le lissage est activé, les dashboards exposent à la fois les compteurs GiB·hour/PoR bruts et lissés afin de mettre en évidence des tendances sans jitter à côté des valeurs instantanées.
 
 ### Exécution à blanc de la CLI (optionnelle)
@@ -87,8 +87,8 @@ La commande émet un résumé JSON (digest de manifest, id fournisseur, digest d
 Une fois Torii en ligne, vous pouvez récupérer les mêmes artefacts via HTTP :
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Les deux endpoints sont servis par le worker de stockage embarqué, afin que les smoke tests CLI et les sondes de gateway restent alignés.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
@@ -99,7 +99,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
 2. Soumettez le manifest en base64 :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -108,7 +108,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
 3. Récupérez les données épinglées :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -124,7 +124,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
 1. Épinglez au moins un manifest comme ci-dessus.
 2. Redémarrez le processus Torii (ou le nœud complet).
 3. Renvoyez la requête fetch. Le payload doit rester récupérable et le digest renvoyé doit correspondre à la valeur d’avant redémarrage.
-4. Inspectez `GET /v2/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifests persistés après le reboot.
+4. Inspectez `GET /v1/sorafs/storage/state` pour confirmer que `bytes_used` reflète les manifests persistés après le reboot.
 
 ## 4. Test de rejet de quota
 
@@ -139,7 +139,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
 2. Demandez un échantillon PoR :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -162,7 +162,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
 - Les dashboards doivent suivre :
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
-  - les compteurs de succès/échec PoR exposés via `/v2/sorafs/capacity/state`
+  - les compteurs de succès/échec PoR exposés via `/v1/sorafs/capacity/state`
   - les tentatives de publication de settlement via `sorafs_node_deal_publish_total{result=success|failure}`
 
 Suivre ces drills garantit que le worker de stockage embarqué peut ingérer des données, survivre aux redémarrages, respecter les quotas configurés et générer des preuves PoR déterministes avant que le nœud n’annonce sa capacité au reste du réseau.

@@ -56,12 +56,12 @@ prórroga de crédito con resultados de liquidación.
 ## Integracao com Torii
 
 Torii expoe endpoints dedicados para que proveedores informen el uso y conduzam o
-ciclo de vida do acordo sin cableado sob medida:- `POST /v2/sorafs/deal/usage` aceita telemetria `DealUsageReport` y retorna
+ciclo de vida do acordo sin cableado sob medida:- `POST /v1/sorafs/deal/usage` aceita telemetria `DealUsageReport` y retorna
   resultados deterministas de contabilidade (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` finaliza a janela atual, transmitiendo o
+- `POST /v1/sorafs/deal/settle` finaliza a janela atual, transmitiendo o
   `DealSettlementRecord` resultante junto con un `DealSettlementV1` en base64
   pronto para publicacao no DAG de gobernanza.
-- O feed `/v2/events/sse` do Torii ahora transmite registros `SorafsGatewayEvent::DealUsage`
+- O feed `/v1/events/sse` do Torii ahora transmite registros `SorafsGatewayEvent::DealUsage`
   resumindo cada envio de uso (época, GiB-horas medidos, contadores de tickets,
   cobrancas deterministas), registros `SorafsGatewayEvent::DealSettlement`
   que incluye la instantánea canónica del libro mayor de liquidación más el resumen/tamanho/base64

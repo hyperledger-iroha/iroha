@@ -6273,7 +6273,7 @@ fn unix_now() -> u64 {
 pub enum HandshakeCommand {
     /// Display the current `SoraNet` handshake summary as reported by Torii.
     Show,
-    /// Update one or more `SoraNet` handshake parameters via `/v2/config`.
+    /// Update one or more `SoraNet` handshake parameters via `/v1/config`.
     Update(HandshakeUpdateArgs),
     /// Admission token helpers (issuance, fingerprinting, revocation digests).
     #[command(subcommand)]
@@ -13829,7 +13829,7 @@ mod tests {
         assert_eq!(plan.provider_id_hex, hex::encode(provider));
         assert_eq!(plan.chain_id, "nexus");
         assert!(
-            plan.direct_car.canonical_url.contains("/direct/v2/car/"),
+            plan.direct_car.canonical_url.contains("/direct/v1/car/"),
             "direct car locator should reference the manifest digest"
         );
         assert!(plan.capabilities.direct_car_supported);
@@ -13924,8 +13924,8 @@ mod tests {
                 vanity: "3333.nexus.direct.sorafs".to_owned(),
             },
             DirectCarLocator {
-                canonical_url: "https://33333333.nexus.sorafs/direct/v2/car/feedface".to_owned(),
-                vanity_url: "https://3333.nexus.direct.sorafs/direct/v2/car/feedface".to_owned(),
+                canonical_url: "https://33333333.nexus.sorafs/direct/v1/car/feedface".to_owned(),
+                vanity_url: "https://3333.nexus.direct.sorafs/direct/v1/car/feedface".to_owned(),
             },
             ManifestCapabilitySummary::default(),
         );

@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 يعرض Torii المزوّدين جنبًا إلى جنب مع 料金台帳の管理
 ペナルティストライキ:
 
-- 残り: `GET /v2/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
+- 残り: `GET /v1/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
   台帳を浸す必要があります。やあ
   `crates/iroha_torii/src/sorafs/registry.rs`。
 - Grafana インポート: `dashboards/grafana/sorafs_capacity_penalties.json`

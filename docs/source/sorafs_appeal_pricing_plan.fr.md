@@ -58,15 +58,15 @@ This specification completes **SFM-4b2 — Appeal pricing engine**.
 - Emergency override: governance may set `surge_multiplier` (e.g., 1.25) for specific classes.
 
 ## APIs
-- `POST /v2/appeals/pricing/quote`:
+- `POST /v1/appeals/pricing/quote`:
   ```json
   { "class": "content", "backlog": 28, "evidence_size_mb": 45, "urgency": "normal", "panel_size": 7 }
   ```
   → response includes `deposit_xor`, `breakdown`, `valid_until`, `config_version`.
-- `GET /v2/appeals/pricing/config` – returns active configuration (for transparency).
-- `POST /v2/appeals/deposit` – creates deposit record, forwards funds to escrow contract (requires signature + token).
-- `GET /v2/appeals/deposit/{case_id}` – status (posted, released, slashed).
-- `GET /v2/appeals/report?period=2026-W12` – aggregated totals for treasury.
+- `GET /v1/appeals/pricing/config` – returns active configuration (for transparency).
+- `POST /v1/appeals/deposit` – creates deposit record, forwards funds to escrow contract (requires signature + token).
+- `GET /v1/appeals/deposit/{case_id}` – status (posted, released, slashed).
+- `GET /v1/appeals/report?period=2026-W12` – aggregated totals for treasury.
 - All endpoints require mTLS + OAuth scopes (`appeals.pricing.read`, `appeals.deposit.write`, etc.).
 
 ## Escrow & Settlement

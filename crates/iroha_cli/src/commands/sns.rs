@@ -1,6 +1,6 @@
 //! Sora Name Service (SNS) registrar helpers.
 //!
-//! Provides convenience wrappers around the Torii `/v2/sns/*` endpoints so
+//! Provides convenience wrappers around the Torii `/v1/sns/*` endpoints so
 //! operators can register and inspect names during the N0 closed beta without
 //! crafting raw JSON payloads.
 
@@ -45,9 +45,9 @@ static SUFFIX_CATALOG: LazyLock<SuffixCatalog> = LazyLock::new(|| {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Register a SNS name via `/v2/sns/registrations`.
+    /// Register a SNS name via `/v1/sns/registrations`.
     Register(RegisterArgs),
-    /// Renew a SNS name via `/v2/sns/registrations/{selector}/renew`.
+    /// Renew a SNS name via `/v1/sns/registrations/{selector}/renew`.
     Renew(RenewArgs),
     /// Transfer ownership of a SNS name.
     Transfer(TransferArgs),

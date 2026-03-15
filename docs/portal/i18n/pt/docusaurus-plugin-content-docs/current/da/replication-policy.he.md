@@ -41,7 +41,7 @@ requerido de epocas e replicas sem depender da intencao do emissor.
 | _Default (todas as demais classes)_ | 6 horas | 30 dias | 3 | `warm` | `da.default` |
 
 Esses valores sao embutidos em `torii.da_ingest.replication_policy` e aplicados
-a todas as submissions `/v2/da/ingest`. Torii reescreve manifests com o perfil
+a todas as submissions `/v1/da/ingest`. Torii reescreve manifests com o perfil
 de retencao imposto e emite um warning quando callers fornecem valores divergentes
 para que operadores detectem SDKs desatualizados.
 
@@ -164,5 +164,5 @@ automatica.
    que SREs possam referenciar o mesmo digest e evidencia PDP.
 
 A cobertura de regressao vive em `integration_tests/tests/da/replication_policy.rs`;
-a suite envia uma politica de retencao divergente para `/v2/da/ingest` e verifica
+a suite envia uma politica de retencao divergente para `/v1/da/ingest` e verifica
 que o manifest buscado expoe o perfil imposto em vez da intencao do caller.

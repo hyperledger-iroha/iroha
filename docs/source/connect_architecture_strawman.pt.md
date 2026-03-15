@@ -88,7 +88,7 @@ ainda captura o mandato que levou à integração da ponte:
 - Compartilhado: criptografia de documentos (troca de chaves X25519, AEAD) com derivação de chave consistente
   de acordo com a especificação Norito e fornece exemplos de testes de integração usando a ponte Rust.
 
-## Contrato de Transporte- Transporte primário: WebSocket (`/v2/connect/ws?sid=<session_id>`).
+## Contrato de Transporte- Transporte primário: WebSocket (`/v1/connect/ws?sid=<session_id>`).
 - Futuro opcional: WebRTC (TBD) – fora do escopo do espantalho inicial.
 - Estratégia de reconexão: back-off exponencial com jitter total (base 5s, máximo 60s); constantes compartilhadas em Swift, Android e JS para que as novas tentativas permaneçam previsíveis.
 - Cadência de ping/pong: batimentos cardíacos de 30s com tolerância para três pongs perdidos antes de reconectar; JS limita o intervalo mínimo em 15s para satisfazer as regras de limitação do navegador.
@@ -107,7 +107,7 @@ ainda captura o mandato que levou à integração da ponte:
 ### Identificadores e sais de sessão
 
 - `sid` é um identificador de 32 bytes derivado de `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`.  
-  DApps calculam antes de chamar `/v2/connect/session`; as carteiras ecoam em quadros `approve` para que ambos os lados possam digitar diários e telemetria de forma consistente.
+  DApps calculam antes de chamar `/v1/connect/session`; as carteiras ecoam em quadros `approve` para que ambos os lados possam digitar diários e telemetria de forma consistente.
 - O mesmo salt alimenta todas as etapas de derivação de chave para que os SDKs nunca dependam da entropia coletada da plataforma host.
 
 ### Manipulação de chaves efêmeras

@@ -1,6 +1,6 @@
 # Torii MCP API
 
-Torii exposes a native Model Context Protocol bridge at `/v2/mcp`.
+Torii exposes a native Model Context Protocol bridge at `/v1/mcp`.
 It lets MCP clients discover tools and call Torii/Connect endpoints through JSON-RPC.
 
 ## Enable And Configure
@@ -27,7 +27,7 @@ MCP is disabled by default. Enable it under `torii.mcp`.
 ```
 
 ### Configuration Fields
-- `enabled`: master switch for `/v2/mcp`.
+- `enabled`: master switch for `/v1/mcp`.
 - `max_request_bytes`: POST body limit for MCP JSON-RPC.
 - `max_tools_per_list`: pagination size for `tools/list`.
 - `profile`: `read_only`, `writer`, or `operator`.
@@ -43,8 +43,8 @@ Profile behavior:
 - `operator`: includes operator tools as well.
 
 ## Endpoints
-- `GET /v2/mcp`: capabilities payload (not JSON-RPC wrapped).
-- `POST /v2/mcp`: JSON-RPC 2.0 execution endpoint.
+- `GET /v1/mcp`: capabilities payload (not JSON-RPC wrapped).
+- `POST /v1/mcp`: JSON-RPC 2.0 execution endpoint.
 
 If `torii.mcp.enabled` is `false`, these routes are not exposed.
 
@@ -52,7 +52,7 @@ If `torii.mcp.enabled` is `false`, these routes are not exposed.
 MCP does not bypass Torii auth.
 Tool dispatch executes the same handlers as regular HTTP routes, so normal endpoint auth rules still apply.
 
-`/v2/mcp` is also covered by Torii’s API-token middleware. If `torii.require_api_token` is enabled and
+`/v1/mcp` is also covered by Torii’s API-token middleware. If `torii.require_api_token` is enabled and
 the inbound token is missing/invalid, Torii rejects before JSON-RPC dispatch.
 
 For route dispatch, MCP forwards inbound auth headers automatically:
@@ -81,7 +81,7 @@ Per-call additional headers can also be passed via `arguments.headers`.
 - `413 Payload Too Large`: request exceeds `max_request_bytes`.
 - `429 Too Many Requests`: MCP rate-limited.
 - `404 Not Found`: MCP disabled (`torii.mcp.enabled = false`).
-- `405 Method Not Allowed`: method other than GET/POST on `/v2/mcp`.
+- `405 Method Not Allowed`: method other than GET/POST on `/v1/mcp`.
 
 ## Supported JSON-RPC Methods
 - `initialize`
@@ -175,7 +175,7 @@ Tool names are stable and generated from HTTP method + path for OpenAPI-derived 
 
 Additional curated aliases are provided under `connect.*` and `iroha.*`.
 
-Streaming/internal paths are intentionally excluded from MCP tool generation (for example SSE/WS stream routes and `/v2/mcp` itself).
+Streaming/internal paths are intentionally excluded from MCP tool generation (for example SSE/WS stream routes and `/v1/mcp` itself).
 
 Do not hardcode the full tool catalog in clients.
 Use `initialize` + `tools/list` for runtime discovery.
@@ -252,7 +252,7 @@ Notes:
 - `-32603/internal_error` is used for malformed internal batch-item handling fallbacks.
 
 ## Minimal Usage Flow
-1. `GET /v2/mcp` (optional) or JSON-RPC `initialize`.
+1. `GET /v1/mcp` (optional) or JSON-RPC `initialize`.
 2. `tools/list` and cache `toolsetVersion`.
 3. Call tools with `tools/call`.
 4. For long-running work, use `tools/call_async` + `tools/jobs/get` polling.

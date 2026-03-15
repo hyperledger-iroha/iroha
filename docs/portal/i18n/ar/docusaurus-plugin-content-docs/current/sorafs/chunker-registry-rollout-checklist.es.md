@@ -74,7 +74,7 @@ Sidebar_label: قائمة التحقق من بدء تشغيل القطعة
    مرجع التدريج `torii.sorafs.discovery.admission.envelopes_dir`.
 3. التحقق من أن إعلانات الموفر يتم نشرها عبر واجهة برمجة التطبيقات للاكتشاف:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. تنفيذ نقاط نهاية البيان/الخطة مع رؤوس الإدارة:
    ```bash

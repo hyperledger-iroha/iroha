@@ -36,7 +36,7 @@ Nome do produto Norito; Não há substituto para serde/JSON.
 ## API de API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -206,7 +206,7 @@ O `compression` é o mais importante. Torii `identity` e `gzip`
   `iroha app sorafs fetch`. يمكن للمشغلين توجيهه الى artefatos manifesto + plano de bloco
   (`--manifest`, `--plan`, `--manifest-id`) **E** Bilhete de armazenamento de cartão de Torii
   Modelo `--storage-ticket`. عند استخدام مسار ticket, تقوم CLI بجلب manifest من
-  `/v2/da/manifests/<ticket>`, e o código de barras `artifacts/da/fetch_<timestamp>/`
+  `/v1/da/manifests/<ticket>`, e o código de barras `artifacts/da/fetch_<timestamp>/`
   (substituir `--manifest-cache-dir`), e usar hash no blob para `--manifest-id`,
   Use o orquestrador no `--gateway-provider`. Botões de تبقى جميع
   المتقدمة من جالب SoraFS كما هي (envelopes manifestos, تسميات العميل, guarda
@@ -215,7 +215,7 @@ O `compression` é o mais importante. Torii `identity` e `gzip`
   Verifique a disponibilidade do site `da` e verifique a disponibilidade
   orquestrador.
 - `iroha app da get-blob` يسحب manifests القياسية مباشرة من Torii عبر
-  `GET /v2/da/manifests/{storage_ticket}`. يكتب الامر
+  `GET /v1/da/manifests/{storage_ticket}`. يكتب الامر
   `manifest_{ticket}.norito` e `manifest_{ticket}.json` e `chunk_plan_{ticket}.json`
   Você pode usar `artifacts/da/fetch_<timestamp>/` (e `--output-dir`)
   Use o código `iroha app da get` (ou seja, `--manifest-id`)

@@ -172,7 +172,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` と Rust の client crate は、`--lane-id` / `LaneSelector` を渡さない場合に `lane_id` フィールドを省略します。queue router はそのため `default_lane` にフォールバックします。非デフォルト lane を狙うときだけ `--lane-id`/`--dataspace-id` を明示してください。
 - **JS/Swift/Android.** 最新の SDK リリースでは `laneId`/`lane_id` を任意として扱い、`/status` で告知された値にフォールバックします。ステージングと本番でルーティングポリシーを同期し、モバイルアプリが緊急再設定を不要にできるようにしてください。
-- **Pipeline/SSE tests.** トランザクションイベントフィルタは `tx_lane_id == <u32>` の述語を受け付けます（`docs/source/pipeline.md` を参照）。`/v2/pipeline/events/transactions` にそのフィルタで購読し、lane を明示せずに送信した書き込みが fallback lane id で到達することを確認してください。
+- **Pipeline/SSE tests.** トランザクションイベントフィルタは `tx_lane_id == <u32>` の述語を受け付けます（`docs/source/pipeline.md` を参照）。`/v1/pipeline/events/transactions` にそのフィルタで購読し、lane を明示せずに送信した書き込みが fallback lane id で到達することを確認してください。
 
 ## 7. 監視性とガバナンスのフック
 

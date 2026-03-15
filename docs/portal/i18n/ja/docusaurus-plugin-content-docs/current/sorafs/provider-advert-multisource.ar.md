@@ -64,7 +64,7 @@ SDK は SoraFS です。
 ## フィクスチャ
 
 - ペイロード数は `range_capability` و`stream_budget` و`transport_hints` です。
-  `/v2/sorafs/providers` の備品の確認يجب أن تتضمن
+  `/v1/sorafs/providers` の備品の確認يجب أن تتضمن
   JSON は、ヒントを示します。
 - `cargo xtask sorafs-admission-fixtures` ストリーム予算とトランスポートのヒント
   アーティファクト JSON は、JSON を使用して作成されます。
@@ -74,7 +74,7 @@ SDK は SoraFS です。
 
 ## كامل المُنسق وTorii
 
-- يعيد Torii `/v2/sorafs/providers` بيانات قدرة النطاق المحللة مع
+- يعيد Torii `/v1/sorafs/providers` بيانات قدرة النطاق المحللة مع
   `stream_budget` و`transport_hints`。ダウングレード عندما يحذف
   重要な問題は、次のとおりです。
 - يفرض المُنسق متعدد المصادر (`sorafs_car::multi_fetch`) حدود النطاق ومحاذاة

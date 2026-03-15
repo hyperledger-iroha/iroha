@@ -68,7 +68,7 @@ SoraFS 运行手册。
 ## 工装和固定装置
 
 - 提供商广告负载必须包含 `range_capability`、`stream_budget` 和
-  `transport_hints` 元数据。通过 `/v2/sorafs/providers` 响应进行验证并
+  `transport_hints` 元数据。通过 `/v1/sorafs/providers` 响应进行验证并
   入场装置； JSON 摘要应包括解析的功能，
   流预算和用于遥测摄取的提示数组。
 - `cargo xtask sorafs-admission-fixtures` 表面流预算和传输
@@ -80,7 +80,7 @@ SoraFS 运行手册。
 
 ## Orchestrator 和 Torii 集成
 
-- Torii `/v2/sorafs/providers` 返回解析的范围能力元数据
+- Torii `/v1/sorafs/providers` 返回解析的范围能力元数据
   与 `stream_budget` 和 `transport_hints`。降级警告在以下情况下触发：
   提供者省略新的元数据，网关范围端点强制执行相同的元数据
   直接客户的限制。

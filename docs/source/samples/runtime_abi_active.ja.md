@@ -11,7 +11,7 @@ translator: manual
 # ランタイム ABI — アクティブなバージョン（Torii）
 
 エンドポイント
-- `GET /v2/runtime/abi/active`
+- `GET /v1/runtime/abi/active`
 
 レスポンス（初回リリース・単一 ABI）
 ```json

@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-02-07
 
 | Требование | Детали |
 |------------|--------|
-| Протоколы | REST под `/v2/sns/*` и gRPC сервис `sns.v1.Registrar`. Оба принимают Norito-JSON (`application/json`) и двойной Norito-RPC (`application/x-norito`). |
+| Протоколы | REST под `/v1/sns/*` и gRPC сервис `sns.v1.Registrar`. Оба принимают Norito-JSON (`application/json`) и двойной Norito-RPC (`application/x-norito`). |
 | Авторизация | `Authorization: Bearer` токены или сертификаты mTLS, выданные по суффиксу steward. Чувствительные к управлению эндпоинты (замораживание/разблокирование, зарезервированные назначения) требуют `scope=sns.admin`. |
 | Ограничения | регистратор делит сегменты `torii.preauth_scheme_limits` с JSON, вызывающими плюс лимиты всплеска по суффиксу: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
 | Телеметрия | Torii публикует `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` для обработчиков регистратора (фильтр по `scheme="norito_rpc"`); API также увеличивает `sns_registrar_status_total{result, suffix_id}`. |
@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Конечная точка | Метод | Полезная нагрузка | Описание |
 |----------|-------|---------|----------|
-| `/v2/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрешает ценовой уровень, впоследствии доказательства платежа/управления, испускает события реестра. |
-| `/v2/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | Продлевает срок. Применяет окно благодати/искупления из политики. |
-| `/v2/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Передает воздействие после прикрепления согласования управления. |
-| `/v2/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Заменяет набор контроллеров; впоследствии подписанные адреса аккаунтов. |
-| `/v2/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозить опекуна/совета. Требует билет опекуна и ссылку на список управления. |
-| `/v2/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить после ограничения; Убежден, что отмена совета зафиксирована. |
-| `/v2/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | Назначение зарезервированных имен стюарда/совета. |
-| `/v2/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
-| `/v2/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace и т. д.). |**Селектор кодирования:** сегмент `{selector}` принимает I105, сжатый (`sora`) или канонический шестнадцатеричный формат по ADDR-5; Torii нормализуется через `NameSelectorV1`.
+| `/v1/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрешает ценовой уровень, впоследствии доказательства платежа/управления, испускает события реестра. |
+| `/v1/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | Продлевает срок. Применяет окно благодати/искупления из политики. |
+| `/v1/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Передает воздействие после прикрепления согласования управления. |
+| `/v1/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Заменяет набор контроллеров; впоследствии подписанные адреса аккаунтов. |
+| `/v1/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозить опекуна/совета. Требует билет опекуна и ссылку на список управления. |
+| `/v1/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить после ограничения; Убежден, что отмена совета зафиксирована. |
+| `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | Назначение зарезервированных имен стюарда/совета. |
+| `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
+| `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace и т. д.). |**Селектор кодирования:** сегмент `{selector}` принимает I105, сжатый (`sora`) или канонический шестнадцатеричный формат по ADDR-5; Torii нормализуется через `NameSelectorV1`.
 
 **Модель ошибок:** все эндпоинты возвращают Norito JSON с `code`, `message`, `details`. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` должен поддерживать корректную запись `GovernanceHookV1` (идентификатор предложения, хэши голосования, управляющий/опекун бесплатной почты). Каждый просто отражает соответствующий эндпоинт `/v2/sns/registrations/{selector}/...`, чтобы операторы могли воспроизвести точные поверхности Torii, которые будут хранить SDK.
+`--governance-json` должен поддерживать корректную запись `GovernanceHookV1` (идентификатор предложения, хэши голосования, управляющий/опекун бесплатной почты). Каждый просто отражает соответствующий эндпоинт `/v1/sns/registrations/{selector}/...`, чтобы операторы могли воспроизвести точные поверхности Torii, которые будут хранить SDK.
 
 ## 4. сервис gRPC
 
@@ -211,7 +211,7 @@ Wire-формат: хеш-схемы Norito на этапе компиляции
 
 Torii последние доказательства, проверяя:
 
-1. Идентификатор предложения существует в реестре управления (`/v2/governance/proposals/{id}`) и статусе `Approved`.
+1. Идентификатор предложения существует в реестре управления (`/v1/governance/proposals/{id}`) и статусе `Approved`.
 2. Хеши случился с нарисованными документами.
 3. Подписки стюарда/опекуна ссылаются на ожидаемые публичные ключи из `SuffixPolicyV1`.
 
@@ -219,7 +219,7 @@ Torii последние доказательства, проверяя:
 
 ## 6. Примеры рабочих процессов
 
-### 6.1 Стандартная регистрация1. Клиент запрашивает `/v2/sns/policies/{suffix_id}`, чтобы получить цены, льготы и доступные уровни.
+### 6.1 Стандартная регистрация1. Клиент запрашивает `/v1/sns/policies/{suffix_id}`, чтобы получить цены, льготы и доступные уровни.
 2. Клиент строит `RegisterNameRequestV1`:
    - `selector` получен из предпочитаемого I105 или второго по предпочтению сжатого (`sora`) ярлыка.
    - `term_years` в пределах политики.
@@ -246,7 +246,7 @@ Torii последние доказательства, проверяя:
 
 1. Guardian отправляет `FreezeNameRequestV1` с билетом, ссылающимся на идентификатор происшествия.
 2. Torii переводит запись в `NameStatus::Frozen`, испускает `NameFrozen`.
-3. После блокировки совет выдает блокировку; оператор отправляет DELETE `/v2/sns/registrations/{selector}/freeze` с `GovernanceHookV1`.
+3. После блокировки совет выдает блокировку; оператор отправляет DELETE `/v1/sns/registrations/{selector}/freeze` с `GovernanceHookV1`.
 4. Torii в последнее время переопределяет, испускает `NameUnfrozen`.
 
 ## 7. Проверка и коды ошибок
@@ -264,7 +264,7 @@ Torii последние доказательства, проверяя:
 ## 8. Примечания по реализации
 
 - Torii хранит ожидающие аукционы в `NameRecordV1.auction` и отклоняет прямую попытку регистрации, пока `PendingAuction`.
-- Доказательства платежа переиспользуют поступления в бухгалтерскую книгу Norito; Казначейские сервисы предоставляют вспомогательный API (`/v2/finance/sns/payments`).
+- Доказательства платежа переиспользуют поступления в бухгалтерскую книгу Norito; Казначейские сервисы предоставляют вспомогательный API (`/v1/finance/sns/payments`).
 - SDK должен обернуть эти эндпоинты строго типизированными помощниками, чтобы кошельки могли показывать понятные причины ошибок (`ERR_SNS_RESERVED` и т. д.).
 
 ## 9. Следующие шаги

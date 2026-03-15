@@ -42,7 +42,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ### Calendrier حتمية
 
-Le mémo de l'article concerne le luminaire du `fixtures/confidential/encrypted_payload_v1.json`. L'enveloppe v1 est également compatible avec les SDK et les SDK. Utilisez le modèle de données Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) et Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) pour le montage en utilisant l'encodage Norito. الاخطاء وتغطية الانحدار مع تطور الكودك.Les SDK Swift utilisent Shield pour la colle JSON comme : `ShieldRequest` pour la note d'engagement de 32 pour la charge utile et les métadonnées de débit. Utilisez `IrohaSDK.submit(shield:keypair:)` (`submitAndWait`) pour vous connecter à `/v2/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال engagements, ويمرر `ConfidentialEncryptedPayload` الى Norito codeur, ويعكس layout `zk::Shield` الموضح ادناه Il s'agit d'une application de Rust.
+Le mémo de l'article concerne le luminaire du `fixtures/confidential/encrypted_payload_v1.json`. L'enveloppe v1 est également compatible avec les SDK et les SDK. Utilisez le modèle de données Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) et Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) pour le montage en utilisant l'encodage Norito. الاخطاء وتغطية الانحدار مع تطور الكودك.Les SDK Swift utilisent Shield pour la colle JSON comme : `ShieldRequest` pour la note d'engagement de 32 pour la charge utile et les métadonnées de débit. Utilisez `IrohaSDK.submit(shield:keypair:)` (`submitAndWait`) pour vous connecter à `/v1/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال engagements, ويمرر `ConfidentialEncryptedPayload` الى Norito codeur, ويعكس layout `zk::Shield` الموضح ادناه Il s'agit d'une application de Rust.
 
 ## Engagements et contrôle des engagements
 - تكشف رؤوس الكتل `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`؛ يشارك digest في hash الاجماع ويجب ان يساوي عرض السجل المحلي لقبول الكتلة.
@@ -70,7 +70,7 @@ Le mémo de l'article concerne le luminaire du `fixtures/confidential/encrypted_
 
 #### مراقبة الانتقالات عبر Torii
 
-Utilisez la fonction `GET /v2/confidential/assets/{definition_id}/transitions` pour `AssetConfidentialPolicy`. La charge utile JSON est associée à l'identifiant d'actif et est associée à `current_mode`. ذلك الارتفاع (نوافذ التحويل تبلغ مؤقتا `Convertible`) et ومعرفات معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
+Utilisez la fonction `GET /v1/confidential/assets/{definition_id}/transitions` pour `AssetConfidentialPolicy`. La charge utile JSON est associée à l'identifiant d'actif et est associée à `current_mode`. ذلك الارتفاع (نوافذ التحويل تبلغ مؤقتا `Convertible`) et ومعرفات معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
 
 - `transition_id` - descripteur d'audit المعاد من `ScheduleConfidentialPolicyTransition`.
 -`previous_mode`/`new_mode`.
@@ -113,7 +113,7 @@ Utilisez la fonction `GET /v2/confidential/assets/{definition_id}/transitions` p
 
 1. **Préparer les registres :** فعّل كل مدخلات verifier والمعلمات المشار اليها في السياسة المستهدفة. تعلن العقد `conf_features` الناتجة حتى يتمكن peers من التحقق من التوافق.
 2. **Étapez la transition :** قدّم `ScheduleConfidentialPolicyTransition` ou `effective_height` ou `policy_transition_delay_blocks`. عند الانتقال نحو `ShieldedOnly` حدد نافذة تحويل (`window ≥ policy_transition_window_blocks`).
-3. **Publiez les instructions de l'opérateur :** Téléchargez le runbook `transition_id` et la rampe d'accès/sortie. تشترك المحافظ والمدققون في `/v2/confidential/assets/{id}/transitions` لمعرفة ارتفاع فتح النافذة.
+3. **Publiez les instructions de l'opérateur :** Téléchargez le runbook `transition_id` et la rampe d'accès/sortie. تشترك المحافظ والمدققون في `/v1/confidential/assets/{id}/transitions` لمعرفة ارتفاع فتح النافذة.
 4. **Application de la fenêtre :** Utilisez le runtime pour `Convertible` et `PolicyTransitionWindowOpened { transition_id }` pour créer des applications. الحوكمة المتعارضة.
 5. **Finaliser ou abandonner :** Utilisez le moteur d'exécution `effective_height` pour le moment (ou le runtime). النجاح يقلب السياسة للوضع المطلوب؛ Il s'agit du `PolicyTransitionPrerequisiteFailed`, qui est en cours de réalisation.
 6. **Mises à niveau du schéma :** Utilisez la ligne de commande pour télécharger la CLI (`asset_definition.v2`) et la CLI. `confidential_policy` est un manifeste manifeste. توجه وثائق ترقية genesis المشغلين لاضافة اعدادات السياسة وبصمات registre قبل اعادة تشغيل المدققين.La genèse est une histoire de la genèse. مع ذلك تتبع نفس قائمة التحقق عند تغيير الاوضاع بعد الاطلاق كي تبقى نوافذ التحويل حتمية وتمتلك المحافظ وقتا للتكيف.
@@ -210,7 +210,7 @@ Utilisez la fonction `GET /v2/confidential/assets/{definition_id}/transitions` p
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (clé d'annulation) ، `ivk` (clé de visualisation entrante) ، `ovk` (clé de visualisation sortante) ، `fvk`.
 - Notes sur les charges utiles de l'AEAD et de l'ECDH؛ Il s'agit des clés de vue de l'auditeur et des sorties.
-- Lignes CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, fonctions pour les mémos et `iroha app zk envelope`. Les enveloppes Norito sont disponibles. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v2/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.## الغاز، الحدود، وضوابط DoS
+- Lignes CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, fonctions pour les mémos et `iroha app zk envelope`. Les enveloppes Norito sont disponibles. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.## الغاز، الحدود، وضوابط DoS
 - جدول gaz حتمي:
   - Halo2 (Plonkish) : gaz `250_000` + gaz `2_000` pour la contribution du public.
   - `5` gaz pour la preuve, pour l'annulation (`300`) et l'engagement (`500`).

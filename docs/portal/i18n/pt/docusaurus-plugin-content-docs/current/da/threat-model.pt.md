@@ -243,7 +243,7 @@ whitelist de provedores maliciosos, ou alertas surpresa.
 - O replay cache e a persistência de cursores aterrissaram em DA-2. Veja a
   implementação em `crates/iroha_core/src/da/replay_cache.rs` (lógica do cache)
   e a integração Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia verificações de
-  impressão digital via `/v2/da/ingest`.
+  impressão digital via `/v1/da/ingest`.
 - As simulações de streaming PDP/PoTR são exercitadas via o aproveitamento proof-stream
   em `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisição
   PoR/PDP/PoTR e cenários de falhas animadas no modelo de ameacas.

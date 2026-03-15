@@ -88,7 +88,7 @@ körpü inteqrasiyasına səbəb olan mandatı hələ də ələ keçirir:
 - Paylaşılan: Ardıcıl açar əldə etmə ilə sənəd şifrələməsi (X25519 açar mübadiləsi, AEAD)
   Norito spesifikasiyasına uyğun olaraq və Rust körpüsündən istifadə edərək nümunə inteqrasiya testlərini təmin edin.
 
-## Nəqliyyat Müqaviləsi- Əsas nəqliyyat: WebSocket (`/v2/connect/ws?sid=<session_id>`).
+## Nəqliyyat Müqaviləsi- Əsas nəqliyyat: WebSocket (`/v1/connect/ws?sid=<session_id>`).
 - Könüllü gələcək: WebRTC (TBD) – ilkin strawman üçün əhatə dairəsi xaricindədir.
 - Yenidən əlaqə strategiyası: tam titrəmə ilə eksponensial geri çəkilmə (baza 5s, maksimum 60s); Swift, Android və JS-də paylaşılan sabitlər, beləliklə təkrar cəhdlər proqnozlaşdırıla bilər.
 - Ping/ponq kadansı: yenidən qoşulmazdan əvvəl buraxılmış üç tennis üçün tolerantlıqla 30s ürək döyüntüsü; JS brauzerin tənzimləmə qaydalarını təmin etmək üçün minimum intervalı 15 saniyəyə qədər sıxışdırır.
@@ -107,7 +107,7 @@ körpü inteqrasiyasına səbəb olan mandatı hələ də ələ keçirir:
 ### Sessiya identifikatorları və duzları
 
 - `sid` `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)`-dən əldə edilən 32 baytlıq identifikatordur.  
-  DApps onu `/v2/connect/session`-ə zəng etməzdən əvvəl hesablayır; pul kisələri onu `approve` çərçivələrində əks etdirir ki, hər iki tərəf jurnalları və telemetriyanı ardıcıl olaraq əsaslandıra bilsin.
+  DApps onu `/v1/connect/session`-ə zəng etməzdən əvvəl hesablayır; pul kisələri onu `approve` çərçivələrində əks etdirir ki, hər iki tərəf jurnalları və telemetriyanı ardıcıl olaraq əsaslandıra bilsin.
 - Eyni duz hər bir açar törəmə addımını qidalandırır ki, SDK heç vaxt ana platformadan toplanan entropiyaya etibar etmir.
 
 ### Efemer açarla işləmə

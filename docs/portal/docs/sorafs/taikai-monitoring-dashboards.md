@@ -63,7 +63,7 @@ ready for governance review:
    which routing manifest (TRM) and lineage window were active. The helper
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    will copy the spool files, emit hashes, and optionally sign the summary.
-2. Record `/v2/status` output filtered to
+2. Record `/v1/status` output filtered to
    `.telemetry.taikai_alias_rotations[]` and store it next to the spool files.
    Reviewers compare the reported `manifest_digest_hex` and window bounds with
    the copied spool state.

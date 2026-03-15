@@ -1,6 +1,6 @@
 ---
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
 ---
 
@@ -10,7 +10,7 @@ This recipe shows how to combine `bootstrapConnectPreviewSession` with the
 WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
 mirrors the Connect section of the JS SDK roadmap: it mints deterministic
 preview URIs, records queue depth telemetry, and opens the canonical
-`/v2/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
+`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
 same flow as browsers.
 
 <SampleDownload

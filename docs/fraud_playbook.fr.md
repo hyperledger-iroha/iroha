@@ -105,7 +105,7 @@ La gateway expose désormais des enveloppes JSON concrètes qui se mettent en
 correspondance un‑à‑un avec les types Norito implémentés dans
 `crates/iroha_data_model::fraud` :
 
-- **Entrée de risque** – `POST /v2/fraud/query` accepte le schéma `RiskQuery` :
+- **Entrée de risque** – `POST /v1/fraud/query` accepte le schéma `RiskQuery` :
   - `query_id` (`[u8; 32]`, encodé en hex)
   - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
   - `operation` (enum tagué correspondant à `RiskOperation` ; le discriminant
@@ -116,7 +116,7 @@ correspondance un‑à‑un avec les types Norito implémentés dans
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext` ; contient `tenant_id`, un `session_id` optionnel
     et un `reason` optionnel)
-- **Décision de risque** – `POST /v2/fraud/assessment` consomme le payload
+- **Décision de risque** – `POST /v1/fraud/assessment` consomme le payload
   `FraudAssessment` (également reflété dans les exports de gouvernance) :
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (enum `AssessmentDecision`), `rule_outcomes`
@@ -124,7 +124,7 @@ correspondance un‑à‑un avec les types Norito implémentés dans
   - `generated_at_ms`
   - `signature` (base64 optionnel englobant l’évaluation `FraudAssessment`
     encodée en Norito)
-- **Export de gouvernance** – `GET /v2/fraud/governance/export` renvoie la
+- **Export de gouvernance** – `GET /v1/fraud/governance/export` renvoie la
   structure `GovernanceExport` lorsque la feature `governance` est activée,
   incluant les paramètres actifs, le dernier enactment, la version de modèle,
   le digest de politique et l’histogramme `DecisionAggregate`.

@@ -39,7 +39,7 @@ I18NF0000004X
 འབྲེལ་མཐུན་ལྡེ་མིག་ཚུ་ ཆ་འཇོག་ལན་འདེབས་འབད་ནི་ལུ་སྒུག་སྡོད།
 
 ```swift
-let connectURL = URL(string: "wss://node.example/v2/connect/ws?sid=\(sidB64)&role=app")!
+let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
 var connectRequest = URLRequest(url: connectURL)
 connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 let connectClient = ConnectClient(request: connectRequest)

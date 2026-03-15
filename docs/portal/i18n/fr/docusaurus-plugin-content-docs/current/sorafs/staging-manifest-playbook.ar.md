@@ -75,13 +75,13 @@ Vous pouvez utiliser le chunker pour la mise en scène de la mise en scène Tori
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. استعلم عن نقطة Discovery وتأكد من ظهور الإعلان مع الأسماء المستعارة المعتمدة:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    Utilisez `profile_aliases` pour `"sorafs.sf1@1.0.0"`.

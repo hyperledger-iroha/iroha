@@ -215,7 +215,7 @@ _اخر مراجعة: 19.01.2026 -- المراجعة القادمة المجدو
 
 **Вот это:**- кэш повторов, созданный в DA-2. راجع التنفيذ في
   `crates/iroha_core/src/da/replay_cache.rs` (кэш) или Torii
-  `crates/iroha_torii/src/da/ingest.rs` Проверка отпечатка пальца `/v2/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs` Проверка отпечатка пальца `/v1/da/ingest`.
 - Для потоковой передачи PDP/PoTR используется протокол проверки потока.
   `crates/sorafs_car/tests/sorafs_cli.rs`, а также подключение PoR/PDP/PoTR.
   Он сказал, что в Нэнси-Айленде.

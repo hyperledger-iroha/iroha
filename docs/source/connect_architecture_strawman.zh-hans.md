@@ -88,7 +88,7 @@ Swift 之前发布了占位符 JSON 编码器 (`ConnectCodec.swift`)。截至 20
 - 共享：具有一致密钥派生的文档加密（X25519 密钥交换，AEAD）
   根据 Norito 规范，并使用 Rust 桥提供示例集成测试。
 
-## 运输合同- 主要传输：WebSocket (`/v2/connect/ws?sid=<session_id>`)。
+## 运输合同- 主要传输：WebSocket (`/v1/connect/ws?sid=<session_id>`)。
 - 可选的未来：WebRTC（TBD）——超出了最初稻草人的范围。
 - 重新连接策略：带完全抖动的指数退避（基本 5 秒，最大 60 秒）； Swift、Android 和 JS 之间共享常量，因此重试仍然是可预测的。
 - Ping/pong 节奏：30 秒心跳，在重新连接之前可以容忍 3 次错过的 Pong； JS 将最小间隔限制为 15 秒以满足浏览器限制规则。
@@ -107,7 +107,7 @@ Swift 之前发布了占位符 JSON 编码器 (`ConnectCodec.swift`)。截至 20
 ### 会话标识符和盐
 
 - `sid` 是从 `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` 派生的 32 字节标识符。  
-  DApp 在调用 `/v2/connect/session` 之前计算它；钱包在 `approve` 帧中回应它，因此双方可以一致地输入日志和遥测数据。
+  DApp 在调用 `/v1/connect/session` 之前计算它；钱包在 `approve` 帧中回应它，因此双方可以一致地输入日志和遥测数据。
 - 相同的盐提供每个密钥派生步骤，因此 SDK 从不依赖于从主机平台获取的熵。
 
 ### 临时密钥处理

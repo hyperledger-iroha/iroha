@@ -54,12 +54,12 @@ Nombre del producto: `sorafs.node.micropayment_*`:
 ## Mensaje Torii
 
 تعرض Torii نقاط نهاية مخصصة كي يتمكن المزوّدون من الإبلاغ عن الاستخدام وتحريك
-دورة حياة الصفقة بدون cableado:- `POST /v2/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
+دورة حياة الصفقة بدون cableado:- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
   نتائج محاسبة حتمية (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
+- `POST /v1/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
   `DealSettlementRecord` Adaptador de base `DealSettlementV1` basado en base64
   وجاهزًا للنشر في DAG الحوكمة.
-- يغذي `/v2/events/sse` في Torii آن سجلات `SorafsGatewayEvent::DealUsage`
+- يغذي `/v1/events/sse` في Torii آن سجلات `SorafsGatewayEvent::DealUsage`
   التي تلخص كل إرسال استخدام (época, ساعات GiB المقاسة, عدّادات التذاكر،
   الرسوم الحتمية) ، سجلات `SorafsGatewayEvent::DealSettlement`
   El libro mayor se basa en digest/الحجم/base64 de BLAKE3

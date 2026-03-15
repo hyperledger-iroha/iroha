@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -134,10 +134,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- ヘルパーリクエスト `POST /v2/sns/registrations` HTTP リクエスト
+- ヘルパーリクエスト `POST /v1/sns/registrations` HTTP リクエスト
   エラー 中断 ہے۔応答ログのパスを NDJSON レコードに追加します
   ہوتے ہیں۔
-- `--poll-status` 6 回の提出 ٩ے بعد `/v2/sns/registrations/{selector}` ٩و
+- `--poll-status` 6 回の提出 ٩ے بعد `/v1/sns/registrations/{selector}` ٩و
   دوبارہ クエリ کرتا ہے (زیادہ سے زیادہ `--poll-attempts`、デフォルト 5) تاکہ レコード
   見える ہونے کی تصدیق ہو۔ `--suffix-map` (JSON と `suffix_id` の「サフィックス」値)
   マップ (マップ)) ツール `{label}.{suffix}` リテラルの派生 کر سکے۔

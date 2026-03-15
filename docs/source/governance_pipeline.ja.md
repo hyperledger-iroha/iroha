@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-01-21
   モード不一致は拒否され、ロックの作成/延長は両モードで単調。ZK と plain の再投票に
   対する回帰テストがある。
 - バリデータの不正行為はエビデンスパイプライン
-  (`/v2/sumeragi/evidence*`, CLI ヘルパー) を通じて処理され、
+  (`/v1/sumeragi/evidence*`, CLI ヘルパー) を通じて処理され、
   `NextMode` + `ModeActivationHeight` により joint‑consensus ハンドオフが強制される。
 - 保護名前空間、ランタイムアップグレードフック、ガバナンスマニフェストの admission は
   `governance_api.md` に記載され、テレメトリ

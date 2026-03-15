@@ -83,7 +83,7 @@ cooldown لمدة خمس دقائق. كلا التنبيهين موجودان ف
 | `sorafs_node_por_failure_total` | Contador | `provider_id` | عداد أحادي لعينات PoR الفاشلة. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Medidor | `provider` | مقايس Prometheus حالية للبايتات المستخدمة وعمق الطابور وعدادات PoR الجارية. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Medidor | `provider` | Você pode usar/desativar o código de barras no final do processo. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | Faça o download do seu cartão de crédito em `/v2/sorafs/por/ingestion/{manifest}` لتغذية لوحة/تنبيه "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | Faça o download do seu cartão de crédito em `/v1/sorafs/por/ingestion/{manifest}` لتغذية لوحة/تنبيه "PoR Stalls". |
 
 ### Prova de recuperação oportuna (PoTR) e SLA الشرائح
 

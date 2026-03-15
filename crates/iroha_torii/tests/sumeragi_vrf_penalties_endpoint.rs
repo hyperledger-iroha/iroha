@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level tests for `GET /v2/sumeragi/vrf/penalties/{epoch}`.
+//! Router-level tests for `GET /v1/sumeragi/vrf/penalties/{epoch}`.
 #![cfg(feature = "telemetry")]
 
 use axum::{
@@ -14,7 +14,7 @@ use tower::ServiceExt as _;
 
 fn vrf_penalties_router() -> Router {
     Router::new().route(
-        "/v2/sumeragi/vrf/penalties/:epoch",
+        "/v1/sumeragi/vrf/penalties/:epoch",
         get(|path: axum::extract::Path<String>| async move {
             iroha_torii::handle_v1_sumeragi_vrf_penalties(path)
                 .await
@@ -37,7 +37,7 @@ async fn sumeragi_vrf_penalties_endpoint_returns_report() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/sumeragi/vrf/penalties/{epoch}"))
+                .uri(format!("/v1/sumeragi/vrf/penalties/{epoch}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -99,7 +99,7 @@ async fn sumeragi_vrf_penalties_endpoint_returns_empty_when_missing() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/sumeragi/vrf/penalties/{missing_epoch}"))
+                .uri(format!("/v1/sumeragi/vrf/penalties/{missing_epoch}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -150,7 +150,7 @@ async fn sumeragi_vrf_penalties_endpoint_parses_hex_epochs() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sumeragi/vrf/penalties/0x36")
+                .uri("/v1/sumeragi/vrf/penalties/0x36")
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -200,7 +200,7 @@ translator: machine-google-reviewed
 - Mint по псевдониму + компоненты аккаунта:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Разрешить псевдоним канонической помощи:
-  - `POST /v2/assets/aliases/resolve` с JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` с JSON `{ "alias": "pkr#ubl@sbp" }`
 
 Примечание по миграции:
 — Текстовые идентификаторы определения активов `name#domain` намеренно не поддерживаются в первом выпуске.

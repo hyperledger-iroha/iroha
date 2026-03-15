@@ -30,7 +30,7 @@ Este runbook guía a los operadores de gobernanza para presentar disputas de cap
 ## 1. Evaluar el incidente
 
 - **Condiciones de activación:** detección de incumplimiento de SLA (tiempo de actividad/fallo de PoR), déficit de replicación o desacuerdo de facturación.
-- **Confirmar telemetría:** captura snapshots de `/v2/sorafs/capacity/state` y `/v2/sorafs/capacity/telemetry` para el proveedor.
+- **Confirmar telemetría:** captura snapshots de `/v1/sorafs/capacity/state` y `/v1/sorafs/capacity/telemetry` para el proveedor.
 - **Notificar a las partes interesadas:** Storage Team (operaciones del proveedor), Governance Council (órgano decisorio), Observability (actualizaciones de dashboards).
 
 ## 2. Preparar el paquete de evidencias
@@ -78,7 +78,7 @@ Este runbook guía a los operadores de gobernanza para presentar disputas de cap
    ```
 
 3. Revisa `dispute_summary.json` (confirma tipo, digest de evidencias y timestamps).
-4. Envía el JSON de la solicitud a Torii `/v2/sorafs/capacity/dispute` a través de la cola de transacciones de gobernanza. Captura el valor de respuesta `dispute_id_hex`; ancla las acciones de revocación posteriores y los informes de auditoría.
+4. Envía el JSON de la solicitud a Torii `/v1/sorafs/capacity/dispute` a través de la cola de transacciones de gobernanza. Captura el valor de respuesta `dispute_id_hex`; ancla las acciones de revocación posteriores y los informes de auditoría.
 
 ## 4. Evacuación y revocación
 

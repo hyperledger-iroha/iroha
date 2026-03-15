@@ -91,12 +91,12 @@ This specification completes **SFM-4b3 — Secure evidence viewer tooling**.
   - Watermark generation failure.
 
 ## APIs
-- `POST /v2/evidence/session` – initiate session; returns signed URLs + overlay metadata.
-- `GET /v2/evidence/manifest/{case_id}` – returns list of evidence items user can access.
-- `POST /v2/evidence/acknowledge` – juror acknowledges trauma warning.
-- `POST /v2/evidence/annotation` – juror adds annotation (retention 90 days).
-- `POST /v2/evidence/log` – fallback logging endpoint if client offline (sends pending events).
-- `GET /v2/evidence/audit?case_id=` – authorized audit export.
+- `POST /v1/evidence/session` – initiate session; returns signed URLs + overlay metadata.
+- `GET /v1/evidence/manifest/{case_id}` – returns list of evidence items user can access.
+- `POST /v1/evidence/acknowledge` – juror acknowledges trauma warning.
+- `POST /v1/evidence/annotation` – juror adds annotation (retention 90 days).
+- `POST /v1/evidence/log` – fallback logging endpoint if client offline (sends pending events).
+- `GET /v1/evidence/audit?case_id=` – authorized audit export.
 - Strict auth via mTLS + JWT scopes (`evidence.view`, `evidence.audit`).
 
 ## Security & Privacy

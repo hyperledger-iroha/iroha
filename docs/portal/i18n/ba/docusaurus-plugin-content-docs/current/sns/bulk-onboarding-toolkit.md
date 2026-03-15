@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -143,7 +143,7 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Ярҙамсыһы бер тапҡыр үтенескә һәм 2019 йылда аборттарҙы бер тапҡыр 2018-се `POST /v2/sns/registrations` сығара.
+- Ярҙамсыһы бер тапҡыр үтенескә һәм 2019 йылда аборттарҙы бер тапҡыр 2018-се `POST /v1/sns/registrations` сығара.
   беренсе HTTP хатаһы. Яуаптар лог юлына ҡушыла, тип NDJSON
   яҙмалары.
 - I18NI00000000064X ҡабаттан эҙләүҙәр I18NI0000000065X һәр береһенән һуң

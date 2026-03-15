@@ -31,7 +31,7 @@ Sidebar_label: Открыть
 
 ## إعدادات البيئة
 
-- Для запуска приложения CLI (`POST /v2/sorafs/proof/stream`) используйте CLI. إصدار ملخصات التليمترية.
+- Для запуска приложения CLI (`POST /v1/sorafs/proof/stream`) используйте CLI. إصدار ملخصات التليمترية.
 - Установите `sorafs_alias_cache` и откройте интерфейс командной строки `iroha_config`. Ошибка (`sorafs_cli manifest submit --alias-*`).
 - Он сказал, что он (Джон Бэнхан اعتماد Torii) عبر مدير أسرار آمن.
 - Для получения дополнительной информации (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) установите флажок Prometheus/OTel الخاصة بك.

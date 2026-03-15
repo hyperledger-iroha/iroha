@@ -80,7 +80,7 @@ SF-4 מספק את חוזה Pin Registry ואת שירותי התשתית התו
 
 | רכיב | משימה | בעלים |
 |------|-------|-------|
-| שירות Torii | לחשוף `/v2/sorafs/pin` (submit), `/v2/sorafs/pin/{cid}` (lookup), `/v2/sorafs/aliases` (list/bind), `/v2/sorafs/replication` (orders/receipts). לספק עימוד + סינון. | Networking TL / Core Infra |
+| שירות Torii | לחשוף `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). לספק עימוד + סינון. | Networking TL / Core Infra |
 | אטסטציה | לכלול גובה/האש של registry בתשובות; להוסיף מבנה אטסטציה Norito לצריכת SDKs. | Core Infra |
 | CLI | להרחיב `sorafs_manifest_stub` או CLI חדש `sorafs_pin` עם `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | ליצור bindings לקוח (Rust/Go/TS) מסכמת Norito; להוסיף בדיקות אינטגרציה. | SDK Teams |
@@ -137,9 +137,9 @@ Dashboards:
 כל פריט צ'ק-ליסט תחת SF-4 חייב להפנות לתוכנית זו בעת התקדמות.
 חזית ה-REST מספקת כעת נקודות קצה של רשימה עם אטסטציה:
 
-- `GET /v2/sorafs/pin` ו-`GET /v2/sorafs/pin/{digest}` מחזירות manifests עם
+- `GET /v1/sorafs/pin` ו-`GET /v1/sorafs/pin/{digest}` מחזירות manifests עם
   alias bindings, הזמנות שכפול ואובייקט אטסטציה שמופק מה-hash של הבלוק האחרון.
-- `GET /v2/sorafs/aliases` ו-`GET /v2/sorafs/replication` מציגות קטלוג alias פעיל
+- `GET /v1/sorafs/aliases` ו-`GET /v1/sorafs/replication` מציגות קטלוג alias פעיל
   ו-backlog של הזמנות שכפול עם עימוד עקבי וסינוני סטטוס.
 
 ה-CLI עוטף קריאות אלו (`iroha app sorafs pin list`, `pin show`, `alias list`,

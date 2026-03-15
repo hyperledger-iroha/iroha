@@ -66,7 +66,7 @@ Regressiya qamrovi yashaydi
 ## Asboblar va jihozlar
 
 - Provayder reklama yuklamalari orasida `range_capability`, `stream_budget` va
-  `transport_hints` metama'lumotlari. `/v2/sorafs/providers` javoblari orqali tasdiqlang va
+  `transport_hints` metama'lumotlari. `/v1/sorafs/providers` javoblari orqali tasdiqlang va
   qabul qilish moslamalari; JSON xulosalari tahlil qilingan qobiliyatni o'z ichiga olishi kerak,
   oqim byudjeti va telemetriyani qabul qilish uchun maslahat massivlari.
 - `cargo xtask sorafs-admission-fixtures` oqim byudjetlari va transportni ko'rsatadi
@@ -78,7 +78,7 @@ Regressiya qamrovi yashaydi
 
 ## Orchestrator va Torii integratsiyasi
 
-- Torii `/v2/sorafs/providers` tahlil qilingan diapazon qobiliyati metama'lumotlarini qaytaradi
+- Torii `/v1/sorafs/providers` tahlil qilingan diapazon qobiliyati metama'lumotlarini qaytaradi
   `stream_budget` va `transport_hints` bilan. Past darajali ogohlantirishlar qachon yonadi
   provayderlar yangi metama'lumotlarni o'tkazib yuboradi va shlyuz diapazonining so'nggi nuqtalari xuddi shunday qiladi
   to'g'ridan-to'g'ri mijozlar uchun cheklovlar.

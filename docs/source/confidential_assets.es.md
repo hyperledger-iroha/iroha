@@ -45,7 +45,7 @@ Los sobres para notas confidenciales ahora se envían con un accesorio canónico
 Los SDK de Swift ahora pueden emitir instrucciones de protección sin pegamento JSON personalizado: construya un
 `ShieldRequest` con compromiso de nota de 32 bytes, carga útil cifrada y metadatos de débito,
 luego llame a `IrohaSDK.submit(shield:keypair:)` (o `submitAndWait`) para firmar y transmitir el
-transacción sobre `/v2/pipeline/transactions`. El ayudante valida la duración del compromiso,
+transacción sobre `/v1/pipeline/transactions`. El ayudante valida la duración del compromiso,
 Enhebra `ConfidentialEncryptedPayload` en el codificador Norito y refleja el `zk::Shield`.
 diseño que se describe a continuación para que las billeteras se mantengan al día con Rust.## Compromisos de consenso y control de capacidades
 - Los encabezados de bloque exponen `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; el resumen participa en el hash de consenso y debe ser igual a la vista del registro local para la aceptación del bloque.
@@ -71,7 +71,7 @@ diseño que se describe a continuación para que las billeteras se mantengan al 
 - Los manifiestos de Génesis y los flujos CLI muestran las políticas actuales y pendientes. La lógica de admisión lee la política en el momento de la ejecución para confirmar que cada instrucción confidencial esté autorizada.
 - Lista de verificación de migración: consulte "Secuencia de migración" a continuación para conocer el plan de actualización por etapas que sigue Milestone M0.
 
-#### Monitoreo de transiciones a través de ToriiCarteras y auditores encuestan `GET /v2/confidential/assets/{definition_id}/transitions` para inspeccionar
+#### Monitoreo de transiciones a través de ToriiCarteras y auditores encuestan `GET /v1/confidential/assets/{definition_id}/transitions` para inspeccionar
 el activo `AssetConfidentialPolicy`. La carga útil JSON siempre incluye la información canónica.
 ID de activo, la última altura de bloque observada, el `current_mode` de la política, el modo que es
 efectivo a esa altura (las ventanas de conversión informan temporalmente `Convertible`), y el
@@ -122,7 +122,7 @@ El campo `pending_transition` programado es `null`.
 ### Secuenciación de migración
 
 2. **Etapa la transición:** Envíe `ScheduleConfidentialPolicyTransition` con un `effective_height` que respete `policy_transition_delay_blocks`. Cuando avance hacia `ShieldedOnly`, especifique una ventana de conversión (`window ≥ policy_transition_window_blocks`).
-3. **Publicar guía para el operador:** Registre el `transition_id` devuelto y haga circular un runbook de entrada y salida. Las billeteras y los auditores se suscriben a `/v2/confidential/assets/{id}/transitions` para conocer la altura de apertura de la ventana.
+3. **Publicar guía para el operador:** Registre el `transition_id` devuelto y haga circular un runbook de entrada y salida. Las billeteras y los auditores se suscriben a `/v1/confidential/assets/{id}/transitions` para conocer la altura de apertura de la ventana.
 4. **Aplicación de ventanas:** Cuando se abre la ventana, el tiempo de ejecución cambia la política a `Convertible`, emite `PolicyTransitionWindowOpened { transition_id }` y comienza a rechazar solicitudes de gobernanza conflictivas.
 5. **Finalizar o cancelar:** En `effective_height`, el tiempo de ejecución verifica los requisitos previos de la transición (suministro transparente cero, sin retiros de emergencia, etc.). El éxito cambia la política al modo solicitado; El error emite `PolicyTransitionPrerequisiteFailed`, borra la transición pendiente y deja la política sin cambios.
 6. **Actualizaciones del esquema:** Después de una transición exitosa, la gobernanza aumenta la versión del esquema de activos (por ejemplo, `asset_definition.v2`) y las herramientas CLI requieren `confidential_policy` al serializar manifiestos. Los documentos de actualización de Genesis instruyen a los operadores a agregar configuraciones de políticas y huellas digitales de registro antes de reiniciar los validadores.
@@ -238,7 +238,7 @@ paso a paso.
 - Jerarquía de derivación de claves por cuenta:
   - `sk_spend` → `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Las cargas útiles de notas cifradas utilizan AEAD con claves compartidas derivadas de ECDH; Se pueden adjuntar claves opcionales de vista del auditor a los resultados según la política de activos.
-- Adiciones de CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar notas y el asistente `iroha app zk envelope` para producir/inspeccionar sobres de notas Norito sin conexión. Torii expone el mismo flujo de derivación a través de `POST /v2/confidential/derive-keyset`, devolviendo formatos hexadecimal y base64 para que las billeteras puedan recuperar jerarquías clave mediante programación.
+- Adiciones de CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar notas y el asistente `iroha app zk envelope` para producir/inspeccionar sobres de notas Norito sin conexión. Torii expone el mismo flujo de derivación a través de `POST /v1/confidential/derive-keyset`, devolviendo formatos hexadecimal y base64 para que las billeteras puedan recuperar jerarquías clave mediante programación.
 
 ## Controles de gas, límites y DoS
 - Horario de gas determinista:

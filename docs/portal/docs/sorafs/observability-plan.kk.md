@@ -87,7 +87,7 @@ PoR/PoTR талаптарын орындау күшейген сайын.
 | `sorafs_node_por_failure_total` | Есептегіш | `provider_id` | Сәтсіз PoR үлгілері үшін монотонды есептегіш. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Өлшеуіш | `provider` | Қолданылған байттар үшін бар Prometheus өлшеуіштері, кезек тереңдігі, PoR рейс санаулары. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Өлшеуіш | `provider` | Провайдердің сыйымдылығы/жұмыс уақыты табысы туралы деректер сыйымдылық бақылау тақтасында пайда болды. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Өлшеуіш | `provider`, `manifest` | `/v2/sorafs/por/ingestion/{manifest}` сұралған сайын экспортталатын, "PoR Stalls" панелін/ескертуін беретін артта қалу тереңдігі және жиынтық ақаулық есептегіштері. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Өлшеуіш | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}` сұралған сайын экспортталатын, "PoR Stalls" панелін/ескертуін беретін артта қалу тереңдігі және жиынтық ақаулық есептегіштері. |
 
 ### Жөндеу және SLA
 

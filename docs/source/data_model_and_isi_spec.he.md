@@ -201,7 +201,7 @@ translation_last_reviewed: 2026-03-12
 - נטבע בכינוי + רכיבי חשבון:
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - פתרון כינוי לסיוע קנוני:
-  - `POST /v2/assets/aliases/resolve` עם JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` עם JSON `{ "alias": "pkr#ubl@sbp" }`
 
 הערת הגירה:
 - מזהי `name#domain` הגדרת נכסים טקסטואליים אינם נתמכים בכוונה במהדורה הראשונה.

@@ -31,7 +31,7 @@ Sidebar_label: تعليقات النشر
 
 ## إعدادات البيئة
 
-- يجب على البوابات تفعيل نقطة نهاية مؤشرات الأدلة (`POST /v2/sorafs/proof/stream`) حتى يتمكن CLI من مسح ملخصات التليميترية.
+- يجب على البوابات تفعيل نقطة نهاية مؤشرات الأدلة (`POST /v1/sorafs/proof/stream`) حتى يتمكن CLI من مسح ملخصات التليميترية.
 - اضبط لـ `sorafs_alias_cache` باستخدام القيم الافتراضية في `iroha_config` أو عبر أداة CLI المساعدة (`sorafs_cli manifest submit --alias-*`).
 - توفير رموز البريد الإلكتروني (أو بيانات موثوقة Torii) عبر مدير آمن.
 - ففعل مصدّرات التليميرية (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) وأرسلها إلى الحزمة Prometheus/OTel الخاصة بك.

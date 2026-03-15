@@ -11,13 +11,13 @@ translation_last_reviewed: 2026-01-30
 
 ---
 title: JavaScript Connect プレビュー レシピ
-description: Connect プレビューセッションを準備し、キューのテレメトリを出力し、`@iroha/iroha-js` で `/v2/connect/ws` ソケットに接続します。
+description: Connect プレビューセッションを準備し、キューのテレメトリを出力し、`@iroha/iroha-js` で `/v1/connect/ws` ソケットに接続します。
 slug: /sdks/recipes/javascript-connect-preview
 ---
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-このレシピは `bootstrapConnectPreviewSession` と `ToriiClient.openConnectWebSocket()` が公開する WebSocket ダイアラを組み合わせる方法を示します。スクリプトは JS SDK の Connect セクションの roadmap を反映し、決定的なプレビュー URI を生成し、キュー深度のテレメトリを記録し、`ws` パッケージを使って `/v2/connect/ws` のカノニカルなエンドポイントを開き、Node.js アプリがブラウザと同じフローを実行できるようにします。
+このレシピは `bootstrapConnectPreviewSession` と `ToriiClient.openConnectWebSocket()` が公開する WebSocket ダイアラを組み合わせる方法を示します。スクリプトは JS SDK の Connect セクションの roadmap を反映し、決定的なプレビュー URI を生成し、キュー深度のテレメトリを記録し、`ws` パッケージを使って `/v1/connect/ws` のカノニカルなエンドポイントを開き、Node.js アプリがブラウザと同じフローを実行できるようにします。
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"

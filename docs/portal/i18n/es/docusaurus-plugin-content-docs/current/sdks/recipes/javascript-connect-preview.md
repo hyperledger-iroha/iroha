@@ -6,12 +6,12 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 slug: /sdks/recipes/javascript-connect-preview
 title: Receta de vista previa de Connect en JavaScript
-description: Prepara sesiones de vista previa de Connect, emite telemetría de cola y abre el socket `/v2/connect/ws` con `@iroha/iroha-js`.
+description: Prepara sesiones de vista previa de Connect, emite telemetría de cola y abre el socket `/v1/connect/ws` con `@iroha/iroha-js`.
 ---
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-Esta receta muestra cómo combinar `bootstrapConnectPreviewSession` con el marcador WebSocket expuesto por `ToriiClient.openConnectWebSocket()`. El script refleja la sección Connect del roadmap del SDK JS: acuña URIs de vista previa deterministas, registra telemetría de profundidad de cola y abre el endpoint canónico `/v2/connect/ws` usando el paquete `ws` para que las apps Node.js ejerciten el mismo flujo que los navegadores.
+Esta receta muestra cómo combinar `bootstrapConnectPreviewSession` con el marcador WebSocket expuesto por `ToriiClient.openConnectWebSocket()`. El script refleja la sección Connect del roadmap del SDK JS: acuña URIs de vista previa deterministas, registra telemetría de profundidad de cola y abre el endpoint canónico `/v1/connect/ws` usando el paquete `ws` para que las apps Node.js ejerciten el mismo flujo que los navegadores.
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"

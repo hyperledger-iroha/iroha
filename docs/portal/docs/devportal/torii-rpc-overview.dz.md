@@ -32,7 +32,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v2/transactions/submit
+  https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. ཁྱོད་ཀྱི་པེ་ལོཌ་འདི་ Norito གསང་གྲངས་ (`iroha_client`, SDK གྲོགས་རམ་པ་, ཡང་ན་ ཡང་ན་ དང་ཅིག་ཁར་ རིམ་སྒྲིག་འབད།
@@ -59,7 +59,7 @@ SDK-special ལམ་སྟོན་:
    I18NI000000036X དེ་འབདཝ་ལས་ ཝིཌི་གེཊི་ཚུ་གིས་ འགྲུལ་སྐྱོད་ག་ཏེ་གཏང་ནི་ཨིན་ན་ ཤེས་ཚུགས།
 2. ཤོག་ལེབ་འདི་གུ་ ***try ** ཤོག་བྱང་ཁ་ཕྱེ། ཡང་ན་ `/reference/torii-swagger` འདི་ཁ་ཕྱེ།
    For MCP/agent flows, use `/reference/torii-mcp`.
-   པེ་ནཱལ་དང་ `POST /v2/pipeline/submit` བཟུམ་གྱི་ མཐའ་མཚམས་ཅིག་སེལ་འཐུ་འབད།
+   པེ་ནཱལ་དང་ `POST /v1/pipeline/submit` བཟུམ་གྱི་ མཐའ་མཚམས་ཅིག་སེལ་འཐུ་འབད།
 3. **ནང་དོན་-དབྱེ་བ་** ལུ་ I18NI000000039X ལུ་སོར་བསྒྱུར་འབད།, **Binary** གདམ་ཁ་རྐྱབས།
    རྩོམ་སྒྲིག་པ་, དང་ I18NI0000040X སྐྱེལ་བཙུགས་བྱས།
    (ཡང་ན་ ༢༠༠༨ ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ འབབ་ཁུངས་གང་རུང་ཅིག།

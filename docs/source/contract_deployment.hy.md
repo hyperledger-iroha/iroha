@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   ընդունված `DeployContract` առաջարկների դեմ; եթե չկա համապատասխան առաջարկ
   գործարքը մերժվում է `NotPermitted`-ով:
 
-## Torii վերջնակետեր (հատկանիշ `app_api`)- `POST /v2/contracts/deploy`
+## Torii վերջնակետեր (հատկանիշ `app_api`)- `POST /v1/contracts/deploy`
   - Հարցման մարմին՝ `DeployContractDto` (տե՛ս `docs/source/torii_contracts_api.md` դաշտի մանրամասների համար):
   - Torii-ը վերծանում է base64 օգտակար բեռը, հաշվարկում է երկու հեշերը, կառուցում է մանիֆեստ,
     և ներկայացնում է `RegisterSmartContractCode` գումարած
@@ -64,19 +64,19 @@ translator: machine-google-reviewed
   - Պատասխան՝ `{ ok, code_hash_hex, abi_hash_hex }`:
   - Սխալներ՝ անվավեր base64, չաջակցվող ABI տարբերակ, բացակայում է թույլտվությունը
     (`CanRegisterSmartContractCode`), չափի սահմանաչափը գերազանցված է, կառավարման դարպաս:
-- `POST /v2/contracts/code`
+- `POST /v1/contracts/code`
   - Ընդունում է `RegisterContractCodeDto` (հեղինակություն, անձնական բանալի, մանիֆեստ) և ներկայացնում է միայն
     `RegisterSmartContractCode`. Օգտագործեք, երբ մանիֆեստները բեմադրվում են առանձին
     բայթկոդ:
-- `POST /v2/contracts/instance`
+- `POST /v1/contracts/instance`
   - Ընդունում է `DeployAndActivateInstanceDto` (հեղինակություն, մասնավոր բանալի, անվանատարածք/պայմանագրի_id, `code_b64`, կամընտիր մանիֆեստի անտեսում) և տեղակայում է + ատոմային ակտիվացում:
-- `POST /v2/contracts/instance/activate`
+- `POST /v1/contracts/instance/activate`
   - Ընդունում է `ActivateInstanceDto` (հեղինակություն, մասնավոր բանալի, անվանատարածք, contract_id, `code_hash`) և ներկայացնում է միայն ակտիվացման հրահանգը:
-- `GET /v2/contracts/code/{code_hash}`
+- `GET /v1/contracts/code/{code_hash}`
   - Վերադարձնում է `{ manifest: { code_hash, abi_hash } }`:
     Լրացուցիչ մանիֆեստի դաշտերը պահպանվում են ներսից, բայց այստեղ բաց թողնված են a
     կայուն API:
-- `GET /v2/contracts/code-bytes/{code_hash}`
+- `GET /v1/contracts/code-bytes/{code_hash}`
   - Վերադարձնում է `{ code_b64 }`՝ պահպանված `.to` պատկերով, որը կոդավորված է որպես base64:
 
 Պայմանագրի կյանքի ցիկլի բոլոր վերջնակետերը կիսում են հատուկ տեղակայման սահմանափակիչը՝ կազմաձևված միջոցով
@@ -91,10 +91,10 @@ translator: machine-google-reviewed
 
 ## Կառավարման ինտեգրում և պաշտպանված անունների տարածքներ- Սահմանեք մաքսային պարամետրը `gov_protected_namespaces` (անվան տարածության JSON զանգված
   strings) մուտքի դարպասը միացնելու համար: Torii-ը բացահայտում է օգնականներին տակ
-  `/v2/gov/protected-namespaces` և CLI-ն արտացոլում է դրանք միջոցով
+  `/v1/gov/protected-namespaces` և CLI-ն արտացոլում է դրանք միջոցով
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - `ProposeDeployContract`-ով (կամ Torii-ով ստեղծված առաջարկներ
-  `/v2/gov/proposals/deploy-contract` վերջնակետ) գրավում
+  `/v1/gov/proposals/deploy-contract` վերջնակետ) գրավում
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - Հանրաքվեն անցնելուց հետո, `EnactReferendum` նշում է առաջարկը ուժի մեջ և
   ընդունելությունը կընդունի տեղակայումներ, որոնք պարունակում են համապատասխան մետատվյալներ և կոդ:

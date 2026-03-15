@@ -66,13 +66,13 @@ translation_last_reviewed: 2026-02-07
 تقبل طلبات HTTP الحتمية للبوابات البيانات الوصفية للإعلان والمرآة
 شكرا جزيلا.
 
-###`GET /v2/sorafs/storage/car/{manifest_id}`| المتطلبات | التفاصيل |
+###`GET /v1/sorafs/storage/car/{manifest_id}`| المتطلبات | التفاصيل |
 |------------|---------|
 | **العناوين** | `Range` (نافذة واحدة محاذاة لإزاحات المجموعة)، `dag-scope: block`، `X-SoraFS-Chunker`، `X-SoraFS-Nonce` اختياري، وضروري base64 `X-SoraFS-Stream-Token`. |
 | **الردود** | `206` مع `Content-Type: application/vnd.ipld.car`، `Content-Range` النافذة المقدمة من قبل البيانات التعريفية `X-Sora-Chunk-Range`، ورؤوس المقطع/الرمز المميز. |
 | **أوضاع الفشل** | النطاقات غير المحاذية پر `416`، الرموز المميزة المفقودة/غير الصالحة پر `401`، وتتجاوز ميزانيات الدفق/البايت ہونے پر `429`. |
 
-###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 جلب قطعة واحدة عبارة عن رؤوس ثابتة بالإضافة إلى ملخص القطعة الحتمية. إعادة المحاولة
 تعتبر تنزيلات الطب الشرعي مفيدة لشرائح CAR غير الضرورية.
@@ -119,11 +119,11 @@ translation_last_reviewed: 2026-02-07
 - `iroha app sorafs pin list|show`، `alias list`، و`replication list` دبوس التسجيل
   تقوم نقاط نهاية REST بتغليف البطاقة وأدلة التدقيق لكتل المصادقة تلقائيًا
   طباعة خام Norito JSON.
-- `iroha app sorafs storage pin` أو `torii /v2/sorafs/pin/register` Norito أو JSON
+- `iroha app sorafs storage pin` أو `torii /v1/sorafs/pin/register` Norito أو JSON
   يُظهر البراهين الاسم المستعار الاختياري والخلفاء يقبلون البطاقة؛ مشوه
   بروفات پر `400`، بروفات قديمة پر `503` مع `Warning: 110`، وبراهين منتهية الصلاحية
   پر `412`۔
-- نقاط نهاية REST (`/v2/sorafs/pin`، `/v2/sorafs/aliases`، `/v2/sorafs/replication`)
+- نقاط نهاية REST (`/v1/sorafs/pin`، `/v1/sorafs/aliases`، `/v1/sorafs/replication`)
   تشتمل هياكل التصديق على أحدث رؤوس الكتل للعملاء
   التحقق من البيانات المختلفة کر سكای۔
 

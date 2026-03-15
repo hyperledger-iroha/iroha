@@ -4315,7 +4315,7 @@ Submit a governance ballot; auto-detects referendum mode unless overridden
 ###### **Options:**
 
 * `--referendum-id <REFERENDUM_ID>`
-* `--mode <MODE>` — Voting mode override. Defaults to auto-detect via GET /v2/gov/referenda/{id}
+* `--mode <MODE>` — Voting mode override. Defaults to auto-detect via GET /v1/gov/referenda/{id}
 
   Default value: `auto`
 
@@ -4456,7 +4456,7 @@ Get current sortition council or manage council VRF flows
 
   Default value: `wonderland`
 * `--out <OUT>` — Output path; if omitted, prints JSON to stdout
-* `--from-audit` — Fetch `seed/epoch/chain_id` from /v2/gov/council/audit (overrides --epoch/--beacon-hex when set)
+* `--from-audit` — Fetch `seed/epoch/chain_id` from /v1/gov/council/audit (overrides --epoch/--beacon-hex when set)
 
   Default value: `false`
 
@@ -4474,7 +4474,7 @@ Get current sortition council or manage council VRF flows
 * `--candidates-file <PATH>` — Path to JSON file with candidates: [{ `account_id`, variant: Normal|Small, `pk_b64`, `proof_b64` }, ...]
 * `--authority <AUTHORITY>` — Authority `AccountId` for signing (canonical I105 account literal)
 * `--private-key <HEX>` — Private key (hex) for signing
-* `--wait` — Wait for `CouncilPersisted` event and verify via /v2/gov/council/current
+* `--wait` — Wait for `CouncilPersisted` event and verify via /v1/gov/council/current
 
   Default value: `false`
 
@@ -4691,7 +4691,7 @@ Contracts helpers (code storage)
 ###### **Subcommands:**
 
 * `code` — Contract code helpers
-* `deploy` — Deploy compiled `.to` code via Torii (POST /v2/contracts/deploy)
+* `deploy` — Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 * `deploy-activate` — Deploy bytecode, register manifest, and activate a namespace binding in one transaction
 * `manifest` — Contract manifest helpers
 * `simulate` — Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
@@ -4726,7 +4726,7 @@ Fetch on-chain contract code bytes by code hash and write to a file
 
 ## `iroha app contracts deploy`
 
-Deploy compiled `.to` code via Torii (POST /v2/contracts/deploy)
+Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 
 **Usage:** `iroha app contracts deploy [OPTIONS] --authority <AUTHORITY> --private-key <HEX>`
 
@@ -4843,10 +4843,10 @@ Zero-knowledge helpers (roots, etc.)
 
 ###### **Subcommands:**
 
-* `roots` — Get recent shielded roots for an asset (JSON). Posts to /v2/zk/roots
-* `verify` — Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v2/zk/verify
-* `submit-proof` — Submit a ZK proof envelope for later reference/inspection. Posts to /v2/zk/submit-proof
-* `verify-batch` — Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v2/zk/verify-batch
+* `roots` — Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
+* `verify` — Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v1/zk/verify
+* `submit-proof` — Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submit-proof
+* `verify-batch` — Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
 * `schema-hash` — Compute the Blake2b-32 hash required for `public_inputs_schema_hash` and print it
 * `attachments` — Manage ZK attachments in the app API
 * `register-asset` — Register a ZK-capable asset (Hybrid mode) with policy and VK ids
@@ -4863,7 +4863,7 @@ Zero-knowledge helpers (roots, etc.)
 
 ## `iroha app zk roots`
 
-Get recent shielded roots for an asset (JSON). Posts to /v2/zk/roots
+Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
 
 **Usage:** `iroha app zk roots [OPTIONS] --asset-id <ASSET_ID>`
 
@@ -4878,7 +4878,7 @@ Get recent shielded roots for an asset (JSON). Posts to /v2/zk/roots
 
 ## `iroha app zk verify`
 
-Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v2/zk/verify
+Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /v1/zk/verify
 
 **Usage:** `iroha app zk verify [OPTIONS]`
 
@@ -4891,7 +4891,7 @@ Verify a ZK proof by posting an `OpenVerifyEnvelope` (Norito) or a JSON DTO to /
 
 ## `iroha app zk submit-proof`
 
-Submit a ZK proof envelope for later reference/inspection. Posts to /v2/zk/submit-proof
+Submit a ZK proof envelope for later reference/inspection. Posts to /v1/zk/submit-proof
 
 **Usage:** `iroha app zk submit-proof [OPTIONS]`
 
@@ -4904,7 +4904,7 @@ Submit a ZK proof envelope for later reference/inspection. Posts to /v2/zk/submi
 
 ## `iroha app zk verify-batch`
 
-Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v2/zk/verify-batch
+Verify a batch of ZK `OpenVerify` envelopes (Norito vector) via /v1/zk/verify-batch
 
 **Usage:** `iroha app zk verify-batch [OPTIONS]`
 
@@ -5338,17 +5338,17 @@ IVM prove helpers (non-consensus, app API)
 
 ###### **Subcommands:**
 
-* `derive` — Derive an `IvmProved` payload via `/v2/zk/ivm/derive`
-* `prove` — Submit a prove job for an `IvmProved` payload via `/v2/zk/ivm/prove`
-* `get` — Get a prove job status via `/v2/zk/ivm/prove/{job_id}`
-* `delete` — Delete a prove job via `/v2/zk/ivm/prove/{job_id}`
+* `derive` — Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
+* `prove` — Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
+* `get` — Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
+* `delete` — Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
 * `derive-pk` — Derive a proving key (.pk) from verifying key bytes (.vk) for the Halo2 IPA IVM bind circuit
 
 
 
 ## `iroha app zk ivm derive`
 
-Derive an `IvmProved` payload via `/v2/zk/ivm/derive`
+Derive an `IvmProved` payload via `/v1/zk/ivm/derive`
 
 **Usage:** `iroha app zk ivm derive --json <PATH>`
 
@@ -5360,7 +5360,7 @@ Derive an `IvmProved` payload via `/v2/zk/ivm/derive`
 
 ## `iroha app zk ivm prove`
 
-Submit a prove job for an `IvmProved` payload via `/v2/zk/ivm/prove`
+Submit a prove job for an `IvmProved` payload via `/v1/zk/ivm/prove`
 
 **Usage:** `iroha app zk ivm prove [OPTIONS] --json <PATH>`
 
@@ -5379,7 +5379,7 @@ Submit a prove job for an `IvmProved` payload via `/v2/zk/ivm/prove`
 
 ## `iroha app zk ivm get`
 
-Get a prove job status via `/v2/zk/ivm/prove/{job_id}`
+Get a prove job status via `/v1/zk/ivm/prove/{job_id}`
 
 **Usage:** `iroha app zk ivm get --job-id <JOB_ID>`
 
@@ -5391,7 +5391,7 @@ Get a prove job status via `/v2/zk/ivm/prove/{job_id}`
 
 ## `iroha app zk ivm delete`
 
-Delete a prove job via `/v2/zk/ivm/prove/{job_id}`
+Delete a prove job via `/v1/zk/ivm/prove/{job_id}`
 
 **Usage:** `iroha app zk ivm delete --job-id <JOB_ID>`
 
@@ -5556,7 +5556,7 @@ Bundle a Taikai segment into a CAR archive and Norito envelope
 * `--car-out <PATH>` — Where to write the generated `CARv2` archive
 * `--envelope-out <PATH>` — Where to write the Norito-encoded Taikai segment envelope
 * `--indexes-out <PATH>` — Optional path for a JSON file containing the time/CID index keys
-* `--ingest-metadata-out <PATH>` — Optional path for the ingest metadata JSON map consumed by `/v2/da/ingest`
+* `--ingest-metadata-out <PATH>` — Optional path for the ingest metadata JSON map consumed by `/v1/da/ingest`
 * `--event-id <NAME>` — Identifier of the Taikai event
 * `--stream-id <NAME>` — Logical stream identifier within the event
 * `--rendition-id <NAME>` — Rendition identifier (ladder rung)
@@ -5727,8 +5727,8 @@ Watch a directory for CMAF fragments and bundle them into CAR + Norito artifacts
 * `--da-governance-tag <DA_GOVERNANCE_TAG>` — Governance tag recorded in the retention policy (default `da.taikai.live`)
 
   Default value: `da.taikai.live`
-* `--publish-da` — Toggle automatic publishing to `/v2/da/ingest` using the CLI config
-* `--da-endpoint <URL>` — Override the Torii DA ingest endpoint (defaults to `$TORII/v2/da/ingest`)
+* `--publish-da` — Toggle automatic publishing to `/v1/da/ingest` using the CLI config
+* `--da-endpoint <URL>` — Override the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`)
 
 
 
@@ -5830,7 +5830,7 @@ Data availability helpers (ingest tooling)
 
 ###### **Subcommands:**
 
-* `submit` — Submit a raw blob to `/v2/da/ingest` and capture the signed receipt
+* `submit` — Submit a raw blob to `/v1/da/ingest` and capture the signed receipt
 * `get` — Fetch blobs via the multi-source orchestrator (thin wrapper over `sorafs fetch`)
 * `get-blob` — Download manifest + chunk plan artifacts for an existing DA storage ticket
 * `prove` — Generate Proof-of-Retrievability witnesses for a manifest/payload pair
@@ -5850,7 +5850,7 @@ Data availability helpers (ingest tooling)
 
 ## `iroha app da submit`
 
-Submit a raw blob to `/v2/da/ingest` and capture the signed receipt
+Submit a raw blob to `/v1/da/ingest` and capture the signed receipt
 
 **Usage:** `iroha app da submit [OPTIONS] --payload <PATH>`
 
@@ -5904,7 +5904,7 @@ Submit a raw blob to `/v2/da/ingest` and capture the signed receipt
   Default value: `da.generic`
 * `--metadata-json <PATH>` — Optional metadata JSON file providing string key/value pairs
 * `--manifest <PATH>` — Optional pre-generated Norito manifest to embed in the request
-* `--endpoint <URL>` — Override for the Torii DA ingest endpoint (defaults to `$TORII/v2/da/ingest`)
+* `--endpoint <URL>` — Override for the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`)
 * `--client-blob-id <HEX>` — Override the caller-supplied blob identifier (hex). Defaults to BLAKE3(payload)
 * `--artifact-dir <PATH>` — Directory for storing Norito/JSON artefacts (defaults to `artifacts/da/submission_<timestamp>`)
 * `--no-submit` — Skip HTTP submission and only emit the signed request artefacts
@@ -5964,7 +5964,7 @@ Download manifest + chunk plan artifacts for an existing DA storage ticket
 
 * `--storage-ticket <HEX>` — Storage ticket identifier (hex string) issued by Torii
 * `--block-hash <HEX>` — Optional block hash used to seed deterministic sampling in the manifest response
-* `--endpoint <URL>` — Optional override for the Torii manifest endpoint (defaults to `$TORII/v2/da/manifests/`)
+* `--endpoint <URL>` — Optional override for the Torii manifest endpoint (defaults to `$TORII/v1/da/manifests/`)
 * `--output-dir <PATH>` — Directory for storing the fetched manifest + chunk plan artefacts
 
 
@@ -6895,7 +6895,7 @@ Show current registry state (all services or one service)
 
   Default value: `.soracloud/registry.json`
 * `--service-name <NAME>` — Optional service name filter
-* `--torii-url <URL>` — Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query `/v2/soracloud/status` from a live control plane
+* `--torii-url <URL>` — Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query `/v1/soracloud/status` from a live control plane
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying Torii
 * `--timeout-secs <SECS>` — HTTP timeout for Torii status requests
 
@@ -8731,7 +8731,7 @@ Observe or modify the Torii `SoraNet` handshake configuration
 ###### **Subcommands:**
 
 * `show` — Display the current `SoraNet` handshake summary as reported by Torii
-* `update` — Update one or more `SoraNet` handshake parameters via `/v2/config`
+* `update` — Update one or more `SoraNet` handshake parameters via `/v1/config`
 * `token` — Admission token helpers (issuance, fingerprinting, revocation digests)
 
 
@@ -8746,7 +8746,7 @@ Display the current `SoraNet` handshake summary as reported by Torii
 
 ## `iroha app sorafs handshake update`
 
-Update one or more `SoraNet` handshake parameters via `/v2/config`
+Update one or more `SoraNet` handshake parameters via `/v1/config`
 
 **Usage:** `iroha app sorafs handshake update [OPTIONS]`
 
@@ -9304,8 +9304,8 @@ Sora Name Service helpers (registrar + policy tooling)
 
 ###### **Subcommands:**
 
-* `register` — Register a SNS name via `/v2/sns/registrations`
-* `renew` — Renew a SNS name via `/v2/sns/registrations/{selector}/renew`
+* `register` — Register a SNS name via `/v1/sns/registrations`
+* `renew` — Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
 * `transfer` — Transfer ownership of a SNS name
 * `update-controllers` — Replace controllers on a SNS name
 * `freeze` — Freeze a SNS name
@@ -9318,7 +9318,7 @@ Sora Name Service helpers (registrar + policy tooling)
 
 ## `iroha app sns register`
 
-Register a SNS name via `/v2/sns/registrations`
+Register a SNS name via `/v1/sns/registrations`
 
 **Usage:** `iroha app sns register [OPTIONS] --label <LABEL> --suffix-id <U16>`
 
@@ -9346,7 +9346,7 @@ Register a SNS name via `/v2/sns/registrations`
 
 ## `iroha app sns renew`
 
-Renew a SNS name via `/v2/sns/registrations/{selector}/renew`
+Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
 
 **Usage:** `iroha app sns renew [OPTIONS] --selector <LABEL.SUFFIX>`
 

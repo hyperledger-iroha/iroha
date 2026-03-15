@@ -18,11 +18,11 @@ description : La version de TORII-APP-1 est une version SDK et une version plus 
 Nom : Plateforme Torii, responsable du programme SDK  
 Lien vers la version : TORII-APP-1 — Mise à jour `app_api`
 
-تعكس هذه الصفحة تدقيق `TORII-APP-1` الداخلي (`docs/source/torii/app_api_parity_audit.md`) حتى يتمكن القراء خارج المستودع الاحادي من معرفة اي اسطح `/v2/*` موصولة ومختبرة وموثقة. يتتبع التدقيق المسارات المعاد تصديرها عبر `Torii::add_app_api_routes` et `add_contracts_and_vk_routes` et `add_connect_routes`.
+تعكس هذه الصفحة تدقيق `TORII-APP-1` الداخلي (`docs/source/torii/app_api_parity_audit.md`) حتى يتمكن القراء خارج المستودع الاحادي من معرفة اي اسطح `/v1/*` موصولة ومختبرة وموثقة. يتتبع التدقيق المسارات المعاد تصديرها عبر `Torii::add_app_api_routes` et `add_contracts_and_vk_routes` et `add_connect_routes`.
 
 ## النطاق والمنهج
 
-يفحص التدقيق اعادة التصدير العامة في `crates/iroha_torii/src/lib.rs:256-522` وبناة المسارات المحمية بالميزات. ولكل سطح `/v2/*` في خارطة الطريق تحققنامن:
+يفحص التدقيق اعادة التصدير العامة في `crates/iroha_torii/src/lib.rs:256-522` وبناة المسارات المحمية بالميزات. ولكل سطح `/v1/*` في خارطة الطريق تحققنامن:
 
 - تنفيذ المعالج وتعريفات DTO pour `crates/iroha_torii/src/routing.rs`.
 - Utilisez les fichiers `app_api` et `connect`.
@@ -38,25 +38,25 @@ Lien vers la version : TORII-APP-1 — Mise à jour `app_api`
 - امثلة:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## جرد نقاط النهاية
 
-### اذونات الحساب (`/v2/accounts/{id}/permissions`) — مغطى
+### اذونات الحساب (`/v1/accounts/{id}/permissions`) — مغطى
 - Nom : `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTO : `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Nom de la personne : `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -64,7 +64,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Nom : Plateforme Torii.
 - Fichiers : Fichiers JSON Norito ou `items`/`total`, qui sont également disponibles. Fonctionnalités du SDK.
 
-### تقييم OPRF للاسماء المستعارة (`POST /v2/aliases/voprf/evaluate`) — مغطى
+### تقييم OPRF للاسماء المستعارة (`POST /v1/aliases/voprf/evaluate`) — مغطى
 - Nom : `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO : `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -72,7 +72,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Éléments : éléments en ligne pour le SDK (`crates/iroha_torii/src/lib.rs:9945-9986`) pour le SDK
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
 - Nom : Plateforme Torii.
-- ملاحظات: واجهة الاستجابة تفرض hex محدد وهوية backend؛ Utilisez le SDK pour DTO.### احداث preuve عبر SSE (`GET /v2/events/sse`) — مغطى
+- ملاحظات: واجهة الاستجابة تفرض hex محدد وهوية backend؛ Utilisez le SDK pour DTO.### احداث preuve عبر SSE (`GET /v1/events/sse`) — مغطى
 - Nom : `handle_v1_events_sse` ou numéro de téléphone (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTO : `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) pour la preuve.
 - Nom de la personne : `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -82,7 +82,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Fonctionnalité : Plateforme Torii (runtime) et GT de tests d'intégration (fixtures).
 - ملاحظات: تم التحقق من مسارات فلتر preuve طرفا لطرف؛ والتوثيق موجود في `docs/source/zk_app_api.md`.
 
-### دورة حياة العقود (`/v2/contracts/*`) — مغطى
+### دورة حياة العقود (`/v1/contracts/*`) — مغطى
 - Titres : `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -95,7 +95,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
   `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
   `contracts_instances_list_router.rs`.
 - Sujet : Smart Contract WG sur la plateforme Torii.
-- ملاحظات: نقاط النهاية تضع المعاملات الموقعة في قائمة انتظار وتعيد استخدام مقاييس التليمترية المشتركة (`handle_transaction_with_metrics`).### دورة حياة مفاتيح التحقق (`/v2/zk/vk/*`) — مغطى
+- ملاحظات: نقاط النهاية تضع المعاملات الموقعة في قائمة انتظار وتعيد استخدام مقاييس التليمترية المشتركة (`handle_transaction_with_metrics`).### دورة حياة مفاتيح التحقق (`/v1/zk/vk/*`) — مغطى
 - Modèles : `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) et `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO : `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -107,7 +107,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Nom : Groupe de travail ZK pour la plate-forme Torii.
 - Éléments : Utiliser les DTO avec les SDK Norito Il s'agit de la limitation de débit `limits.rs`.
 
-### Nexus Connect (`/v2/connect/*`) — Fonctionnalité (fonctionnalité `connect`)
+### Nexus Connect (`/v1/connect/*`) — Fonctionnalité (fonctionnalité `connect`)
 - Modèles : `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTO : `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

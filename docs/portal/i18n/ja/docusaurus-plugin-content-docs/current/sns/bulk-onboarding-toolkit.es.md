@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -133,10 +133,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- ヘルパーは、中絶前に `POST /v2/sns/registrations` の要求を出します
+- ヘルパーは、中絶前に `POST /v1/sns/registrations` の要求を出します
   プライマー エラー HTTP。登録されたログを参照してください。
   NDJSON。
-- `--poll-status` コンサルタントを参照 `/v2/sns/registrations/{selector}` はデプスをサポートします
+- `--poll-status` コンサルタントを参照 `/v1/sns/registrations/{selector}` はデプスをサポートします
   cada envio (hasta `--poll-attempts`、デフォルト 5) 登録情報の確認
   見えます。 Proporcione `--suffix-map` (`suffix_id` 値「サフィックス」の JSON)
   パラ ケ ラ ヘルラミエンタは、リテラル `{label}.{suffix}` al hacer ポーリングを導出します。

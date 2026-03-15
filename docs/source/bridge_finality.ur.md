@@ -62,7 +62,7 @@ payload کے ذریعے وہی hash verify کر سکتے ہیں۔
 MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
 from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
 
 Verification بنیادی proof جیسی ہے: header سے `block_hash` دوبارہ compute کریں، commit
 certificate signatures verify کریں، اور commitment fields کو certificate اور block hash
@@ -105,9 +105,9 @@ errors کے ساتھ reject کرتا ہے؛ anchors کے بغیر یہ پہلی 
 
 ## API surface
 
-- `GET /v2/bridge/finality/{height}` - مطلوبہ block height کیلئے `BridgeFinalityProof` واپس کرتا ہے۔
+- `GET /v1/bridge/finality/{height}` - مطلوبہ block height کیلئے `BridgeFinalityProof` واپس کرتا ہے۔
   `Accept` کے ذریعے content negotiation Norito یا JSON کو سپورٹ کرتی ہے۔
-- `GET /v2/bridge/finality/bundle/{height}` - مطلوبہ height کیلئے `BridgeFinalityBundle`
+- `GET /v1/bridge/finality/bundle/{height}` - مطلوبہ height کیلئے `BridgeFinalityBundle`
   (commitment + justification + header/certificate) واپس کرتا ہے۔
 
 ## Notes and follow-ups

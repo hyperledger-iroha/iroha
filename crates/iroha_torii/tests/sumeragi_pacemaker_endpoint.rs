@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v2/sumeragi/pacemaker (telemetry-gated)
+//! Router-level test for GET /v1/sumeragi/pacemaker (telemetry-gated)
 #![cfg(feature = "telemetry")]
 
 #[tokio::test]
@@ -29,7 +29,7 @@ async fn sumeragi_pacemaker_endpoint_shape() {
 
     // Build a tiny router with the pacemaker endpoint handler
     let app = Router::new().route(
-        "/v2/sumeragi/pacemaker",
+        "/v1/sumeragi/pacemaker",
         get({
             let telemetry = telemetry.clone();
             move || {
@@ -42,7 +42,7 @@ async fn sumeragi_pacemaker_endpoint_shape() {
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v2/sumeragi/pacemaker")
+                .uri("/v1/sumeragi/pacemaker")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

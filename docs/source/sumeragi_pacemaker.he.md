@@ -32,7 +32,7 @@ window = min(cap, max(window + base * backoff_mul, avg_rtt * rtt_floor_mul))
 
 טלמטריה (ראו telemetry.md):
 - זמן ריצה: ‏`sumeragi_pacemaker_backoff_ms`, ‏`sumeragi_pacemaker_rtt_floor_ms`, ‏`sumeragi_phase_latency_ema_ms{phase=…}`
-- REST: ‏`/v2/sumeragi/phases` מוסיף `ema_ms` לצד זמני הפאזות הגבוהים, כך שניתן לשרטט את הטרנד גם ללא Prometheus.
+- REST: ‏`/v1/sumeragi/phases` מוסיף `ema_ms` לצד זמני הפאזות הגבוהים, כך שניתן לשרטט את הטרנד גם ללא Prometheus.
 - הגדרות: ‏`sumeragi.advanced.pacemaker.backoff_multiplier`, ‏`sumeragi.advanced.pacemaker.rtt_floor_multiplier`, ‏`sumeragi.advanced.pacemaker.max_backoff_ms`
 
 ## מדיניות ג׳יטר

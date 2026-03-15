@@ -159,7 +159,7 @@ Il s'agit d'un instantané TEU, d'un alias de métadonnées et d'un drapeau mani
 
 ## 6. Vérifier la disponibilité du client- **Rust/CLI.** `iroha_cli` et la caisse client Rust utilisent le pôle `lane_id`, mais vous ne devez pas remplacer `--lane-id` / `LaneSelector`. Le routeur de file d'attente est connecté à `default_lane`. Utilisez vos drapeaux `--lane-id`/`--dataspace-id` uniquement pour activer une voie qui n'est pas celle par défaut.
 - **JS/Swift/Android.** Les versions ultérieures du SDK incluent `laneId`/`lane_id`, options et solutions de secours disponibles dans `/status`. Les politiques de marketing de synchronisation ne permettent pas de faire de la mise en scène et de la production des projets mobiles.
-- **Tests Pipeline/SSE.** Les filtres sont basés sur les prédicats `tx_lane_id == <u32>` (avec `docs/source/pipeline.md`). Ajoutez le filtre `/v2/pipeline/events/transactions` à ce filtre pour obtenir un identifiant de voie de repli.
+- **Tests Pipeline/SSE.** Les filtres sont basés sur les prédicats `tx_lane_id == <u32>` (avec `docs/source/pipeline.md`). Ajoutez le filtre `/v1/pipeline/events/transactions` à ce filtre pour obtenir un identifiant de voie de repli.
 
 ## 7. Observabilité et crochets de gouvernance- `/status` publie `nexus_lane_governance_sealed_total` et `nexus_lane_governance_sealed_aliases`, ce qui permet à Alertmanager de se présenter lorsque la voie est affichée. Obtenez ces alertes directement sur Devnet.
 - Le planificateur télémétrique et la gouvernance du tableau de bord pour les voies (`dashboards/grafana/nexus_lanes.json`) indiquent l'alias/slug du catalogue. Si vous choisissez un alias, choisissez et contactez le directeur Kura, les auditeurs sont responsables de la détection des choses (ensuite sur NX-1).

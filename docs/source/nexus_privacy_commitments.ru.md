@@ -193,7 +193,7 @@ LanePrivacyCommitment::snark(id, circuit)
 
 ### Видимость для операторов
 
-Endpoint Torii `/v2/sumeragi/status` теперь отображает массив
+Endpoint Torii `/v1/sumeragi/status` теперь отображает массив
 `lane_governance[].privacy_commitments`, чтобы операторы и SDK могли сравнить live registry с
 опубликованными manifests без повторного чтения bundle. Snapshot строится в
 `crates/iroha_core/src/sumeragi/status.rs`, экспортируется REST/JSON handlers Torii

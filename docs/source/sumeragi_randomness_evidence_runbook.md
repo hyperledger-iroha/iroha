@@ -123,7 +123,7 @@ the drop reason). When testing alerting, submit a known-good payload via:
 iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
-Monitor `/v2/events/sse` with a filtered stream to prove SDKs see the same data:
+Monitor `/v1/events/sse` with a filtered stream to prove SDKs see the same data:
 reuse the Python one-liner from {doc}`torii/sumeragi_evidence_app_api` to build
 the filter and capture the raw `data:` frames. The SSE payloads should echo the
 evidence kind and signer that appeared in the CLI output.
@@ -163,7 +163,7 @@ trail back to the captured metrics and CLI snapshots.
   the offending peer before rerunning the test.
 - **Evidence ingestion stalls** — When `sumeragi_evidence_records_total`
   plateaus while chaos tests emit faults, run `iroha ops sumeragi evidence count`
-  on multiple validators and confirm `/v2/sumeragi/evidence/count` matches the
+  on multiple validators and confirm `/v1/sumeragi/evidence/count` matches the
   CLI output. Any divergence means SSE/webhook consumers may also be stale, so
   re-submit a known-good fixture and escalate to the Torii maintainers if the
   counter still fails to increment.

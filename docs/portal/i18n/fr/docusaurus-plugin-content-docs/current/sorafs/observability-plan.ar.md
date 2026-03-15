@@ -79,7 +79,7 @@ Utiliser PoR/PoTR.
 | `sorafs_node_por_failure_total` | Compteur | `provider_id` | عداد أحادي لعينات PoR الفاشلة. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Jauge | `provider` | مقاييس Prometheus الحالية للبايتات المستخدمة وعمق الطابور وعدادات PoR الجارية. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Jauge | `provider` | بيانات نجاح السعة/الجاهزية للمزوّد المعروضة في لوحة السعة. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | عمق التراكم بالإضافة إلى عدادات الفشل التراكمية المصدّرة عند الاستعلام عن `/v2/sorafs/por/ingestion/{manifest}` لتغذية Voir "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | عمق التراكم بالإضافة إلى عدادات الفشل التراكمية المصدّرة عند الاستعلام عن `/v1/sorafs/por/ingestion/{manifest}` لتغذية Voir "PoR Stalls". |
 
 ### Preuve de récupération en temps opportun (PoTR) et SLA الشرائح| المقياس | النوع | Étiquettes | المُنتِج | الملاحظات |
 |--------|-------|--------|---------|---------------|

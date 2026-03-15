@@ -61,7 +61,7 @@ SF-3 پہلا عمل درآمد کریٹ `sorafs-node` فراہم کرتا ہے 
 - Torii کا AXUM اسٹیک `norito::json` پے لوڈ کے ساتھ استعمال کریں۔
 - جوابات کے ل I Norito اسکیموں کو شامل کریں (`PinResultV1` ، `FetchErrorV1` ، ٹیلی میٹری ڈھانچے)۔
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی کے ساتھ ساتھ سب سے قدیم عہد/آخری تاریخ اور سب سے حالیہ کامیابی/ناکامی کے ٹائم اسٹیمپس کے ذریعہ ، `sorafs_node::NodeHandle::por_ingestion_status` ، اور Torii ریکارڈز Prometheus ڈیش بورڈز۔ 【کریٹس/sorafs_node/src/lib.rs: 510 】【 کریٹس/اروہہ_ٹوری/ایس آر سی/سورافس/api.rs: 18 83 】【 کریٹس/اروہ_ٹوری/ایس آر سی/روٹنگ۔
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب بیک بلاگ کی گہرائی کے ساتھ ساتھ سب سے قدیم عہد/آخری تاریخ اور سب سے حالیہ کامیابی/ناکامی کے ٹائم اسٹیمپس کے ذریعہ ، `sorafs_node::NodeHandle::por_ingestion_status` ، اور Torii ریکارڈز Prometheus ڈیش بورڈز۔ 【کریٹس/sorafs_node/src/lib.rs: 510 】【 کریٹس/اروہہ_ٹوری/ایس آر سی/سورافس/api.rs: 18 83 】【 کریٹس/اروہ_ٹوری/ایس آر سی/روٹنگ۔
 
 ### D. شیڈولر اور کوٹہ کی درخواست| ٹاسک | تفصیلات |
 | ------ | --------- |

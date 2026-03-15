@@ -165,9 +165,9 @@ faydalı yüklər Torii API enişindən əvvəl təmiz şəkildə gediş-gəliş
 > Torii şlüzü indi eyni proqram tərəfindən dəstəklənən yalnız oxuna bilən köməkçiləri ifşa edir.
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — saxlananı qaytarır
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — saxlananı qaytarır
 > Norito manifest (base64) həzm/metadata ilə yanaşı.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — deterministi qaytarır
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — deterministi qaytarır
 > aşağı axın alətləri üçün yığın planı JSON (`chunk_fetch_specs`).【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Bu son nöqtələr CLI çıxışını əks etdirir, beləliklə boru kəmərləri lokaldan keçid edə bilsin
@@ -210,19 +210,19 @@ faydalı yüklər Torii API enişindən əvvəl təmiz şəkildə gediş-gəliş
      idarəetmə modeli razılaşdırılıb; hələlik dizayn ciddi kvotaları nəzərdə tutur və
      operator tərəfindən başlatılan əməliyyatları çıxarmaq.
 
-### Bacarıq Bəyannaməsi və Planlaşdırma İnteqrasiyası- Torii indi `/v2/sorafs/capacity/declare`-dən `CapacityDeclarationRecord` yeniləmələrini ötürür
+### Bacarıq Bəyannaməsi və Planlaşdırma İnteqrasiyası- Torii indi `/v1/sorafs/capacity/declare`-dən `CapacityDeclarationRecord` yeniləmələrini ötürür
   daxil edilmiş `CapacityManager`-ə, buna görə də hər bir qovşaq onun yaddaşdaxili görünüşünü qurur
   chunker və zolaq ayırmaları həyata keçirdi. Menecer yalnız oxunan anlıq görüntüləri ifşa edir
-  telemetriya üçün (`GET /v2/sorafs/capacity/state`) və hər profil və ya hər zolaq üçün tətbiq edir
+  telemetriya üçün (`GET /v1/sorafs/capacity/state`) və hər profil və ya hər zolaq üçün tətbiq edir
   yeni sifarişlər qəbul edilməzdən əvvəl rezervasiyalar.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v2/sorafs/capacity/schedule` son nöqtəsi idarəetmə tərəfindən verilmiş `ReplicationOrderV1`-i qəbul edir
+- `/v1/sorafs/capacity/schedule` son nöqtəsi idarəetmə tərəfindən verilmiş `ReplicationOrderV1`-i qəbul edir
   faydalı yüklər. Sifariş yerli provayderi hədəf aldıqda, menecer yoxlayır
   dublikat planlaşdırma, chunker/zolaq tutumunu yoxlayır, dilimi ehtiyatda saxlayır və
   orkestrasiya alətləri üçün qalan tutumu təsvir edən `ReplicationPlan` qaytarır
   qəbulu ilə davam edə bilər. Digər provayderlər üçün sifarişlər an ilə təsdiqlənir
   Çox operatorlu iş axınlarını asanlaşdırmaq üçün `ignored` cavabı.【crates/iroha_torii/src/routing.rs:4845】
 - Tamamlama qarmaqları (məsələn, udma müvəffəqiyyətli olduqdan sonra işə salınır) vuruldu
-  `POST /v2/sorafs/capacity/complete` vasitəsilə rezervasiyaları buraxmaq
+  `POST /v1/sorafs/capacity/complete` vasitəsilə rezervasiyaları buraxmaq
   `CapacityManager::complete_order`. Cavab `ReplicationRelease` daxildir
   snapshot (qalan cəmlər, chunker/zolaq qalıqları) belə ki, orkestrasiya alətləri
   səsvermə olmadan növbəti sifarişi növbəyə qoyun. Sonrakı iş bunu hissəyə çevirəcək

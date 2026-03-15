@@ -104,7 +104,7 @@ Instruction matchers are case-insensitive. For boxed ISIs you can target the
 family or a specific variant using `family::variant` (for example,
 `register::domain` or `transfer::asset_definition`). The `smartcontract::deploy`
 matcher targets smart contract code registration instructions emitted by
-`/v2/contracts/deploy`.
+`/v1/contracts/deploy`.
 
 ## 3. Boot a node with the policy applied
 
@@ -140,14 +140,14 @@ If the default lane shows `sealed`, follow the lane governance runbook before
 allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
 
 After lane governance is ready, run the Nexus lane smoke helper (shipped under
-`scripts/nexus_lane_smoke.py`) to validate `/v2/sumeragi/status` plus the
+`scripts/nexus_lane_smoke.py`) to validate `/v1/sumeragi/status` plus the
 Prometheus exports. Lanes flagged as `manifest_required=true` now need a
 non-empty `manifest_path` in the status payload—the helper fails if the manifest
 reference is missing so release bundles always capture the signed artefact path:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.org/v2/sumeragi/status \
+  --status-url https://torii.example.org/v1/sumeragi/status \
   --metrics-url https://torii.example.org/metrics \
   --lane-alias core \
   --expected-lane-count 3 \
@@ -222,7 +222,7 @@ lane-ingest dashboard.
   reconfigurations.
 - **Pipeline/SSE tests.** The transaction event filters accept
   `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v2/pipeline/events/transactions` with that filter to prove that writes sent
+  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
   without an explicit lane arrive under the fallback lane id.
 
 ## 7. Observability and governance hooks

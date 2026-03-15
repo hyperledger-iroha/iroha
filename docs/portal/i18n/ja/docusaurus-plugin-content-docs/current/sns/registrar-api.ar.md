@@ -27,7 +27,7 @@ translation_last_reviewed: 2026-02-07
 
 |回答 |翻訳 |
 |----------|----------|
-| और देखें REST は `/v2/sns/*` と gRPC `sns.v1.Registrar` です。 Norito-JSON (`application/json`) と Norito-RPC (`application/x-norito`)。 |
+| और देखें REST は `/v1/sns/*` と gRPC `sns.v1.Registrar` です。 Norito-JSON (`application/json`) と Norito-RPC (`application/x-norito`)。 |
 |認証 | `Authorization: Bearer` は mTLS のサフィックス スチュワードです。 `scope=sns.admin` を参照してください。 |
 | حدود المعدل |バケット `torii.preauth_scheme_limits` の JSON のバースト: `sns.register`、 `sns.renew`、`sns.controller`、`sns.freeze`。 |
 |ああ | Torii يعرض `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` لمعالجات المسجل (رشح `scheme="norito_rpc"`); كما تزيد الواجهة `sns_registrar_status_total{result, suffix_id}`。 |
@@ -106,15 +106,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | और देखें और देखेंああ |ああ |
 |-----------|-----------|-----------|------|
-| `/v2/sns/registrations` |投稿 | `RegisterNameRequestV1` |ありがとうございます。ログインしてください。 |
-| `/v2/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` |そうです。 يفرض نوافذ 恵み/救い من السياسة. |
-| `/v2/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` | بعد ارفاق موافقات الحوكمة. |
-| `/v2/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーححقق من عناوين الحساب الموقعة. |
-| `/v2/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |保護者/評議会。守護者 ومرجع دفتر حوكمة。 |
-| `/v2/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` | فك التجميد بعد المعالجة؛をオーバーライドします。 |
-| `/v2/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |管理人/評議会。 |
-| `/v2/sns/policies/{suffix_id}` |入手 | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش)。 |
-| `/v2/sns/registrations/{selector}` |入手 | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (アクティブ、グレース、الخ)。 |
+| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` |ありがとうございます。ログインしてください。 |
+| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` |そうです。 يفرض نوافذ 恵み/救い من السياسة. |
+| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` | بعد ارفاق موافقات الحوكمة. |
+| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーححقق من عناوين الحساب الموقعة. |
+| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |保護者/評議会。守護者 ومرجع دفتر حوكمة。 |
+| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` | فك التجميد بعد المعالجة؛をオーバーライドします。 |
+| `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |管理人/評議会。 |
+| `/v1/sns/policies/{suffix_id}` |入手 | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش)。 |
+| `/v1/sns/registrations/{selector}` |入手 | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (アクティブ、グレース、الخ)。 |
 
 ** セレクタ:** مقطع `{selector}` يقبل I105 او مضغوط او 16 進数 قياسي حسب ADDR-5; Torii يطبعها عبر `NameSelectorV1`。
 
@@ -177,7 +177,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` يجب ان يحتوي على سجل `GovernanceHookV1` صالح (提案 ID 投票ハッシュ数 تواقيع スチュワード/ガーディアン)。 كل امر يعكس ببساطة نقطة النهاية `/v2/sns/registrations/{selector}/...` المقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii SDK。
+`--governance-json` يجب ان يحتوي على سجل `GovernanceHookV1` صالح (提案 ID 投票ハッシュ数 تواقيع スチュワード/ガーディアン)。 كل امر يعكس ببساطة نقطة النهاية `/v1/sns/registrations/{selector}/...` المقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii SDK。
 
 ## 4. gRPC の使用
 
@@ -210,7 +210,7 @@ service Registrar {
 
 Torii يتحقق من الاثباتات عبر فحص:
 
-1. 提案 ID موجود في دفتر الحوكمة (`/v2/governance/proposals/{id}`) وحالته `Approved`。
+1. 提案 ID موجود في دفتر الحوكمة (`/v1/governance/proposals/{id}`) وحالته `Approved`。
 2. ハッシュ値は、ハッシュ値です。
 3. スチュワード/ガーディアン تشير الى المفاتيح العامة المتوقعة من `SuffixPolicyV1`.
 
@@ -220,7 +220,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 
 ### 6.1 のレビュー
 
-1. `/v2/sns/policies/{suffix_id}` は、グレース والشرائح المتاحة を意味します。
+1. `/v1/sns/policies/{suffix_id}` は、グレース والشرائح المتاحة を意味します。
 2. `RegisterNameRequestV1`:
    - `selector` مشتق من ラベル I105 (المفضل) او المضغوط (الخيار الثاني)。
    - `term_years` 認証済み。
@@ -247,7 +247,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 
 1. ガーディアン يرسل `FreezeNameRequestV1` مع تذكرة تشير الى id حادث.
 2. Torii は `NameStatus::Frozen`、`NameFrozen` です。
-3. オーバーライドします。 `/v2/sns/registrations/{selector}/freeze` を削除してください。`GovernanceHookV1` を削除してください。
+3. オーバーライドします。 `/v1/sns/registrations/{selector}/freeze` を削除してください。`GovernanceHookV1` を削除してください。
 4. Torii は、`NameUnfrozen` をオーバーライドします。
 
 ## 7. いいえ
@@ -265,7 +265,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 ## 8. 大事なこと
 
 - Torii يخزن المزادات المعلقة تحت `NameRecordV1.auction` ويرفض محاولات التسجيل المزاشر بينما الحالة `PendingAuction`。
-- ニュース ニュース Norito ニュース重要な API (`/v2/finance/sns/payments`)。
+- ニュース ニュース Norito ニュース重要な API (`/v1/finance/sns/payments`)。
 - SDK の開発、開発、開発、開発、開発、開発、開発、開発(`ERR_SNS_RESERVED`, الخ)。
 
 ## 9. いいえ

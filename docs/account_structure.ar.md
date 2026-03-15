@@ -669,8 +669,8 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
 
 ### تنسيقات استجابة توري
 
-- `GET /v2/accounts` يقبل معلمة استعلام اختيارية `canonical I105 rendering` و
-  `POST /v2/accounts/query` يقبل نفس الحقل داخل مغلف JSON.
+- `GET /v1/accounts` يقبل معلمة استعلام اختيارية `canonical I105 rendering` و
+  `POST /v1/accounts/query` يقبل نفس الحقل داخل مغلف JSON.
   القيم المدعومة هي:
   - `i105` (افتراضي) — تصدر الاستجابات حمولات I105 Base58 الأساسية (على سبيل المثال،
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
@@ -679,7 +679,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
 - تُرجع القيم غير الصالحة `400` (`QueryExecutionFail::Conversion`). هذا يسمح
   المحافظ والمستكشفون لطلب سلاسل مضغوطة لـ Sora-only UX بينما
   الاحتفاظ بـ I105 كإعداد افتراضي قابل للتشغيل البيني.
-- قوائم أصحاب الأصول (`GET /v2/assets/{definition_id}/holders`) وJSON الخاصة بهم
+- قوائم أصحاب الأصول (`GET /v1/assets/{definition_id}/holders`) وJSON الخاصة بهم
   نظيره المغلف (`POST …/holders/query`) يكرم أيضًا `canonical I105 rendering`.
   يقوم الحقل `items[*].account_id` بإصدار قيم حرفية مضغوطة عندما يكون
   تم تعيين حقل المعلمة/المغلف على `i105_default`، مما يعكس الحسابات

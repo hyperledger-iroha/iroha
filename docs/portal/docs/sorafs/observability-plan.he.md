@@ -90,7 +90,7 @@ description: סכמת טלמטריה, דשבורדים ומדיניות תקצי
 | `sorafs_node_por_failure_total` | Counter | `provider_id` | מונה מונוטוני לדגימות PoR כושלות. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Gauges קיימים של Prometheus עבור בתים בשימוש, עומק תור וספירות PoR בתהליך. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | נתוני הצלחת capacity/uptime של ספק המוצגים בדשבורד capacity. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | עומק backlog בתוספת מוני כשל מצטברים שמיוצאים בכל polling של `/v2/sorafs/por/ingestion/{manifest}`, מזינים את פאנל/התראת "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | עומק backlog בתוספת מוני כשל מצטברים שמיוצאים בכל polling של `/v1/sorafs/por/ingestion/{manifest}`, מזינים את פאנל/התראת "PoR Stalls". |
 
 ### Proof of Timely Retrieval (PoTR) ו-SLA של chunks
 

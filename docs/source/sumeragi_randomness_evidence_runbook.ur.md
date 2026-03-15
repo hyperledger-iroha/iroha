@@ -132,7 +132,7 @@ payload یہیں سے بھیجیں:
 iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
-`/v2/events/sse` کو filtered stream کے ساتھ مانیٹر کریں تاکہ ثابت ہو کہ SDKs وہی data دیکھتے ہیں:
+`/v1/events/sse` کو filtered stream کے ساتھ مانیٹر کریں تاکہ ثابت ہو کہ SDKs وہی data دیکھتے ہیں:
 {doc}`torii/sumeragi_evidence_app_api` کا Python one-liner استعمال کر کے filter بنائیں اور raw
 `data:` frames capture کریں۔ SSE payloads میں evidence kind اور signer ویسا ہی ہونا چاہئے جیسا
 CLI output میں آیا تھا۔
@@ -169,7 +169,7 @@ CLI output میں آیا تھا۔
   replay protection کی نشاندہی کرتی ہیں؛ test دوبارہ چلانے سے پہلے peer درست کریں۔
 - **Evidence ingestion stalls** — جب `sumeragi_evidence_records_total` رکتا ہوا نظر آئے جبکہ
   chaos tests faults emit کر رہے ہوں، تو `iroha ops sumeragi evidence count` کئی validators پر چلائیں
-  اور `/v2/sumeragi/evidence/count` کو CLI output سے match کریں۔ کسی بھی فرق کا مطلب یہ ہے کہ
+  اور `/v1/sumeragi/evidence/count` کو CLI output سے match کریں۔ کسی بھی فرق کا مطلب یہ ہے کہ
   SSE/webhook consumers stale ہو سکتے ہیں، اس لئے معروف fixture دوبارہ submit کریں اور اگر
   counter پھر بھی نہ بڑھے تو Torii maintainers تک معاملہ escalate کریں۔
 

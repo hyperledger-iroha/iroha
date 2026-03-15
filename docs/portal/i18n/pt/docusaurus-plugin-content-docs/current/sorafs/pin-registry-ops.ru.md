@@ -21,7 +21,7 @@ Verifique `docs/source/sorafs/runbooks/pin_registry_ops.md`. Держите об
 
 ##Obzor
 
-Esta é a descrição do runbook, como monitorar e usar triagem Pin Registry SoraFS e sua solicitação de serviço de serviço (SLA) para replicações. As métricas são postadas em `iroha_torii` e exportadas para Prometheus no namespace `torii_sorafs_*`. Torii опрашивает состояние registro caждые 30 segundos no telefone, os painéis de controle são atualizados atualmente Os operadores não devem atualizar os endpoints `/v2/sorafs/pin/*`. Importar painel de controle (`docs/source/grafana_sorafs_pin_registry.json`) para layout de arquivo Grafana, который напрямую соответствует разделам não.
+Esta é a descrição do runbook, como monitorar e usar triagem Pin Registry SoraFS e sua solicitação de serviço de serviço (SLA) para replicações. As métricas são postadas em `iroha_torii` e exportadas para Prometheus no namespace `torii_sorafs_*`. Torii опрашивает состояние registro caждые 30 segundos no telefone, os painéis de controle são atualizados atualmente Os operadores não devem atualizar os endpoints `/v1/sorafs/pin/*`. Importar painel de controle (`docs/source/grafana_sorafs_pin_registry.json`) para layout de arquivo Grafana, который напрямую соответствует разделам não.
 
 ## Métrica de precisão
 
@@ -114,7 +114,7 @@ groups:
 
 1. **Princípio de segurança**
    - Qualquer proposta de SLA растут, um backlog остается низким, сосредоточьтесь на производительности provedores (сбои PoR, поздние segurança).
-   - Если backlog растет при стабильных пропусках, проверьте admissão (`/v2/sorafs/pin/*`), чтобы подтвердить manifestos, ожидающие утверждения совета.
+   - Если backlog растет при стабильных пропусках, проверьте admissão (`/v1/sorafs/pin/*`), чтобы подтвердить manifestos, ожидающие утверждения совета.
 2. **Provedores de status de verificação**
    - Abra `iroha app sorafs providers list` e instale-o para obter as réplicas necessárias.
    - Verifique os medidores `torii_sorafs_capacity_*`, você pode fornecer GiB provisionado e PoR suspeito.
@@ -133,7 +133,7 @@ Verifique o processo de configuração do cache de alias ou use a política de a
 2. **Teste de teste**
    - Defina configurações de configuração no cluster de teste, permitindo que a topologia do produto seja executada.
    - Запустите `cargo xtask sorafs-pin-fixtures`, чтобы убедиться, что канонические alias fixtures по-прежнему декодируются и проходят ida e volta; Não há necessidade de derivar a montante, mas isso não é possível.
-   - Прогоните endpoints `/v2/sorafs/pin/{digest}` e `/v2/sorafs/aliases` com prova de синтетическими, покрывающими случаи fresco, janela de atualização, expirado e expirado. Verifique códigos HTTP, cabeçalhos (`Sora-Proof-Status`, `Retry-After`, `Warning`) e um JSON que contém este runbook.
+   - Прогоните endpoints `/v1/sorafs/pin/{digest}` e `/v1/sorafs/aliases` com prova de синтетическими, покрывающими случаи fresco, janela de atualização, expirado e expirado. Verifique códigos HTTP, cabeçalhos (`Sora-Proof-Status`, `Retry-After`, `Warning`) e um JSON que contém este runbook.
 3. **Confira o produto**
    - Configure uma nova configuração com uma configuração padrão. Selecione Torii para configurar gateways/serviços SDK para novas políticas de login você.
    - Importe `docs/source/grafana_sorafs_pin_registry.json` para Grafana (ou atualize painéis de controle) e abra o painel para atualizar o cache de alias no trabalho prosтранстве NOC.

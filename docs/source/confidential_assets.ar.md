@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 يمكن الآن لحزم SDK الخاصة بـ Swift إصدار تعليمات الدرع بدون غراء JSON المخصص: قم ببناء ملف
 `ShieldRequest` مع التزام مذكرة بحجم 32 بايت، والحمولة المشفرة، وبيانات التعريف المدينة،
 ثم اتصل بـ `IrohaSDK.submit(shield:keypair:)` (أو `submitAndWait`) للتوقيع وترحيل
-المعاملة عبر `/v2/pipeline/transactions`. يقوم المساعد بالتحقق من مدة الالتزام،
+المعاملة عبر `/v1/pipeline/transactions`. يقوم المساعد بالتحقق من مدة الالتزام،
 يقوم بإدخال `ConfidentialEncryptedPayload` في برنامج التشفير Norito، ويعكس `zk::Shield`
 التخطيط الموضح أدناه حتى تظل المحافظ متوافقة مع Rust.## التزامات الإجماع وبوابة القدرة
 - تعرض رؤوس الكتلة `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`؛ يشارك الملخص في تجزئة الإجماع ويجب أن يساوي عرض التسجيل المحلي لقبول الكتلة.
@@ -71,7 +71,7 @@ SPDX-License-Identifier: Apache-2.0
 - يظهر التكوين ويتدفق CLI إلى السياسات الحالية والمعلقة. يقرأ منطق القبول السياسة في وقت التنفيذ للتأكد من اعتماد كل تعليمات سرية.
 - قائمة التحقق من الترحيل - راجع "تسلسل الترحيل" أدناه للتعرف على خطة الترقية المرحلية التي يتتبعها Milestone M0.
 
-#### مراقبة التحولات عبر Toriiيقوم المحافظ والمدققون باستقصاء `GET /v2/confidential/assets/{definition_id}/transitions` للفحص
+#### مراقبة التحولات عبر Toriiيقوم المحافظ والمدققون باستقصاء `GET /v1/confidential/assets/{definition_id}/transitions` للفحص
 the active `AssetConfidentialPolicy`. تتضمن حمولة JSON دائمًا الملف الأساسي
 معرف الأصل، أحدث ارتفاع كتلة تمت ملاحظته، `current_mode` للسياسة، الوضع الذي
 فعال عند هذا الارتفاع (تُبلغ نوافذ التحويل مؤقتًا عن `Convertible`)، و
@@ -122,7 +122,7 @@ the active `AssetConfidentialPolicy`. تتضمن حمولة JSON دائمًا ا
 ### تسلسل الهجرة
 
 2. **مرحلة الانتقال:** أرسل `ScheduleConfidentialPolicyTransition` مع `effective_height` الذي يحترم `policy_transition_delay_blocks`. عند التحرك نحو `ShieldedOnly`، حدد نافذة التحويل (`window ≥ policy_transition_window_blocks`).
-3. **نشر إرشادات المشغل:** قم بتسجيل `transition_id` الذي تم إرجاعه وقم بتعميم دليل التشغيل/الإيقاف. تشترك المحافظ والمدققون في `/v2/confidential/assets/{id}/transitions` لمعرفة ارتفاع النافذة المفتوحة.
+3. **نشر إرشادات المشغل:** قم بتسجيل `transition_id` الذي تم إرجاعه وقم بتعميم دليل التشغيل/الإيقاف. تشترك المحافظ والمدققون في `/v1/confidential/assets/{id}/transitions` لمعرفة ارتفاع النافذة المفتوحة.
 4. **فرض النافذة:** عندما تفتح النافذة، يقوم وقت التشغيل بتبديل السياسة إلى `Convertible`، ويصدر `PolicyTransitionWindowOpened { transition_id }`، ويبدأ في رفض طلبات الإدارة المتعارضة.
 5. **إنهاء أو إحباط:** في `effective_height`، يتحقق وقت التشغيل من متطلبات النقل الأساسية (صفر إمدادات شفافة، لا توجد عمليات سحب طارئة، وما إلى ذلك). النجاح يقلب السياسة إلى الوضع المطلوب؛ failure emits `PolicyTransitionPrerequisiteFailed`, clears the pending transition, and leaves the policy unchanged.
 6. **ترقيات المخطط:** بعد عملية انتقال ناجحة، تعمل الإدارة على تحسين إصدار مخطط الأصول (على سبيل المثال، `asset_definition.v2`) وتتطلب أدوات واجهة سطر الأوامر `confidential_policy` عند إجراء تسلسل للبيانات. تقوم مستندات ترقية Genesis بتوجيه المشغلين إلى إضافة إعدادات السياسة وبصمات التسجيل قبل إعادة تشغيل أدوات التحقق من الصحة.
@@ -238,7 +238,7 @@ lockstep.
 - التسلسل الهرمي لاشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - تستخدم حمولات الملاحظات المشفرة AEAD مع المفاتيح المشتركة المشتقة من ECDH؛ قد يتم إرفاق مفاتيح عرض المدقق الاختيارية بالمخرجات وفقًا لسياسة الأصول.
-- إضافات واجهة سطر الأوامر: `confidential create-keys`، و`confidential send`، و`confidential export-view-key`، وأدوات المدقق لفك تشفير المذكرات، ومساعد `iroha app zk envelope` لإنتاج/فحص أظرف المذكرات Norito دون الاتصال بالإنترنت. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v2/confidential/derive-keyset`، مما يؤدي إلى إرجاع كلا النموذجين السداسي وbase64 حتى تتمكن المحافظ من جلب التسلسلات الهرمية الرئيسية برمجيًا.
+- إضافات واجهة سطر الأوامر: `confidential create-keys`، و`confidential send`، و`confidential export-view-key`، وأدوات المدقق لفك تشفير المذكرات، ومساعد `iroha app zk envelope` لإنتاج/فحص أظرف المذكرات Norito دون الاتصال بالإنترنت. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset`، مما يؤدي إلى إرجاع كلا النموذجين السداسي وbase64 حتى تتمكن المحافظ من جلب التسلسلات الهرمية الرئيسية برمجيًا.
 
 ## الغاز والحدود وضوابط DoS
 - جدول الغاز الحتمي:

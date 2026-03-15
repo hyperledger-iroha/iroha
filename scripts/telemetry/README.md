@@ -38,7 +38,7 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
   same transfer feed used in governance evidence. Use it inside rent automation
   or to keep Alertmanager in sync with treasury executions.
 - `capacity_reconcile.py`: compares the capacity fee ledger emitted by
-  `/v2/sorafs/capacity/state` against executed XOR transfers (JSON or NDJSON)
+  `/v1/sorafs/capacity/state` against executed XOR transfers (JSON or NDJSON)
   and reports missing/overpaid settlements or penalties. It writes JSON
   summaries and Prometheus textfiles so Alertmanager can fire on reconciliation
   gaps during nightly treasury runs.

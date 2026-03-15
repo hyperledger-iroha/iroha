@@ -62,7 +62,7 @@ async fn rbc_status_json_shape() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sumeragi/rbc")
+                .uri("/v1/sumeragi/rbc")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -88,7 +88,7 @@ async fn pacemaker_status_json_shape() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sumeragi/pacemaker")
+                .uri("/v1/sumeragi/pacemaker")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

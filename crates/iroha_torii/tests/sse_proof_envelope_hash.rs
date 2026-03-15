@@ -16,7 +16,7 @@ use tower::ServiceExt as _;
 async fn sse_filters_by_proof_envelope_hash() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let app = Router::new().route(
-        "/v2/events/sse",
+        "/v1/events/sse",
         get({
             let events = events.clone();
             move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }
@@ -33,7 +33,7 @@ async fn sse_filters_by_proof_envelope_hash() {
         ),
     ]);
     let filter = norito::json::to_string(&filter_value).expect("serialize filter");
-    let uri = format!("/v2/events/sse?filter={}", urlencoding::encode(&filter));
+    let uri = format!("/v1/events/sse?filter={}", urlencoding::encode(&filter));
     let req = http::Request::builder()
         .method("GET")
         .uri(uri)

@@ -33,7 +33,7 @@ use url::Url;
 
 const HEADER_SORA_PDP_COMMITMENT: &str = "sora-pdp-commitment";
 
-/// Blocking Torii publisher for `/v2/da/ingest`.
+/// Blocking Torii publisher for `/v1/da/ingest`.
 pub(super) struct DaPublisher {
     client: HttpClient,
     endpoint: Url,
@@ -48,7 +48,7 @@ pub(super) struct DaPublisherReceipt {
     pub(super) pdp_commitment_header: Option<String>,
 }
 
-/// Blocking Torii fetcher for `/v2/da/manifests/{ticket}`.
+/// Blocking Torii fetcher for `/v1/da/manifests/{ticket}`.
 pub(super) struct DaManifestFetcher {
     client: HttpClient,
     endpoint: Url,
@@ -75,8 +75,8 @@ impl DaPublisher {
         } else {
             config
                 .torii_api_url
-                .join("v2/da/ingest")
-                .wrap_err("failed to derive /v2/da/ingest from torii_api_url")?
+                .join("v1/da/ingest")
+                .wrap_err("failed to derive /v1/da/ingest from torii_api_url")?
         };
         let client = HttpClient::builder()
             .build()
@@ -117,7 +117,7 @@ impl DaPublisher {
         if !status.is_success() {
             let preview = String::from_utf8_lossy(&bytes);
             return Err(eyre!(
-                "Torii /v2/da/ingest responded with {}: {}",
+                "Torii /v1/da/ingest responded with {}: {}",
                 status,
                 preview
             ));
@@ -155,8 +155,8 @@ impl DaManifestFetcher {
         } else {
             config
                 .torii_api_url
-                .join("v2/da/manifests/")
-                .wrap_err("failed to derive /v2/da/manifests from torii_api_url")?
+                .join("v1/da/manifests/")
+                .wrap_err("failed to derive /v1/da/manifests from torii_api_url")?
         };
         let client = HttpClient::builder()
             .build()
@@ -202,7 +202,7 @@ impl DaManifestFetcher {
         if !status.is_success() {
             let preview = String::from_utf8_lossy(&bytes);
             return Err(eyre!(
-                "Torii /v2/da/manifests responded with {}: {}",
+                "Torii /v1/da/manifests responded with {}: {}",
                 status,
                 preview
             ));

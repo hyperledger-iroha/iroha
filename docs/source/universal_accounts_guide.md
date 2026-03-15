@@ -20,7 +20,7 @@ publish` run (roadmap reference: `roadmap.md:2209`).
 - Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
   to the dataspace accounts referenced by active manifests. Torii reuses that
   map for the `/portfolio` and `/uaids/*` APIs.
-- `POST /v2/accounts/onboard` publishes a default Space Directory manifest for
+- `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
   the global dataspace when none exists, so the UAID is immediately bound.
   Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
 - All SDKs expose helpers for canonicalising UAID literals (e.g.,
@@ -36,7 +36,7 @@ There are three supported ways to obtain a UAID:
    payload queried via Torii now has the `uaid` field populated when the
    participant opted into universal accounts.
 2. **Query the UAID registries.** Torii exposes
-   `GET /v2/space-directory/uaids/{uaid}` which returns the dataspace bindings
+   `GET /v1/space-directory/uaids/{uaid}` which returns the dataspace bindings
    and manifest metadata the Space Directory host persists (see
    `docs/space-directory.md` §3 for payload samples).
 3. **Derive it deterministically.** When bootstrapping new UAIDs offline, hash
@@ -64,9 +64,9 @@ can consume the data through the following surfaces:
 
 | Surface | Usage |
 |---------|-------|
-| `GET /v2/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `docs/source/torii/portfolio_api.md`. |
-| `GET /v2/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
-| `GET /v2/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
+| `GET /v1/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `docs/source/torii/portfolio_api.md`. |
+| `GET /v1/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
+| `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
 | `iroha app space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
 | `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
 
@@ -168,8 +168,8 @@ the UAID-centric surfaces described above. Use this checklist during upgrades:
   account ids. For Rust/JS/Swift/Android this means upgrading to the latest
   workspace crates or regenerating Norito bindings.
 - **API calls:** Replace domain-scoped portfolio queries with
-  `GET /v2/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
-  `GET /v2/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
+  `GET /v1/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
+  `GET /v1/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
   parameter when wallets only need a single asset instance. Client helpers such
   as `ToriiClient.getUaidPortfolio` (JS) and the Android
   `SpaceDirectoryClient` already wrap these routes; prefer them over bespoke

@@ -33,7 +33,7 @@ description: مرحلہ وار ملٹی سورس رول آؤٹس اور ہنگا
 ## 1. قبل از عمل توثیق
 
 1. **گورننس ان پٹس کی تصدیق کریں۔**
-   - تمام امیدوار پرووائیڈرز کو cargas úteis de capacidade de alcance اور orçamentos de fluxo کے ساتھ envelopes `ProviderAdvertV1` شائع کرنے چاہئیں۔ `/v2/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع capacidade فیلڈز سے موازنہ کریں۔
+   - تمام امیدوار پرووائیڈرز کو cargas úteis de capacidade de alcance اور orçamentos de fluxo کے ساتھ envelopes `ProviderAdvertV1` شائع کرنے چاہئیں۔ `/v1/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع capacidade فیلڈز سے موازنہ کریں۔
    - taxas de latência/falha
 2. **کنفیگریشن اسٹیج کریں۔**
    - آرکسٹریٹر کی JSON کنفیگریشن کو `iroha_config` em camadas ٹری میں محفوظ کریں:

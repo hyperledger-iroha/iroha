@@ -56,7 +56,7 @@ Regression coverage lives in
 ## Tooling & fixtures
 
 - Provider advert payloads must include `range_capability`, `stream_budget`, and
-  `transport_hints` metadata. Validate via `/v2/sorafs/providers` responses and
+  `transport_hints` metadata. Validate via `/v1/sorafs/providers` responses and
   admission fixtures; JSON summaries should include the parsed capability,
   stream budget, and hint arrays for telemetry ingestion.
 - `cargo xtask sorafs-admission-fixtures` surfaces stream budgets and transport
@@ -68,7 +68,7 @@ Regression coverage lives in
 
 ## Orchestrator & Torii integration
 
-- Torii `/v2/sorafs/providers` returns parsed range capability metadata along
+- Torii `/v1/sorafs/providers` returns parsed range capability metadata along
   with `stream_budget` and `transport_hints`. Downgrade warnings fire when
   providers omit the new metadata, and gateway range endpoints enforce the same
   constraints for direct clients.

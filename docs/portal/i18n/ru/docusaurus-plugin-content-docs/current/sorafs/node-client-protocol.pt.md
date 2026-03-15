@@ -69,7 +69,7 @@ SoraFS.
 ## Конечные точки диапазона до шлюзаШлюзы, требующие HTTP-запросов, определяют, какие метаданные делают
 реклама.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`
+### `GET /v1/sorafs/storage/car/{manifest_id}`
 
 | Реквизито | Подробности |
 |-----------|----------|
@@ -77,7 +77,7 @@ SoraFS.
 | **Ответы** | `206` с `Content-Type: application/vnd.ipld.car`, `Content-Range` описаны на сервере, метаданные `X-Sora-Chunk-Range` и заголовки блоков/токенов. |
 | **Фальхас** | `416` для удаленных диапазонов, `401` для устаревших/недействительных токенов, `429` для превышения бюджетов потока/байтов. |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Извлеките единый фрагмент из заголовков сообщений или выберите детерминированный фрагмент.
 Используется для повторных попыток или загрузок, когда нужны фрагменты CAR.
@@ -127,11 +127,11 @@ SDK через `sorafs_orchestrator`):
 ## Помощники CLI и REST- `iroha app sorafs pin list|show`, `alias list` и `replication list` связаны с операционной системой
   конечные точки REST выполняют регистрацию контактов и импортируют Norito JSON грубо с блоками
   аттестация для аудиторских доказательств.
-- `iroha app sorafs storage pin` и `torii /v2/sorafs/pin/register` aceitam манифестирует
+- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` aceitam манифестирует
   Norito или JSON с доказательствами псевдонимов и дополнительными преемниками; доказательства
   geram `400`, доказательства устарели, retornam `503` com `Warning: 110`, электронные доказательства истекли
   реторнам `412`.
-- Конечные точки REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
+- Конечные точки REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   включить estruturas de attestation для клиентов, проверяющих данные против них
   последние заголовки блоков до начала игры.
 

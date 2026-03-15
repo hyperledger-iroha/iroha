@@ -21,7 +21,7 @@ structured summary that can be ingested by dashboards or regression tooling.
 
 For light-client driven sampling of RBC payloads see
 [`light_client_da.md`](light_client_da.md), which documents the authenticated
-`/v2/sumeragi/rbc/sample` endpoint and the associated rate limits and budgets.
+`/v1/sumeragi/rbc/sample` endpoint and the associated rate limits and budgets.
 
 ### DA timeout & advisory warnings
 
@@ -55,7 +55,7 @@ topology.
   payload as delivered.
 - RBC session snapshot (`total_chunks`, `received_chunks`, `ready_count`,
   `view`, `block_hash`, `recovered`, `lane_backlog`, `dataspace_backlog`) fetched from
-  `/v2/sumeragi/rbc/sessions`.
+  `/v1/sumeragi/rbc/sessions`.
 - Prometheus counters per peer: `sumeragi_rbc_payload_bytes_delivered_total`,
   `sumeragi_rbc_deliver_broadcasts_total`, and
   `sumeragi_rbc_ready_broadcasts_total` obtained from `/metrics`.

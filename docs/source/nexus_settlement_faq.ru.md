@@ -136,7 +136,7 @@ cargo xtask nexus-lane-audit \
 ### Нужна ли SDK особая обработка для settlement?
 
 - SDK должны:
-  - Предоставлять helpers для запроса settlement событий (`/v2/settlement/records`) и интерпретации
+  - Предоставлять helpers для запроса settlement событий (`/v1/settlement/records`) и интерпретации
     логов `SettlementApplied`.
   - Выводить lane IDs + settlement handles в конфигурации клиента, чтобы операторы корректно
     маршрутизировали транзакции.

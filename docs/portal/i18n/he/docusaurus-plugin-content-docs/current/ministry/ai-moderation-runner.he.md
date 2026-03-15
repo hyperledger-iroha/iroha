@@ -176,7 +176,7 @@ struct AdversarialPerceptualVariantV1 {
   - תיקיית `models/` עם משקלי ONNX מאוחסנים כ־hash.
   - נקודת כניסה `run_moderation.py` (או מקביל Rust) שמחשפת API HTTP/gRPC.
 - פרסמו ארטיפקטים ל־`registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- הבינארי של הראנר נשלח כחלק מ־crate `sorafs_ai_runner`. צינור הבנייה מטמיע את hash המניפסט בבינארי (נחשף דרך `/v2/info`).
+- הבינארי של הראנר נשלח כחלק מ־crate `sorafs_ai_runner`. צינור הבנייה מטמיע את hash המניפסט בבינארי (נחשף דרך `/v1/info`).
 
 ## 8. טלמטריה ותצפיות
 - מדדי Prometheus:

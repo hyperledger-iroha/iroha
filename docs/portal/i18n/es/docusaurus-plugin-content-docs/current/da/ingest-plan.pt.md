@@ -39,7 +39,7 @@ serde/JSON.
 ## Superficie API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```La carga útil es un `DaIngestRequest` codificado en Norito. Como respuestas usamos
 `application/norito+v1` y regrese `DaIngestReceipt`.
@@ -216,7 +216,7 @@ fragmentación y verificación de manifiestos opcionales.
 - `iroha app da get` agrega un alias enfocado en DA para el orquestador multifuente
   que ja alimenta `iroha app sorafs fetch`. Operadores podem apontar para artefatos
   manifiesto + plan de fragmentos (`--manifest`, `--plan`, `--manifest-id`) **ou**
-  pasar un ticket de almacenamiento Torii a través de `--storage-ticket`. Cuando el camino lo hagoticket e usado, a CLI baixa o manifest de `/v2/da/manifests/<ticket>`,
+  pasar un ticket de almacenamiento Torii a través de `--storage-ticket`. Cuando el camino lo hagoticket e usado, a CLI baixa o manifest de `/v1/da/manifests/<ticket>`,
   persistir o paquete sollozo `artifacts/da/fetch_<timestamp>/` (anular com
   `--manifest-cache-dir`), deriva del hash del blob para `--manifest-id`, y entao
   ejecuta el orquestador con la lista `--gateway-provider` fornecida. Todos os
@@ -227,7 +227,7 @@ fragmentación y verificación de manifiestos opcionales.
   La disponibilidad de extremo a extremo vive totalmente sob o namespace `da` sin duplicar
   lógica del orquestador.
 - `iroha app da get-blob` baixa manifests canonicos direto de Torii via
-  `GET /v2/da/manifests/{storage_ticket}`. O comando escreve
+  `GET /v1/da/manifests/{storage_ticket}`. O comando escreve
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` y
   `chunk_plan_{ticket}.json` sollozo `artifacts/da/fetch_<timestamp>/` (ou um
   `--output-dir` fornecido pelo usuario) enquanto imprime o comando exato de

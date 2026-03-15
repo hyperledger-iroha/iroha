@@ -70,7 +70,7 @@ pub struct NodeSmAcceleration {
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
-/// Curve capability advert emitted by `/v2/node/capabilities`.
+/// Curve capability advert emitted by `/v1/node/capabilities`.
 pub struct NodeCurveCapabilities {
     /// Registry version referenced by this advert.
     pub registry_version: u32,
@@ -127,7 +127,7 @@ pub struct RuntimeUpgradesListResponse {
     pub items: Vec<RuntimeUpgradeListItem>,
 }
 
-/// GET /v2/runtime/abi/active
+/// GET /v1/runtime/abi/active
 pub async fn handle_runtime_abi_active(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiActiveResponse, crate::Error> {
@@ -142,7 +142,7 @@ pub async fn handle_runtime_abi_active(
     })
 }
 
-/// GET /v2/node/capabilities — advertise supported ABI versions and defaults
+/// GET /v1/node/capabilities — advertise supported ABI versions and defaults
 pub async fn handle_node_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<NodeCapabilitiesResponse, crate::Error> {
@@ -265,7 +265,7 @@ mod bitmap_tests {
     }
 }
 
-/// GET /v2/runtime/metrics — expose runtime metrics summary
+/// GET /v1/runtime/metrics — expose runtime metrics summary
 pub async fn handle_runtime_metrics(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeMetricsResponse, crate::Error> {
@@ -296,7 +296,7 @@ pub async fn handle_runtime_metrics(
     })
 }
 
-/// GET /v2/runtime/abi/hash — return the canonical ABI hash for the node's active policy.
+/// GET /v1/runtime/abi/hash — return the canonical ABI hash for the node's active policy.
 pub async fn handle_runtime_abi_hash(
     _state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiHashResponse, crate::Error> {
@@ -308,7 +308,7 @@ pub async fn handle_runtime_abi_hash(
     })
 }
 
-/// GET /v2/runtime/upgrades
+/// GET /v1/runtime/upgrades
 ///
 /// # Errors
 /// Returns an error if the state view cannot be acquired or serialized.
@@ -359,7 +359,7 @@ pub struct ProposeUpgradeResponse {
     pub tx_instructions: Vec<TxInstr>,
 }
 
-/// POST /v2/runtime/upgrades/propose
+/// POST /v1/runtime/upgrades/propose
 pub async fn handle_runtime_propose_upgrade(
     NoritoJson(ProposeUpgradeDto(manifest)): NoritoJson<ProposeUpgradeDto>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
@@ -394,7 +394,7 @@ impl IntoResponse for ActivateCancelResponse {
     }
 }
 
-/// POST /v2/runtime/upgrades/activate/{id}
+/// POST /v1/runtime/upgrades/activate/{id}
 ///
 /// # Errors
 /// Returns an error when the provided upgrade identifier is malformed or activation fails.
@@ -429,7 +429,7 @@ pub async fn handle_runtime_activate_upgrade(
     })
 }
 
-/// POST /v2/runtime/upgrades/cancel/{id}
+/// POST /v1/runtime/upgrades/cancel/{id}
 ///
 /// # Errors
 /// Returns an error when the identifier cannot be decoded or cancellation fails.

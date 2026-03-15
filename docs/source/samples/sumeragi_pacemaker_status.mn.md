@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 # Sumeragi — Pacemaker Status (Torii)
 
 Endpoint
-- `GET /v2/sumeragi/pacemaker`
+- `GET /v1/sumeragi/pacemaker`
 
 Response (example)
 ```json

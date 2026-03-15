@@ -233,7 +233,7 @@ iroha app space-directory manifest audit-bundle \
 
 1. ** ሌይን ይገለጻል: ** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. ** የጊዜ መርሐግብር ኮታዎች: ** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **የእጅ ጭስ፡** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` ከማንፀባረቂያው ማውጫ ጋር ወደ CBDC ፋይሎች ይጠቁማል፣ከዚያ `/v2/sumeragi/status` ይምቱ እና `lane_governance.manifest_ready=true`ን ለCBDC መስመር ያረጋግጡ።
+3. **የእጅ ጭስ፡** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` ከማንፀባረቂያው ማውጫ ጋር ወደ CBDC ፋይሎች ይጠቁማል፣ከዚያ `/v1/sumeragi/status` ይምቱ እና `lane_governance.manifest_ready=true`ን ለCBDC መስመር ያረጋግጡ።
 4. **የነጮች ዝርዝር ወጥነት ፈተና፡** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` ልምምዶች `integration_tests/tests/nexus/cbdc_whitelist.rs`፣ `fixtures/space_directory/profile/cbdc_lane_profile.json` ን መተንተን እና የተጠቀሰው አቅም እያንዳንዱ የተፈቀደላቸው የመግቢያ UAID፣ የመረጃ ቦታ፣ የማግበር ዘመን እና የአበል ዝርዝር ከማንፀባረቂያው I18005 ኤንቲኤክስ0005 ጋር የሚዛመዱ መሆናቸውን ያረጋግጣል። `fixtures/space_directory/capability/`. የተፈቀደላቸው ዝርዝር ውስጥ ወይም በሚገለጥበት ጊዜ ሁሉ የሙከራ ምዝግብ ማስታወሻውን ከNX-6 ማስረጃ ጥቅል ጋር ያያይዙት።
 
 ### 2.2 CLI ቅንጥቦች
@@ -243,7 +243,7 @@ iroha app space-directory manifest audit-bundle \
 - የ ops ዴስክ የርቀት አውቶማቲክን እያሄደ ከሆነ በኤችቲቲፒ ያትሙ፡-
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ iroha app space-directory manifest audit-bundle \
 - የአደጋ መሻር በርቀት ወደ Torii በመለጠፍ ሊሰጥ ይችላል፡-
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

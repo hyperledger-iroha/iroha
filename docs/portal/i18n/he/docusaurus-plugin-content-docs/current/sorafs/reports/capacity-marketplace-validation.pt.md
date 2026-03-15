@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-02-07
 
 | Checagem | Validacao | Evidencia |
 |-------|----------------|--------|
-| O registry aceita declaracoes canonicas de capacidade | בדיקה אינטגרלית של תרגול `/v2/sorafs/capacity/declare` באמצעות API של אפליקציה, אימות תיקון של אסינטוראס, קלטת מטא נתונים והעברה לצומת רישום. | `crates/iroha_torii/src/routing.rs:7654` |
+| O registry aceita declaracoes canonicas de capacidade | בדיקה אינטגרלית של תרגול `/v1/sorafs/capacity/declare` באמצעות API של אפליקציה, אימות תיקון של אסינטוראס, קלטת מטא נתונים והעברה לצומת רישום. | `crates/iroha_torii/src/routing.rs:7654` |
 | O חוזה חכם דחה מטענים שונים | O teste unitario garante que IDs de provider e campos GiB comprometidos correspondem a declaracao assinada antes de persistir. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | O CLI emite artefatos canonicos de onboarding | הרתמה של CLI escreve saidas Norito/JSON/Base64 קובעת את תקינות נסיעות הלוך ושוב עבור מפעילי אפשרות הכנה לא מקוונת. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | O guia do operator cobre o workflow de admissao e guardrails de governanca | תקציר של סכימת הצהרות, ברירת מחדל של מדיניות e passos de revisao para o Council. | `../storage-capacity-marketplace.md` |

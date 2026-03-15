@@ -45,7 +45,7 @@ I18NI000000022X WebSocket идара итә, шул уҡ ваҡытта `Connect
 алыу асҡыстарын тоташтырыу, һәм раҫлау яуап көтөп.
 
 ```swift
-let connectURL = URL(string: "wss://node.example/v2/connect/ws?sid=\(sidB64)&role=app")!
+let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
 var connectRequest = URLRequest(url: connectURL)
 connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 let connectClient = ConnectClient(request: connectRequest)

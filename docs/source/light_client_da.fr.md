@@ -21,7 +21,7 @@ récupérer la totalité de la charge utile.
 ## Point de terminaison
 
 ```
-POST /v2/sumeragi/rbc/sample
+POST /v1/sumeragi/rbc/sample
 ```
 
 Le point de terminaison nécessite un en-tête `X-API-Token` correspondant à l'un des éléments configurés.

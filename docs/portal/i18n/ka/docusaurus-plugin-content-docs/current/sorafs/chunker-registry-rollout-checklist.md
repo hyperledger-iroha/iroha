@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
    დირექტორია მითითებულ `torii.sorafs.discovery.admission.envelopes_dir`-ის მიერ.
 3. შეამოწმეთ, რომ პროვაიდერის რეკლამები ვრცელდება აღმოჩენის API-ით:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. განახორციელეთ მანიფესტის/გეგმის საბოლოო წერტილები მმართველობის სათაურებით:
    ```bash

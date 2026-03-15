@@ -26,7 +26,7 @@ for portal audiences.
 
 | Component | Purpose | Evidence |
 |-----------|---------|----------|
-| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v2/sns/settlements`. | JSON bundle + hash. |
+| `sns_settlementd` | Applies policy, signs bundles, surfaces `/v1/sns/settlements`. | JSON bundle + hash. |
 | Settlement queue & writer | Idempotent queue + ledger submitter driven by `iroha_cli app sns settlement ledger`. | Bundle hash ↔ tx hash manifest. |
 | Reconciliation job | Daily diff + monthly statement under `docs/source/sns/reports/`. | Markdown + JSON digest. |
 | Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |

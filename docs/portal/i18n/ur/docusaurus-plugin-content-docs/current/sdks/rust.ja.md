@@ -154,7 +154,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` `/v2/explorer/accounts/{id}/qr` JSON کی عکاسی کرتا ہے: اس میں canonical account id، معیاری I105 literal، نیٹ ورک prefix/error-correction میٹاڈیٹا، QR dimensions، اور inline SVG payload شامل ہوتا ہے جسے wallets/explorers براہ راست embed کر سکتے ہیں۔
+`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON کی عکاسی کرتا ہے: اس میں canonical account id، معیاری I105 literal، نیٹ ورک prefix/error-correction میٹاڈیٹا، QR dimensions، اور inline SVG payload شامل ہوتا ہے جسے wallets/explorers براہ راست embed کر سکتے ہیں۔
 
 ## 7. ایونٹس سبسکرائب کریں
 

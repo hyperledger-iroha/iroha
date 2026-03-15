@@ -51,7 +51,7 @@ telemetry Prometheus et les preuves de gouvernance sans quitter l’aperçu du p
 | `taikai_ingest_segment_latency_ms` | Histogramme de latence d’ingest CMAF par cluster/stream (cible : p95 < 750 ms, p99 < 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | Drift live-edge entre l’encodeur et les workers d’ancrage (page si p99 > 1,5 s pendant 10 min). |
 | `taikai_ingest_segment_errors_total{reason}` | Compteurs d’erreurs par raison (`decode`, `manifest_mismatch`, `lineage_replay`, …). Toute hausse déclenche `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Incrémente à chaque acceptation d’un nouveau TRM par `/v2/da/ingest`; utilisez `rate()` pour valider la cadence de rotation. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Incrémente à chaque acceptation d’un nouveau TRM par `/v1/da/ingest`; utilisez `rate()` pour valider la cadence de rotation. |
 | `/status → telemetry.taikai_alias_rotations[]` | Snapshot JSON avec `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` et timestamps pour les bundles de preuve. |
 | `taikai_viewer_*` (rebuffer, âge rotation CEK, santé PQ, alertes) | KPIs viewer pour garantir que la rotation CEK + les circuits PQ restent sains pendant les anchors. |
 

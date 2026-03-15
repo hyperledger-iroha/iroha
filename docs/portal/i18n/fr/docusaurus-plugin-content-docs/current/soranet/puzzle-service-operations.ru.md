@@ -26,17 +26,17 @@ Et, maintenant, vous pouvez échanger des jetons d'admission ML-DSA à partir de
 Pour préparer les points de terminaison HTTP :
 
 - `GET /healthz` - sonde de vivacité.
-- `GET /v2/puzzle/config` - améliore les paramètres d'effet PoW/puzzle,
+- `GET /v1/puzzle/config` - améliore les paramètres d'effet PoW/puzzle,
   Il s'agit du relais JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v2/puzzle/mint` - billet Argon2 ; corps JSON facultatif
+- `POST /v1/puzzle/mint` - billet Argon2 ; corps JSON facultatif
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   запрашивает более короткий TTL (fenêtre de politique serrée), привязывает ticket
   к hachage de transcription и возвращает ticket signé par relais + empreinte digitale de signature
   pour la signature des clés.
-- `GET /v2/token/config` - avec `pow.token.enabled = true`, votre activité est active
+- `GET /v1/token/config` - avec `pow.token.enabled = true`, votre activité est active
   politique de jeton d'admission (empreinte digitale de l'émetteur, limites TTL/clock-skew, ID de relais,
   и ensemble de révocation fusionné).
-- `POST /v2/token/mint` - jeton d'admission ML-DSA, directement fourni
+- `POST /v1/token/mint` - jeton d'admission ML-DSA, directement fourni
   reprendre le hachage ; corps принимает `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Billets, service client, vérification lors du test d'intégration
@@ -78,17 +78,17 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` installé, le secret de la mise en place d'outils hors bande
-canalisation. Observateur de fichiers de révocation держит `/v2/token/config` актуальным;
+canalisation. Observateur de fichiers de révocation держит `/v1/token/config` актуальным;
 coordonner la maintenance avec la commande `soranet-admission-token revoke`, pour vous
 избежать отставания état de révocation.Installez `pow.signed_ticket_public_key_hex` dans le relais JSON pour le faire fonctionner
-Clé publique ML-DSA-44 pour les tickets PoW signés ; `/v2/puzzle/config` ici
+Clé publique ML-DSA-44 pour les tickets PoW signés ; `/v1/puzzle/config` ici
 возвращает key и его BLAKE3 empreinte digitale (`signed_ticket_public_key_fingerprint_hex`),
 Les clients peuvent vérifier les broches. Billets signés vérifiés par identification de relais et
 liaisons de transcription et utilisation du magasin de révocation ; tickets PoW bruts de 74 octets
 остаются валидными при настроенном vérificateur de billets signés. Передайте secret du signataire
 Pour `--signed-ticket-secret-hex` ou `--signed-ticket-secret-path` à l'achat
 service de casse-tête; commencer à ouvrir les paires de clés manquantes, si le secret n'est pas validé
-pour `pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` принимает
+pour `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` принимает
 `"signed": true` (et `"transcript_hash_hex"` en option) à utiliser
 Le ticket signé codé en Norito contient des octets bruts du ticket ; ответы включают
 `signed_ticket_b64` et `signed_ticket_fingerprint_hex` pour la relecture des empreintes digitales.
@@ -106,10 +106,10 @@ La procédure `signed = true` est ouverte, si le secret du signataire n'est pas 
 3. **Démarrez le redémarrage.** Démarrez l'unité système ou le conteneur après cela, comme
    la gouvernance объявит rotation bascule. Le service ne prend pas en charge le rechargement à chaud ; pour
    применения нового descripteur commit требуется redémarrage.
-4. **Провалидируйте.** Выпустите ticket через `POST /v2/puzzle/mint` и подтвердите,
+4. **Провалидируйте.** Выпустите ticket через `POST /v1/puzzle/mint` и подтвердите,
    C'est `difficulty` et `expires_at` qui correspondent à une nouvelle politique. Rapport de trempage
    (`docs/source/soranet/reports/pow_resilience.md`) permet d'éliminer les limites de latence
-   для справки. Alors jetons un coup d'oeil, запросите `/v2/token/config`, чтобы убедиться,
+   для справки. Alors jetons un coup d'oeil, запросите `/v1/token/config`, чтобы убедиться,
    Les empreintes digitales de l'émetteur annoncées et le nombre de révocations sont disponibles.
 
 ## Procédure de désactivation d'urgence
@@ -120,7 +120,7 @@ La procédure `signed = true` est ouverte, si le secret du signataire n'est pas 
    descripteurs de la porte Argon2 hors ligne.
 3. Utilisez le service de relais et de puzzle pour effectuer une analyse.
 4. Surveillez le `soranet_handshake_pow_difficulty` pour savoir ce qui se passe.
-   J'ai ouvert la session hashcash et j'ai vérifié qu'il s'agissait de `/v2/puzzle/config`.
+   J'ai ouvert la session hashcash et j'ai vérifié qu'il s'agissait de `/v1/puzzle/config`.
    сообщает `puzzle = null`.
 
 ## Surveillance et alerte- **SLO de latence :** Remplacez le `soranet_handshake_latency_seconds` et le P95
@@ -130,16 +130,16 @@ La procédure `signed = true` est ouverte, si le secret du signataire n'est pas 
   pour les temps de recharge `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Alignement du puzzle :** `soranet_handshake_pow_difficulty` должен совпадать с
-  difficulté из `/v2/puzzle/config`. Diversification de la configuration de relais obsolète
+  difficulté из `/v1/puzzle/config`. Diversification de la configuration de relais obsolète
   ou un redémarrage imminent.
-- **Préparation au jeton :** Alerte, si `/v2/token/config` n'est pas disponible
+- **Préparation au jeton :** Alerte, si `/v1/token/config` n'est pas disponible
   `enabled = false` ou `revocation_source` utilisent des horodatages obsolètes. Opérateurs
   Vous devez faire pivoter le fichier de révocation Norito à partir de la CLI pour que vous puissiez le faire.
   le point final est défini.
 - **Santé du service :** Vérifiez `/healthz` dans la cadence de vivacité et l'alerte,
-  Si `/v2/puzzle/mint` utilise HTTP 500 (incompatibilité des paramètres Argon2
+  Si `/v1/puzzle/mint` utilise HTTP 500 (incompatibilité des paramètres Argon2
   ou échecs RNG). Les méthodes de création de jetons sont compatibles avec HTTP 4xx/5xx
-  `/v2/token/mint` ; повторяющиеся сбои следует считать condition de pagination.
+  `/v1/token/mint` ; повторяющиеся сбои следует считать condition de pagination.
 
 ## Conformité et journalisation d'audit
 

@@ -31,7 +31,7 @@ Supongo que la pila de orquestación libre bajo SF-6 está ya desplegada (`soraf
 > **Voir aussi:** El [Runbook d'exploitation de l'orchestrateur](./orchestrator-ops.md) aplica los procedimientos de ejecución (captura del marcador, bases de implementación de etapas, reversión). Utilice les deux références ensemble lors des changements en producción.
 
 ## 1. Validación previa al despliegue1. **Confirmar las entradas de gobierno.**
-   - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` con cargas útiles de capacidad de playa y presupuestos de flujo. Valide a través de `/v2/sorafs/providers` y compare los campeones de capacidad de los asistentes.
+   - Todos los proveedores candidatos deben publicar sobres `ProviderAdvertV1` con cargas útiles de capacidad de playa y presupuestos de flujo. Valide a través de `/v1/sorafs/providers` y compare los campeones de capacidad de los asistentes.
    - Las instantáneas de télémétrie fournissant les taux de latence/échec doivent dater de moins de 15 minutos antes de cada ejecución canary.
 2. **Preparar la configuración.**
    - Continúe la configuración JSON del orquestador en la arborescencia `iroha_config` en sofás:

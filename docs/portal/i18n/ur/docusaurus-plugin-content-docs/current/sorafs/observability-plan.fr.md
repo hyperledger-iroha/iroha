@@ -84,7 +84,7 @@ ID: مشاہدہ کرنے والا منصوبہ
 | `sorafs_node_por_failure_total` | کاؤنٹر | `provider_id` | ناکام پور نمونوں کا مونوٹونک کاؤنٹر۔ |
 | `torii_sorafs_storage_bytes_*` ، `torii_sorafs_storage_por_*` | گیج | `provider` | استعمال شدہ بائٹس کے لئے موجودہ Prometheus گیجز ، قطار کی گہرائی ، ان فلائٹ پور گنتی کے لئے۔ |
 | `torii_sorafs_capacity_*` ، `torii_sorafs_uptime_bps` ، `torii_sorafs_por_bps` | گیج | `provider` | سپلائر کی گنجائش/کامیاب اپ ٹائم ڈیٹا صلاحیت ڈیش بورڈ میں بے نقاب ہے۔ |
-| `torii_sorafs_por_ingest_backlog` ، `torii_sorafs_por_ingest_failures_total` | گیج | `provider` ، `manifest` | بیک بلاگ کی گہرائی کے علاوہ مجموعی ناکامی کاؤنٹرز برآمد کیے جاتے ہیں جب ہر بار `/v2/sorafs/por/ingestion/{manifest}` سے استفسار کیا جاتا ہے ، جس سے "پور اسٹالز" پینل/الرٹ کھلایا جاتا ہے۔ |
+| `torii_sorafs_por_ingest_backlog` ، `torii_sorafs_por_ingest_failures_total` | گیج | `provider` ، `manifest` | بیک بلاگ کی گہرائی کے علاوہ مجموعی ناکامی کاؤنٹرز برآمد کیے جاتے ہیں جب ہر بار `/v1/sorafs/por/ingestion/{manifest}` سے استفسار کیا جاتا ہے ، جس سے "پور اسٹالز" پینل/الرٹ کھلایا جاتا ہے۔ |
 
 ### بروقت بازیافت (POTR) اور chunk SLA کا ثبوت
 

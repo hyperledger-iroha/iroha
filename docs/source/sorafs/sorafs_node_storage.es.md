@@ -165,9 +165,9 @@ las APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】
 > El gateway de Torii ahora expone helpers de solo lectura respaldados por el
 > mismo `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — devuelve el manifiesto
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — devuelve el manifiesto
 >   Norito almacenado (base64) junto con digest/metadatos.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — devuelve el JSON del plan
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — devuelve el JSON del plan
 >   de chunks determinista (`chunk_fetch_specs`) para herramientas downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Estos endpoints reflejan la salida de la CLI para que los pipelines puedan
@@ -217,12 +217,12 @@ las APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】
 ### Integración de declaraciones de capacidad y scheduling
 
 - Torii ahora retransmite actualizaciones `CapacityDeclarationRecord` desde
-  `/v2/sorafs/capacity/declare` al `CapacityManager` embebido, de modo que cada
+  `/v1/sorafs/capacity/declare` al `CapacityManager` embebido, de modo que cada
   nodo construye una vista en memoria de sus asignaciones de chunker y lane
   comprometidas. El manager expone snapshots de solo lectura para telemetría
-  (`GET /v2/sorafs/capacity/state`) y aplica reservas por perfil o por lane antes
+  (`GET /v1/sorafs/capacity/state`) y aplica reservas por perfil o por lane antes
   de aceptar nuevas órdenes.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- El endpoint `/v2/sorafs/capacity/schedule` acepta payloads `ReplicationOrderV1`
+- El endpoint `/v1/sorafs/capacity/schedule` acepta payloads `ReplicationOrderV1`
   emitidos por gobernanza. Cuando la orden apunta al proveedor local, el manager
   verifica scheduling duplicado, valida capacidad de chunker/lane, reserva la
   porción y devuelve un `ReplicationPlan` que describe la capacidad restante
@@ -230,7 +230,7 @@ las APIs de Torii.【crates/sorafs_node/tests/cli.rs:1】
   para otros proveedores se reconocen con una respuesta `ignored` para facilitar
   flujos multi-operador.【crates/iroha_torii/src/routing.rs:4845】
 - Los hooks de finalización (p. ej., disparados tras una ingesta exitosa) llaman
-  a `POST /v2/sorafs/capacity/complete` para liberar reservas vía
+  a `POST /v1/sorafs/capacity/complete` para liberar reservas vía
   `CapacityManager::complete_order`. La respuesta incluye un snapshot
   `ReplicationRelease` (totales restantes, residuales de chunker/lane) para que
   las herramientas de orquestación puedan encolar la siguiente orden sin

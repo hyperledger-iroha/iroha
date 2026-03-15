@@ -126,8 +126,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > Установите Torii и установите флажок `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — манифест Norito المخزن (base64) для дайджеста/метаданных.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — создать файл JSON (`chunk_fetch_specs`) в нисходящем направлении.【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — манифест Norito المخزن (base64) для дайджеста/метаданных.【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — создать файл JSON (`chunk_fetch_specs`) в нисходящем направлении.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Доступ к CLI и доступ к скриптам для HTTP 【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -150,9 +150,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 6. **Уведомления/переговоры**:
    - Установите штифты для крепления на крючках. Его слова: Сэнсэй Сейлз (во главе TTL وLRU) выступил в Нью-Йорке. Нажмите на кнопку и открепите ее.
 
-### تكامل إعلان السعة والجدولة- Для Torii установите `CapacityDeclarationRecord` для `/v2/sorafs/capacity/declare` для `CapacityManager`. Он находится в центре города в районе Чанкера/переулка в районе Сан-Франциско. Доступ к файлу только для чтения (`GET /v2/sorafs/capacity/state`) Загрузите файл.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Конечная точка `/v2/sorafs/capacity/schedule` запускается `ReplicationOrderV1` в исходном состоянии. Он был создан в 1990-х годах в Нью-Йорке и в 1990-х годах. chunker/lane, ويحجز الشريحة, ويعيد `ReplicationPlan` для настройки оркестровки. متابعة الإدخال. يتم الإقرار بالأوامر الخاصة Pمزوّدين آخرين باستجابة `ignored` لتسهيل سير 【crates/iroha_torii/src/routing.rs:4845】
-- Дополнительные крючки الإكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v2/sorafs/capacity/complete` لإطلاق Приложение `CapacityManager::complete_order`. Добавление `ReplicationRelease` (отображение фрагмента/дорожки) с оркестровкой Во время опроса в Вашингтоне. Сэнсэй Сэнсэйз в фильме «Старый мир» الإدخال.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+### تكامل إعلان السعة والجدولة- Для Torii установите `CapacityDeclarationRecord` для `/v1/sorafs/capacity/declare` для `CapacityManager`. Он находится в центре города в районе Чанкера/переулка в районе Сан-Франциско. Доступ к файлу только для чтения (`GET /v1/sorafs/capacity/state`) Загрузите файл.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- Конечная точка `/v1/sorafs/capacity/schedule` запускается `ReplicationOrderV1` в исходном состоянии. Он был создан в 1990-х годах в Нью-Йорке и в 1990-х годах. chunker/lane, ويحجز الشريحة, ويعيد `ReplicationPlan` для настройки оркестровки. متابعة الإدخال. يتم الإقرار بالأوامر الخاصة Pمزوّدين آخرين باستجابة `ignored` لتسهيل سير 【crates/iroha_torii/src/routing.rs:4845】
+- Дополнительные крючки الإكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v1/sorafs/capacity/complete` لإطلاق Приложение `CapacityManager::complete_order`. Добавление `ReplicationRelease` (отображение фрагмента/дорожки) с оркестровкой Во время опроса в Вашингтоне. Сэнсэй Сэнсэйз в фильме «Старый мир» الإدخال.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - يمكن تعديل `TelemetryAccumulator` المضمن عبر `NodeHandle::update_telemetry`, مما يسمح لعمال الخلفية بتسجيل. Проверьте PoR/время безотказной работы и проверьте внутренние компоненты `CapacityTelemetryV1`. Scheduler.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### التكاملات والعمل المستقبلي

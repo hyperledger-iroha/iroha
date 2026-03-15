@@ -130,7 +130,7 @@ la raison). Lors des tests d alerting, soumettez un payload connu via:
 iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
-Surveillez `/v2/events/sse` avec un stream filtre pour prouver que les SDK voient
+Surveillez `/v1/events/sse` avec un stream filtre pour prouver que les SDK voient
 les memes donnees: reutilisez le one-liner Python de {doc}`torii/sumeragi_evidence_app_api`
 pour construire le filtre et capturez les frames `data:` brutes. Les payloads SSE
  doivent echoer le kind d evidence et le signer vu dans la sortie CLI.
@@ -170,7 +170,7 @@ Suivre cette checklist garde les preuves d alea VRF et d evidence de slashing
   corrigez le peer fautif avant de relancer le test.
 - **Evidence ingestion stalls** - Quand `sumeragi_evidence_records_total` stagne alors
   que les tests de chaos emettent des fautes, lancez `iroha ops sumeragi evidence count`
-  sur plusieurs validateurs et confirmez que `/v2/sumeragi/evidence/count` correspond
+  sur plusieurs validateurs et confirmez que `/v1/sumeragi/evidence/count` correspond
   a la sortie CLI. Toute divergence signifie que les consommateurs SSE/webhook peuvent
   etre stale, donc re-soumettez un fixture connu et escaladez aux mainteneurs Torii si
   le compteur ne s incremente pas.

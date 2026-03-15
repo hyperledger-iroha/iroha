@@ -30,7 +30,7 @@ qobiq eksportidan.
 
 - `npm` yoki `pnpm` bilan 18.18+ tugun.
 - `cargo run -p sorafs_car --features cli --bin sorafs_cli` dan `sorafs_cli`.
-- Torii URL manzili, `/v2/sorafs/*` va vakolatli hisob/maxfiy kalit
+- Torii URL manzili, `/v1/sorafs/*` va vakolatli hisob/maxfiy kalit
   manifest va taxalluslarni yuborishi mumkin.
 - OIDC emitenti (GitHub Actions, GitLab, ish yukining identifikatori va boshqalar)
   `SIGSTORE_ID_TOKEN`.
@@ -892,7 +892,7 @@ Ishni boshlashdan oldin quyidagi ombor sirlarini/o'zgaruvchilarini sozlang:
 
 | Ism | Maqsad |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | `/v2/sorafs/pin/register`ni ochib beruvchi Torii xost. |
+| `DOCS_SORAFS_TORII_URL` | `/v1/sorafs/pin/register`ni ochib beruvchi Torii xost. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Epoch identifikatori taqdimotlar bilan yozib olingan. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Manifestni topshirish uchun imzolash vakolati. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` `true` bo'lganda manifestga bog'langan taxallus korteji. |

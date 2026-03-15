@@ -22,11 +22,11 @@ Umumiy koʻrinish
 - SDK qamrovi:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` qaytaradi `GovernanceProposalResult` (holat/turdagi maydonlarni normallashtirish), `ToriiClient.get_governance_referendum_typed` qaytaradi `GovernanceReferendumResult`, I18NI000000000, I18NI000000000, I18NI000000001 `ToriiClient.get_governance_locks_typed` `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` `GovernanceUnlockStats`, `ToriiClient.list_governance_instances_typed` esa `GovernanceInstancesPage`, misollar orqali bizga terilgan kirishni ta’minlaydi.
 - Python engil mijozi (`iroha_torii_client`): `ToriiClient.finalize_referendum` va `ToriiClient.enact_proposal` `GovernanceInstructionDraft` to'plamlarini qaytaradi (Torii skeletini o'rash, I18NI55000 qo'llanmasini tuzishdan qochganda), Oqimlarni yakunlash/aniqlash.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` takliflar, referendumlar, hisob-kitoblar, blokirovkalar, blokirovkalar uchun yozilgan yordamchilarni koʻrsatadi va endi `listGovernanceInstances(namespace, options)` va kengashning soʻnggi nuqtalari (I18NI000000590X, I18NI0000005900X, I18NI00000059000X `governancePersistCouncil`, `getGovernanceCouncilAudit`) shuning uchun Node.js mijozlari `/v2/gov/instances/{ns}` sahifalarini ajratishi va mavjud shartnoma namunalari roʻyxati bilan bir qatorda VRF tomonidan qoʻllab-quvvatlanadigan ish oqimlarini boshqarishi mumkin.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` takliflar, referendumlar, hisob-kitoblar, blokirovkalar, blokirovkalar uchun yozilgan yordamchilarni koʻrsatadi va endi `listGovernanceInstances(namespace, options)` va kengashning soʻnggi nuqtalari (I18NI000000590X, I18NI0000005900X, I18NI00000059000X `governancePersistCouncil`, `getGovernanceCouncilAudit`) shuning uchun Node.js mijozlari `/v1/gov/instances/{ns}` sahifalarini ajratishi va mavjud shartnoma namunalari roʻyxati bilan bir qatorda VRF tomonidan qoʻllab-quvvatlanadigan ish oqimlarini boshqarishi mumkin.
 
 Yakuniy nuqtalar
 
-- POST `/v2/gov/proposals/deploy-contract`
+- POST `/v1/gov/proposals/deploy-contract`
   - So'rov (JSON):
     {
       "namespace": "ilovalar",
@@ -43,30 +43,30 @@ Yakuniy nuqtalar
   - Tasdiqlash: tugunlar taqdim etilgan `abi_version` uchun `abi_hash` ni kanoniklashtiradi va mos kelmaslikni rad etadi. `abi_version = "v1"` uchun kutilgan qiymat `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
 
 Contracts API (joylashtirish)
-- POST `/v2/contracts/deploy`
+- POST `/v1/contracts/deploy`
   - So'rov: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Xulq-atvor: IVM dastur tanasidan `code_hash` va `abi_version` sarlavhasidan `abi_hash` ni hisoblaydi, so‘ngra `RegisterSmartContractCode` (manifest) va I10040l ni taqdim etadi `.to` bayt) `authority` nomidan.
   - Javob: { "ok": rost, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Tegishli:
-    - GET `/v2/contracts/code/{code_hash}` → saqlangan manifestni qaytaradi
-    - `/v2/contracts/code-bytes/{code_hash}` ni oling → `{ code_b64 }`ni qaytaradi
-- POST `/v2/contracts/instance`
+    - GET `/v1/contracts/code/{code_hash}` → saqlangan manifestni qaytaradi
+    - `/v1/contracts/code-bytes/{code_hash}` ni oling → `{ code_b64 }`ni qaytaradi
+- POST `/v1/contracts/instance`
   - So'rov: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Xulq-atvor: Taqdim etilgan baytekodni joylashtiradi va `(namespace, contract_id)` xaritalashni `ActivateContractInstance` orqali darhol faollashtiradi.
   - Javob: { "ok": rost, "nom maydoni": "ilovalar", "kontrakt_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
 Taxallus xizmati
-- POST `/v2/aliases/voprf/evaluate`
+- POST `/v1/aliases/voprf/evaluate`
   - So'rov: { "blinded_element_hex": "..." }
   - Javob: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - `backend` baholovchining amalga oshirilishini aks ettiradi. Joriy qiymat: `blake2b512-mock`.
   - Eslatmalar: `iroha.alias.voprf.mock.v1` domen ajratish bilan Blake2b512 qo'llaydigan deterministik soxta baholovchi. Ishlab chiqarish VOPRF quvur liniyasi Iroha orqali o'tkazilgunga qadar sinov asboblari uchun mo'ljallangan.
   - Xatolar: noto'g'ri tuzilgan hex kiritishda HTTP `400`. Torii dekoder xato xabari bilan Norito `ValidationFail::QueryFailed::Conversion` konvertini qaytaradi.
-- POST `/v2/aliases/resolve`
+- POST `/v1/aliases/resolve`
   - So'rov: { "taxallus": "GB82 WEST 1234 5698 7654 32" }
   - Javob: { "taxallus": "GB82WEST12345698765432", "account_id": "i105...", "indeks": 0, "manba": "iso_bridge" }
   - Eslatmalar: ISO ko'prigining ish vaqti bosqichini talab qiladi (`[iso_bridge.account_aliases]`, `iroha_config`). Torii qidirishdan oldin bo'sh joy va katta harflarni olib tashlash orqali taxalluslarni normallashtiradi. Taxallus mavjud bo'lmaganda 404 va ISO ko'prigining ishlash vaqti o'chirilganda 503 qaytariladi.
-- POST `/v2/aliases/resolve_index`
+- POST `/v1/aliases/resolve_index`
   - So'rov: { "indeks": 0 }
   - Javob: { "indeks": 0, "taxallus": "GB82WEST12345698765432", "account_id": "i105...", "manba": "iso_bridge" }
   - Eslatmalar: taxallus indekslari konfiguratsiya tartibidan (0-asosli) deterministik tarzda tayinlanadi. Taxallus attestatsiya hodisalari uchun audit izlarini yaratish uchun mijozlar javoblarni oflayn rejimda keshlashi mumkin.
@@ -77,7 +77,7 @@ Kod o'lchami qopqog'i
   - Standart: 16 Mb. `.to` tasvir uzunligi chegaradan oshib ketganda tugunlar `RegisterSmartContractBytes` ni oʻzgarmas buzilish xatosi bilan rad etadi.
   - Operatorlar `SetParameter(Custom)` ni `id = "max_contract_code_bytes"` va raqamli foydali yukni taqdim etish orqali sozlashlari mumkin.
 
-- POST `/v2/gov/ballots/zk`
+- POST `/v1/gov/ballots/zk`
   - So'rov: { "avtoritet": "i105...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "ommaviy": {…} }
   - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
   - Eslatmalar:
@@ -85,12 +85,12 @@ Kod o'lchami qopqog'i
     - Miqdorni qisqartirishga yoki amal qilish muddatini qisqartirishga urinayotgan ZK qayta ovozlari `BallotRejected` diagnostikasi bilan server tomonida rad etiladi.
     - Shartnomaning bajarilishi `SubmitBallot` navbati oldidan `ZK_VOTE_VERIFY_BALLOT` chaqirilishi kerak; xostlar bir martalik mandalni majbur qiladi.
 
-- POST `/v2/gov/ballots/plain`
+- POST `/v1/gov/ballots/plain`
   - So'rov: { "avtoritet": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "egasi": "i105...", "summa": "1000", "davomiylik_bloklar": 6000, "absp_taxminiy"
   - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }
   - Eslatmalar: Qayta ovoz berish faqat uzaytiriladi - yangi byulleten mavjud blokirovka miqdorini yoki amal qilish muddatini kamaytira olmaydi. `owner` tranzaksiya vakolatiga teng bo'lishi kerak. Minimal davomiylik `conviction_step_blocks`.
 
-- POST `/v2/gov/finalize`
+- POST `/v1/gov/finalize`
   - So'rov: { "referendum_id": "r1", "proposal_id": "...64hex", "hokimiyat": "i105...?", "private_key": "...?" }
   - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - Zanjirdagi effekt (joriy iskala): tasdiqlangan joylashtirish taklifini amalga oshirish kutilgan `abi_hash` bilan `code_hash` tomonidan kalitlangan minimal `ContractManifest` kiritadi va taklifni Qabul qilingan deb belgilaydi. Agar boshqa `abi_hash` bilan `code_hash` uchun manifest allaqachon mavjud bo'lsa, qabul qilish rad etiladi.
@@ -99,22 +99,22 @@ Kod o'lchami qopqog'i
     - `h_end` da avtomatik yopish faqat oddiy referendum uchun tasdiqlangan/rad etilgan chiqaradi; ZK referendumi yakuniy hisob topshirilmaguncha va `FinalizeReferendum` bajarilmaguncha yopiq qoladi.
     - Saylov ishtirokini tekshirishda faqat tasdiqlash+rad etishdan foydalaniladi; betaraf bo'lish saylovchilarning ishtirokini hisobga olmaydi.
 
-- POST `/v2/gov/enact`
+- POST `/v1/gov/enact`
   - So'rov: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "pastki": 0, "yuqori": 0 }?, "hokimiyat": "i105...?", "private_key": "...?" }
   - Javob: { "ok": rost, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Eslatmalar: Torii imzolangan bitimni `authority`/`private_key` taqdim etilganda taqdim etadi; aks holda u mijozlar imzolashi va topshirishi uchun skeletni qaytaradi. Preimage ixtiyoriy va hozirda ma'lumotlidir.
 
-- `/v2/gov/proposals/{id}` OLING
+- `/v1/gov/proposals/{id}` OLING
   - `{id}` yo'li: taklif identifikatori hex (64 belgi)
   - Javob: { "topildi": bool, "taklif": { … }? }
 
-- `/v2/gov/locks/{rid}` OLING
+- `/v1/gov/locks/{rid}` OLING
   - `{rid}` yo'li: referendum identifikatori qatori
   - Javob: { "topildi": bool, "referendum_id": "rid", "qulflar": { … }? }
 
-- `/v2/gov/council/current` OLING
+- `/v1/gov/council/current` OLING
   - Javob: { "davr": N, "a'zolar": [{ "account_id": "..." }, …] }
-  - Eslatmalar: Qachon mavjud bo'lsa, doimiy kengashni qaytaradi; aks holda konfiguratsiya qilingan ulush aktivi va chegaralari yordamida deterministik qaytarilish hosil qiladi (jonli VRF isbotlari zanjirda saqlanib qolguncha VRF spetsifikatsiyasini aks ettiradi).- POST `/v2/gov/council/derive-vrf` (xususiyat: gov_vrf)
+  - Eslatmalar: Qachon mavjud bo'lsa, doimiy kengashni qaytaradi; aks holda konfiguratsiya qilingan ulush aktivi va chegaralari yordamida deterministik qaytarilish hosil qiladi (jonli VRF isbotlari zanjirda saqlanib qolguncha VRF spetsifikatsiyasini aks ettiradi).- POST `/v1/gov/council/derive-vrf` (xususiyat: gov_vrf)
   - So'rov: { "komitet_size": 21, "davr": 123? , "nomzodlar": [{ "account_id": "...", "variant": "Oddiy|Kichik", "pk_b64": "...", "proof_b64": "..." }, …] }
   - Xulq-atvor: har bir nomzodning VRF isbotini `chain_id`, `epoch` va oxirgi blok xesh-mayoqidan olingan kanonik kiritishga nisbatan tekshiradi; chiqish baytlari bo'yicha saralash desc tiebreakers bilan; yuqori `committee_size` a'zolarini qaytaradi. Davom etmaydi.
   - Javob: { "davr": N, "a'zolar": [{ "account_id": "..." } …], "jami_nomzodlar": M, "tasdiqlangan": K }
@@ -189,7 +189,7 @@ Runtime Upgrade Hooks
 - Kancani qondiradigan tranzaksiyalar manifest kvorumi talab qiladigan har qanday validator tasdiqlashlari bilan bir qatorda `gov_upgrade_id=<value>` metamaʼlumotlarini (yoki manifestda aniqlangan kalitni) oʻz ichiga olishi kerak.
 
 Qulaylik so'nggi nuqtasi
-- POST `/v2/gov/protected-namespaces` - `gov_protected_namespaces` to'g'ridan-to'g'ri tugunga qo'llaniladi.
+- POST `/v1/gov/protected-namespaces` - `gov_protected_namespaces` to'g'ridan-to'g'ri tugunga qo'llaniladi.
   - So'rov: { "namespaces": ["ilovalar", "tizim"] }
   - Javob: { "ok": rost, "qo'llaniladi": 1 }
   - Eslatmalar: Administrator/test uchun mo'ljallangan; sozlangan bo'lsa, API tokenini talab qiladi. Ishlab chiqarish uchun `SetParameter(Custom)` bilan imzolangan tranzaksiyani topshiring.
@@ -198,7 +198,7 @@ CLI yordamchilari
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - Nomlar maydoni uchun shartnoma misollarini olib keladi va quyidagilarni tekshiradi:
     - Torii har bir `code_hash` uchun bayt kodini saqlaydi va uning Blake2b-32 dayjesti `code_hash` bilan mos keladi.
-    - `/v2/contracts/code/{code_hash}` ostida saqlangan manifest `code_hash` va `abi_hash` qiymatlariga mos kelishi haqida xabar beradi.
+    - `/v1/contracts/code/{code_hash}` ostida saqlangan manifest `code_hash` va `abi_hash` qiymatlariga mos kelishi haqida xabar beradi.
     - `(namespace, contract_id, code_hash, abi_hash)` uchun qabul qilingan boshqaruv taklifi tugun foydalanadigan bir xil taklif-identifikatori orqali olingan.
   - Har bir shartnoma bo'yicha `results[]` (muammolar, manifest/kod/takliflar xulosalari) va agar bostirilmasa, bir qatorli xulosa bilan JSON hisobotini chiqaradi (`--no-summary`).
   - Himoyalangan nom maydonlarini tekshirish yoki boshqaruv tomonidan boshqariladigan joylashtirish ish oqimlarini tekshirish uchun foydalidir.
@@ -216,7 +216,7 @@ CLI yordamchilari
   - `vote --mode zk` qisqacha chiqish oynalari shifrlangan koʻrsatma barmoq izi va odam oʻqishi mumkin boʻlgan saylov byulletenlarini (`owner`, `amount`, `direction`, `direction` imzolashdan oldin) oʻz ichiga oladi.
 
 Hodisalar ro'yxati
-- GET `/v2/gov/instances/{ns}` - nom maydoni uchun faol shartnoma misollarini ro'yxatlaydi.
+- GET `/v1/gov/instances/{ns}` - nom maydoni uchun faol shartnoma misollarini ro'yxatlaydi.
   - So'rov parametrlari:
     - `contains`: `contract_id` pastki qatori boʻyicha filtrlash (harf-katta sezgir)
     - `hash_prefix`: `code_hash_hex` olti burchakli prefiks bo'yicha filtrlash (kichik harf)
@@ -226,10 +226,10 @@ Hodisalar ro'yxati
   - SDK yordamchisi: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) yoki `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
 
 Qulfni ochish (Operator/Audit)
-- `/v2/gov/unlocks/stats` OLING
+- `/v1/gov/unlocks/stats` OLING
   - Javob: { "balandlik_joriy": H, "muddati tugagan_qulflar": n, "muddati tugagan_referendum": m, "oxirgi_supurish_balandligi": S }
   - Eslatmalar: `last_sweep_height` muddati o'tgan qulflar tozalangan va saqlanib qolgan eng so'nggi blok balandligini aks ettiradi. `expired_locks_now` `expiry_height <= height_current` bilan blokirovka yozuvlarini skanerlash orqali hisoblanadi.
-- POST `/v2/gov/ballots/zk-v1`
+- POST `/v1/gov/ballots/zk-v1`
   - So'rov (v1 uslubidagi DTO):
     {
       "hokimiyat": "i105...",
@@ -245,7 +245,7 @@ Qulfni ochish (Operator/Audit)
       "direction": "Ha|Yo'q|Tixtash kerakmi?",
       "nullifier": "blake2b32:...64hex?"
     }
-  - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }- POST `/v2/gov/ballots/zk-v1/ballot-proof` (xususiyat: `zk-ballot`)
+  - Javob: { "ok": rost, "qabul qilingan": rost, "tx_instructions": [{…}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (xususiyat: `zk-ballot`)
   - `BallotProof` JSON-ni bevosita qabul qiladi va `CastZkBallot` skeletini qaytaradi.
   - Talab:
     {
@@ -321,7 +321,7 @@ VRF jazolari `activation_lag_blocks` dan keyin avtomatik ravishda amalga oshiril
 
 Operatorlar va asboblar foydali yuklarni tekshirishi va qayta uzatishi mumkin:
 
-- Torii: `GET /v2/sumeragi/evidence` va `GET /v2/sumeragi/evidence/count`.
+- Torii: `GET /v1/sumeragi/evidence` va `GET /v1/sumeragi/evidence/count`.
 - CLI: `iroha ops sumeragi evidence list`, `… count` va `… submit --evidence-hex <payload>`.
 
 Boshqaruv dalillar baytlarini kanonik dalil sifatida ko'rib chiqishi kerak:
@@ -330,7 +330,7 @@ Boshqaruv dalillar baytlarini kanonik dalil sifatida ko'rib chiqishi kerak:
 2. **Agar kerak bo'lsa, bekor qiling** `CancelConsensusEvidencePenalty` hujjat yuki bilan `slashing_delay_blocks` muddati tugagunga qadar taqdim etish; yozuv `penalty_cancelled` va `penalty_cancelled_at_height` deb belgilangan va hech qanday kesish qo'llanilmaydi.
 3. **Jazoni bosqichma-bosqich belgilang** foydali yukni referendum yoki sudo yo'riqnomasiga kiritish (masalan, `Unregister::peer`). Bajarish foydali yukni qayta tasdiqlaydi; noto'g'ri shakllangan yoki eskirgan dalillar deterministik ravishda rad etiladi.
 4. **Keyingi topologiyani rejalashtiring**, shunda qoidabuzar validator darhol qayta qo‘shila olmaydi. Odatdagi oqimlar navbati `SetParameter(Sumeragi::NextMode)` va `SetParameter(Sumeragi::ModeActivationHeight)` yangilangan ro'yxat bilan.
-5. **Audit natijalari** `/v2/sumeragi/evidence` va `/v2/sumeragi/status` orqali dalil hisoblagichning ilg'orligini ta'minlash va boshqaruv olib tashlashni amalga oshirgan.
+5. **Audit natijalari** `/v1/sumeragi/evidence` va `/v1/sumeragi/status` orqali dalil hisoblagichning ilg'orligini ta'minlash va boshqaruv olib tashlashni amalga oshirgan.
 
 ### Birgalikda konsensus ketma-ketligi
 
@@ -345,11 +345,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- Ish vaqti va CLI `/v2/sumeragi/params` va `iroha --output-format text ops sumeragi params` orqali bosqichli parametrlarni ochib beradi, shuning uchun operatorlar faollashtirish balandligi va validator ro'yxatini tasdiqlashlari mumkin.
+- Ish vaqti va CLI `/v1/sumeragi/params` va `iroha --output-format text ops sumeragi params` orqali bosqichli parametrlarni ochib beradi, shuning uchun operatorlar faollashtirish balandligi va validator ro'yxatini tasdiqlashlari mumkin.
 - Boshqaruvni avtomatlashtirish har doim:
   1. Dalillarga asoslangan olib tashlash (yoki qayta tiklash) to'g'risidagi qarorni yakunlang.
   2. `mode_activation_height = h_current + activation_lag_blocks` bilan keyingi qayta konfiguratsiyani navbatga qo'ying.
-  3. `effective_consensus_mode` kutilgan balandlikda aylanguncha monitor `/v2/sumeragi/status`.
+  3. `effective_consensus_mode` kutilgan balandlikda aylanguncha monitor `/v1/sumeragi/status`.
 
 Validatorlarni aylantiruvchi yoki kesishni qo'llaydigan har qanday skript **kechikishsiz faollashtirishga urinmasligi yoki topshirish parametrlarini o'tkazib yubormasligi kerak; bunday operatsiyalar rad etiladi va tarmoqni avvalgi rejimda qoldiradi.
 

@@ -277,7 +277,7 @@ fn por_status_outputs_table() {
     let manifest_hex = hex_encode([0x22; 32]);
     server.mock(|when, then| {
         when.method(GET)
-            .path("/v2/sorafs/por/status")
+            .path("/v1/sorafs/por/status")
             .query_param("manifest", manifest_hex.as_str());
         then.status(200)
             .header("content-type", "application/x-norito")
@@ -323,7 +323,7 @@ fn por_status_outputs_json() {
     };
     let body = to_bytes(&vec![status]).expect("encode status list");
     server.mock(|when, then| {
-        when.method(GET).path("/v2/sorafs/por/status");
+        when.method(GET).path("/v1/sorafs/por/status");
         then.status(200)
             .header("content-type", "application/x-norito")
             .body(body.clone());
@@ -375,7 +375,7 @@ fn por_trigger_posts_manual_challenge() {
 
     let trigger_mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/por/trigger")
+            .path("/v1/sorafs/por/trigger")
             .header("content-type", "application/x-norito");
         then.status(202)
             .header("content-type", "application/json")
@@ -406,7 +406,7 @@ fn por_export_writes_file() {
     let payload = b"PARQUET".to_vec();
     server.mock(|when, then| {
         when.method(GET)
-            .path("/v2/sorafs/por/export")
+            .path("/v1/sorafs/por/export")
             .query_param("start_epoch", "10");
         then.status(200)
             .header("content-type", "application/octet-stream")
@@ -482,7 +482,7 @@ fn por_report_outputs_markdown() {
     report.validate().expect("report validates");
     let body = to_bytes(&report).expect("encode report");
     server.mock(|when, then| {
-        when.method(GET).path("/v2/sorafs/por/report/2025-W12");
+        when.method(GET).path("/v1/sorafs/por/report/2025-W12");
         then.status(200)
             .header("content-type", "application/x-norito")
             .body(body.clone());
@@ -558,7 +558,7 @@ fn proof_stream_command_consumes_ndjson() {
 
     let server = MockServer::start();
     let _mock = server.mock(|when, then| {
-        when.method("POST").path("/v2/sorafs/proof/stream");
+        when.method("POST").path("/v1/sorafs/proof/stream");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
             .body(format!("{ndjson_line}\n"));
@@ -914,7 +914,7 @@ fn manifest_submit_posts_payload() {
 
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
-        when.method(POST).path("/v2/sorafs/pin/register");
+        when.method(POST).path("/v1/sorafs/pin/register");
         then.status(200)
             .header("Content-Type", "application/json")
             .body("{\"status\":\"ok\"}");
@@ -950,7 +950,7 @@ fn manifest_submit_posts_payload() {
     );
 
     let expected_endpoint = format!(
-        "{}/v2/sorafs/pin/register",
+        "{}/v1/sorafs/pin/register",
         server.base_url().trim_end_matches('/')
     );
     assert_eq!(
@@ -978,7 +978,7 @@ fn manifest_submit_rejects_chunk_digest_mismatch() {
 
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
-        when.method(POST).path("/v2/sorafs/pin/register");
+        when.method(POST).path("/v1/sorafs/pin/register");
         then.status(200).body("{\"status\":\"ok\"}");
     });
 
@@ -1035,7 +1035,7 @@ fn fetch_command_streams_payload_via_gateway() {
         let manifest_for_path = manifest_id_hex.clone();
         let mock = server.mock(move |when, then| {
             when.method(GET).path(format!(
-                "/v2/sorafs/storage/chunk/{}/{}",
+                "/v1/sorafs/storage/chunk/{}/{}",
                 manifest_for_path, digest_hex
             ));
             then.status(200).body(chunk_bytes.clone());
@@ -1892,7 +1892,7 @@ fn proof_stream_consumes_ndjson_and_reports_metrics() {
     let server = MockServer::start();
     let mock = server.mock(move |when, then| {
         when.method(POST)
-            .path("/v2/proof/stream")
+            .path("/v1/proof/stream")
             .header("content-type", "application/json")
             .header("accept", "application/x-ndjson");
         then.status(200)
@@ -1905,7 +1905,7 @@ fn proof_stream_consumes_ndjson_and_reports_metrics() {
         .arg("proof")
         .arg("stream")
         .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--gateway-url={}", server.url("/v2/proof/stream")))
+        .arg(format!("--gateway-url={}", server.url("/v1/proof/stream")))
         .arg("--provider-id=provider-1")
         .arg("--samples=2")
         .arg("--emit-events=false")
@@ -2487,7 +2487,7 @@ fn proof_stream_pdp_requests_use_samples() -> Result<(), Box<dyn std::error::Err
     let expected_samples: u32 = 16;
     let mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/proof/stream")
+            .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
@@ -2545,7 +2545,7 @@ fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::erro
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/proof/stream")
+            .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json")
             .body_includes("\"proof_kind\":\"potr\"")
             .body_includes(format!("\"deadline_ms\":{}", deadline_ms));
@@ -2604,7 +2604,7 @@ fn proof_stream_fails_when_gateway_reports_failure() -> Result<(), Box<dyn std::
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/proof/stream")
+            .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
@@ -2641,7 +2641,7 @@ fn proof_stream_respects_max_failures_override() -> Result<(), Box<dyn std::erro
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/proof/stream")
+            .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
@@ -2675,7 +2675,7 @@ fn proof_stream_verification_failures_trigger_exit() -> Result<(), Box<dyn std::
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/proof/stream")
+            .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
@@ -2711,7 +2711,7 @@ fn proof_stream_verification_budget_allows_overrides() -> Result<(), Box<dyn std
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/proof/stream")
+            .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
@@ -2752,7 +2752,7 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(POST)
-            .path("/v2/sorafs/proof/stream")
+            .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json")
             .body_includes("\"proof_kind\":\"potr\"");
         then.status(200)
@@ -2892,7 +2892,7 @@ fn fetch_command_streams_gateway_payload() {
 
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
-            "/v2/sorafs/storage/chunk/{}/{}",
+            "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex_encode(spec.digest)
         );
@@ -3022,7 +3022,7 @@ fn fetch_command_respects_direct_transports() {
 
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
-            "/v2/sorafs/storage/chunk/{}/{}",
+            "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex_encode(spec.digest)
         );
@@ -3145,7 +3145,7 @@ fn fetch_command_applies_policy_override() {
 
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
-            "/v2/sorafs/storage/chunk/{}/{}",
+            "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex_encode(spec.digest)
         );
@@ -3240,7 +3240,7 @@ fn fetch_command_uses_orchestrator_config_json() {
     let server = MockServer::start();
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
-            "/v2/sorafs/storage/chunk/{}/{}",
+            "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex_encode(spec.digest)
         );
@@ -3393,7 +3393,7 @@ fn fetch_command_persists_scoreboard_via_flag() {
     let server = MockServer::start();
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
-            "/v2/sorafs/storage/chunk/{}/{}",
+            "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex_encode(spec.digest)
         );
@@ -3509,7 +3509,7 @@ fn fetch_command_writes_local_proxy_manifest() {
     let server = MockServer::start();
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
-            "/v2/sorafs/storage/chunk/{}/{}",
+            "/v1/sorafs/storage/chunk/{}/{}",
             manifest_id_hex,
             hex_encode(spec.digest)
         );

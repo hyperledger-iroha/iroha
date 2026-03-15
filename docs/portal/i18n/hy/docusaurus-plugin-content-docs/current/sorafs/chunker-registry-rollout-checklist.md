@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
    գրացուցակը, որը վկայակոչված է `torii.sorafs.discovery.admission.envelopes_dir`-ի կողմից:
 3. Ստուգեք, որ մատակարարի գովազդները տարածվում են հայտնաբերման API-ի միջոցով.
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Կիրառեք մանիֆեստի/պլանի վերջնակետերը կառավարման վերնագրերով.
    ```bash

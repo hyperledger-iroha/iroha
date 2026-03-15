@@ -70,7 +70,7 @@ Tâches :
 
 | Componente | tache | Propietario(s) |
 |-----------|------|----------|
-| Servicio Torii | Expositor `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (búsqueda), `/v2/sorafs/aliases` (listar/vincular), `/v2/sorafs/replication` (pedidos/recibos). Fournir paginación + filtración. | Redes TL / Core Infraestructura |
+| Servicio Torii | Expositor `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (listar/vincular), `/v1/sorafs/replication` (pedidos/recibos). Fournir paginación + filtración. | Redes TL / Core Infraestructura |
 | Atestación | Incluir la altura/hash del registro en las respuestas; Agregue una estructura de certificación Norito proporcionada por los SDK. | Infraestructura básica |
 | CLI | Tenga en cuenta `sorafs_manifest_stub` o una nueva CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
 | SDK | Generar cliente de enlaces (Rust/Go/TS) después del esquema Norito; Agregar pruebas de integración. | Equipos SDK |
@@ -121,10 +121,10 @@ Paneles de control:
 5. Mettre à jour docs/runbooks y marque los elementos de la hoja de ruta como completos.
 
 Cada elemento de la lista de verificación SF-4 debe consultar este plan cuando el progreso esté registrado.
-La fachada REST muestra los puntos finales del listado certificado:- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` remiten los manifiestos con
+La fachada REST muestra los puntos finales del listado certificado:- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` remiten los manifiestos con
   vinculaciones de alias, órdenes de réplica y un objeto de certificación derivado del hash
   del último bloque.
-- `GET /v2/sorafs/aliases` e `GET /v2/sorafs/replication` catálogo de archivos expuestos
+- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` catálogo de archivos expuestos
   d'alias actif et le backlog des ordres de replication avec una paginación coherente
   et des filtres de statut.
 

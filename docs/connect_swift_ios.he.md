@@ -16,7 +16,7 @@ translator: manual
 `docs/connect_swift_integration.md` לקבלת הוראות מקצה לקצה לפני שממשיכים עם המקטע הזה.
 
 חבילת Swift כבר כוללת שכבת Connect מבוססת Norito:
-- `ConnectClient` מתחזק את חיבור ה-WebSocket (`/v2/connect/ws?...`) מעל `URLSessionWebSocketTask`.
+- `ConnectClient` מתחזק את חיבור ה-WebSocket (`/v1/connect/ws?...`) מעל `URLSessionWebSocketTask`.
 - `ConnectSession` מנהלת את מחזור החיים (open → approve/reject → sign → close) ומפענחת מעטפות מוצפנות לאחר הגדרת מפתחות כיוון.
 - `ConnectCrypto` מספקת יצירת מפתח X25519 וגזירת מפתחות כיוון התואמים לנוריטו, כך שאין צורך לממש HKDF/ChaChaPoly ידנית.
 - `ConnectEnvelope`/`ConnectControl` מייצגים את המסגרות הטיפוסיות שמספק גשר הנוריטו (`connect_norito_bridge`) ושומרות על פריות עם Android/Rust.
@@ -29,7 +29,7 @@ translator: manual
 ```swift
 import IrohaSwift
 
-let connectURL = URL(string: "wss://node.example/v2/connect/ws?sid=\(sidB64)&role=app")!
+let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
 var connectRequest = URLRequest(url: connectURL)
 connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 let connectClient = ConnectClient(request: connectRequest)
@@ -152,7 +152,7 @@ func base64url(_ data: Data) -> String {
               .replacingOccurrences(of: "=", with: "")
 }
 
-// יצירת סשן Connect: הלקוח מחשב sid ושולח POST ל-/v2/connect/session
+// יצירת סשן Connect: הלקוח מחשב sid ושולח POST ל-/v1/connect/session
 func createConnectSession(node: String, chainId: String, appEphemeralPk: Data, completion: @escaping (Result<(sidB64: String, tokenApp: String, tokenWallet: String), Error>) -> Void) {
     // sid = BLAKE2b-256("iroha-connect|sid|" || chain_id || app_pk || nonce16)
     let nonce16 = (0..<16).map { _ in UInt8.random(in: 0...255) }
@@ -164,7 +164,7 @@ func createConnectSession(node: String, chainId: String, appEphemeralPk: Data, c
     let sidB64 = base64url(sid)
 
     // שליחת JSON { sid, node }
-    let url = URL(string: node + "/v2/connect/session")!
+    let url = URL(string: node + "/v1/connect/session")!
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -187,7 +187,7 @@ func createConnectSession(node: String, chainId: String, appEphemeralPk: Data, c
 
 // הצטרפות ל-WS עם טוקן (URLSessionWebSocketTask)
 func joinWs(node: String, sid: String, role: String, token: String, onMessage: @escaping (Data)->Void) {
-    let wsUrl = node.replacingOccurrences(of: "http", with: "ws") + "/v2/connect/ws?sid=\(sid)&role=\(role)"
+    let wsUrl = node.replacingOccurrences(of: "http", with: "ws") + "/v1/connect/ws?sid=\(sid)&role=\(role)"
     var request = URLRequest(url: URL(string: wsUrl)!)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     let task = URLSession.shared.webSocketTask(with: request)
@@ -215,7 +215,7 @@ func joinWs(node: String, sid: String, role: String, token: String, onMessage: @
 ```
 
 הערות:
-- הלקוח מחשב sid בצד שלו ואז שולח `/v2/connect/session` עם אותו sid כדי לקבל אסימונים לכל תפקיד. בהצטרפות ל-WS יש להשתמש בטוקן.
+- הלקוח מחשב sid בצד שלו ואז שולח `/v1/connect/session` עם אותו sid כדי לקבל אסימונים לכל תפקיד. בהצטרפות ל-WS יש להשתמש בטוקן.
 - לאחר Approve יש לשלוח Close/Reject כמטענים מוצפנים.
 - עטיפת `aead` בתוך `ConnectFrameV1` דורשת מסגור Norito; מימשו בעזרת כריכות Norito שלכם.
 

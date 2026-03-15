@@ -155,8 +155,8 @@ Parameters (current defaults)
 - Smoothing (off by default): `smoothing_alpha` = 0.2, `max_adjust_ms_per_min` = 50
 
 Interfaces
-- Torii: `GET /v2/time/now` → `{ now, offset_ms, confidence_ms }`
-         `GET /v2/time/status` → peer statistics and recent offsets (for ops)
+- Torii: `GET /v1/time/now` → `{ now, offset_ms, confidence_ms }`
+         `GET /v1/time/status` → peer statistics and recent offsets (for ops)
 - Sumeragi: NTS provides timers/timeouts using `t_net`. Consensus validity
   never consults NTS.
 - Consensus rules: TTL is height‑based; time‑based trigger validity is checked

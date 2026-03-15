@@ -27,7 +27,7 @@ O serviço de streaming pode ser acessado por meio de rede social (SNS). Qual é
 
 | المتطلب | التفاصيل |
 |--------|----------|
-| Produtos | REST é `/v2/sns/*` e gRPC `sns.v1.Registrar`. Você pode usar Norito-JSON (`application/json`) e Norito-RPC (`application/x-norito`). |
+| Produtos | REST é `/v1/sns/*` e gRPC `sns.v1.Registrar`. Você pode usar Norito-JSON (`application/json`) e Norito-RPC (`application/x-norito`). |
 | Autenticação | O `Authorization: Bearer` e o mTLS são usados ​​como sufixo steward. نقاط النهاية الحساسة للحوكمة (congelar/descongelar, تعيينات محجوزة) تتطلب `scope=sns.admin`. |
 | حدود المعدل | O nome do bucket é `torii.preauth_scheme_limits`, mas o JSON é definido como burst para o seguinte: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
 | القياس | Torii é compatível com `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}`. Use o código `sns_registrar_status_total{result, suffix_id}`. |
@@ -106,15 +106,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | نقطة النهاية | الطريقة | الحمولة | الوصف |
 |---------|---------|---------|-------|
-| `/v2/sns/registrations` | POSTAR | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Não se preocupe, você pode usar um dispositivo de segurança/recuperação de energia. |
-| `/v2/sns/registrations/{selector}/renew` | POSTAR | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ graça/redenção من السياسة. |
-| `/v2/sns/registrations/{selector}/transfer` | POSTAR | `TransferNameRequestV1` | ينقل الملكية بعد ارفاق موافقات الحوكمة. |
-| `/v2/sns/registrations/{selector}/controllers` | COLOCAR | `UpdateControllersRequestV1` | Controladores de controle remoto; يتحقق من عناوين الحساب الموقعة. |
-| `/v2/sns/registrations/{selector}/freeze` | POSTAR | `FreezeNameRequestV1` | تجميد guardião/conselho. يتطلب تذكرة guardião e مرجع دفتر حوكمة. |
-| `/v2/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | فك التجميد بعد المعالجة؛ Você não pode substituir o valor. |
-| `/v2/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | تعين اسماء محجوزة بواسطة mordomo/conselho. |
-| `/v2/sns/policies/{suffix_id}` | OBTER | -- | Selecione `SuffixPolicyV1` (para o caso). |
-| `/v2/sns/registrations/{selector}` | OBTER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Ativo, Graça, الخ). |
+| `/v1/sns/registrations` | POSTAR | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Não se preocupe, você pode usar um dispositivo de segurança/recuperação de energia. |
+| `/v1/sns/registrations/{selector}/renew` | POSTAR | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ graça/redenção من السياسة. |
+| `/v1/sns/registrations/{selector}/transfer` | POSTAR | `TransferNameRequestV1` | ينقل الملكية بعد ارفاق موافقات الحوكمة. |
+| `/v1/sns/registrations/{selector}/controllers` | COLOCAR | `UpdateControllersRequestV1` | Controladores de controle remoto; يتحقق من عناوين الحساب الموقعة. |
+| `/v1/sns/registrations/{selector}/freeze` | POSTAR | `FreezeNameRequestV1` | تجميد guardião/conselho. يتطلب تذكرة guardião e مرجع دفتر حوكمة. |
+| `/v1/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | فك التجميد بعد المعالجة؛ Você não pode substituir o valor. |
+| `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | تعين اسماء محجوزة بواسطة mordomo/conselho. |
+| `/v1/sns/policies/{suffix_id}` | OBTER | -- | Selecione `SuffixPolicyV1` (para o caso). |
+| `/v1/sns/registrations/{selector}` | OBTER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Ativo, Graça, الخ). |
 
 **Seletor de extensão:** مقطع `{selector}` يقبل I105 او مضغوط او hex قياسي حسب ADDR-5; Torii é igual a `NameSelectorV1`.
 
@@ -175,7 +175,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` é um nome de usuário do `GovernanceHookV1` (id da proposta, hashes de voto, administrador/guardião). كل امر يعكس ببساطة نقطة النهاية `/v2/sns/registrations/{selector}/...` مقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii é compatível com SDKs.
+`--governance-json` é um nome de usuário do `GovernanceHookV1` (id da proposta, hashes de voto, administrador/guardião). كل امر يعكس ببساطة نقطة النهاية `/v1/sns/registrations/{selector}/...` مقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii é compatível com SDKs.
 
 ## 4. Como gRPC
 
@@ -210,7 +210,7 @@ Formato de fio: hash مخطط Norito في وقت الترجمة مسجل تحت
 
 Torii é um arquivo de configuração:
 
-1. ID da proposta: ID da proposta (`/v2/governance/proposals/{id}`) e `Approved`.
+1. ID da proposta: ID da proposta (`/v1/governance/proposals/{id}`) e `Approved`.
 2. Os hashes são usados ​​para criar hashes.
 3. O mordomo/tutor é o responsável por `SuffixPolicyV1`.
 
@@ -220,7 +220,7 @@ O código é `sns_err_governance_missing`.
 
 ### 6.1 تسجيل قياسي
 
-1. Use o `/v2/sns/policies/{suffix_id}` para obter a graça e a graça.
+1. Use o `/v1/sns/policies/{suffix_id}` para obter a graça e a graça.
 2. Código `RegisterNameRequestV1`:
    - `selector` é compatível com a etiqueta I105 (I105) e I105 (I105).
    - `term_years` é um problema.
@@ -245,7 +245,7 @@ O código é `sns_err_governance_missing`.
 
 ### 6.3 Guardião e substituição do guardião1. guardião يرسل `FreezeNameRequestV1` مع تذكرة تشير الى id حادث.
 2. Torii é compatível com `NameStatus::Frozen`, e `NameFrozen`.
-3. بعد المعالجة, يصدر المجلس substituição; Execute DELETE `/v2/sns/registrations/{selector}/freeze` em `GovernanceHookV1`.
+3. بعد المعالجة, يصدر المجلس substituição; Execute DELETE `/v1/sns/registrations/{selector}/freeze` em `GovernanceHookV1`.
 4. Torii é substituído por `NameUnfrozen`.
 
 ## 7. التحقق واكواد الخطا
@@ -263,7 +263,7 @@ Você pode usar `X-Iroha-Error-Code` e Norito JSON/NRPC.
 ## 8. ملاحظات التنفيذ
 
 - Torii يخزن المزادات المعلقة تحت `NameRecordV1.auction` ويرفض محاولات التسجيل المباشر بينما الحالة `PendingAuction`.
-- اثباتات الدفع تعيد استخدام ايصالات دفتر Norito; Você pode usar APIs de terceiros (`/v2/finance/sns/payments`).
+- اثباتات الدفع تعيد استخدام ايصالات دفتر Norito; Você pode usar APIs de terceiros (`/v1/finance/sns/payments`).
 - ينبغي للـ SDKs تغليف هذه النقاط بمساعدات قوية النوع حتى تتمكن المحافظ من عرض اسباب خطا e (`ERR_SNS_RESERVED`, país).
 
 ## 9. الخطوات التالية

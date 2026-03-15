@@ -31,7 +31,7 @@ Torii מנהל משא ומתן על גרסת API סמנטית (`major.minor`) ב
   - `torii_api_version_unsupported` — גרסה שאינה בקבוצת התמיכה של השרת.
   - `torii_api_version_too_old` — גרסה מתחת למינימום לכל משטח.
 
-נקודת הקצה `/v2/api/versions` מציגה את מטריצת התמיכה (`default`,
+נקודת הקצה `/v1/api/versions` מציגה את מטריצת התמיכה (`default`,
 `supported`, `min_proof_version`, אופציונלי `sunset_unix`) לצורכי אבחון וברירות
 מחדל של SDK. לקוחות צריכים לשלוח את הכותרת במפורש; ה‑CLI משתמש כעת ב‑`1.1`
 כברירת מחדל ומעביר overrides דרך `torii_api_version` בקובץ `client.toml`.

@@ -30,7 +30,7 @@ translation_last_reviewed: 2026-02-07
   Это было сделано в честь Дня святого Валентина.
 - Дэниел Пинсон проинформировал о хеш-значении манифеста.
   Он был в Кейптауне.
-- Код Torii (`/v2/da/commitments/*`) для подключения реле и SDK.
+- Код Torii (`/v1/da/commitments/*`) для подключения реле и SDK.
   Доступность всегда доступна в ближайшее время.
 - على ظرف `SignedBlockWire` عبر تمرير البنى الجديدة من خلال
   Установите флажок Norito для создания хеш-кода.
@@ -44,7 +44,7 @@ translation_last_reviewed: 2026-02-07
    `crates/iroha_core/src/block.rs`).
 3. **Сохраняющиеся/индексы** Создаются в WSV в зависимости от типа файла.
    (`iroha_core/src/wsv/mod.rs`).
-4. **Запустите RPC для Torii** для создания списка/запроса/подтверждения `/v2/da/commitments`.
+4. **Запустите RPC для Torii** для создания списка/запроса/подтверждения `/v1/da/commitments`.
 5. **Оборудование + светильники** Проверьте расположение проводов и доказательство.
    `integration_tests/tests/da/commitments.rs`.
 
@@ -131,9 +131,9 @@ Torii определяет конечные точки:
 
 | المسار | طريقة | حمولة | ملاحظات |
 |--------|---------|---------|---------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (отображение дорожки/эпохи/последовательности, нумерации страниц) | Загрузите `DaCommitmentPage` и создайте хеш-код. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (дорожка + хеш манифеста или кортеж `(epoch, sequence)`). | يعيد `DaCommitmentProof` (запись + код Меркла + хеш-код). |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Получение хэша без сохранения состояния без сохранения состояния Пакеты SDK доступны для использования в `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (отображение дорожки/эпохи/последовательности, нумерации страниц) | Загрузите `DaCommitmentPage` и создайте хеш-код. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (дорожка + хеш манифеста или кортеж `(epoch, sequence)`). | يعيد `DaCommitmentProof` (запись + код Меркла + хеш-код). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Получение хэша без сохранения состояния без сохранения состояния Пакеты SDK доступны для использования в `iroha_crypto`. |
 
 На сайте `iroha_data_model::da::commitment`. يقوم Torii بتركيب
 обработчики, конечные точки, принимающие токены/mTLS.

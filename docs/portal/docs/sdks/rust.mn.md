@@ -158,7 +158,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` `/v2/explorer/accounts/{id}/qr` JSON-г тусгадаг
+`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON-г тусгадаг
 гадаргуу: энэ нь каноник дансны id, кодоор илэрхийлэгдсэн үг хэллэгийг агуулдаг
 канон I105 literal, сүлжээний угтвар/алдаа засах мета өгөгдөл, QR хэмжээсүүд болон
 түрийвч/судлаачдын шууд оруулах боломжтой SVG ачаалал.

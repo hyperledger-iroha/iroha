@@ -83,7 +83,7 @@ alətlər status sənədlərini silmədən eyni parametrləri yükləyə bilər.
 
 1. Operatorlara paylamazdan əvvəl JSON snapşotunu yükləyin və onu hash edin/imzalayın.
 2. Qeydiyyatçı alətləri `suffix_id`, müddət məhdudiyyətləri və qiymətləri əks etdirməlidir.
-   sorğu `/v2/sns/*`-ə çatdıqda kataloqdan.
+   sorğu `/v1/sns/*`-ə çatdıqda kataloqdan.
 3. DNS/Gateway köməkçiləri GAR yaradan zaman qorunan etiket metadatasını oxuyur
    şablonlar, beləliklə DNS cavabları idarəetmə nəzarətləri ilə uyğunlaşdırılır.
 4. KPI əlavə iş etiketi tablosuna metadata şəkilçisi ilə ixrac edilir ki, xəbərdarlıqlar ilə uyğun gəlir

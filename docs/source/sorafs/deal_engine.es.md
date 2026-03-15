@@ -53,12 +53,12 @@ settlement.
 Torii expone endpoints dedicados para que los providers reporten uso y dirijan
 el ciclo de vida del acuerdo sin wiring ad hoc:
 
-- `POST /v2/sorafs/deal/usage` acepta telemetria `DealUsageReport` y retorna
+- `POST /v1/sorafs/deal/usage` acepta telemetria `DealUsageReport` y retorna
   resultados deterministas de contabilidad (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` finaliza la ventana actual, streameando el
+- `POST /v1/sorafs/deal/settle` finaliza la ventana actual, streameando el
   `DealSettlementRecord` resultante junto a un `DealSettlementV1` codificado en
   base64 listo para publicarse en Governance DAG.
-- El feed `/v2/events/sse` de Torii ahora difunde registros
+- El feed `/v1/events/sse` de Torii ahora difunde registros
   `SorafsGatewayEvent::DealUsage` que resumen cada submit de uso (epoch,
   GiB-hours medidos, contadores de tickets, cargos deterministas), registros
   `SorafsGatewayEvent::DealSettlement` que incluyen el snapshot canonico del

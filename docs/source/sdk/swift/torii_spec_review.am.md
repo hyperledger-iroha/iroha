@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-02-07
 
 This agenda schedules the Torii spec review called out in `roadmap.md` for the
 IOS2 Norito/parity milestone (`roadmap.md:1405`). The session aligns Swift,
-Torii, and SDK governance owners on `/v2/pipeline` plus Norito-RPC behaviour so
+Torii, and SDK governance owners on `/v1/pipeline` plus Norito-RPC behaviour so
 the CI parity work can proceed with a frozen spec and documented action items.
 
 ## Session Overview
@@ -27,7 +27,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 | **Date / Time** | 2026-11-21 · 14:00–15:30 UTC |
 | **Format** | Zoom (`https://meet.sora.dev/swift-torii-spec`) with collaborative notes in HackMD |
 | **Audience** | Swift Program PM, Torii Platform TL, Norito tooling maintainer, SDK Program Lead, Observability TL, Android/JS parity reps, Release Engineering |
-| **Goal** | Freeze the Torii `/v2/pipeline` + Norito RPC contract for IOS2, capture schema gaps that block Swift parity, and assign CI/telemetry follow-ups |
+| **Goal** | Freeze the Torii `/v1/pipeline` + Norito RPC contract for IOS2, capture schema gaps that block Swift parity, and assign CI/telemetry follow-ups |
 | **Recording** | Stored under `docs/source/sdk/swift/archive/meetings/2026-11-21/` (audio, chat export, and HackMD export) within 24 h |
 
 ## Objectives
@@ -37,7 +37,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
    and the weekly digest risks.
 2. Confirm which proto/schema changes are landing before IOS2 freeze and align
    fixture owners for Swift/Android/JS SDKs.
-3. Decide on documentation + CI updates (OpenAPI snapshots, `/v2/pipeline`
+3. Decide on documentation + CI updates (OpenAPI snapshots, `/v1/pipeline`
    samples, telemetry exporters) that must land before the readiness review.
 4. Record owned follow-ups in `status.md` and the parity dashboard backlog with
    due dates and evidence links.
@@ -58,8 +58,8 @@ the CI parity work can proceed with a frozen spec and documented action items.
 | Time (UTC) | Topic | Presenter |
 |------------|-------|-----------|
 | 14:00–14:10 | Welcome, objectives, success criteria | Swift Program PM |
-| 14:10–14:30 | `/v2/pipeline` + Norito RPC walkthrough (request/response envelopes, retries, ABI hash policy) | Torii Platform TL |
-| 14:30–14:45 | Spec delta review vs. Swift blockers (fixtures, telemetry, `/v2/pipeline` adoption) | Swift IOS2 lead |
+| 14:10–14:30 | `/v1/pipeline` + Norito RPC walkthrough (request/response envelopes, retries, ABI hash policy) | Torii Platform TL |
+| 14:30–14:45 | Spec delta review vs. Swift blockers (fixtures, telemetry, `/v1/pipeline` adoption) | Swift IOS2 lead |
 | 14:45–15:05 | Cross-SDK fixture cadence + CI/telemetry requirements | SDK Program Lead + Observability TL |
 | 15:05–15:20 | Open issues + risk register updates (CR-2/CR-3, governance dependencies) | Swift Program PM |
 | 15:20–15:30 | Action capture, owners, evidence expectations | All |
@@ -74,7 +74,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 - **SDK Program Lead:** export the latest parity diff artefact and parity dashboard
   screenshot; pre-populate the fixture cadence section with Tue/Fri owners.
 - **Observability TL:** prepare telemetry requirements (OTLP counter list,
-  dashboards impacted) and bring the backlog of `connect.queue_*` + `/v2/pipeline`
+  dashboards impacted) and bring the backlog of `connect.queue_*` + `/v1/pipeline`
   gauges to review.
 - **Release Engineering:** confirm the OpenAPI snapshot hash matches the signed
   manifest and bring the markdown snippet produced by
@@ -86,7 +86,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 
 | Topic | Proposed Outcome | Owner | Evidence / Due |
 |-------|------------------|-------|----------------|
-| `/v2/pipeline` retries + canonical errors | Freeze error catalog + retry hints for IOS2 |  |  |
+| `/v1/pipeline` retries + canonical errors | Freeze error catalog + retry hints for IOS2 |  |  |
 | Norito RPC headers + telemetry | Confirm required headers + OTLP events |  |  |
 | Fixture cadence adjustments | Tue/Fri cadence sufficient? emergency policy? |  |  |
 | CI/exporter updates | What runs before merge + nightly? |  |  |
@@ -97,7 +97,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 |----|-------------|-------|--------|--------------|
 | TSPEC-001 | Update `docs/source/torii/nrpc_spec.md` with agreed retry hints |  | 2026-11-28 |  |
 | TSPEC-002 | Regenerate Swift/Android fixtures aligned with new schema |  | 2026-11-29 |  |
-| TSPEC-003 | Add `/v2/pipeline` parity tests + CI alert wiring |  | 2026-12-05 |  |
+| TSPEC-003 | Add `/v1/pipeline` parity tests + CI alert wiring |  | 2026-12-05 |  |
 | TSPEC-004 | Update `status.md` + weekly digest with decisions |  | T+1 day |  |
 
 ## Deliverables & Follow-Ups
@@ -109,7 +109,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
    `docs/source/android_fixture_changelog.md` (if impacted) and the Swift parity
    dashboard backlog.
 3. **Telemetry checklist** — extend `docs/source/status/swift_weekly_digest.md`
-   + `docs/source/status/swift_weekly_digest_template.md` so `/v2/pipeline`
+   + `docs/source/status/swift_weekly_digest_template.md` so `/v1/pipeline`
    adoption + telemetry readiness appear in the Governance Watchers table.
 4. **Status update** — log the review completion + major outcomes in
    `status.md` under IOS2 within 24 h.

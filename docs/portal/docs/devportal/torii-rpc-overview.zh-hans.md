@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # Norito-RPC 概述
 
 Norito-RPC 是 Torii API 的二进制传输。它重用相同的 HTTP 路径
-作为 `/v2/pipeline`，但交换包含模式的 Norito 帧有效负载
+作为 `/v1/pipeline`，但交换包含模式的 Norito 帧有效负载
 哈希值和校验和。当您需要确定性、经过验证的响应或
 当管道 JSON 响应成为瓶颈时。
 
@@ -32,7 +32,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v2/transactions/submit
+  https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. 使用 Norito 编解码器（`iroha_client`、SDK 帮助程序或
@@ -59,7 +59,7 @@ SDK特定指南：
    `TRYIT_PROXY_PUBLIC_URL` 因此小部件知道将流量发送到哪里。
 2. 打开此页面上的**尝试**卡或 `/reference/torii-swagger`
    For MCP/agent flows, use `/reference/torii-mcp`.
-   面板并选择一个端点，例如 `POST /v2/pipeline/submit`。
+   面板并选择一个端点，例如 `POST /v1/pipeline/submit`。
 3.将**Content-Type**切换为`application/x-norito`，选择**Binary**
    编辑器，并上传`fixtures/norito_rpc/transfer_asset.norito`
    （或中列出的任何有效负载

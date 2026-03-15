@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | `taikai_ingest_segment_latency_ms` | Кластерге/ағынға CMAF қабылдау кешігу гистограммасы (мақсат: p95<750ms, p99<900ms). |
 | `taikai_ingest_live_edge_drift_ms` | Кодер мен якорь жұмысшылары арасындағы тікелей жиектердің ауытқуы (10 минут ішінде p99>1,5 с беттерінде). |
 | `taikai_ingest_segment_errors_total{reason}` | Себеп бойынша қате есептегіштері (`decode`, `manifest_mismatch`, `lineage_replay`, …). Кез келген өсу `TaikaiIngestFailure` іске қосылады. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v2/da/ingest` бүркеншік ат үшін жаңа TRM қабылдаған сайын өседі; айналу каденциясын тексеру үшін `rate()` пайдаланыңыз. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v1/da/ingest` бүркеншік ат үшін жаңа TRM қабылдаған сайын өседі; айналу каденциясын тексеру үшін `rate()` пайдаланыңыз. |
 | `/status → telemetry.taikai_alias_rotations[]` | `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` және дәлелдер жинақтарына арналған уақыт белгілері бар JSON суреті. |
 | `taikai_viewer_*` (ребуфер, CEK айналу жасы, PQ денсаулығы, ескертулер) | Зәкірлер кезінде CEK айналуын және PQ тізбектерінің сау болып қалуын қамтамасыз ету үшін қараушы жағындағы KPI көрсеткіштері. |
 

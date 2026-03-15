@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 Жол картасының анықтамасы: TORII-APP-1 — `app_api` паритет аудиті
 
 Бұл бет ішкі `TORII-APP-1` аудитін көрсетеді (`docs/source/torii/app_api_parity_audit.md`)
-сондықтан моно-реподан тыс оқырмандар `/v2/*` беттерінің сымды, сыналған,
+сондықтан моно-реподан тыс оқырмандар `/v1/*` беттерінің сымды, сыналған,
 және құжатталған. Аудит `Torii::add_app_api_routes` арқылы қайта экспортталған маршруттарды бақылайды,
 `add_contracts_and_vk_routes`, және `add_connect_routes`.
 
 ## Қолдану аймағы және әдісі
 
 Аудит `crates/iroha_torii/src/lib.rs:256-522` және мемлекеттік реэкспорттарды тексереді.
-ерекшелігі бар маршрут құрастырушылар. Жол картасындағы әрбір `/v2/*` беті үшін біз мыналарды тексердік:
+ерекшелігі бар маршрут құрастырушылар. Жол картасындағы әрбір `/v1/*` беті үшін біз мыналарды тексердік:
 
 - `crates/iroha_torii/src/routing.rs` ішіндегі өңдегіштің орындалуы және DTO анықтамалары.
 - `app_api` немесе `connect` мүмкіндіктер топтары бойынша маршрутизаторды тіркеу.
@@ -42,25 +42,25 @@ translation_last_reviewed: 2026-02-07
 - Мысал үзінділер:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Соңғы нүкте түгендеу
 
-### Тіркелгі рұқсаттары (`/v2/accounts/{id}/permissions`) — Қамтылған
+### Тіркелгі рұқсаттары (`/v1/accounts/{id}/permissions`) — Қамтылған
 - Өңдеуші: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Маршрутизаторды байланыстыру: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -68,7 +68,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Иесі: Torii платформасы.
 - Ескертпелер: Жауап - `items`/`total`, сәйкес SDK беттеу көмекшілері бар Norito JSON денесі.
 
-### Бүркеншік ат OPRF бағалауы (`POST /v2/aliases/voprf/evaluate`) — Қамтылған
+### Бүркеншік ат OPRF бағалауы (`POST /v1/aliases/voprf/evaluate`) — Қамтылған
 - Өңдеуші: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -78,7 +78,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Иесі: Torii платформасы.
 - Ескертулер: Жауап беті детерминирленген он алтылық және серверлік идентификаторларды мәжбүрлейді; SDKs DTO пайдаланады.
 
-### Дәлелдеу оқиғалары SSE (`GET /v2/events/sse`) — Қамтылған
+### Дәлелдеу оқиғалары SSE (`GET /v1/events/sse`) — Қамтылған
 - Өңдеуші: сүзгі қолдауы бар `handle_v1_events_sse` (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) плюс өтпейтін сүзгі сымдары.
 - Маршрутизаторды байланыстыру: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -88,7 +88,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Иесі: Torii платформасы (орындалу уақыты), WG интеграциялық сынақтары (құралдар).
 - Ескертпелер: дәлелдеу сүзгі жолдарының басынан аяғына дейін расталған; құжаттама `docs/source/zk_app_api.md` астында өмір сүреді.
 
-### Шарттың өмірлік циклі (`/v2/contracts/*`) — Қамтылған
+### Шарттың өмірлік циклі (`/v1/contracts/*`) — Қамтылған
 - Өңдеуіштер: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -103,7 +103,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Иесі: Torii платформасы бар Smart Contract WG.
 - Ескертпелер: Соңғы нүктелер қол қойылған транзакцияларды кезекке қояды және ортақ телеметрия көрсеткіштерін қайта пайдаланады (`handle_transaction_with_metrics`).
 
-### Кілттің өмірлік циклін тексеру (`/v2/zk/vk/*`) — Қамтылған
+### Кілттің өмірлік циклін тексеру (`/v1/zk/vk/*`) — Қамтылған
 - Өңдеуіштер: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) және `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -115,7 +115,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Иесі: Torii платформасының қолдауы бар ZK жұмыс тобы.
 - Ескертпелер: DTO SDK арқылы сілтеме жасалған Norito схемаларына сәйкестендіріледі; мөлшерлемені шектеу `limits.rs` арқылы орындалады.
 
-### Nexus Қосылу (`/v2/connect/*`) — Жабық (`connect` мүмкіндігі)
+### Nexus Қосылу (`/v1/connect/*`) — Жабық (`connect` мүмкіндігі)
 - Өңдеуіштер: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTO: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

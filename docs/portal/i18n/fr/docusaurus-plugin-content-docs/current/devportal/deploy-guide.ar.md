@@ -16,7 +16,7 @@ Il s'agit d'un point de terminaison `sorafs_cli` (avec `--features cli`) et d'un
 
 ## المتطلبات المسبقة- Nœud 18.18 et `npm` et `pnpm`.
 - `sorafs_cli` ou `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- عنوان Torii يكشف `/v2/sorafs/*` مع حساب/مفتاح خاص بسلطة يمكنها ارسال المانيفست والاسماء المستعارة.
+- عنوان Torii يكشف `/v1/sorafs/*` مع حساب/مفتاح خاص بسلطة يمكنها ارسال المانيفست والاسماء المستعارة.
 - Utilisez OIDC (Actions GitHub, GitLab, identité de charge de travail, ici) pour `SIGSTORE_ID_TOKEN`.
 - Version : `examples/sorafs_cli_quickstart.sh` pour les workflows et `docs/source/sorafs_ci_templates.md` pour les workflows sur GitHub/GitLab.
 - اضبط متغيرات OAuth الخاصة بـ Essayez-le (`DOCS_OAUTH_*`) et
@@ -552,7 +552,7 @@ Utilisez SoraFS pour récupérer la passerelle (DOCS-7/SF-6) vers DNS/passerelle
 
 | Nom | الغرض |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Utilisez Torii pour `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Utilisez Torii pour `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | معرف époque المسجل مع الارسال. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | سلطة التوقيع لارسال المانيفست. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | alias tuple est `perform_submit` = `true`. |

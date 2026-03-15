@@ -177,7 +177,7 @@ NRPC тодорхойлолтод тодорхойлсон урьдчилан к
 1. `fixtures/norito_rpc/transfer_asset.norito` гэх мэт бэхэлгээг сонго. Эдгээр
    файлууд нь түүхий Norito дугтуй; base64-ээр кодлох хэрэггүй.
 2. Swagger эсвэл RapiDoc дээр NRPC төгсгөлийн цэгийг олоорой (жишээ нь
-   `POST /v2/pipeline/submit`) ба **Агуулгын төрөл** сонгогчийг
+   `POST /v1/pipeline/submit`) ба **Агуулгын төрөл** сонгогчийг
    `application/x-norito`.
 3. Хүсэлтийн үндсэн засварлагчийг **хоёртын файл руу шилжүүлнэ үү (Swagger-ийн "Файл" горим эсвэл
    RapiDoc-ийн "Хоёртын/Файл" сонгогч) болон `.norito` файлыг байршуулна уу. Виджет
@@ -205,13 +205,13 @@ curl \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: ${TOKEN}" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v2/pipeline/submit"
+  "${TORII}/v1/pipeline/submit"
 ```
 
 `transaction_fixtures.manifest.json`-д жагсаасан дурын оруулгатай бэхэлгээг солино уу
 эсвэл `cargo xtask norito-rpc-fixtures` ашиглан өөрийн ачааллыг кодчил. Torii үед
 canary горимд байгаа бол та `curl`-г оролдох прокси дээр зааж болно
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) ижил дасгал хийх
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) ижил дасгал хийх
 портал виджетүүдийн ашигладаг дэд бүтэц.
 
 ## Ажиглалт ба үйл ажиллагааХүсэлт бүрийг арга, зам, гарал үүсэл, дээд урсгалын төлөв болон
@@ -227,7 +227,7 @@ canary горимд байгаа бол та `curl`-г оролдох прокс
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 

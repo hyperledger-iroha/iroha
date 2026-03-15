@@ -56,12 +56,12 @@ A telemetria usada também é a métrica `sorafs.node.micropayment_*`:
 ## Integração Torii
 
 Torii fornece endpoints valiosos, isso prova o uso e o uso
-жизненный цикл сделок без специального fiação:- `POST /v2/sorafs/deal/usage` fornece o telefone `DealUsageReport` e retorna
+жизненный цикл сделок без специального fiação:- `POST /v1/sorafs/deal/usage` fornece o telefone `DealUsageReport` e retorna
   детерминированные результаты учета (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` janela de proteção de segurança, janela
+- `POST /v1/sorafs/deal/settle` janela de proteção de segurança, janela
   O `DealSettlementRecord` é baseado em base64-кодированным `DealSettlementV1`,
   готовым к публикации в governança DAG.
--Lente Torii `/v2/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
+-Lente Torii `/v1/events/sse` теперь транслирует записи `SorafsGatewayEvent::DealUsage`,
   суммирующие каждую отправку uso (época, измеренные GiB-horas, счетчики билетов,
   taxas de determinação), nome `SorafsGatewayEvent::DealSettlement`,
   включающие канонический snapshot ledger расчетов плюс BLAKE3 digest/size/base64

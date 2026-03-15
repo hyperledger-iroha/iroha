@@ -73,13 +73,13 @@ Este libro de jugadas describe la activación del perfil fragmentador ratificado
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. Interrogue el descubrimiento de puntos finales y confirme que el anuncio aparece con los alias canónicos:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    Asegúrese de que `profile_aliases` incluya `"sorafs.sf1@1.0.0"` en primer plato principal.

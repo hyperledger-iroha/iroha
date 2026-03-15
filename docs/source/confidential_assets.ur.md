@@ -48,7 +48,7 @@ curl -s http://127.0.0.1:8180/metrics \
   | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
 ``` بائٹ نوٹ کے عہد کے ساتھ ، خفیہ کردہ پے لوڈ ، اور ڈیبٹ میٹا ڈیٹا ،
 پھر دستخط اور ریلے کے لئے `IrohaSDK.submit(shield:keypair:)` (یا `submitAndWait`) پر کال کریں
-`/v2/pipeline/transactions` پر ٹرانزیکشن۔ مددگار عزم کی لمبائی کی توثیق کرتا ہے ،
+`/v1/pipeline/transactions` پر ٹرانزیکشن۔ مددگار عزم کی لمبائی کی توثیق کرتا ہے ،
 Norito انکوڈر میں `ConfidentialEncryptedPayload`
 ذیل میں بیان کردہ ترتیب تاکہ بٹوے زنگ کے ساتھ لاک قدم میں رہتے ہیں۔## اتفاق رائے اور صلاحیت کا گیٹنگ
 - بلاک ہیڈر `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` کو بے نقاب کرتے ہیں۔ ڈائجسٹ اتفاق رائے میں حصہ لیتا ہے اور بلاک قبولیت کے ل local مقامی رجسٹری نظریہ کے برابر ہونا چاہئے۔
@@ -74,7 +74,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
 - پیدائش کا اظہار اور سی ایل آئی سطح کی موجودہ اور زیر التواء پالیسیاں بہاتا ہے۔ داخلے کی منطق ہر خفیہ ہدایت کی تصدیق کے لئے پھانسی کے وقت پالیسی کو پڑھتی ہے۔
 - ہجرت کی جانچ پڑتال کی فہرست - اسٹیج اپ گریڈ پلان کے لئے نیچے "ہجرت کی ترتیب" دیکھیں جو سنگ میل M0 پٹریوں سے ہے۔
 
-#### Torii کے ذریعے منتقلی کی نگرانیمعائنہ کرنے کے لئے بٹوے اور آڈیٹرز `GET /v2/confidential/assets/{definition_id}/transitions` کو پولنگ کریں گے
+#### Torii کے ذریعے منتقلی کی نگرانیمعائنہ کرنے کے لئے بٹوے اور آڈیٹرز `GET /v1/confidential/assets/{definition_id}/transitions` کو پولنگ کریں گے
 فعال `AssetConfidentialPolicy`۔ JSON پے لوڈ میں ہمیشہ کیننیکل شامل ہوتا ہے
 اثاثہ آئی ڈی ، تازہ ترین مشاہدہ بلاک اونچائی ، پالیسی کی `current_mode` ، موڈ جو ہے
 اس اونچائی پر موثر (تبادلوں کی ونڈوز عارضی طور پر `Convertible` کی رپورٹ کریں) ، اور
@@ -125,7 +125,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
 ### منتقلی کی ترتیب
 
 2. ** منتقلی کا مرحلہ: ** `effective_height` کے ساتھ `ScheduleConfidentialPolicyTransition` جمع کروائیں جو `policy_transition_delay_blocks` کا احترام کرتا ہے۔ `ShieldedOnly` کی طرف بڑھتے وقت ، تبادلوں کی ونڈو (`window ≥ policy_transition_window_blocks`) کی وضاحت کریں۔
-3. ** آپریٹر کی رہنمائی شائع کریں: ** ریکارڈ شدہ `transition_id` ریکارڈ کریں اور آن/آف ریمپ رن بک کو گردش کریں۔ ونڈو کھلی اونچائی کو سیکھنے کے لئے بٹوے اور آڈیٹر `/v2/confidential/assets/{id}/transitions` کو سبسکرائب کرتے ہیں۔
+3. ** آپریٹر کی رہنمائی شائع کریں: ** ریکارڈ شدہ `transition_id` ریکارڈ کریں اور آن/آف ریمپ رن بک کو گردش کریں۔ ونڈو کھلی اونچائی کو سیکھنے کے لئے بٹوے اور آڈیٹر `/v1/confidential/assets/{id}/transitions` کو سبسکرائب کرتے ہیں۔
 4. ** ونڈو نفاذ: ** جب ونڈو کھلتی ہے تو ، رن ٹائم پالیسی کو `Convertible` میں تبدیل کرتا ہے ، `PolicyTransitionWindowOpened { transition_id }` کو خارج کرتا ہے ، اور متضاد حکمرانی کی درخواستوں کو مسترد کرنا شروع کرتا ہے۔
 5. ** حتمی شکل دیں یا اسقاط حمل کریں: ** `effective_height` پر ، رن ٹائم منتقلی کی شرائط (صفر شفاف فراہمی ، کوئی ہنگامی واپسی ، وغیرہ) کی تصدیق کرتا ہے۔ کامیابی پالیسی کو مطلوبہ موڈ پر پلٹ جاتی ہے۔ ناکامی `PolicyTransitionPrerequisiteFailed` کو خارج کرتی ہے ، زیر التواء منتقلی کو صاف کرتی ہے ، اور پالیسی کو کوئی تبدیلی نہیں کرتی ہے۔
 6. ** اسکیما اپ گریڈ: ** ایک کامیاب منتقلی کے بعد ، گورننس اثاثہ اسکیما ورژن (جیسے ، `asset_definition.v2`) اور CLI ٹولنگ کو `confidential_policy` کی ضرورت ہوتی ہے جب مینیفائٹس کو سیریلائز کرتے ہیں۔ جینیسیس اپ گریڈ دستاویزات آپریٹرز کو ہدایت کرتے ہیں کہ وہ توثیق کرنے والوں کو دوبارہ شروع کرنے سے پہلے پالیسی کی ترتیبات اور رجسٹری فنگر پرنٹ شامل کریں۔
@@ -241,7 +241,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
 - فی اکاؤنٹ کلیدی مشتق درجہ بندی:
   - `sk_spend` → `nk` (nullifier KEY) ، `ivk` (آنے والی دیکھنے کی کلید) ، `ovk` (سبکدوش ہونے والی دیکھنے کی کلید) ، `fvk`۔
 - خفیہ کردہ نوٹ پے لوڈ ECDH سے ماخوذ مشترکہ چابیاں کے ساتھ AEAD استعمال کرتے ہیں۔ اختیاری آڈیٹر ویو کیز ہر اثاثہ پالیسی کے آؤٹ پٹس کے ساتھ منسلک ہوسکتی ہیں۔
-- CLI اضافے: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، میمو کو ڈکرپٹنگ کے لئے آڈیٹر ٹولنگ ، اور Norito میمو لفافوں کو آف لائن تیار کرنے/معائنہ کرنے کے لئے `iroha app zk envelope` مددگار۔ Torii ایک ہی مشتق بہاؤ کو `POST /v2/confidential/derive-keyset` کے ذریعے بے نقاب کرتا ہے ، ہیکس اور بیس 64 دونوں فارموں کو واپس کرتا ہے تاکہ بٹوے اہم درجہ بندی کو پروگرام میں لایا جاسکے۔
+- CLI اضافے: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، میمو کو ڈکرپٹنگ کے لئے آڈیٹر ٹولنگ ، اور Norito میمو لفافوں کو آف لائن تیار کرنے/معائنہ کرنے کے لئے `iroha app zk envelope` مددگار۔ Torii ایک ہی مشتق بہاؤ کو `POST /v1/confidential/derive-keyset` کے ذریعے بے نقاب کرتا ہے ، ہیکس اور بیس 64 دونوں فارموں کو واپس کرتا ہے تاکہ بٹوے اہم درجہ بندی کو پروگرام میں لایا جاسکے۔
 
 ## گیس ، حدود اور ڈاس کنٹرولز
 - گیس کا تعی .ن شیڈول:

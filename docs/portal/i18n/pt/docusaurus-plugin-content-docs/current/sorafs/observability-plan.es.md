@@ -84,7 +84,7 @@ quando a aplicação PoR/PoTR se intensifica.
 | `sorafs_node_por_failure_total` | Contador | `provider_id` | Contador monotônico de mostras PoR falidas. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Medidor | `provider` | Medidores Prometheus existentes para bytes usados, profundidade de cola, conteúdos PoR em voo. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Medidor | `provider` | Dados de capacidade/tempo de atividade existentes no provedor exposto no painel de capacidade. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | A profundidade do backlog é maior que os contadores acumulados de falhas exportados cada vez que você consulta `/v2/sorafs/por/ingestion/{manifest}`, alimentando o painel/alerta "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | A profundidade do backlog é maior que os contadores acumulados de falhas exportados cada vez que você consulta `/v1/sorafs/por/ingestion/{manifest}`, alimentando o painel/alerta "PoR Stalls". |
 
 ### Teste de recuperação rápida (PoTR) e SLA de chunks
 

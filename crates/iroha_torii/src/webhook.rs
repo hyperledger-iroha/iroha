@@ -11,9 +11,9 @@
 //!   using `hyper` + `rustls` with WebPKI roots. Otherwise, only `http://` is allowed.
 //!
 //! Endpoints (wired in `lib.rs` when `app_api` is enabled):
-//! - POST `/v2/webhooks` – Create a webhook.
-//! - GET  `/v2/webhooks` – List webhooks.
-//! - DELETE `/v2/webhooks/{id}` – Delete a webhook by id.
+//! - POST `/v1/webhooks` – Create a webhook.
+//! - GET  `/v1/webhooks` – List webhooks.
+//! - DELETE `/v1/webhooks/{id}` – Delete a webhook by id.
 
 use core::{convert::TryFrom, str::FromStr};
 #[cfg(test)]
@@ -626,7 +626,7 @@ fn validate_webhook_url_for_create(
     Ok(())
 }
 
-/// POST /v2/webhooks – create a webhook entry.
+/// POST /v1/webhooks – create a webhook entry.
 pub async fn handle_create_webhook(
     crate::utils::extractors::JsonOnly(req): crate::utils::extractors::JsonOnly<WebhookCreate>,
 ) -> axum::response::Response {
@@ -658,7 +658,7 @@ pub async fn handle_create_webhook(
     (StatusCode::CREATED, body).into_response()
 }
 
-/// GET /v2/webhooks – list current webhook entries.
+/// GET /v1/webhooks – list current webhook entries.
 pub async fn handle_list_webhooks() -> impl IntoResponse {
     let guard = registry().lock().expect("poisoned");
     let mut entries: Vec<_> = guard.items.values().cloned().collect();
@@ -675,7 +675,7 @@ pub async fn handle_list_webhooks() -> impl IntoResponse {
         .unwrap()
 }
 
-/// DELETE /v2/webhooks/{id} – delete a webhook.
+/// DELETE /v1/webhooks/{id} – delete a webhook.
 pub async fn handle_delete_webhook(AxumPath(id): AxumPath<u64>) -> impl IntoResponse {
     let mut guard = registry().lock().expect("poisoned");
     let removed = guard.items.remove(&id).is_some();

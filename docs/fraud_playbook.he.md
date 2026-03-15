@@ -55,7 +55,7 @@ translator: manual
 
 ה-Gateway חושף כעת מעטפות JSON התואמות אחד-לאחד לטיפוסי Norito שממומשים ב-`crates/iroha_data_model::fraud`:
 
-- **צריכת סיכון** – `POST /v2/fraud/query` מקבל את סכמת `RiskQuery`:
+- **צריכת סיכון** – `POST /v1/fraud/query` מקבל את סכמת `RiskQuery`:
   - `query_id` (`[u8; 32]`, מקודד Hex)
   - `subject` (`AccountId`, ‏`domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
   - `operation` (enum מתויג התואם ל-`RiskOperation`; שדה ה-`type` ב-JSON ממפה לווריאנט)
@@ -63,11 +63,11 @@ translator: manual
   - `features` (מערך של `{ key: String, value_hash: hex32 }` ממופה מ-`FeatureInput`)
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; כולל `tenant_id`, ‏`session_id` אופציונלי, `reason` אופציונלי)
-- **החלטת סיכון** – `POST /v2/fraud/assessment` צורך את מטען `FraudAssessment` (מופיע גם בייצואי הממשל):
+- **החלטת סיכון** – `POST /v1/fraud/assessment` צורך את מטען `FraudAssessment` (מופיע גם בייצואי הממשל):
   - `query_id`, ‏`engine_id`, ‏`risk_score_bps`, ‏`confidence_bps`, ‏`decision` (enum של `AssessmentDecision`), ‏`rule_outcomes` (מערך `{ rule_id, score_delta_bps, rationale? }`)
   - `generated_at_ms`
   - `signature` (Base64 אופציונלית העוטפת את ההערכה המקודדת ב-Norito)
-- **ייצוא ממשל** – `GET /v2/fraud/governance/export` מחזיר את מבנה `GovernanceExport` כאשר הגדרת `governance` פעילה, ומאגד פרמטרים פעילים, ההחלה האחרונה, גרסת מודל, Digest מדיניות והיסטוגרמת `DecisionAggregate`.
+- **ייצוא ממשל** – `GET /v1/fraud/governance/export` מחזיר את מבנה `GovernanceExport` כאשר הגדרת `governance` פעילה, ומאגד פרמטרים פעילים, ההחלה האחרונה, גרסת מודל, Digest מדיניות והיסטוגרמת `DecisionAggregate`.
 
 בדיקות Round-Trip ב-`crates/iroha_data_model/src/fraud/types.rs` מבטיחות שהסכמות הללו נשארות תואמות בינארית לקודק Norito, ו-`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` מפעיל את צנרת intake/decision מקצה לקצה.
 

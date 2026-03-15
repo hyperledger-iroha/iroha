@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # Resumo de Norito-RPC
 
-Norito-RPC é o transporte binário para as APIs de Torii. Reutiliza as mesmas rotas HTTP que `/v2/pipeline`, mas alterna cargas marcadas por Norito que incluem hashes de esquema e somas de verificação. Usado quando você precisa de respostas deterministas e validadas ou quando as respostas JSON do pipeline são retornadas para um copo de garrafa.
+Norito-RPC é o transporte binário para as APIs de Torii. Reutiliza as mesmas rotas HTTP que `/v1/pipeline`, mas alterna cargas marcadas por Norito que incluem hashes de esquema e somas de verificação. Usado quando você precisa de respostas deterministas e validadas ou quando as respostas JSON do pipeline são retornadas para um copo de garrafa.
 
 ## Por que mudar?
 - O determinista marcado com CRC64 e hashes de esquema reduzem erros de decodificação.
@@ -20,7 +20,7 @@ Norito-RPC é o transporte binário para as APIs de Torii. Reutiliza as mesmas r
 ## Como fazer uma solicitação
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Serialize sua carga útil com o codec Norito (`iroha_client`, ajudantes do SDK ou `norito::to_bytes`).
@@ -39,7 +39,7 @@ Guia do SDK:
 O portal de desenvolvimento inclui um proxy Try It para que os revisores possam reproduzir cargas úteis Norito sem escrever scripts conforme necessário.
 
 1. [Inicie o proxy](./try-it.md#start-the-proxy-locally) e defina `TRYIT_PROXY_PUBLIC_URL` para que os widgets se espalhem para onde enviar o tráfego.
-2. Abra a tarjeta **Try it** nesta página ou no painel `/reference/torii-swagger` e selecione um endpoint como `POST /v2/pipeline/submit`.
+2. Abra a tarjeta **Try it** nesta página ou no painel `/reference/torii-swagger` e selecione um endpoint como `POST /v1/pipeline/submit`.
 3. Mude o **Content-Type** para `application/x-norito`, escolha o editor **Binary** e sube `fixtures/norito_rpc/transfer_asset.norito` (ou qualquer carga útil listada em `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Proporcione um token de portador por meio do widget OAuth device-code ou do campo de token manual (o proxy aceita substitui `X-TryIt-Auth` quando configurado com `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. Envie a solicitação e verifique se Torii reflete o `schema_hash` listado em `fixtures/norito_rpc/schema_hashes.json`. Os hashes coincidentes confirmam que o encabezado Norito sobrevive ao salto navegador/proxy.

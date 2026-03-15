@@ -73,7 +73,7 @@ Test coverage highlights:
 ## Tooling & Fixtures
 
 - Provider advert payloads must include `range_capability`, `stream_budget`, and
-  `transport_hints` metadata. Validate via `/v2/sorafs/providers` responses and
+  `transport_hints` metadata. Validate via `/v1/sorafs/providers` responses and
   admission fixtures; JSON reports should surface the structured `range`,
   `stream_budget`, and `transport_hints` sections for telemetry.
 - `cargo xtask sorafs-admission-fixtures` emits JSON summaries that now expose
@@ -85,7 +85,7 @@ Test coverage highlights:
 
 ## Remaining Integration Work
 
-- Torii `/v2/sorafs/providers` responses now include parsed range capability
+- Torii `/v1/sorafs/providers` responses now include parsed range capability
   metadata plus `stream_budget` and `transport_hints`, and emit downgrade
   warnings when providers omit the new fields. Gateway range endpoints enforce
   the same constraints, with remaining work focused on scheduler telemetry and

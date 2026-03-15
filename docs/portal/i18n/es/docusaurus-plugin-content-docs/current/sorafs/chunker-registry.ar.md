@@ -82,13 +82,13 @@ Esta es la versión CARv1 + SHA-256 del sistema operativo (`Accept-Chunker` + `A
 |--------|--------|---------|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | Conecte el cable + el bloque y el bloque `--json-out=-` y el bloque `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifiesto قديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق sin conexión فقط؛ يجب إنتاج anuncios de proveedores عبر خط أنابيب النشر والتحقق منها عبر `/v2/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق sin conexión فقط؛ يجب إنتاج anuncios de proveedores عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
 | `sorafs_fetch` (organizador de desarrollo) | ✅ مدعوم | يقرأ `chunk_fetch_specs` y حمولة قدرة `range` y يجمع إخراج CARv2. |
 | Accesorios para SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض المعتمد يظهر أولاً في كل قائمة بدائل ويُوقَّع بواسطة أظرف المجلس. |
 | Puerta de enlace Torii | ✅ مدعوم | يطبق كامل قواعد `Accept-Chunker`, y ويتضمن ترويسات `Content-Chunker`, y ويعرض Bridge CARv1 para degradar la versión. |
 
 طرح التليمترية:- **تليمترية جلب الـ chunks** — يصدر CLI الخاص بـ Iroha `sorafs toolkit pack` digests للـ fragment, وبيانات CAR, y جذور PoR لإدخالها في لوحات المتابعة.
-- **Anuncios de proveedores** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ Utilice el botón `/v2/sorafs/providers` (y el botón `range`).
+- **Anuncios de proveedores** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ Utilice el botón `/v1/sorafs/providers` (y el botón `range`).
 - **مراقبة الـ gateway** — على المشغلين الإبلاغ عن أزواج `Content-Chunker`/`Content-Digest` لاكتشاف أي خفض غير متوقع؛ Y من المتوقع أن ينخفض ​​استخدام الـ bridge إلى الصفر قبل الإيقاف.
 
 سياسة الإيقاف: بعد اعتماد ملف خلف، حدّد نافذة نشر مزدوجة (موثقة في المقترح) قبل وسم

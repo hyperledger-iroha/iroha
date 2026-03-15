@@ -54,12 +54,12 @@ ganhos de micropagamento de operadores اور transferência de crédito کو re
 ## Integração Torii
 
 Endpoints dedicados Torii expõem o relatório de uso de provedores de کرتا ہے تاکہ
-A fiação sob medida e a unidade de ciclo de vida do negócio são as seguintes:- `POST /v2/sorafs/deal/usage` `DealUsageReport` telemetria aceita کرتا ہے اور
+A fiação sob medida e a unidade de ciclo de vida do negócio são as seguintes:- `POST /v1/sorafs/deal/usage` `DealUsageReport` telemetria aceita کرتا ہے اور
   resultados contábeis determinísticos (`UsageOutcome`) retorno کرتا ہے۔
-- `POST /v2/sorafs/deal/settle` finalização da janela atual کرتا ہے، اور
+- `POST /v1/sorafs/deal/settle` finalização da janela atual کرتا ہے، اور
   نتیجے میں بننے والا `DealSettlementRecord` `DealSettlementV1` codificado em base64 کے ساتھ stream کرتا ہے
   جو governança publicação DAG کے لیے تیار ہوتا ہے۔
-- Torii کا `/v2/events/sse` feed اب `SorafsGatewayEvent::DealUsage` registra transmissão کرتا ہے
+- Torii کا `/v1/events/sse` feed اب `SorafsGatewayEvent::DealUsage` registra transmissão کرتا ہے
   جو ہر envio de uso کا خلاصہ دیتے ہیں (época, GiB-horas medidas, balcões de ingressos,
   encargos determinísticos), registros `SorafsGatewayEvent::DealSettlement` e instantâneo do razão de liquidação canônica کے ساتھ
   artefato de governança em disco کا BLAKE3 digest/size/base64 شامل کرتے ہیں، اور

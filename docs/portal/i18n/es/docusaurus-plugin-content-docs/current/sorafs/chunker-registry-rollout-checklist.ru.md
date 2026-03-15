@@ -73,7 +73,7 @@ carta de gobernanza.
    указанный в `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Asegúrese de que los anuncios del proveedor se adapten a su API de descubrimiento:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Progrese el manifiesto/plan de puntos finales con los encabezados de gobernanza:
    ```bash

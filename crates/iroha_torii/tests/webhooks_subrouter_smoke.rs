@@ -98,13 +98,13 @@ async fn webhooks_endpoints_exposed() {
 
     let app = torii.api_router_for_tests();
 
-    // POST /v2/webhooks — create a webhook
+    // POST /v1/webhooks — create a webhook
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/webhooks")
+                .uri("/v1/webhooks")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(
                     "{\"url\":\"https://example.com/webhook\",\"active\":true}",
@@ -118,11 +118,11 @@ async fn webhooks_endpoints_exposed() {
         StatusCode::CREATED | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // GET /v2/webhooks — list webhooks
+    // GET /v1/webhooks — list webhooks
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v2/webhooks")
+                .uri("/v1/webhooks")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

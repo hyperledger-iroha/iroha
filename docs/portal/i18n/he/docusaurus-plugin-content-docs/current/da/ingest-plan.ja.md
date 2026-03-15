@@ -44,7 +44,7 @@ payload חייבים להשתמש בקודקים Norito; אין לאפשר fallb
 ## משטח API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -220,7 +220,7 @@ pub struct DaIngestReceipt {
   `iroha app sorafs fetch`. מפעילים יכולים לכוון אותו ל-artefacts של manifest +
   chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **או** להעביר storage
   ticket של Torii דרך `--storage-ticket`. כאשר משתמשים במסלול ticket, ה-CLI
-  מוריד manifest מ-`/v2/da/manifests/<ticket>`, שומר את החבילה תחת
+  מוריד manifest מ-`/v1/da/manifests/<ticket>`, שומר את החבילה תחת
   `artifacts/da/fetch_<timestamp>/` (override עם `--manifest-cache-dir`), מפיק את
   hash ה-blob עבור `--manifest-id`, ואז מריץ את האורקסטרטור עם רשימת
   `--gateway-provider` שסופקה. כל ה-knobs המתקדמים מה-fetcher של SoraFS נשארים
@@ -230,7 +230,7 @@ pub struct DaIngestReceipt {
   availability מקצה לקצה חיות כולן תחת namespace `da` בלי לשכפל לוגיקת
   orchestrator.
 - `iroha app da get-blob` מושך manifests קנוניים ישירות מ-Torii דרך
-  `GET /v2/da/manifests/{storage_ticket}`. הפקודה כותבת
+  `GET /v1/da/manifests/{storage_ticket}`. הפקודה כותבת
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` ו-
   `chunk_plan_{ticket}.json` תחת `artifacts/da/fetch_<timestamp>/` (או
   `--output-dir` שמספק המשתמש) תוך הדפסה של פקודת `iroha app da get` המדויקת

@@ -38,7 +38,7 @@ DA-2 используется для Torii для приема больших д
 ## Поверхность API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -202,14 +202,14 @@ pub struct DaIngestReceipt {
   Разблокировка SDK по четности ہوتا ہے۔
 - `iroha app da get` псевдоним, ориентированный на DA.
   `iroha app sorafs fetch` کو چلاتا ہے۔ Манифест операторов + артефакты плана фрагментов (`--manifest`, `--plan`, `--manifest-id`)
-  **یا** Torii билет хранилища через `--storage-ticket` دے سکتے ہیں۔ Путь к билету в CLI `/v2/da/manifests/<ticket>` سے
+  **یا** Torii билет хранилища через `--storage-ticket` دے سکتے ہیں۔ Путь к билету в CLI `/v1/da/manifests/<ticket>` سے
   загрузка манифеста کرتی ہے، Bundle کو `artifacts/da/fetch_<timestamp>/` میں محفوظ کرتی ہے (переопределить через
   `--manifest-cache-dir`), `--manifest-id` کیلئے получение хэша больших двоичных объектов для получения списка `--gateway-provider`
   Запуск оркестратора کرتی ہے۔ SoraFS сборщик расширенных ручек برقرار رہتے ہیں (конверты манифеста,
   метки клиентов, защитные кэши, переопределение анонимного транспорта, экспорт табло, пути `--output`).
   `--manifest-endpoint` Переопределение конечной точки манифеста для сквозной проверки доступности
   Пространство имен `da` или дубликат логики оркестратора.
-- `iroha app da get-blob` Torii سے `GET /v2/da/manifests/{storage_ticket}` کے ذریعے канонические манифесты کھینچتا ہے۔
+- `iroha app da get-blob` Torii سے `GET /v1/da/manifests/{storage_ticket}` کے ذریعے канонические манифесты کھینچتا ہے۔
   Например, `manifest_{ticket}.norito`, `manifest_{ticket}.json`, `chunk_plan_{ticket}.json`.
   `artifacts/da/fetch_<timestamp>/` — дополнительная информация (предоставляется пользователем `--output-dir`) `iroha app da get`
   вызов (بشمول `--manifest-id`) echo کرتی ہے جو последующий оркестратор fetch کیلئے درکار ہے۔ اس سے операторы

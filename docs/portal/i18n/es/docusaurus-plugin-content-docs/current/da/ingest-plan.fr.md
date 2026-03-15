@@ -39,7 +39,7 @@ El servidor alternativo/JSON no está permitido.
 ## API de superficie (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```La carga útil es una codificación `DaIngestRequest` en Norito. Las respuestas útiles
 `application/norito+v1` y envíe `DaIngestReceipt`.
@@ -219,7 +219,7 @@ El hash, el fragmentación y las opciones de verificación de manifiestos.
 - `iroha app da get` agregue un alias DA para el orquestador multifuente que alimenta
   deja `iroha app sorafs fetch`. Los operadores pueden marcar el puntero frente a los artefactos.
   manifiesto + plan de fragmentos (`--manifest`, `--plan`, `--manifest-id`) **ou** fournirun ticket de almacenamiento Torii vía `--storage-ticket`. Quand le chemin ticket est
-  utilizar, la CLI recupera el manifiesto después de `/v2/da/manifests/<ticket>`,
+  utilizar, la CLI recupera el manifiesto después de `/v1/da/manifests/<ticket>`,
   persistir el paquete bajo `artifacts/da/fetch_<timestamp>/` (anular con
   `--manifest-cache-dir`), deriva el hash del blob para `--manifest-id`, luego
   Ejecute el orquestador con la lista `--gateway-provider` fournie. Todos les
@@ -230,7 +230,7 @@ El hash, el fragmentación y las opciones de verificación de manifiestos.
   La disponibilidad de extremo a extremo vive en todo el espacio de nombres `da` sin
   Duplicar la lógica del orquestador.
 - `iroha app da get-blob` recupera los manifiestos canónicos directamente después de Torii
-  vía `GET /v2/da/manifests/{storage_ticket}`. La orden escrita
+  vía `GET /v1/da/manifests/{storage_ticket}`. La orden escrita
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` y
   `chunk_plan_{ticket}.json` en `artifacts/da/fetch_<timestamp>/` (o un
   `--output-dir` proporcionado por el usuario) para indicar el comando exacto

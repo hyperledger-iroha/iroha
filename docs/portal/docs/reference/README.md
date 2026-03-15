@@ -14,7 +14,7 @@ guides and tutorials evolve.
   Redoc. Regenerate the spec with `npm run sync-openapi -- --version=current --latest` (add
   `--mirror=<label>` to copy the snapshot into additional historical versions).
 - **Torii MCP API** – `/reference/torii-mcp` documents the JSON-RPC method contract behind
-  `/v2/mcp`, including discovery flow (`initialize` + `tools/list`), tool invocation semantics,
+  `/v1/mcp`, including discovery flow (`initialize` + `tools/list`), tool invocation semantics,
   async job polling, and stable error signaling.
 - **Configuration tables** – The full parameter catalog is kept in
   `docs/source/references/configuration.md`. Until the portal ships an auto-import, reference that

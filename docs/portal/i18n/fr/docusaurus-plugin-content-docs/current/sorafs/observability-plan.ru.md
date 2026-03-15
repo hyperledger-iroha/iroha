@@ -78,7 +78,7 @@ nécessaire pour l'augmentation de la valeur PoR/PoTR.
 | `sorafs_node_por_failure_total` | Compteur | `provider_id` | Монотонный счетчик неуспешных PoR-выборок. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Jauge | `provider` | Jauge Prometheus adaptée pour les bateaux, les balles et les avions en vol PoR. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Jauge | `provider` | Vous pouvez donc utiliser un fournisseur de capacité/disponibilité, qui est disponible dans les locaux du pays. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | Le carnet de commandes et les dossiers d'exportation du groupe sont indiqués lors de l'ouverture du `/v2/sorafs/por/ingestion/{manifest}`, sur le panneau/alerte "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | Le carnet de commandes et les dossiers d'exportation du groupe sont indiqués lors de l'ouverture du `/v1/sorafs/por/ingestion/{manifest}`, sur le panneau/alerte "PoR Stalls". |
 
 ### Preuve de récupération en temps opportun (PoTR) et morceaux de SLA| Métrique | Astuce | Metki | Projet | Première |
 |---------|-----|-------|---------------|------------|

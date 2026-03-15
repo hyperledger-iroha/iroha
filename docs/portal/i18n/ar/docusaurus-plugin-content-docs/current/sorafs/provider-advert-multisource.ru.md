@@ -63,7 +63,7 @@ translation_last_reviewed: 2026-02-07
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## الأدوات والتركيبات- تتضمن الحمولات الصافية التي يوفرها مقدمو الطلبات `range_capability`، `stream_budget`
-  و `transport_hints`. تحقق من خلال الإجابات `/v2/sorafs/providers` وتركيبات القبول؛
+  و `transport_hints`. تحقق من خلال الإجابات `/v1/sorafs/providers` وتركيبات القبول؛
   تشتمل متطلبات السيرة الذاتية لـ JSON على إمكانات واسعة النطاق وميزانية التدفق وتلميحات ضخمة
   لاستيعاب القياس عن بعد.
 - `cargo xtask sorafs-admission-fixtures` يعرض ميزانيات البث وتلميحات النقل
@@ -75,7 +75,7 @@ translation_last_reviewed: 2026-02-07
 
 ## التكامل مع الأوركسترا وTorii
 
-- Torii `/v2/sorafs/providers` يوفر إمكانات تبادلية واسعة النطاق
+- Torii `/v1/sorafs/providers` يوفر إمكانات تبادلية واسعة النطاق
   هنا مع `stream_budget` و`transport_hints`. يجب أن يتم تخفيض الاقتراح المسبق عندما
   يقدم الموردون طرقًا بديلة جديدة، حيث يتم تعزيزها من خلال نقاط نهاية النطاق
   للعملاء المميزين.

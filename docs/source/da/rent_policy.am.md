@@ -161,7 +161,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 
 ## የተግባር ፍሰት
 
-1. ** ማስገቢያ፡** `/v2/da/ingest` ገባሪውን `DaRentPolicyV1` ይጭናል የኪራይ ዋጋ
+1. ** ማስገቢያ፡** `/v1/da/ingest` ገባሪውን `DaRentPolicyV1` ይጭናል የኪራይ ዋጋ
    በብሎብ መጠን እና ማቆየት ላይ በመመስረት እና ጥቅሱን በ Norito ውስጥ አካትቷል።
    ገላጭ. አስገቢው የኪራይ ሀሽ እና የማጣቀሻ መግለጫ ይፈርማል
    የማከማቻ ትኬት መታወቂያ.
@@ -179,7 +179,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 ## ቴሌሜትሪTorii አንጓዎች የኪራይ አጠቃቀምን በሚከተሉት Prometheus ሜትሪክስ (ስያሜዎች) ያጋልጣሉ።
 `cluster`፣ `storage_class`፡
 
-- `torii_da_rent_gib_months_total` - GiB-ወሮች በ `/v2/da/ingest` የተጠቀሱ።
+- `torii_da_rent_gib_months_total` - GiB-ወሮች በ `/v1/da/ingest` የተጠቀሱ።
 - `torii_da_rent_base_micro_total` — መነሻ ኪራይ (ማይክሮ XOR) በመግቢያው ላይ ተከማችቷል።
 - `torii_da_protocol_reserve_micro_total` - የፕሮቶኮል መጠባበቂያ መዋጮዎች።
 - `torii_da_provider_reward_micro_total` - የአቅራቢ-ጎን ኪራይ ክፍያዎች።
@@ -196,7 +196,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 
 ## ቀጣይ እርምጃዎች
 
-- ✅ `/v2/da/ingest` ደረሰኞች አሁን `rent_quote` እና የCLI/SDK ንጣፎች የተጠቀሰውን ያሳያሉ።
+- ✅ `/v1/da/ingest` ደረሰኞች አሁን `rent_quote` እና የCLI/SDK ንጣፎች የተጠቀሰውን ያሳያሉ።
   መነሻ ኪራይ፣ የተጠባባቂ ድርሻ እና የ PDP/PoTR ቦነስ አስገቢዎች የXOR ግዴታዎችን ከዚህ በፊት መገምገም ይችላሉ።
   ሸክሞችን መፈጸም.
 - የኪራይ ደብተርን ከሚመጣው የDA ዝና/የመጽሐፍ ምግቦች ጋር ያዋህዱ

@@ -158,7 +158,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` は `/v2/explorer/accounts/{id}/qr` JSON をミラーリングします。
+`ExplorerAccountQrSnapshot` は `/v1/explorer/accounts/{id}/qr` JSON をミラーリングします。
 表面: 正規のアカウント ID、つまり、
 要求された形式、ネットワーク プレフィックス/エラー修正メタデータ、QR 寸法、および
 ウォレット/エクスプローラーが直接埋め込むことができるインライン SVG ペイロード。

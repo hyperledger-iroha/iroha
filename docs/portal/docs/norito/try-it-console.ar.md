@@ -78,10 +78,10 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 1. أنشئ حمولة `.norito` باستخدام CLI أو المقاطع الموضحة في [البدء السريع لـ Norito](./quickstart.md). الوكيل يعيد توجيه أجسام `application/x-norito` دون تغيير، لذا يمكنك إعادة استخدام الأثر نفسه الذي سترسله عبر `curl`.
 2. افتح `/reference/torii-rapidoc` (مفضل للحمولات الثنائية) أو `/reference/torii-swagger`.
 3. اختر لقطة Torii المطلوبة من القائمة المنسدلة. اللقطات موقعة؛ وتعرض اللوحة بصمة البيان المسجلة في `static/openapi/manifest.json`.
-4. اختر نوع المحتوى `application/x-norito` في درج "Try it"، واضغط **Choose File**، وحدد الحمولة الخاصة بك. يعيد الوكيل كتابة الطلب إلى `/proxy/v2/pipeline/submit` ويضع وسم `X-TryIt-Client=docs-portal-rapidoc`.
+4. اختر نوع المحتوى `application/x-norito` في درج "Try it"، واضغط **Choose File**، وحدد الحمولة الخاصة بك. يعيد الوكيل كتابة الطلب إلى `/proxy/v1/pipeline/submit` ويضع وسم `X-TryIt-Client=docs-portal-rapidoc`.
 5. لتنزيل استجابات Norito اضبط `Accept: application/x-norito`. تعرض Swagger/RapiDoc محدد الرؤوس في الدرج نفسه وتعيد الباينري عبر الوكيل.
 
-بالنسبة للمسارات التي تستخدم JSON فقط، يكون sandbox Try it المضمّن غالبا أسرع: أدخل المسار (على سبيل المثال `/v2/accounts/i105.../assets`)، اختر طريقة HTTP، الصق جسم JSON عند الحاجة، واضغط **Send request** لفحص الرؤوس والمدة والحمولات مباشرة.
+بالنسبة للمسارات التي تستخدم JSON فقط، يكون sandbox Try it المضمّن غالبا أسرع: أدخل المسار (على سبيل المثال `/v1/accounts/i105.../assets`)، اختر طريقة HTTP، الصق جسم JSON عند الحاجة، واضغط **Send request** لفحص الرؤوس والمدة والحمولات مباشرة.
 
 ## استكشاف الأخطاء وإصلاحها
 
