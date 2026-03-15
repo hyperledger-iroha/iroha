@@ -2,6 +2,103 @@
 
 Last updated: 2026-03-15
 
+## 2026-03-15 Follow-up: suppress direct missing-QC rotation when matching frontier pending already exists
+- Simplified `crates/iroha_core/src/sumeragi/main_loop.rs` so
+  `force_view_change_if_idle(...)` no longer emits a direct `MissingQc`
+  rotation when the contiguous frontier already has a matching pending block for
+  the current `(height, view)`:
+  - matching frontier pending now suppresses the empty-frontier `missing_qc`
+    direct-rotation branch,
+  - the same condition also blocks `advance_frontier_recovery("missing_qc", ...)`
+    from becoming a second rotation owner while that pending exists,
+  - this leaves cached-slot / quorum-timeout handling to the existing pending
+    owner instead of letting `missing_qc` race it.
+- Added focused regression coverage in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `force_view_change_if_idle_suppresses_missing_qc_when_matching_frontier_pending_exists`
+    asserts that matching frontier pending keeps the current view and does not
+    count a `MissingQc` rotation,
+  - the broader `force_view_change_if_idle_` slice remains green.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_suppresses_missing_qc_when_matching_frontier_pending_exists -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_ -- --nocapture` (pass)
+- Runtime note:
+  - the prior live probe
+    `/tmp/izanami_npos_healthy_probe_propose_owner_unified_20260315T1234Z.log`
+    finished with `quorum min height 63` / `strict min height 70` before target
+    `120`,
+  - that run confirmed the cached-slot cut was live in peer logs
+    (`cached proposal slot stalled past quorum timeout; routing through unified frontier recovery`)
+    but still exposed `proposal_handlers` `missing_qc` at heights `9`, `28`,
+    and `48` with `pending_match=true`,
+  - a fresh rerun with the new suppression patch is now compiling/running in
+    session `26144`, logging to
+    `/tmp/izanami_npos_healthy_probe_pending_match_suppressed_20260315T1350Z.log`.
+
+## 2026-03-15 Follow-up: cached proposal-slot timeout now routes through unified frontier recovery
+- Simplified `crates/iroha_core/src/sumeragi/main_loop/propose.rs` so a
+  stalled cached proposal on the contiguous frontier no longer triggers its own
+  direct quorum-timeout view change:
+  - the cached-slot timeout branch now routes contiguous-frontier stalls through
+    the existing `frontier_recovery` owner using `quorum_timeout`,
+  - direct `trigger_view_change_with_cause(...QuorumTimeout)` is retained only
+    for non-contiguous heights,
+  - the cached-slot timeout trigger/hysteresis bookkeeping remains intact.
+- Updated focused regression coverage in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - renamed the cached-slot timeout test to assert controller ownership instead
+    of immediate `forced_view_after_timeout`,
+  - the contiguous-frontier cached-slot stall now expects
+    `frontier_recovery.phase == RotateArmed` with cause `quorum_timeout`.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib pacemaker_routes_contiguous_cached_slot_stall_through_frontier_recovery -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_ -- --nocapture` (pass)
+- Runtime note:
+  - a fresh release NPoS 120-block probe is running in session `35751`, logging
+    to `/tmp/izanami_npos_healthy_probe_propose_owner_unified_20260315T1234Z.log`
+    with keep-dirs under
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_Nw2BSR`,
+    but the run is still blocked on the child warmup build
+    `cargo build -p irohad --release --bin iroha3d` (pid `94915`), so there is
+    no consensus verdict yet.
+
+## 2026-03-15 Follow-up: frontier recovery ownership unification for stalled pending vs missing-QC
+- Simplified contiguous-frontier recovery ownership in
+  `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - added a small frontier-owned quorum-timeout handoff instead of allowing
+    `maybe_force_view_change_for_stalled_pending(...)` to trigger a second direct
+    rotation authority;
+  - stalled contiguous frontier pending now seeds the existing
+    `frontier_recovery` controller at the cleanup boundary and lets that
+    controller own the eventual rotate;
+  - empty-frontier `missing_qc` no longer clears or steals recovery ownership
+    while a quorum-timeout frontier controller still owns the active window;
+  - frontier recovery cause mapping now preserves `quorum_timeout` in view-change
+    accounting instead of collapsing it into `missing_qc`.
+- Added focused regressions in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` for:
+  - stalled-pending two-step controller handoff (`arm RotateArmed`, then rotate
+    on the next window),
+  - empty-frontier `missing_qc` suppression while quorum-timeout recovery owns
+    the frontier window,
+  - existing stalled-pending timeout fixtures updated so proposal-owned cases
+    explicitly record proposal evidence.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib frontier_recovery_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib stake_quorum_timeout_reschedules_without_immediate_view_change -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_drops_pending_without_immediate_view_change -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib committed_edge_conflict_ -- --nocapture` (pass)
+- Runtime note:
+  - a fresh release NPoS 120-block probe is running with warmed keep-dirs-style
+    settings, but there is no verdict yet because release compilation is still in
+    progress in session `27010`.
+
 ## 2026-03-15 Follow-up: first-release API version normalization (`v1` only)
 - Standardized Torii/API path references from `v2` to `v1` across code and
   integration tests in this repository slice (`crates/` + `integration_tests/`):
