@@ -80,13 +80,8 @@ fn pagination_behaves() -> Result<()> {
 fn register_assets(client: &Client) -> Result<()> {
     const MAX_INSTRUCTIONS_PER_TX: usize = 5;
 
-    let register: Vec<InstructionBox> = ('a'..='j')
-        .map(|c| c.to_string())
-        .map(|name| {
-            (name + "#wonderland")
-                .parse::<AssetDefinitionId>()
-                .expect("Valid")
-        })
+    let register: Vec<InstructionBox> = pagination_asset_definition_ids()
+        .into_iter()
         .map(|asset_definition_id: AssetDefinitionId| {
             Register::asset_definition({
                 let __asset_definition_id = asset_definition_id;
@@ -102,4 +97,30 @@ fn register_assets(client: &Client) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn pagination_asset_definition_ids() -> Vec<AssetDefinitionId> {
+    ('a'..='j')
+        .map(|c| c.to_string())
+        .map(|name| {
+            AssetDefinitionId::new(
+                "wonderland"
+                    .parse::<DomainId>()
+                    .expect("wonderland domain is valid"),
+                name.parse::<Name>().expect("single-letter name is valid"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn pagination_asset_definition_ids_are_canonical_aid_literals() {
+    let ids = pagination_asset_definition_ids();
+    assert_eq!(ids.len(), 10);
+    for id in ids {
+        let literal = id.to_string();
+        assert!(literal.starts_with("aid:"));
+        assert_eq!(literal.len(), 36);
+        assert_eq!(literal.parse::<AssetDefinitionId>().expect("canonical"), id);
+    }
 }
