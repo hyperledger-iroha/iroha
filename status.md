@@ -2,6 +2,20 @@
 
 Last updated: 2026-03-15
 
+## 2026-03-15 Follow-up: address canonicalisation path-helper regression fix
+- Fixed `integration_tests/tests/address_canonicalisation.rs` helper paths used by account/explorer
+  path-surface tests:
+  - `account_endpoint_url(...)` now targets `/v1/accounts/...` (was accidentally switched to `/v2/...`).
+  - `explorer_account_qr_url(...)` now targets `/v1/explorer/accounts/.../qr`
+    (was accidentally switched to `/v2/...`).
+- This restores expected handler dispatch so malformed literals are validated by route handlers
+  (`400 Bad Request`) and canonical I105 account/explorer requests succeed (`200 OK`) instead of
+  hitting `404 Not Found`.
+- Validation (this follow-up):
+  - `cargo test -p integration_tests --test address_canonicalisation account_path_endpoints_reject_ -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation account_transactions_ -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation explorer_account_qr_ -- --nocapture` (pass)
+
 ## 2026-03-15 Follow-up: mobile offline asset-id literal builders (`norito:<hex>`)
 - Implemented SDK-facing support for building canonical encoded asset IDs from textual parts
   (`assetDefinitionId` + `accountId`) via `OfflineNorito.encodeAssetId` paths and bridge/native hooks.
