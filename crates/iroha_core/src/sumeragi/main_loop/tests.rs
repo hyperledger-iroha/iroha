@@ -38279,11 +38279,19 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
         .get(&block_hash)
         .expect("request entry retained");
     assert!(
-        stats.view_change_triggered_view == Some(view),
-        "dwell beyond window should trigger view change"
+        stats.view_change_triggered_view.is_none(),
+        "contiguous-frontier dwell should hand recovery to the frontier controller instead of marking a direct view change"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::CatchUp
+                && state.last_cause == "missing_payload"
+        }),
+        "contiguous-frontier dwell should seed the unified frontier recovery controller"
     );
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_payload_total, 1);
+    assert_eq!(snapshot.missing_payload_total, 0);
 
     harness.shutdown.send();
 }
@@ -44624,12 +44632,18 @@ async fn deferred_missing_payload_qc_replay_respects_same_height_stall_window_pa
         !actor.deferred_missing_payload_qcs.contains_key(&key),
         "deferred QC should be drained after paced replay is allowed"
     );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height && state.last_cause == "missing_payload"
+        }),
+        "paced replay should hand contiguous-frontier MissingPayload recovery to the unified controller"
+    );
     assert_eq!(
         super::status::snapshot()
             .view_change_causes
             .missing_payload_total,
-        before.saturating_add(1),
-        "allowed replay should emit the fail-closed MissingPayload rotation"
+        before,
+        "paced replay should no longer emit an immediate direct MissingPayload rotation"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -47159,12 +47173,19 @@ async fn retry_missing_block_requests_forces_view_change_after_backlog_extension
         .get(&block_hash)
         .expect("request entry retained");
     assert_eq!(
-        stats.view_change_triggered_view,
-        Some(view),
-        "view change should trigger once backlog extension cap is exceeded"
+        stats.view_change_triggered_view, None,
+        "backlog-extension expiry should hand recovery to the frontier controller instead of marking a direct view change"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::CatchUp
+                && state.last_cause == "missing_payload"
+        }),
+        "backlog-extension expiry should seed the unified frontier recovery controller"
     );
     let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_payload_total, 1);
+    assert_eq!(snapshot.missing_payload_total, 0);
 
     harness.shutdown.send();
 }
@@ -50975,6 +50996,174 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_suppresses_missing_qc_when_matching_frontier_pending_exists() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let availability_timeout =
+        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let start = now
+        .checked_sub(
+            timeout
+                .saturating_add(availability_timeout)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+
+    let block = sample_block(height, current_view, actor.state.view().latest_block_hash());
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block.hash(),
+        PendingBlock::new(block, payload_hash, height, current_view),
+    );
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle missing_qc should stay suppressed while a matching contiguous-frontier pending block exists for the current view"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "suppression should keep the current view"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppression should not install a forced-view marker"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "suppression should not count a MissingQc rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_routes_nonmatching_frontier_pending_through_recovery() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 1u64;
+    let now = Instant::now();
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+
+    let block = sample_block(
+        height,
+        current_view.saturating_sub(1),
+        actor.state.view().latest_block_hash(),
+    );
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block.hash(),
+        PendingBlock::new(block, payload_hash, height, current_view.saturating_sub(1)),
+    );
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "non-matching contiguous-frontier pending should hand recovery to the frontier controller instead of rotating directly"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "frontier controller handoff should keep the current view on the first timeout"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "frontier controller handoff should not install a forced-view marker immediately"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "frontier pending handoff should avoid counting a direct MissingQc rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per_window() {
     use std::borrow::Cow;
 
@@ -52557,8 +52746,33 @@ async fn force_view_change_if_idle_rotates_stalled_active_pending_without_queue_
         )
         .unwrap_or(now);
     assert!(
-        actor.force_view_change_if_idle(later),
-        "stalled active pending block should force a deterministic view change after the frontier pending timeout"
+        !actor.force_view_change_if_idle(later),
+        "stalled active pending block should hand contiguous frontier recovery to the unified controller once the frontier pending timeout expires"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "frontier timeout ownership should move into rotate-armed frontier recovery instead of forcing an immediate direct rotation"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "arming frontier recovery should not install a forced-view marker before the next recovery window expires"
+    );
+
+    let rotate_at = later
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(later);
+    assert!(
+        actor.force_view_change_if_idle(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -52572,6 +52786,317 @@ async fn force_view_change_if_idle_rotates_stalled_active_pending_without_queue_
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.quorum_timeout_total, 1);
     assert_eq!(snapshot.last_cause.as_deref(), Some("quorum_timeout"));
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window()
+ {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::RotateArmed,
+        entered_at: now,
+        last_progress_at: now,
+        last_dependency_progress_at: None,
+        last_action_at: Some(now),
+        no_progress_windows: 2,
+        cleanup_done: true,
+        last_view: current_view,
+        last_rotation_view: None,
+        last_cause: "quorum_timeout",
+    });
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "empty-frontier missing_qc should stay suppressed while quorum-timeout frontier recovery still owns the active window"
+    );
+    let after = super::status::snapshot();
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.last_cause == "quorum_timeout"
+        }),
+        "missing_qc observation must not clear or steal an active quorum-timeout frontier controller"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "suppression should not count a missing_qc view change"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppression should not install a forced-view marker"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_routes_frontier_missing_dependency_through_missing_payload_owner()
+ {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+
+    let missing_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"frontier-missing-owner"));
+    actor.pending.missing_block_requests.insert(
+        missing_hash,
+        MissingBlockRequest {
+            height,
+            view: current_view,
+            phase: Phase::Commit,
+            priority: MissingBlockPriority::Consensus,
+            retry_window: Duration::from_secs(1),
+            view_change_window: Some(Duration::from_secs(1)),
+            first_seen: start,
+            last_requested: start,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+
+    let queue_depths = super::status::worker_queue_depth_snapshot();
+    let backlog_signals = actor.idle_backlog_signals_for_height(height, queue_depths);
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let age = now.saturating_duration_since(start);
+    dbg!(age, timeout, backlog_signals.consensus_queue_backlog);
+    dbg!(
+        actor.has_actionable_missing_block_requests(),
+        actor.missing_qc_height_has_unresolved_dependency_at_height(height),
+        actor.frontier_catchup_has_unresolved_dependency(height),
+        actor.frontier_dependency_recovery_cause(height, now)
+    );
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "frontier missing-block dependency should transfer ownership into missing-payload recovery instead of triggering empty missing_qc rotation"
+    );
+    let after = super::status::snapshot();
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height && state.last_cause == "missing_payload"
+        }),
+        "frontier dependency-backed idle recovery should preserve a missing-payload owner"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "first dependency-backed timeout should not install a forced-view marker"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "dependency-backed handoff should not count a MissingQc rotation"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_payload_total,
+        before.view_change_causes.missing_payload_total,
+        "first dependency-backed handoff should not yet count a MissingPayload rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_to_existing_missing_payload_frontier_recovery_window() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let start = now
+        .checked_sub(timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::RotateArmed,
+        entered_at: now,
+        last_progress_at: now,
+        last_dependency_progress_at: None,
+        last_action_at: Some(now),
+        no_progress_windows: 2,
+        cleanup_done: true,
+        last_view: current_view,
+        last_rotation_view: None,
+        last_cause: "missing_block_height_hard_cap",
+    });
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "empty-frontier missing_qc should stay suppressed while the existing missing-payload frontier controller still owns the reserved window"
+    );
+    let after = super::status::snapshot();
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.last_cause == "missing_block_height_hard_cap"
+        }),
+        "missing_qc observation must not steal or clear a non-missing_qc frontier controller"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "suppression should not count a missing_qc view change"
+    );
+
+    let rotate_at = now
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    assert!(
+        actor.force_view_change_if_idle(rotate_at),
+        "the reserved missing-payload frontier controller should be the one that rotates after its next window expires"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+    assert_eq!(
+        actor.subsystems.propose.forced_view_after_timeout,
+        Some((height, current_view.saturating_add(1)))
+    );
+    let snapshot = super::status::snapshot().view_change_causes;
+    assert_eq!(snapshot.missing_payload_total, 1);
+    assert_eq!(snapshot.last_cause.as_deref(), Some("missing_payload"));
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -52618,6 +53143,7 @@ async fn maybe_force_view_change_for_stalled_pending_uses_reduced_timeout_for_ne
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
     actor
         .phase_tracker
         .on_view_change(height, view_idx, stalled_at);
@@ -52652,8 +53178,28 @@ async fn maybe_force_view_change_for_stalled_pending_uses_reduced_timeout_for_ne
     );
 
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(now),
-        "near-quorum payload-missing stall should force view change on reduced timeout"
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "near-quorum payload-missing stall should hand recovery ownership to the unified frontier controller on the first timeout window"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "first stalled-pending timeout should arm rotate-after-window frontier recovery"
+    );
+    let rotate_at = now
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -52778,8 +53324,28 @@ async fn maybe_force_view_change_for_stalled_pending_reduced_timeout_is_suppress
     );
     super::status::reset_worker_loop_snapshot_for_tests();
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(now),
-        "reduced near-quorum forced view change should resume once backlog clears"
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "once backlog clears, the first stalled-pending timeout should arm the unified frontier controller instead of rotating immediately"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "clearing backlog should arm rotate-after-window frontier recovery"
+    );
+    let rotate_at = now
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -52861,8 +53427,28 @@ async fn maybe_force_view_change_for_stalled_pending_reduced_timeout_defers_on_r
         .expect("pending retained")
         .touch_progress(stale_progress);
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(now),
-        "stale near-quorum progress should allow reduced-timeout forced view change"
+        !actor.maybe_force_view_change_for_stalled_pending(now),
+        "stale near-quorum progress should arm rotate-after-window frontier recovery instead of rotating immediately"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "stale near-quorum progress should transfer ownership into the unified frontier controller"
+    );
+    let rotate_at = now
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(now);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -52908,6 +53494,7 @@ async fn maybe_force_view_change_for_stalled_pending_vote_backed_blocks_wait_for
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
     actor
         .phase_tracker
         .on_view_change(height, view_idx, stalled_at);
@@ -52954,8 +53541,28 @@ async fn maybe_force_view_change_for_stalled_pending_vote_backed_blocks_wait_for
         )
         .unwrap_or(now);
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(later),
-        "vote-backed pending should eventually force view change once the frontier pending timeout expires"
+        !actor.maybe_force_view_change_for_stalled_pending(later),
+        "vote-backed pending should hand the contiguous frontier to the unified recovery controller once the frontier pending timeout expires"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "frontier pending timeout should arm rotate-after-window frontier recovery"
+    );
+    let rotate_at = later
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(later);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -53007,6 +53614,7 @@ async fn maybe_force_view_change_for_stalled_pending_non_near_path_waits_for_fro
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
     actor
         .phase_tracker
         .on_view_change(height, view_idx, stalled_at);
@@ -53026,8 +53634,28 @@ async fn maybe_force_view_change_for_stalled_pending_non_near_path_waits_for_fro
         .saturating_add(Duration::from_millis(2));
     let later = now.checked_add(delay).unwrap_or(now);
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(later),
-        "non-near stalled pending should force VC once the frontier pending timeout expires"
+        !actor.maybe_force_view_change_for_stalled_pending(later),
+        "non-near stalled pending should arm unified frontier recovery once the frontier pending timeout expires"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "frontier pending timeout should arm rotate-after-window frontier recovery"
+    );
+    let rotate_at = later
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(later);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -53082,6 +53710,7 @@ async fn maybe_force_view_change_for_stalled_pending_uses_frontier_pending_timeo
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.touch_progress(pending_stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
     actor
         .phase_tracker
         .on_view_change(height, view_idx, view_started_at);
@@ -53104,8 +53733,28 @@ async fn maybe_force_view_change_for_stalled_pending_uses_frontier_pending_timeo
         )
         .unwrap_or(now);
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(later),
-        "forced VC should fire once view age reaches the frontier pending timeout"
+        !actor.maybe_force_view_change_for_stalled_pending(later),
+        "once view age reaches the frontier pending timeout, stalled pending should arm unified frontier recovery instead of rotating immediately"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "view-age-lagged timeout should arm rotate-after-window frontier recovery"
+    );
+    let rotate_at = later
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(later);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -53153,6 +53802,7 @@ async fn maybe_force_view_change_for_stalled_pending_applies_frontier_pending_ti
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
     pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view_idx, payload_hash);
     actor
         .phase_tracker
         .on_view_change(height, view_idx, stalled_at);
@@ -53197,8 +53847,28 @@ async fn maybe_force_view_change_for_stalled_pending_applies_frontier_pending_ti
         .saturating_add(Duration::from_millis(2));
     let later = now.checked_add(delay).unwrap_or(now);
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(later),
-        "stalled-pending timeout should fire once the frontier pending timeout expires"
+        !actor.maybe_force_view_change_for_stalled_pending(later),
+        "residual-round backlog should arm unified frontier recovery once the frontier pending timeout expires"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "residual-round timeout should arm rotate-after-window frontier recovery"
+    );
+    let rotate_at = later
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(later);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -53313,8 +53983,28 @@ async fn maybe_force_view_change_for_stalled_pending_near_quorum_fast_path_close
         .checked_add(frontier_pending_timeout.saturating_add(Duration::from_millis(2)))
         .unwrap_or(now);
     assert!(
-        actor.maybe_force_view_change_for_stalled_pending(later),
-        "stalled pending should force a view change after the frontier pending timeout elapses"
+        !actor.maybe_force_view_change_for_stalled_pending(later),
+        "once the frontier pending timeout elapses, stalled pending should arm unified frontier recovery instead of rotating immediately"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::RotateArmed
+                && state.cleanup_done
+                && state.last_cause == "quorum_timeout"
+        }),
+        "residual-round near-quorum timeout should arm rotate-after-window frontier recovery"
+    );
+    let rotate_at = later
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
+        .unwrap_or(later);
+    assert!(
+        actor.maybe_force_view_change_for_stalled_pending(rotate_at),
+        "rotate-armed frontier recovery should rotate once the next recovery window expires"
     );
     assert_eq!(
         actor.subsystems.propose.forced_view_after_timeout,
@@ -53725,6 +54415,82 @@ async fn force_view_change_if_idle_waits_for_pacemaker_attempt() {
     assert!(
         actor.force_view_change_if_idle(now),
         "idle view change should trigger after a pacemaker attempt times out"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1))
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_initial_contiguous_frontier_gap_for_bounded_commit_skew()
+{
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let frontier_grace = actor.rebroadcast_cooldown().max(Duration::from_millis(500));
+    let start = now
+        .checked_sub(timeout + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "empty contiguous frontier should hold view 0 for one bounded grace window"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "bounded grace should preserve the initial frontier view"
+    );
+
+    let rotate_at = now
+        .checked_add(frontier_grace + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
+    assert!(
+        actor.force_view_change_if_idle(rotate_at),
+        "rotation should resume once the bounded commit-skew grace expires"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -54797,8 +55563,25 @@ async fn force_view_change_if_idle_missing_qc_backoff_expires_and_rotation_proce
         });
 
     assert!(
-        actor.force_view_change_if_idle(now),
-        "rotation should proceed once same-height backoff hard-cap window expires"
+        !actor.force_view_change_if_idle(now),
+        "same-height hard-cap expiry should hand ownership to the unified frontier controller before rotating"
+    );
+    let mut rotated = false;
+    for step in 1_u32..=4_u32 {
+        let rotate_at = now
+            .checked_add(
+                super::saturating_mul_duration(actor.frontier_recovery_window(), step)
+                    .saturating_add(Duration::from_millis(2)),
+            )
+            .unwrap_or(now);
+        if actor.force_view_change_if_idle(rotate_at) {
+            rotated = true;
+            break;
+        }
+    }
+    assert!(
+        rotated,
+        "rotation should still proceed within bounded unified frontier recovery windows after same-height hard-cap expiry"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -65885,7 +66668,7 @@ async fn pacemaker_rebroadcasts_cached_proposal_when_leader() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pacemaker_forces_view_change_when_cached_slot_stalls() {
+async fn pacemaker_routes_contiguous_cached_slot_stall_through_frontier_recovery() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -65958,18 +66741,25 @@ async fn pacemaker_forces_view_change_when_cached_slot_stalls() {
         !proposed,
         "pacemaker should not assemble a new proposal when cached"
     );
-    let forced = actor
-        .subsystems
-        .propose
-        .forced_view_after_timeout
-        .expect("stalled cached slot should force view change");
-    assert_eq!(
-        forced.0, height,
-        "forced view should target the same height"
-    );
     assert!(
-        forced.1 > view,
-        "forced view should advance beyond the stalled cached slot"
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "contiguous-frontier cached slot stall should no longer force its own view change"
+    );
+    let frontier_recovery = actor
+        .frontier_recovery
+        .expect("cached slot stall should arm unified frontier recovery");
+    assert_eq!(
+        frontier_recovery.frontier_height, height,
+        "frontier recovery should target the stalled cached slot height"
+    );
+    assert_eq!(
+        frontier_recovery.last_cause, "quorum_timeout",
+        "cached slot stall should be owned by the quorum-timeout frontier controller"
+    );
+    assert_eq!(
+        frontier_recovery.phase,
+        super::FrontierRecoveryPhase::RotateArmed,
+        "cached slot stall should arm the controller instead of rotating directly"
     );
 
     harness.shutdown.send();
@@ -70442,6 +71232,88 @@ async fn proposal_hint_marks_view_seen() {
     assert!(
         actor.subsystems.propose.proposals_seen.contains(&(2, 0)),
         "proposal hint should mark the view as observed"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_payload_mismatch_preserves_active_frontier_owner() {
+    let _guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0_u64;
+    let owner_block = sample_block(height, view, parent);
+    let owner_hash = owner_block.hash();
+    let owner_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&owner_block));
+    actor.pending.pending_blocks.insert(
+        owner_hash,
+        PendingBlock::new(owner_block.clone(), owner_payload_hash, height, view),
+    );
+    actor.note_proposal_seen(height, view, owner_payload_hash);
+    actor.phase_tracker.start_new_round(height, Instant::now());
+    actor
+        .phase_tracker
+        .on_view_change(height, view, Instant::now());
+
+    let proposal = Actor::build_consensus_proposal(
+        &owner_block,
+        owner_payload_hash,
+        sample_qc_ref(height.saturating_sub(1), view),
+        0,
+        view,
+        0,
+    );
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(proposal.clone());
+
+    let conflicting_block = block_with_txs(
+        height,
+        view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    );
+    let before = super::status::snapshot().consensus_sidecar_recovery_trigger_total;
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: conflicting_block.clone(),
+            },
+            None,
+        )
+        .expect("handle conflicting BlockCreated");
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&owner_hash),
+        "existing contiguous-frontier owner should remain active"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .contains_key(&conflicting_block.hash()),
+        "mismatching BlockCreated should not become a second pending owner for the same slot"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_some(),
+        "cached proposal should remain in place while the active frontier owner is preserved"
+    );
+    assert_eq!(
+        super::status::snapshot().consensus_sidecar_recovery_trigger_total,
+        before,
+        "preserving the active frontier owner should suppress the payload-mismatch recovery bundle"
     );
 
     harness.shutdown.send();

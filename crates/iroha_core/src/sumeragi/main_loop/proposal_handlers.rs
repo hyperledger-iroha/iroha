@@ -2340,14 +2340,30 @@ impl Actor {
         let cached_proposal_mismatch = cached_proposal
             .as_ref()
             .and_then(|proposal| detect_proposal_mismatch(proposal, &header, &payload_hash));
+        let session_key = Self::session_key(&block_hash, height, view);
         if let Some(reason) = proposal_mismatch
             .or(cached_proposal_mismatch)
             .map(|mismatch| mismatch.reason())
         {
+            let preserve_frontier_owner = self
+                .preserve_contiguous_frontier_owner_on_payload_mismatch(
+                    height,
+                    view,
+                    Instant::now(),
+                );
             self.invalidate_proposal(block_hash, height, view, reason)?;
+            if preserve_frontier_owner {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockCreated,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::PayloadMismatch,
+                );
+                self.clear_payload_mismatch_state(session_key, block_hash, height, view);
+                self.finalize_collector_plan(false);
+                return Ok(());
+            }
             // Keep processing the payload after invalidating a stale proposal.
         }
-        let session_key = Self::session_key(&block_hash, height, view);
         let (rbc_seed_ms, rbc_hydrate_ms) = if da_enabled {
             let mut seed_ms = 0u64;
             let mut hydrate_ms = 0u64;
@@ -2855,15 +2871,27 @@ impl Actor {
         view: u64,
         reason: String,
     ) -> Result<()> {
-        let proposal_opt = self
-            .subsystems
-            .propose
-            .proposal_cache
-            .pop_proposal(height, view);
-        self.subsystems
-            .propose
-            .proposal_cache
-            .pop_hint(height, view);
+        let now = Instant::now();
+        let preserve_frontier_owner =
+            self.preserve_contiguous_frontier_owner_on_payload_mismatch(height, view, now);
+        let proposal_opt = if preserve_frontier_owner {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(height, view)
+                .cloned()
+        } else {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(height, view)
+        };
+        if !preserve_frontier_owner {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(height, view);
+        }
         super::status::inc_block_created_proposal_mismatch();
         #[cfg(feature = "telemetry")]
         self.telemetry.inc_block_created_proposal_mismatch();
@@ -2872,6 +2900,7 @@ impl Actor {
                 height,
                 view,
                 reason = reason.as_str(),
+                preserve_frontier_owner,
                 "dropping BlockCreated due to proposal mismatch"
             );
             let evidence = invalid_proposal_evidence(proposal, reason);
@@ -2881,17 +2910,50 @@ impl Actor {
                 height,
                 view,
                 reason = reason.as_str(),
+                preserve_frontier_owner,
                 "proposal mismatch detected but no cached proposal available to emit evidence"
             );
+        }
+        if preserve_frontier_owner {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "suppressing payload-mismatch recovery bundle while an active contiguous-frontier owner remains in place"
+            );
+            return Ok(());
         }
         let _ = self.maybe_trigger_payload_mismatch_recovery_bundle(
             height,
             view,
             block_hash,
-            Instant::now(),
+            now,
             "proposal_payload_mismatch",
         );
         Ok(())
+    }
+
+    fn preserve_contiguous_frontier_owner_on_payload_mismatch(
+        &self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        height == committed_height.saturating_add(1)
+            && (self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && pending.height == height
+                    && pending.view == view
+                    && pending_extends_tip(
+                        pending.height,
+                        pending.block.header().prev_block_hash(),
+                        tip_height,
+                        tip_hash,
+                    )
+            }) || self.frontier_vote_backed_recovery_active(height, now))
     }
 
     pub(super) fn clear_payload_mismatch_state(

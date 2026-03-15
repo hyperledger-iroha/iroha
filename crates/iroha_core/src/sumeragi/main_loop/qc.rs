@@ -863,7 +863,31 @@ impl Actor {
                                 "deferring MissingPayload escalation for deferred QC replay failure while dependencies are converging"
                             );
                         } else {
-                            if self.try_reserve_missing_qc_height_stall_rotation_window(
+                            let first_seen = self
+                                .deferred_missing_payload_qcs
+                                .get(&key)
+                                .map(|entry| entry.first_seen)
+                                .unwrap_or(now);
+                            if let Some(action) = self
+                                .handoff_contiguous_frontier_missing_payload_recovery(
+                                    qc.height, qc.view, first_seen, now,
+                                )
+                            {
+                                if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                                    self.deferred_missing_payload_qcs.remove(&key);
+                                    super::status::inc_qc_deferred_expired();
+                                    #[cfg(feature = "telemetry")]
+                                    if let Some(telemetry) = self.telemetry_handle() {
+                                        telemetry.inc_qc_deferred_expired();
+                                    }
+                                } else if let Some(entry) =
+                                    self.deferred_missing_payload_qcs.get_mut(&key)
+                                {
+                                    entry.last_attempt = now;
+                                }
+                                branch_progress |=
+                                    !matches!(action, super::FrontierRecoveryAdvance::None);
+                            } else if self.try_reserve_missing_qc_height_stall_rotation_window(
                                 qc.height,
                                 super::ViewChangeCause::MissingPayload,
                                 now,
@@ -925,7 +949,32 @@ impl Actor {
                             "deferring MissingPayload escalation for expired deferred QC while dependencies are converging"
                         );
                     } else {
-                        if self.try_reserve_missing_qc_height_stall_rotation_window(
+                        let first_seen = self
+                            .deferred_missing_payload_qcs
+                            .get(&key)
+                            .map(|entry| entry.first_seen)
+                            .unwrap_or(now);
+                        if let Some(action) = self
+                            .handoff_contiguous_frontier_missing_payload_recovery(
+                                qc.height, qc.view, first_seen, now,
+                            )
+                        {
+                            if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                                self.deferred_missing_payload_qcs.remove(&key);
+                                super::status::inc_qc_deferred_expired();
+                                #[cfg(feature = "telemetry")]
+                                if let Some(telemetry) = self.telemetry_handle() {
+                                    telemetry.inc_qc_deferred_expired();
+                                }
+                            } else if let Some(entry) =
+                                self.deferred_missing_payload_qcs.get_mut(&key)
+                            {
+                                entry.last_attempt = now;
+                                branch_progress |= fetched;
+                            }
+                            branch_progress |=
+                                !matches!(action, super::FrontierRecoveryAdvance::None);
+                        } else if self.try_reserve_missing_qc_height_stall_rotation_window(
                             qc.height,
                             super::ViewChangeCause::MissingPayload,
                             now,
@@ -956,6 +1005,56 @@ impl Actor {
         }
 
         progress
+    }
+
+    fn handoff_contiguous_frontier_missing_payload_recovery(
+        &mut self,
+        height: u64,
+        view: u64,
+        first_seen: Instant,
+        now: Instant,
+    ) -> Option<super::FrontierRecoveryAdvance> {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        if height != frontier_height || height != self.active_consensus_round_height() {
+            return None;
+        }
+
+        let existing_reason = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == height)
+            .map(|state| state.last_cause);
+        if existing_reason.is_none() {
+            let dependency_progress_at =
+                self.same_height_no_proposal_storm_dependency_progress_at(height);
+            self.frontier_recovery = Some(super::FrontierRecoveryState {
+                frontier_height: height,
+                phase: super::FrontierRecoveryPhase::CatchUp,
+                entered_at: first_seen,
+                last_progress_at: dependency_progress_at.unwrap_or(first_seen),
+                last_dependency_progress_at: dependency_progress_at,
+                last_action_at: None,
+                no_progress_windows: 0,
+                cleanup_done: false,
+                last_view: view,
+                last_rotation_view: None,
+                last_cause: "missing_payload",
+            });
+        }
+
+        let allow_rotation = !self
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|current| current > view);
+        Some(self.advance_frontier_recovery(
+            existing_reason.unwrap_or("missing_payload"),
+            height,
+            view,
+            false,
+            true,
+            allow_rotation,
+            now,
+        ))
     }
 
     pub(super) fn request_missing_block(
@@ -1296,36 +1395,50 @@ impl Actor {
                         "missing block dwell exceeded view-change window; deferring view change while payload backlog is unresolved"
                     );
                 }
-            } else if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                if stats.mark_view_change_if_due(now) {
-                    if self
-                        .phase_tracker
-                        .current_view(height)
-                        .is_some_and(|current| current > view)
-                    {
-                        debug!(
-                            height,
-                            view, "skipping missing-block retry escalation: round already advanced"
-                        );
-                        return deferred;
-                    }
-                    let dwell_ms = now.saturating_duration_since(stats.first_seen).as_millis();
-                    let since_last_ms = now
-                        .saturating_duration_since(stats.last_requested)
-                        .as_millis();
-                    warn!(
+            } else if let Some((first_seen, last_requested, attempts)) = self
+                .pending
+                .missing_block_requests
+                .get(&block_hash)
+                .map(|stats| (stats.first_seen, stats.last_requested, stats.attempts))
+            {
+                if self
+                    .phase_tracker
+                    .current_view(height)
+                    .is_some_and(|current| current > view)
+                {
+                    debug!(
                         height,
-                        view,
-                        dwell_ms,
-                        since_last_ms,
-                        attempts = stats.attempts,
-                        "missing block dwell exceeded retry window; forcing view change"
+                        view, "skipping missing-block retry escalation: round already advanced"
                     );
-                    if self.try_reserve_missing_qc_height_stall_rotation_window(
-                        height,
-                        ViewChangeCause::MissingPayload,
-                        now,
-                    ) {
+                    return deferred;
+                }
+                let dwell_ms = now.saturating_duration_since(first_seen).as_millis();
+                let since_last_ms = now.saturating_duration_since(last_requested).as_millis();
+                warn!(
+                    height,
+                    view,
+                    dwell_ms,
+                    since_last_ms,
+                    attempts,
+                    "missing block dwell exceeded retry window; routing through frontier recovery"
+                );
+                if self
+                    .handoff_contiguous_frontier_missing_payload_recovery(
+                        height, view, first_seen, now,
+                    )
+                    .is_none()
+                {
+                    let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
+                    else {
+                        return deferred;
+                    };
+                    if stats.mark_view_change_if_due(now)
+                        && self.try_reserve_missing_qc_height_stall_rotation_window(
+                            height,
+                            ViewChangeCause::MissingPayload,
+                            now,
+                        )
+                    {
                         self.trigger_view_change_with_cause(
                             height,
                             view,
@@ -1822,25 +1935,7 @@ impl Actor {
                         "missing block dwell exceeded view-change window; deferring view change while RBC availability is unresolved"
                     );
                 } else {
-                    let mut record_height_hard_cap_escalation = false;
                     let recovery_key = self.missing_block_recovery_key_for_height(height);
-                    if let Some(budget) = self.missing_block_height_recovery.get_mut(&recovery_key)
-                    {
-                        if budget.escalated_view != Some(view) {
-                            budget.escalated_view = Some(view);
-                            record_height_hard_cap_escalation = true;
-                        }
-                    }
-                    if record_height_hard_cap_escalation {
-                        super::status::inc_consensus_missing_block_height_escalation();
-                        #[cfg(feature = "telemetry")]
-                        if let Some(telemetry) = self.telemetry_handle() {
-                            telemetry.inc_consensus_missing_block_height_escalation();
-                        }
-                    }
-                    if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                        let _ = stats.mark_view_change_if_due(now);
-                    }
                     if self
                         .phase_tracker
                         .current_view(height)
@@ -1858,13 +1953,69 @@ impl Actor {
                         dwell_ms,
                         since_last_ms,
                         attempts,
-                        "missing block dwell exceeded view-change window; forcing view change"
+                        "missing block dwell exceeded view-change window; routing through frontier recovery"
                     );
-                    if self.try_reserve_missing_qc_height_stall_rotation_window(
+                    let first_seen = self
+                        .pending
+                        .missing_block_requests
+                        .get(&block_hash)
+                        .map(|stats| stats.first_seen)
+                        .unwrap_or(now);
+                    if let Some(action) = self.handoff_contiguous_frontier_missing_payload_recovery(
+                        height, view, first_seen, now,
+                    ) {
+                        if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                            let mut record_height_hard_cap_escalation = false;
+                            if let Some(budget) =
+                                self.missing_block_height_recovery.get_mut(&recovery_key)
+                            {
+                                if budget.escalated_view != Some(view) {
+                                    budget.escalated_view = Some(view);
+                                    record_height_hard_cap_escalation = true;
+                                }
+                            }
+                            if record_height_hard_cap_escalation {
+                                super::status::inc_consensus_missing_block_height_escalation();
+                                #[cfg(feature = "telemetry")]
+                                if let Some(telemetry) = self.telemetry_handle() {
+                                    telemetry.inc_consensus_missing_block_height_escalation();
+                                }
+                            }
+                            if let Some(stats) =
+                                self.pending.missing_block_requests.get_mut(&block_hash)
+                            {
+                                let _ = stats.mark_view_change_if_due(now);
+                            }
+                            progress = true;
+                            break;
+                        }
+                        progress |= !matches!(action, super::FrontierRecoveryAdvance::None);
+                    } else if self.try_reserve_missing_qc_height_stall_rotation_window(
                         height,
                         ViewChangeCause::MissingPayload,
                         now,
                     ) {
+                        let mut record_height_hard_cap_escalation = false;
+                        if let Some(budget) =
+                            self.missing_block_height_recovery.get_mut(&recovery_key)
+                        {
+                            if budget.escalated_view != Some(view) {
+                                budget.escalated_view = Some(view);
+                                record_height_hard_cap_escalation = true;
+                            }
+                        }
+                        if record_height_hard_cap_escalation {
+                            super::status::inc_consensus_missing_block_height_escalation();
+                            #[cfg(feature = "telemetry")]
+                            if let Some(telemetry) = self.telemetry_handle() {
+                                telemetry.inc_consensus_missing_block_height_escalation();
+                            }
+                        }
+                        if let Some(stats) =
+                            self.pending.missing_block_requests.get_mut(&block_hash)
+                        {
+                            let _ = stats.mark_view_change_if_due(now);
+                        }
                         self.trigger_view_change_with_cause(
                             height,
                             view,

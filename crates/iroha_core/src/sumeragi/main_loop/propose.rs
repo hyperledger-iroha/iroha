@@ -2545,21 +2545,46 @@ impl Actor {
                         height,
                         view_idx,
                     );
-                    warn!(
-                        height,
-                        view = view_idx,
-                        queue_len = pending_queue_len,
-                        wait_age_ms,
-                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
-                        base_quorum_timeout_ms = quorum_timeout.as_millis(),
-                        timeout_streak,
-                        "cached proposal slot stalled past quorum timeout; forcing view change"
-                    );
-                    self.trigger_view_change_with_cause(
-                        height,
-                        view_idx,
-                        ViewChangeCause::QuorumTimeout,
-                    );
+                    let committed_height = self.committed_height_snapshot();
+                    let contiguous_frontier = height == committed_height.saturating_add(1);
+                    if contiguous_frontier {
+                        warn!(
+                            height,
+                            view = view_idx,
+                            queue_len = pending_queue_len,
+                            wait_age_ms,
+                            quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                            base_quorum_timeout_ms = quorum_timeout.as_millis(),
+                            timeout_streak,
+                            "cached proposal slot stalled past quorum timeout; routing through unified frontier recovery"
+                        );
+                        self.seed_frontier_recovery_for_quorum_timeout(height, view_idx, now);
+                        let _ = self.advance_frontier_recovery(
+                            "quorum_timeout",
+                            height,
+                            view_idx,
+                            false,
+                            true,
+                            true,
+                            now,
+                        );
+                    } else {
+                        warn!(
+                            height,
+                            view = view_idx,
+                            queue_len = pending_queue_len,
+                            wait_age_ms,
+                            quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                            base_quorum_timeout_ms = quorum_timeout.as_millis(),
+                            timeout_streak,
+                            "cached proposal slot stalled past quorum timeout; forcing view change"
+                        );
+                        self.trigger_view_change_with_cause(
+                            height,
+                            view_idx,
+                            ViewChangeCause::QuorumTimeout,
+                        );
+                    }
                     self.subsystems.propose.last_cached_slot_timeout_trigger =
                         Some(CachedSlotTimeoutTrigger {
                             height,

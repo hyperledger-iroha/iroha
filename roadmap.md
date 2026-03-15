@@ -2,6 +2,57 @@
 
 Last updated: 2026-03-15
 
+Latest sync (2026-03-15 matching frontier pending suppresses direct MissingQc):
+simplified `crates/iroha_core/src/sumeragi/main_loop.rs` so
+`force_view_change_if_idle(...)` no longer emits a direct `MissingQc` rotation
+when the contiguous frontier already has a matching pending block for the
+current `(height, view)`. That path now yields to the existing pending/cached
+slot owner instead of acting as a second rotation authority. Focused
+regressions are green
+(`force_view_change_if_idle_suppresses_missing_qc_when_matching_frontier_pending_exists`,
+`force_view_change_if_idle_`). The previous warmed NPoS probe
+(`/tmp/izanami_npos_healthy_probe_propose_owner_unified_20260315T1234Z.log`)
+still failed at `quorum 63 / strict 70`, but it materially narrowed the live
+shape: cached-slot timeout no longer forced view change directly, and the
+remaining direct owner in the logs was `proposal_handlers` `missing_qc` with
+`pending_match=true` at heights `9`, `28`, and `48`. Immediate open work is to
+finish the rerun in session `26144` and verify that those `pending_match=true`
+`MissingQc` lines disappear or move later. If they do not, the next candidate
+owner to collapse is the active-height lock-reject path in
+`proposal_handlers.rs`.
+
+Latest sync (2026-03-15 cached proposal-slot timeout owner reduction):
+simplified `crates/iroha_core/src/sumeragi/main_loop/propose.rs` so a stalled
+cached proposal on the contiguous frontier no longer triggers its own direct
+`QuorumTimeout` view change. That path now seeds/advances the existing
+`frontier_recovery` controller and leaves non-contiguous heights on the old
+direct path. Focused regressions are green
+(`pacemaker_routes_contiguous_cached_slot_stall_through_frontier_recovery`,
+`maybe_force_view_change_for_stalled_pending_`). Immediate open work remains
+runtime validation, not more branching: let the fresh release NPoS probe in
+session `35751` clear the child `iroha3d` warmup build, then compare the live
+peer logs against the old failure signature. The specific questions are whether
+`cached proposal slot stalled past quorum timeout; forcing view change`
+disappears and whether the plateau moves beyond the previous `66/72` envelope.
+
+Latest sync (2026-03-15 frontier recovery owner unification): simplified
+`crates/iroha_core/src/sumeragi/main_loop.rs` so stalled contiguous frontier
+pending and empty-frontier `missing_qc` no longer act as competing timeout
+owners. `maybe_force_view_change_for_stalled_pending(...)` now hands the
+contiguous frontier into the existing `frontier_recovery` controller instead of
+forcing a second direct rotation, and empty-frontier `missing_qc` now suppresses
+rotation/cleanup while that quorum-timeout-owned controller still holds the
+active window. Focused regressions are green across the affected slices
+(`maybe_force_view_change_for_stalled_pending_`, `force_view_change_if_idle_`,
+`frontier_recovery_`, `stake_quorum_timeout_reschedules_without_immediate_view_change`,
+`zero_vote_quorum_timeout_drops_pending_without_immediate_view_change`,
+`missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted`,
+`committed_edge_conflict_`). Immediate open work is runtime validation, not more
+state machinery: finish the fresh release NPoS 120-block probe currently still
+compiling in session `27010`, inspect whether the previous fixed-height
+`missing_qc` orbit is reduced, then rerun the healthy canary/full soak matrix
+only if that probe looks materially better.
+
 This roadmap enumerates the outstanding efforts required to ship the optional
 NPoS Sumeragi mode and keep the broader Nexus transition on track. For every task listed here we are preparing the first public release, so teams can design and implement with a clean slate. Completed
 items continue to live in `status.md`; only tasks that still need engineering
