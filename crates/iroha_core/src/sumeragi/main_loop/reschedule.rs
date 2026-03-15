@@ -287,6 +287,15 @@ impl Actor {
             ) {
                 continue;
             }
+            if !self.pending_block_has_consensus_evidence(*hash, pending) {
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    "skipping quorum reschedule for payload-only pending block"
+                );
+                continue;
+            }
             let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
             let pending_age = pending.age();
             let fast_timeout = match consensus_mode {
@@ -626,7 +635,12 @@ impl Actor {
                     quorum_stall_escalations = quorum_stall_escalations.saturating_add(1);
                     super::status::inc_quorum_stall_age_escalation();
                 }
-                if !pending.reschedule_due(now, effective_reschedule_backoff) {
+                let reschedule_due = if has_votes || has_qc {
+                    pending.vote_backed_reschedule_due(now, effective_reschedule_backoff)
+                } else {
+                    pending.reschedule_due(now, effective_reschedule_backoff)
+                };
+                if !reschedule_due {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
                 }
@@ -776,7 +790,7 @@ impl Actor {
             quorum_stall_age,
             vote_count,
             min_votes,
-            stake_quorum_missing,
+            _stake_quorum_missing,
             effective_reschedule_backoff,
         ) in to_reschedule
         {
@@ -796,11 +810,6 @@ impl Actor {
                     quorum_timeout,
                     effective_reschedule_backoff,
                     now,
-                );
-                self.trigger_view_change_with_cause(
-                    key.1,
-                    key.2,
-                    view_change_cause_for_quorum(vote_count, stake_quorum_missing),
                 );
                 progress = true;
             }
@@ -1021,15 +1030,14 @@ impl Actor {
         let commit_vote_count = vote_count;
         let reschedule_vote_count = precommit_vote_count.max(commit_vote_count);
         let has_reschedule_votes = reschedule_vote_count > 0;
-        let already_rescheduled = pending.last_quorum_reschedule.is_some();
         let progress_age = pending.progress_age(now);
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
         let no_commit_evidence = reschedule_vote_count == 0;
-        let drop_pending = already_rescheduled
-            && no_commit_evidence
-            && (quorum_timeout == Duration::ZERO || quorum_stall_age >= quorum_timeout);
+        // Once quorum timeout expires with no commit evidence, this block is just zombie state:
+        // keeping and rebroadcasting it only multiplies conflicting frontier candidates.
+        let drop_pending = no_commit_evidence;
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
@@ -1072,13 +1080,16 @@ impl Actor {
                     || (keep_commit_qc
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
-            pending.mark_aborted();
-            pending.tx_batch = None;
-            self.pending.pending_blocks.insert(block_hash, pending);
+            self.pending.pending_fetch_requests.remove(&block_hash);
+            self.subsystems.validation.inflight.remove(&block_hash);
+            self.subsystems
+                .validation
+                .superseded_results
+                .remove(&block_hash);
         } else {
             // Keep the pending block and cached certificates so late commit certificates
-            // can still finalize it.
-            // We only requeue the transactions to allow a new view to assemble a fresh proposal.
+            // can still finalize it. Do not refresh frontier progress here: votes/RBC already
+            // own progress, and quorum reschedule must stay a bounded retransmit side effect.
             self.pending.pending_blocks.insert(block_hash, pending);
         }
 
@@ -1110,6 +1121,7 @@ impl Actor {
             commit_votes = commit_vote_count,
             reschedule_backoff_ms = reschedule_backoff.as_millis(),
             last_reschedule_ms = last_reschedule_ms,
+            rotate_immediately = false,
             "commit quorum missing past timeout; rescheduling block for reassembly"
         );
     }

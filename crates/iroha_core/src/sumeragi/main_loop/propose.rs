@@ -5,6 +5,10 @@ use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
 use core::num::{NonZeroU64, NonZeroUsize};
+use iroha_data_model::consensus::{
+    CommitStakeSnapshot as ModelCommitStakeSnapshot,
+    CommitStakeSnapshotEntry as ModelCommitStakeSnapshotEntry, PreviousRosterEvidence,
+};
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
 pub(super) fn resolve_prev_block_for_proposal(
@@ -54,6 +58,37 @@ fn precommit_qc_for_view_change(
         (None, Some(committed)) => Some(committed),
         (None, None) => None,
     }
+}
+
+fn model_stake_snapshot(
+    snapshot: crate::sumeragi::stake_snapshot::CommitStakeSnapshot,
+) -> ModelCommitStakeSnapshot {
+    ModelCommitStakeSnapshot {
+        validator_set_hash: snapshot.validator_set_hash,
+        entries: snapshot
+            .entries
+            .into_iter()
+            .map(|entry| ModelCommitStakeSnapshotEntry {
+                peer_id: entry.peer_id,
+                stake: entry.stake,
+            })
+            .collect(),
+    }
+}
+
+fn previous_roster_evidence_for_parent(
+    state: &State,
+    parent_block: &SignedBlock,
+) -> Option<PreviousRosterEvidence> {
+    let parent_height = parent_block.header().height().get();
+    let parent_hash = parent_block.hash();
+    let snapshot = state.commit_roster_snapshot_for_block(parent_height, parent_hash)?;
+    Some(PreviousRosterEvidence {
+        height: parent_height,
+        block_hash: parent_hash,
+        validator_checkpoint: snapshot.validator_checkpoint,
+        stake_snapshot: snapshot.stake_snapshot.map(model_stake_snapshot),
+    })
 }
 
 fn next_cached_slot_timeout_streak(
@@ -935,6 +970,9 @@ impl Actor {
             .cloned()
             .zip(routing_batch.iter().copied())
             .collect();
+        let previous_roster_evidence = prev_block
+            .as_deref()
+            .and_then(|parent| previous_roster_evidence_for_parent(self.state.as_ref(), parent));
         let mut removed_for_chunk_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
             Vec::new();
         let mut removed_for_frame_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
@@ -961,6 +999,13 @@ impl Actor {
                 let lane_config = nexus.lane_config.clone();
                 let mut builder =
                     BlockBuilder::new(tx_batch.clone()).chain(view, prev_block.as_deref());
+                if proposal_height > 2 && previous_roster_evidence.is_none() {
+                    return Err(eyre!(
+                        "missing previous-roster evidence for parent block at height {}",
+                        proposal_height.saturating_sub(1),
+                    ));
+                }
+                builder = builder.with_previous_roster_evidence(previous_roster_evidence.clone());
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();

@@ -7,6 +7,7 @@ use norito::{codec::Encode, core as ncore};
 
 use crate::{
     confidential::{ConfidentialFeatureDigest, DEFAULT_CONFIDENTIAL_FEATURE_DIGEST},
+    consensus::PreviousRosterEvidence,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -67,6 +68,9 @@ mod model {
         /// Optional hash covering the DA pin intent bundle embedded in this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+        /// Optional hash covering previous-height roster evidence embedded in the block payload.
+        #[getset(get_copy = "pub", set = "pub")]
+        pub prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
         /// Creation timestamp as Unix time in milliseconds.
         #[getset(skip)]
         pub creation_time_ms: u64,
@@ -123,6 +127,8 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Optional hash of the DA pin intent bundle embedded in the block payload.
         pub Option<[u8; 32]>,
+        /// Optional hash of previous-height roster evidence embedded in the block payload.
+        pub Option<[u8; 32]>,
         /// Optional confidential feature digest committed in the header.
         pub Option<ConfidentialFeatureDigestWire>,
     );
@@ -131,6 +137,7 @@ pub mod wire {
         fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
             let tuple = (
                 self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
+                self.10,
             );
             <(
                 NonZeroU64,
@@ -140,6 +147,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
+                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -148,6 +156,7 @@ pub mod wire {
         fn encoded_len_hint(&self) -> Option<usize> {
             let tuple = (
                 self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
+                self.10,
             );
             <(
                 NonZeroU64,
@@ -157,6 +166,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
+                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -165,6 +175,7 @@ pub mod wire {
         fn encoded_len_exact(&self) -> Option<usize> {
             let tuple = (
                 self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
+                self.10,
             );
             <(
                 NonZeroU64,
@@ -174,6 +185,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
+                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
@@ -193,6 +205,7 @@ pub mod wire {
                 u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
+                Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
             ) = <(
                 NonZeroU64,
@@ -204,10 +217,11 @@ pub mod wire {
                 u64,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
+                Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
             ) as ncore::NoritoDeserialize>::deserialize(archived.cast());
-            let (h, p, m, r, proof_hash, t, v, d, pins, f) = tuple;
-            Self(h, p, m, r, proof_hash, t, v, d, pins, f)
+            let (h, p, m, r, proof_hash, t, v, d, pins, prev_roster, f) = tuple;
+            Self(h, p, m, r, proof_hash, t, v, d, pins, prev_roster, f)
         }
     }
     /// Wire mapping for `ConfidentialFeatureDigest`.
@@ -366,6 +380,7 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
             b.view_change_index,
             opt_hash_to_bytes(b.da_commitments_hash),
             opt_hash_to_bytes(b.da_pin_intents_hash),
+            opt_hash_to_bytes(b.prev_roster_evidence_hash),
             digest_to_wire(b.confidential_features),
         )
     }
@@ -392,7 +407,8 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
         header.set_da_proof_policies_hash(opt_hash_from_bytes::<DaProofPolicyBundle>(w.4));
         header.set_da_commitments_hash(opt_hash_from_bytes::<DaCommitmentBundle>(w.7));
         header.set_da_pin_intents_hash(opt_hash_from_bytes::<DaPinIntentBundle>(w.8));
-        header.set_confidential_features(digest_from_wire(w.9));
+        header.set_prev_roster_evidence_hash(opt_hash_from_bytes::<PreviousRosterEvidence>(w.9));
+        header.set_confidential_features(digest_from_wire(w.10));
         header
     }
 }
@@ -435,6 +451,7 @@ impl BlockHeader {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms,
             view_change_index,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -475,6 +492,8 @@ impl BlockHeader {
             da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
             /// Optional DA pin intent bundle hash.
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            /// Optional previous-roster evidence hash.
+            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -490,6 +509,7 @@ impl BlockHeader {
                     da_proof_policies_hash,
                     da_commitments_hash,
                     da_pin_intents_hash,
+                    prev_roster_evidence_hash,
                     creation_time_ms,
                     view_change_index,
                     confidential_features,
@@ -502,6 +522,7 @@ impl BlockHeader {
                     da_proof_policies_hash,
                     da_commitments_hash,
                     da_pin_intents_hash,
+                    prev_roster_evidence_hash,
                     creation_time_ms,
                     view_change_index,
                     confidential_features,
@@ -781,6 +802,19 @@ mod tests {
     }
 
     #[test]
+    fn block_header_prev_roster_evidence_hash_roundtrip() {
+        let mut header = BlockHeader::new(nonzero!(4_u64), None, None, None, 99, 1);
+        let evidence_hash = HashOf::<PreviousRosterEvidence>::from_untyped_unchecked(Hash::new(
+            [0x7A; Hash::LENGTH],
+        ));
+        header.set_prev_roster_evidence_hash(Some(evidence_hash));
+        let encoded = header.encode();
+        let mut cursor = encoded.as_slice();
+        let decoded = BlockHeader::decode_all(&mut cursor).expect("decode header");
+        assert_eq!(decoded.prev_roster_evidence_hash(), Some(evidence_hash));
+    }
+
+    #[test]
     fn header_hash_captures_da_commitment_hash() {
         let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
         let base = header.hash();
@@ -819,6 +853,21 @@ mod tests {
         assert_ne!(
             base, with_pins,
             "DA pin intent hash must influence header hash"
+        );
+    }
+
+    #[test]
+    fn block_header_hash_captures_prev_roster_evidence_hash() {
+        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
+        let base = header.hash();
+        let evidence_hash = HashOf::<PreviousRosterEvidence>::from_untyped_unchecked(Hash::new(
+            [0x91; Hash::LENGTH],
+        ));
+        header.set_prev_roster_evidence_hash(Some(evidence_hash));
+        let with_evidence = header.hash();
+        assert_ne!(
+            base, with_evidence,
+            "previous roster evidence hash must influence header hash"
         );
     }
 

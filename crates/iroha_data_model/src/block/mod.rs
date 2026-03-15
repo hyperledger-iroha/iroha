@@ -117,6 +117,7 @@ impl SignedBlock {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         }
@@ -141,6 +142,7 @@ impl SignedBlock {
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         }
@@ -445,6 +447,7 @@ impl SignedBlock {
             da_proof_policies_hash: Some(proof_policy_hash),
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms,
             view_change_index: 0,
             confidential_features,
@@ -457,6 +460,7 @@ impl SignedBlock {
             da_commitments: None,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
+            previous_roster_evidence: None,
         };
 
         let result = BlockResult {
@@ -1292,6 +1296,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1309,6 +1314,7 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
+            previous_roster_evidence: None,
         };
         let key_pair =
             iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -1370,6 +1376,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: Some(result),
         };
@@ -1388,6 +1395,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1408,6 +1416,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1445,6 +1454,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms: 123_456_789_000,
             view_change_index: 123,
             confidential_features: None,
@@ -1496,6 +1506,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1523,6 +1534,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1566,6 +1578,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1602,6 +1615,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1635,6 +1649,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1697,6 +1712,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1779,6 +1795,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1809,6 +1826,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1834,6 +1852,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1866,6 +1885,7 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             },
             result: None,
         };
@@ -1892,6 +1912,81 @@ mod tests {
         block.set_da_pin_intents(None);
         assert!(block.da_pin_intents().is_none());
         assert!(block.header().da_pin_intents_hash().is_none());
+    }
+
+    #[test]
+    fn signed_block_previous_roster_evidence_setter_updates_header_hash_and_roundtrips() {
+        use nonzero_ext::nonzero;
+
+        use crate::consensus::{
+            PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+        };
+        use crate::peer::PeerId;
+
+        let kp_a = iroha_crypto::KeyPair::random();
+        let kp_b = iroha_crypto::KeyPair::random();
+        let validator_set = vec![
+            PeerId::new(kp_a.public_key().clone()),
+            PeerId::new(kp_b.public_key().clone()),
+        ];
+
+        let previous_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let previous_hash = previous_header.hash();
+        let evidence = PreviousRosterEvidence {
+            height: previous_header.height().get(),
+            block_hash: previous_hash,
+            validator_checkpoint: ValidatorSetCheckpoint::new(
+                previous_header.height().get(),
+                previous_header.view_change_index(),
+                previous_hash,
+                Hash::new([0xA1; Hash::LENGTH]),
+                Hash::new([0xB2; Hash::LENGTH]),
+                validator_set,
+                vec![0b11],
+                vec![0xCC; 96],
+                VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ),
+            stake_snapshot: None,
+        };
+        let expected_hash = HashOf::new(&evidence);
+
+        let header = BlockHeader::new(nonzero!(2_u64), Some(previous_hash), None, None, 2, 0);
+        let mut block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: Vec::new(),
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+            },
+            result: None,
+        };
+
+        assert!(block.previous_roster_evidence().is_none());
+        assert!(block.header().prev_roster_evidence_hash().is_none());
+
+        block.set_previous_roster_evidence(Some(evidence.clone()));
+        assert_eq!(block.previous_roster_evidence(), Some(&evidence));
+        assert_eq!(
+            block.header().prev_roster_evidence_hash(),
+            Some(expected_hash)
+        );
+
+        let encoded = block.encode_versioned();
+        let decoded =
+            SignedBlock::decode_all_versioned(&encoded).expect("decode versioned signed block");
+        assert_eq!(decoded.previous_roster_evidence(), Some(&evidence));
+        assert_eq!(
+            decoded.header().prev_roster_evidence_hash(),
+            Some(expected_hash)
+        );
+
+        block.set_previous_roster_evidence(None);
+        assert!(block.previous_roster_evidence().is_none());
+        assert!(block.header().prev_roster_evidence_hash().is_none());
     }
 
     #[test]

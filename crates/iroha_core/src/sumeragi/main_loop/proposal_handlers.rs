@@ -922,6 +922,19 @@ impl Actor {
         self.prune_proposals_seen_horizon(self.last_committed_height);
     }
 
+    pub(super) fn slot_has_proposal_evidence(&self, height: u64, view: u64) -> bool {
+        self.subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, view))
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(height, view)
+                .is_some()
+    }
+
     pub(super) fn prune_proposals_seen_horizon(&mut self, committed_height: u64) {
         let highest_commit = self
             .highest_qc
@@ -1301,7 +1314,6 @@ impl Actor {
             return Ok(());
         }
         let expected_height = committed_height.saturating_add(1);
-        let is_active_height = height == expected_height;
         if height > expected_height {
             let active_commit_topology = self.effective_commit_topology();
             let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -1390,13 +1402,15 @@ impl Actor {
                 return Ok(());
             }
         }
-        let pending_status = self
-            .pending
-            .pending_blocks
-            .get(&block_hash)
-            .map(|pending| (pending.aborted, pending.validation_status));
-        let revive_aborted = pending_status.is_some_and(|(aborted, status)| {
-            aborted && !matches!(status, ValidationStatus::Invalid)
+        let pending_status = self.pending.pending_blocks.get(&block_hash).map(|pending| {
+            (
+                pending.aborted,
+                pending.validation_status,
+                pending.commit_qc_seen,
+            )
+        });
+        let revive_aborted = pending_status.is_some_and(|(aborted, status, commit_qc_seen)| {
+            aborted && commit_qc_seen && !matches!(status, ValidationStatus::Invalid)
         });
         if pending_status.is_some() && !revive_aborted {
             if da_enabled {
@@ -2323,15 +2337,14 @@ impl Actor {
                 computed_hash
             }
         };
+        let cached_proposal_mismatch = cached_proposal
+            .as_ref()
+            .and_then(|proposal| detect_proposal_mismatch(proposal, &header, &payload_hash));
         if let Some(reason) = proposal_mismatch
-            .or_else(|| {
-                cached_proposal
-                    .as_ref()
-                    .and_then(|proposal| detect_proposal_mismatch(proposal, &header, &payload_hash))
-            })
+            .or(cached_proposal_mismatch)
             .map(|mismatch| mismatch.reason())
         {
-            self.invalidate_proposal(height, view, reason)?;
+            self.invalidate_proposal(block_hash, height, view, reason)?;
             // Keep processing the payload after invalidating a stale proposal.
         }
         let session_key = Self::session_key(&block_hash, height, view);
@@ -2605,8 +2618,11 @@ impl Actor {
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut occ) => {
                 if revive_aborted {
-                    occ.get_mut()
-                        .revive_after_abort(block, payload_hash, height, view);
+                    let commit_qc_epoch = occ.get().commit_qc_epoch;
+                    let pending = occ.get_mut();
+                    pending.revive_after_abort(block, payload_hash, height, view);
+                    pending.commit_qc_seen = true;
+                    pending.commit_qc_epoch = commit_qc_epoch;
                 } else {
                     occ.get_mut()
                         .replace_block(block, payload_hash, height, view);
@@ -2616,14 +2632,16 @@ impl Actor {
                 vac.insert(PendingBlock::new(block, payload_hash, height, view));
             }
         }
-        if is_active_height {
-            // `BlockCreated` can arrive ahead of `Proposal`/`ProposalHint` on recovery paths.
-            // Mark the slot as observed once the payload is accepted so the FSM does not rotate
-            // solely because proposal metadata was delayed in transit.
-            self.note_proposal_seen(height, view, payload_hash);
-            self.note_view_change_from_block(height, view);
+        if self
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, view))
+        {
+            // Only slots already observed through Proposal handling may update round metrics from
+            // payload collection. Payload-only BlockCreated must not become independent round state.
+            self.record_phase_sample(PipelinePhase::CollectDa, height, view);
         }
-        self.record_phase_sample(PipelinePhase::CollectDa, height, view);
         if let Some(qc) = qc_cache_for_subject(&self.qc_cache, block_hash)
             .filter(|qc| {
                 qc.phase == crate::sumeragi::consensus::Phase::Commit && qc.height == height
@@ -2723,6 +2741,7 @@ impl Actor {
                     super::status::ConsensusMessageReason::PayloadMismatch,
                 );
                 self.invalidate_proposal(
+                    block_hash,
                     height,
                     view,
                     format!(
@@ -2831,6 +2850,7 @@ impl Actor {
     }
     pub(super) fn invalidate_proposal(
         &mut self,
+        block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
         reason: String,
@@ -2864,6 +2884,13 @@ impl Actor {
                 "proposal mismatch detected but no cached proposal available to emit evidence"
             );
         }
+        let _ = self.maybe_trigger_payload_mismatch_recovery_bundle(
+            height,
+            view,
+            block_hash,
+            Instant::now(),
+            "proposal_payload_mismatch",
+        );
         Ok(())
     }
 

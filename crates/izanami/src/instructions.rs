@@ -243,9 +243,8 @@ fn nexus_gas_keypair() -> KeyPair {
 }
 
 /// Deterministic gas/sink account used by Izanami Nexus profiles.
-pub(crate) fn nexus_gas_account_id() -> ScopedAccountId {
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    ScopedAccountId::new(ivm_domain, nexus_gas_keypair().public_key().clone())
+pub(crate) fn nexus_gas_account_id() -> AccountId {
+    AccountId::new(nexus_gas_keypair().public_key().clone())
 }
 
 /// Prepared chaos state with pre-built genesis instructions.
@@ -262,7 +261,6 @@ pub fn npos_post_topology_instructions(
     min_self_bond: u64,
 ) -> Vec<InstructionBox> {
     let effective_peers = peer_count.max(1);
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
     let stake_amount: Numeric = min_self_bond.into();
     let mut instructions = Vec::new();
     for index in 0..effective_peers {

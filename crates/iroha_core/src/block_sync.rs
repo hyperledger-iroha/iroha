@@ -709,14 +709,12 @@ fn prune_unknown_prev_global_hashes(
     });
 }
 
-const UNKNOWN_PREV_SEEN_REWIND_WINDOW: usize = 1024;
-const UNKNOWN_PREV_MAX_REWIND_WINDOW: usize = 256;
-
 fn unknown_prev_rewind_window(height: usize) -> usize {
-    let max_window = UNKNOWN_PREV_SEEN_REWIND_WINDOW.min(UNKNOWN_PREV_MAX_REWIND_WINDOW);
-    // For unknown-prev recovery, rewind enough to bridge honest divergence but avoid
-    // genesis-prefix replay on short/mid-height chains that can starve range-pull progress.
-    (height / 2).max(1).min(max_window)
+    // Keep short-chain recovery forgiving, but cap mid/deep rewinds to the same recent window
+    // we already advertise in seen-block hints to avoid replaying large historical prefixes.
+    (height / 2)
+        .max(1)
+        .min(UNKNOWN_PREV_RECENT_CHAIN_HASH_WINDOW)
 }
 
 fn unknown_prev_fallback_start_height(
@@ -1852,7 +1850,7 @@ mod unknown_prev_hash_tests {
         let (start_height, requested_latest) =
             unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &BTreeSet::new());
         assert!(requested_latest);
-        assert_eq!(start_height.get(), 1045);
+        assert_eq!(start_height.get(), 1237);
     }
 
     #[test]
@@ -1939,6 +1937,30 @@ mod unknown_prev_hash_tests {
             unknown_prev_fallback_start_height(&kura, Some(latest_known), &BTreeSet::new());
         assert!(!requested_latest);
         assert_eq!(start_height.get(), 469);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_caps_mid_height_rewind_to_recent_window() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        for height in 1_u64..=345_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+        let unknown_hash = hash(0xE1);
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &BTreeSet::new());
+        assert!(requested_latest);
+        assert_eq!(start_height.get(), 282);
     }
 
     #[test]
@@ -2974,18 +2996,22 @@ mod prf_seed_tests {
 
 #[cfg(test)]
 mod roster_metadata_tests {
-    use std::sync::Arc;
+    use std::{num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        block::BlockHeader,
-        consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+        block::{BlockHeader, SignedBlock},
+        consensus::{
+            PreviousRosterEvidence, Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+        },
         peer::PeerId,
     };
     use nonzero_ext::nonzero;
 
     use super::*;
-    use crate::{prelude::World, query::store::LiveQueryStore, sumeragi::status};
+    use crate::{
+        block::ValidBlock, prelude::World, query::store::LiveQueryStore, sumeragi::status,
+    };
 
     fn sample_roster_artifacts() -> (Qc, ValidatorSetCheckpoint) {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -3027,6 +3053,21 @@ mod roster_metadata_tests {
             None,
         );
         (commit_qc, checkpoint)
+    }
+
+    fn sample_successor_block(
+        prev_hash: HashOf<BlockHeader>,
+        evidence: Option<PreviousRosterEvidence>,
+    ) -> SignedBlock {
+        let keypair = KeyPair::random();
+        let mut block: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(2).expect("non-zero height"));
+                header.set_prev_block_hash(Some(prev_hash));
+            })
+            .into();
+        block.set_previous_roster_evidence(evidence);
+        block
     }
 
     #[test]
@@ -3125,6 +3166,77 @@ mod roster_metadata_tests {
         assert_eq!(metadata.commit_qc, Some(commit_qc));
         assert_eq!(metadata.validator_checkpoint, Some(checkpoint));
         assert_eq!(metadata.stake_snapshot, Some(snapshot));
+    }
+
+    #[test]
+    fn metadata_uses_successor_block_previous_roster_evidence() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (_commit_qc, checkpoint) = sample_roster_artifacts();
+        let block_hash = checkpoint.block_hash;
+        let evidence = PreviousRosterEvidence {
+            height: checkpoint.height,
+            block_hash,
+            validator_checkpoint: checkpoint.clone(),
+            stake_snapshot: None,
+        };
+        let successor = sample_successor_block(block_hash, Some(evidence));
+        kura.store_block(Arc::new(successor))
+            .expect("store successor block");
+
+        let metadata = super::message::roster_metadata_from_state(
+            &state,
+            kura.as_ref(),
+            checkpoint.height,
+            block_hash,
+            ConsensusMode::Permissioned,
+        )
+        .expect("metadata should be available from successor block evidence");
+        assert_eq!(metadata.commit_qc, None);
+        assert_eq!(metadata.validator_checkpoint, Some(checkpoint));
+    }
+
+    #[test]
+    fn metadata_rejects_successor_block_previous_roster_evidence_mismatch() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (_commit_qc, checkpoint) = sample_roster_artifacts();
+        let block_hash = checkpoint.block_hash;
+        let mismatched_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+        let evidence = PreviousRosterEvidence {
+            height: checkpoint.height,
+            block_hash: mismatched_hash,
+            validator_checkpoint: checkpoint,
+            stake_snapshot: None,
+        };
+        let successor = sample_successor_block(block_hash, Some(evidence));
+        kura.store_block(Arc::new(successor))
+            .expect("store successor block");
+
+        let metadata = super::message::roster_metadata_from_state(
+            &state,
+            kura.as_ref(),
+            1,
+            block_hash,
+            ConsensusMode::Permissioned,
+        );
+        assert!(
+            metadata.is_none(),
+            "mismatched previous roster evidence must be ignored"
+        );
     }
 
     #[test]
@@ -4090,8 +4202,70 @@ pub mod message {
         block_hash: HashOf<BlockHeader>,
         fallback_consensus_mode: ConsensusMode,
     ) -> Option<RosterMetadata> {
+        fn stake_snapshot_from_previous_roster_evidence(
+            snapshot: &iroha_data_model::consensus::CommitStakeSnapshot,
+        ) -> CommitStakeSnapshot {
+            CommitStakeSnapshot {
+                validator_set_hash: snapshot.validator_set_hash,
+                entries: snapshot
+                    .entries
+                    .iter()
+                    .cloned()
+                    .map(
+                        |entry| crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                            peer_id: entry.peer_id,
+                            stake: entry.stake,
+                        },
+                    )
+                    .collect(),
+            }
+        }
+
+        fn roster_metadata_from_successor_block_evidence(
+            kura: &Kura,
+            block_height: u64,
+            block_hash: HashOf<BlockHeader>,
+        ) -> Option<RosterMetadata> {
+            let successor_height = block_height.checked_add(1)?;
+            let successor_height = usize::try_from(successor_height).ok()?;
+            let successor_height = NonZeroUsize::new(successor_height)?;
+            let successor = kura.get_block(successor_height)?;
+            if successor.header().prev_block_hash() != Some(block_hash) {
+                return None;
+            }
+            let evidence = successor.previous_roster_evidence()?;
+            if evidence.height != block_height || evidence.block_hash != block_hash {
+                if let Some(suppressed_since_last) =
+                    allow_block_sync_roster_sidecar_mismatch_warning(
+                        block_height,
+                        block_hash,
+                        evidence.block_hash,
+                    )
+                {
+                    warn!(
+                        expected_height = block_height,
+                        expected = %block_hash,
+                        evidence_height = evidence.height,
+                        evidence_hash = %evidence.block_hash,
+                        successor_height,
+                        suppressed_since_last,
+                        "ignoring previous roster evidence with mismatched target"
+                    );
+                }
+                return None;
+            }
+
+            Some(RosterMetadata {
+                commit_qc: None,
+                validator_checkpoint: Some(evidence.validator_checkpoint.clone()),
+                stake_snapshot: evidence
+                    .stake_snapshot
+                    .as_ref()
+                    .map(stake_snapshot_from_previous_roster_evidence),
+            })
+        }
+
         let world = state.world_view();
-        let committed_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
         let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
             &world,
             block_height,
@@ -4131,49 +4305,10 @@ pub mod message {
             );
         }
 
-        if block_height <= committed_height
-            && let Some(meta) = kura.read_roster_metadata(block_height).and_then(|meta| {
-                if meta.block_hash == block_hash {
-                    Some(meta)
-                } else {
-                    if let Some(suppressed_since_last) =
-                        allow_block_sync_roster_sidecar_mismatch_warning(
-                            block_height,
-                            block_hash,
-                            meta.block_hash,
-                        )
-                    {
-                        warn!(
-                            expected = %block_hash,
-                            stored = %meta.block_hash,
-                            height = block_height,
-                            suppressed_since_last,
-                            "ignoring roster sidecar with mismatched hash"
-                        );
-                    }
-                    None
-                }
-            })
+        if let Some(metadata) =
+            roster_metadata_from_successor_block_evidence(kura, block_height, block_hash)
         {
-            return filter_metadata(
-                fill_snapshot(RosterMetadata {
-                    commit_qc: meta.commit_qc,
-                    validator_checkpoint: meta.validator_checkpoint,
-                    stake_snapshot: meta.stake_snapshot,
-                }),
-                "roster_sidecar",
-            );
-        }
-
-        if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
-            return filter_metadata(
-                fill_snapshot(RosterMetadata {
-                    commit_qc: Some(snapshot.commit_qc),
-                    validator_checkpoint: Some(snapshot.validator_checkpoint),
-                    stake_snapshot: snapshot.stake_snapshot,
-                }),
-                "commit_roster_journal",
-            );
+            return filter_metadata(fill_snapshot(metadata), "previous_block_evidence");
         }
 
         let commit_qc = status::commit_qc_history()

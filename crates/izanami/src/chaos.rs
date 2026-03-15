@@ -58,6 +58,7 @@ const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 12;
 const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 96;
 const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
 const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
+const IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS: i64 = 300;
 const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 16;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 16;
 const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 256;
@@ -92,12 +93,12 @@ const IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 80;
 const IZANAMI_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 1;
 const IZANAMI_NPOS_TIMEOUT_DA_MIN_MS: u64 = 1;
 const IZANAMI_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 150;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 250;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 350;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 900;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 900;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 50;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 60;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 90;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 120;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 320;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 320;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 20;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -136,16 +137,17 @@ const IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR: f64 = 5.0;
 const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR: usize = 8;
 const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 8;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
-const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 300;
+const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 180;
 const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 500;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 6_000;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 4_000;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 6_000;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 2_000;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 800;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 2_000;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
+const IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 1;
+const IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS: u64 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SubmissionConfirmationMode {
@@ -1081,12 +1083,12 @@ fn pending_stall_grace_ms(block_ms: u64) -> i64 {
     i64::try_from(capped).unwrap_or(i64::MAX)
 }
 
-fn is_reliability_first_npos_soak(config: &ChaosConfig) -> bool {
+fn is_shared_host_balanced_latency_profile(config: &ChaosConfig) -> bool {
     is_shared_host_stable_recovery_run(config)
 }
 
 fn npos_timeout_floors(config: &ChaosConfig) -> NposTimeoutFloors {
-    if is_reliability_first_npos_soak(config) {
+    if is_shared_host_balanced_latency_profile(config) {
         NposTimeoutFloors {
             propose_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS,
             prevote_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS,
@@ -1108,15 +1110,15 @@ fn npos_timeout_floors(config: &ChaosConfig) -> NposTimeoutFloors {
 }
 
 fn npos_pending_stall_grace_ms(config: &ChaosConfig, block_ms: u64) -> i64 {
-    if is_reliability_first_npos_soak(config) {
-        IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS
+    if is_shared_host_balanced_latency_profile(config) {
+        IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS
     } else {
         pending_stall_grace_ms(block_ms)
     }
 }
 
 fn npos_collectors_and_redundancy(config: &ChaosConfig) -> (u16, u8) {
-    if is_reliability_first_npos_soak(config) && config.peer_count == 4 {
+    if is_shared_host_balanced_latency_profile(config) && config.peer_count == 4 {
         (
             IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS,
             IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS,
@@ -1251,8 +1253,8 @@ fn audit_npos_preflight_instructions<'a>(
     let mut peer_with_pop_count = 0usize;
     let mut register_validator_count = 0usize;
     let mut activate_validator_count = 0usize;
-    let mut validator_stakes = BTreeMap::<ScopedAccountId, u64>::new();
-    let mut activated_validators = BTreeSet::<ScopedAccountId>::new();
+    let mut validator_stakes = BTreeMap::<AccountId, u64>::new();
+    let mut activated_validators = BTreeSet::<AccountId>::new();
 
     for instruction in instructions {
         if instruction
@@ -1374,14 +1376,14 @@ fn audit_npos_genesis_preflight(
 
 fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
     matches!(config.workload_profile, WorkloadProfile::Stable)
-        && config.faulty_peers == 0
+        && config.faulty_peers <= 1
         && config.peer_count >= 4
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS)
 }
 
 fn is_shared_host_stable_recovery_run(config: &ChaosConfig) -> bool {
     matches!(config.workload_profile, WorkloadProfile::Stable)
-        && config.faulty_peers == 0
+        && config.faulty_peers <= 1
         && config.peer_count >= 4
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS)
 }
@@ -1411,6 +1413,7 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
     let original_max_inflight = config.max_inflight;
     let original_progress_timeout = config.progress_timeout;
     let original_pipeline_time = config.pipeline_time;
+    let original_latency_p95_threshold = config.latency_p95_threshold;
 
     // Preserve operator-selected stress settings while enforcing a minimum load floor
     // for shared-host soaks so runs remain comparable at low load.
@@ -1432,11 +1435,17 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
                 existing.max(pipeline_time_floor)
             }),
     );
+    if config.latency_p95_threshold.is_none() {
+        config.latency_p95_threshold = Some(Duration::from_secs(
+            IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS,
+        ));
+    }
 
     if (config.tps - original_tps).abs() > f64::EPSILON
         || config.max_inflight != original_max_inflight
         || config.progress_timeout != original_progress_timeout
         || config.pipeline_time != original_pipeline_time
+        || config.latency_p95_threshold != original_latency_p95_threshold
     {
         info!(
             target: "izanami::profile",
@@ -1456,6 +1465,13 @@ fn apply_shared_host_stable_soak_profile(config: &mut ChaosConfig) {
                 .pipeline_time
                 .map(|duration| duration.as_millis())
                 .unwrap_or_default(),
+            original_latency_p95_threshold_ms = original_latency_p95_threshold
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default(),
+            tuned_latency_p95_threshold_ms = config
+                .latency_p95_threshold
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default(),
             "applied shared-host stable soak profile for deterministic long-run progress"
         );
     }
@@ -1472,14 +1488,28 @@ fn consensus_mode_label(config: &ChaosConfig) -> &'static str {
 fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
     let recovery_profile = recovery_profile_for(config);
     let npos_timing = derive_npos_timing(config);
+    let balanced_latency_profile = is_shared_host_balanced_latency_profile(config);
     let pending_stall_grace_ms = npos_pending_stall_grace_ms(config, npos_timing.block_ms);
     let (collectors_k, redundant_send_r) = npos_collectors_and_redundancy(config);
+    let latency_profile = if balanced_latency_profile {
+        "shared_host_balanced_sub_1s"
+    } else {
+        "default"
+    };
+    let latency_p95_gate_ms = config
+        .latency_p95_threshold
+        .map(|threshold| u64::try_from(threshold.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default();
     info!(
         target: "izanami::profile",
         consensus_mode = consensus_mode_label(config),
         shared_host_consensus_profile = is_shared_host_stable_recovery_run(config),
+        shared_host_stable_soak = is_shared_host_stable_soak(config),
+        latency_profile,
+        latency_p95_gate_configured = config.latency_p95_threshold.is_some(),
+        latency_p95_gate_ms,
         pending_stall_grace_ms,
-        da_fast_reschedule = !is_reliability_first_npos_soak(config),
+        da_fast_reschedule = balanced_latency_profile,
         collectors_k,
         redundant_send_r,
         recovery_height_window_ms = recovery_profile.height_window_ms,
@@ -1509,7 +1539,32 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     let pipeline_time = config
         .pipeline_time
         .unwrap_or_else(default_izanami_pipeline_time);
-    builder = builder.with_pipeline_time(pipeline_time);
+    let (pipeline_block_ms, pipeline_commit_ms) = split_pipeline_time(pipeline_time);
+    let min_finality_floor = iroha_data_model::parameter::SumeragiParameters::default()
+        .min_finality_ms()
+        .max(1);
+    let needs_manual_pipeline_genesis = pipeline_block_ms < min_finality_floor;
+    if needs_manual_pipeline_genesis {
+        builder = builder.with_default_pipeline_time();
+        let timing_prefix = vec![
+            InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::CommitTimeMs(pipeline_commit_ms),
+            ))),
+            InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::MinFinalityMs(pipeline_block_ms),
+            ))),
+            InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::BlockTimeMs(pipeline_block_ms),
+            ))),
+        ];
+        if let Some(first_tx) = genesis.first_mut() {
+            first_tx.splice(0..0, timing_prefix);
+        } else {
+            genesis.push(timing_prefix);
+        }
+    } else {
+        builder = builder.with_pipeline_time(pipeline_time);
+    }
     if let Some(profile) = &config.nexus {
         builder = builder
             .with_data_availability_enabled(profile.da_enabled)
@@ -1700,7 +1755,7 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             )
             .write(
                 ["sumeragi", "advanced", "pacemaker", "da_fast_reschedule"],
-                !is_reliability_first_npos_soak(config),
+                is_shared_host_balanced_latency_profile(config),
             )
             .write(
                 [
@@ -2402,29 +2457,28 @@ fn tolerated_peer_failures(peer_count: usize) -> usize {
     }
 }
 
-fn effective_tolerated_peer_failures(peer_count: usize, _configured_faulty_peers: usize) -> usize {
-    tolerated_peer_failures(peer_count)
+fn effective_tolerated_peer_failures(peer_count: usize, configured_faulty_peers: usize) -> usize {
+    tolerated_peer_failures(peer_count).min(configured_faulty_peers)
 }
 
-fn quorum_min_height_from_samples(mut heights: Vec<u64>) -> u64 {
+fn quorum_min_height_from_samples(mut heights: Vec<u64>, tolerated_failures: usize) -> u64 {
     if heights.is_empty() {
         return 0;
     }
     heights.sort_unstable();
-    let tolerated = tolerated_peer_failures(heights.len());
-    let index = tolerated.min(heights.len().saturating_sub(1));
+    let index = tolerated_failures.min(heights.len().saturating_sub(1));
     heights[index]
 }
 
-fn strict_divergence_reference_height_from_samples(mut heights: Vec<u64>) -> u64 {
+fn strict_divergence_reference_height_from_samples(
+    mut heights: Vec<u64>,
+    tolerated_failures: usize,
+) -> u64 {
     if heights.is_empty() {
         return 0;
     }
     heights.sort_unstable();
-    let tolerated = tolerated_peer_failures(heights.len());
-    let index = heights
-        .len()
-        .saturating_sub(1 + tolerated.min(heights.len().saturating_sub(1)));
+    let index = tolerated_failures.min(heights.len().saturating_sub(1));
     heights[index]
 }
 
@@ -2440,7 +2494,20 @@ fn strict_divergence_lagging_peer_count(
 }
 
 fn should_enforce_strict_progress_timeout(lagging_peers: usize, tolerated_failures: usize) -> bool {
-    lagging_peers > tolerated_failures
+    lagging_peers == 0 || lagging_peers > tolerated_failures
+}
+
+fn strict_progress_stall_scope_message(
+    lagging_peers: usize,
+    tolerated_failures: usize,
+) -> &'static str {
+    if lagging_peers == 0 {
+        "strict block height is stalled with no lagging peers; if this persists until the strict timeout the run will fail"
+    } else if lagging_peers > tolerated_failures {
+        "strict block height is stalled with broad peer lag beyond tolerated failures; if this persists until the strict timeout the run will fail"
+    } else {
+        "strict block height is stalled under tolerated outlier lag; continuing with quorum progress"
+    }
 }
 
 struct ProgressState {
@@ -2632,6 +2699,56 @@ struct TargetProgressResult {
     strict_min_height: u64,
 }
 
+fn enforce_latency_p95_gate(
+    block_intervals: &BlockIntervalTracker,
+    strict_block_intervals: &BlockIntervalTracker,
+    latency_p95_threshold: Option<Duration>,
+    target_blocks: u64,
+    elapsed: Duration,
+    checkpoint: &'static str,
+) -> Result<()> {
+    let Some(threshold) = latency_p95_threshold else {
+        return Ok(());
+    };
+    let threshold_ms = u64::try_from(threshold.as_millis()).unwrap_or(u64::MAX);
+    let Some(summary) = block_intervals.summary() else {
+        warn!(
+            target: "izanami::progress",
+            target_blocks,
+            threshold_ms,
+            checkpoint,
+            elapsed = ?elapsed,
+            "latency p95 gate is configured but quorum interval samples are unavailable; skipping gate evaluation"
+        );
+        return Ok(());
+    };
+    if summary.p95_ms > threshold_ms {
+        return Err(eyre!(
+            "quorum p95 block interval {}ms exceeded threshold {}ms (samples {}, target {}, elapsed {:?}, checkpoint {})",
+            summary.p95_ms,
+            threshold_ms,
+            summary.samples,
+            target_blocks,
+            elapsed,
+            checkpoint
+        ));
+    }
+    if let Some(strict_summary) = strict_block_intervals.summary()
+        && strict_summary.p95_ms > threshold_ms
+    {
+        return Err(eyre!(
+            "strict p95 block interval {}ms exceeded threshold {}ms (samples {}, target {}, elapsed {:?}, checkpoint {})",
+            strict_summary.p95_ms,
+            threshold_ms,
+            strict_summary.samples,
+            target_blocks,
+            elapsed,
+            checkpoint
+        ));
+    }
+    Ok(())
+}
+
 async fn wait_for_target_blocks(
     peers: &[NetworkPeer],
     target_blocks: u64,
@@ -2663,12 +2780,12 @@ async fn wait_for_target_blocks(
         let sampled_heights = sampled_peer_heights_with_ids(peers);
         let heights: Vec<_> = sampled_heights.iter().map(|(_, height)| *height).collect();
         let strict_min_height = heights.iter().copied().min().unwrap_or(0);
-        let min_height = quorum_min_height_from_samples(heights.clone());
+        let min_height = quorum_min_height_from_samples(heights.clone(), tolerated_failures);
         if let Some(ingress_pool) = ingress_pool {
             ingress_pool.update_lag_snapshot(min_height, sampled_heights.as_slice(), now);
         }
         let strict_reference_height =
-            strict_divergence_reference_height_from_samples(heights.clone());
+            strict_divergence_reference_height_from_samples(heights.clone(), tolerated_failures);
         let divergence_blocks = strict_reference_height.saturating_sub(strict_min_height);
         let lagging_peers = strict_divergence_lagging_peer_count(
             &heights,
@@ -2679,6 +2796,14 @@ async fn wait_for_target_blocks(
             should_enforce_strict_progress_timeout(lagging_peers, tolerated_failures);
         if now >= run_control.deadline() {
             if target_blocks_soft_kpi {
+                enforce_latency_p95_gate(
+                    &block_intervals,
+                    &strict_block_intervals,
+                    latency_p95_threshold,
+                    target_blocks,
+                    now.duration_since(start),
+                    "duration_deadline",
+                )?;
                 return Ok(TargetProgressResult {
                     target_reached,
                     quorum_min_height: min_height,
@@ -2774,31 +2899,14 @@ async fn wait_for_target_blocks(
                         );
                     }
                 }
-                if let Some(threshold) = latency_p95_threshold {
-                    let threshold_ms = u64::try_from(threshold.as_millis()).unwrap_or(u64::MAX);
-                    if summary.p95_ms > threshold_ms {
-                        return Err(eyre!(
-                            "quorum p95 block interval {}ms exceeded threshold {}ms (samples {}, target {}, elapsed {:?})",
-                            summary.p95_ms,
-                            threshold_ms,
-                            summary.samples,
-                            target_blocks,
-                            now.duration_since(start)
-                        ));
-                    }
-                    if let Some(strict_summary) = strict_summary
-                        && strict_summary.p95_ms > threshold_ms
-                    {
-                        return Err(eyre!(
-                            "strict p95 block interval {}ms exceeded threshold {}ms (samples {}, target {}, elapsed {:?})",
-                            strict_summary.p95_ms,
-                            threshold_ms,
-                            strict_summary.samples,
-                            target_blocks,
-                            now.duration_since(start)
-                        ));
-                    }
-                }
+                enforce_latency_p95_gate(
+                    &block_intervals,
+                    &strict_block_intervals,
+                    latency_p95_threshold,
+                    target_blocks,
+                    now.duration_since(start),
+                    "target_reached",
+                )?;
             } else {
                 info!(
                     target: "izanami::progress",
@@ -2895,7 +3003,7 @@ async fn wait_for_target_blocks(
                     tolerated_failures,
                     strict_timeout = ?progress_timeout,
                     ?lagging,
-                    "strict block height is stalled past strict timeout but lagging peers remain within tolerated failures; continuing with quorum progress"
+                    "strict block height is stalled past strict timeout under tolerated outlier lag; continuing with quorum progress"
                 );
                 strict_tolerated_stall_logged_at = Some(now);
             }
@@ -2921,7 +3029,8 @@ async fn wait_for_target_blocks(
                     tolerated_failures,
                     strict_timeout = ?progress_timeout,
                     ?lagging,
-                    "strict block height is stalled but lagging peers remain within tolerated failures; continuing with quorum progress"
+                    "{}",
+                    strict_progress_stall_scope_message(lagging_peers, tolerated_failures)
                 );
                 strict_tolerated_stall_logged_at = Some(now);
             }
@@ -2957,6 +3066,14 @@ async fn wait_for_target_blocks(
             .unwrap_or_default();
         if remaining.is_zero() {
             if target_blocks_soft_kpi {
+                enforce_latency_p95_gate(
+                    &block_intervals,
+                    &strict_block_intervals,
+                    latency_p95_threshold,
+                    target_blocks,
+                    now.duration_since(start),
+                    "duration_deadline",
+                )?;
                 return Ok(TargetProgressResult {
                     target_reached,
                     quorum_min_height: min_height,
@@ -3422,11 +3539,10 @@ mod tests {
         stake_values: &[u64],
     ) -> Vec<InstructionBox> {
         let mut instructions = Vec::new();
-        let domain: DomainId = "nexus".parse().expect("nexus domain");
         let fallback_stake = SumeragiNposParameters::default().min_self_bond();
         for idx in 0..peer_count {
             let key_pair = KeyPair::random();
-            let validator = ScopedAccountId::new(domain.clone(), key_pair.public_key().clone());
+            let validator = AccountId::new(key_pair.public_key().clone());
             let stake = stake_values.get(idx).copied().unwrap_or(fallback_stake);
             if include_pop {
                 instructions.push(
@@ -3864,11 +3980,11 @@ mod tests {
                 && timing.commit_timeout_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS
                 && timing.da_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS
                 && timing.aggregator_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS,
-            "shared-host NPoS soak should enforce conservative timeout floors"
+            "shared-host NPoS soak should enforce balanced sub-1s timeout floors"
         );
         assert_eq!(
             npos_pending_stall_grace_ms(&config, timing.block_ms),
-            IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS
+            IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS
         );
         assert_eq!(
             npos_collectors_and_redundancy(&config),
@@ -4026,6 +4142,13 @@ mod tests {
             )),
             "shared-host soak should enforce a conservative pipeline-time floor"
         );
+        assert_eq!(
+            config.latency_p95_threshold,
+            Some(Duration::from_secs(
+                IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS
+            )),
+            "shared-host soak should default the quorum latency gate to sub-1s when unset"
+        );
         let recovery = recovery_profile_for(&config);
         assert_eq!(
             recovery.height_window_ms,
@@ -4097,6 +4220,13 @@ mod tests {
             )),
             "permissioned long-run soak should use the same conservative pipeline floor"
         );
+        assert_eq!(
+            config.latency_p95_threshold,
+            Some(Duration::from_secs(
+                IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS
+            )),
+            "permissioned shared-host soak should use the same sub-1s latency gate default"
+        );
         assert_eq!(config.tps, 7.0);
         assert_eq!(config.max_inflight, 14);
         assert!(
@@ -4155,8 +4285,8 @@ mod tests {
             "stable shared-host collector/redundancy tuning should be mode-parity"
         );
         assert_eq!(
-            !is_reliability_first_npos_soak(&permissioned),
-            !is_reliability_first_npos_soak(&npos),
+            is_shared_host_balanced_latency_profile(&permissioned),
+            is_shared_host_balanced_latency_profile(&npos),
             "stable shared-host DA fast-reschedule policy should be mode-parity"
         );
     }
@@ -4228,6 +4358,59 @@ mod tests {
         assert_eq!(config.progress_timeout, Duration::from_secs(300));
         assert_eq!(config.pipeline_time, None);
         assert_eq!(recovery_profile_for(&config), baseline_recovery_profile());
+    }
+
+    #[test]
+    fn shared_host_stable_soak_profile_applies_with_single_frozen_peer() {
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 1,
+            duration: Duration::from_secs(3_600),
+            pipeline_time: None,
+            target_blocks: Some(2_000),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: Duration::from_secs(300),
+            latency_p95_threshold: None,
+            seed: Some(29),
+            tps: 4.0,
+            max_inflight: 6,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
+        };
+
+        assert!(
+            is_shared_host_stable_soak(&config),
+            "single frozen peer should still use shared-host stable soak policy"
+        );
+        assert!(
+            is_shared_host_stable_recovery_run(&config),
+            "single frozen peer should still use shared-host recovery policy"
+        );
+
+        apply_shared_host_stable_soak_profile(&mut config);
+
+        assert_eq!(config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR);
+        assert_eq!(
+            config.pipeline_time,
+            Some(Duration::from_millis(
+                IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS
+            ))
+        );
+        assert_eq!(
+            config.latency_p95_threshold,
+            Some(Duration::from_secs(
+                IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS
+            ))
+        );
+        assert_eq!(
+            recovery_profile_for(&config),
+            shared_host_recovery_profile()
+        );
     }
 
     #[test]
@@ -4547,7 +4730,7 @@ mod tests {
             target_blocks: Some(3_600),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: Duration::from_secs(300),
-            latency_p95_threshold: None,
+            latency_p95_threshold: Some(Duration::from_secs(2)),
             seed: Some(11),
             tps: 5.0,
             max_inflight: 8,
@@ -4562,6 +4745,7 @@ mod tests {
         assert!(is_shared_host_stable_soak(&config));
         apply_shared_host_stable_soak_profile(&mut config);
         assert_eq!(config.pipeline_time, Some(Duration::from_millis(1_200)));
+        assert_eq!(config.latency_p95_threshold, Some(Duration::from_secs(2)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -5556,46 +5740,59 @@ mod tests {
     }
 
     #[test]
-    fn effective_tolerated_peer_failures_uses_protocol_tolerance() {
-        assert_eq!(effective_tolerated_peer_failures(4, 0), 1);
+    fn effective_tolerated_peer_failures_honors_configured_fault_budget() {
+        assert_eq!(effective_tolerated_peer_failures(4, 0), 0);
         assert_eq!(effective_tolerated_peer_failures(4, 1), 1);
         assert_eq!(
             effective_tolerated_peer_failures(7, 1),
-            2,
-            "strict guard should respect protocol tolerance, not expected fault injections"
+            1,
+            "strict guard should only tolerate the configured injected-fault budget"
         );
         assert_eq!(
             effective_tolerated_peer_failures(7, 5),
             2,
-            "protocol tolerance remains bounded by peer count"
+            "configured budget must still remain bounded by protocol tolerance"
         );
     }
 
     #[test]
-    fn quorum_min_height_ignores_single_straggler() {
-        assert_eq!(quorum_min_height_from_samples(vec![]), 0);
+    fn quorum_min_height_respects_effective_tolerance() {
+        assert_eq!(quorum_min_height_from_samples(vec![], 0), 0);
         assert_eq!(
-            quorum_min_height_from_samples(vec![246, 316, 316, 316]),
+            quorum_min_height_from_samples(vec![246, 316, 316, 316], 0),
+            246,
+            "healthy runs should fail-open on no unexpected stragglers"
+        );
+        assert_eq!(
+            quorum_min_height_from_samples(vec![246, 316, 316, 316], 1),
             316
         );
         assert_eq!(
-            quorum_min_height_from_samples(vec![0, 0, 316, 316]),
+            quorum_min_height_from_samples(vec![0, 0, 316, 316], 1),
             0,
             "two failed peers should not be hidden for a 4-peer run"
         );
-        assert_eq!(quorum_min_height_from_samples(vec![9, 10, 11]), 9);
+        assert_eq!(quorum_min_height_from_samples(vec![9, 10, 11], 0), 9);
     }
 
     #[test]
-    fn strict_divergence_reference_height_trims_tolerated_outliers() {
-        assert_eq!(strict_divergence_reference_height_from_samples(vec![]), 0);
+    fn strict_divergence_reference_height_trims_only_effectively_tolerated_outliers() {
         assert_eq!(
-            strict_divergence_reference_height_from_samples(vec![120, 149, 149, 149]),
+            strict_divergence_reference_height_from_samples(vec![], 0),
+            0
+        );
+        assert_eq!(
+            strict_divergence_reference_height_from_samples(vec![120, 149, 149, 149], 1),
             149,
             "single lagging outlier should not lower the strict divergence reference"
         );
         assert_eq!(
-            strict_divergence_reference_height_from_samples(vec![120, 120, 120, 149]),
+            strict_divergence_reference_height_from_samples(vec![120, 149, 149, 149], 0),
+            120,
+            "healthy runs should include every peer in strict divergence reference"
+        );
+        assert_eq!(
+            strict_divergence_reference_height_from_samples(vec![120, 120, 120, 149], 1),
             120,
             "single leading outlier should not raise the strict divergence reference"
         );
@@ -5620,7 +5817,7 @@ mod tests {
     fn strict_divergence_guard_requires_more_than_tolerated_outliers() {
         let heights_one_outlier = vec![120_u64, 149, 149, 149];
         let strict_reference_one =
-            strict_divergence_reference_height_from_samples(heights_one_outlier.clone());
+            strict_divergence_reference_height_from_samples(heights_one_outlier.clone(), 1);
         let lagging_one =
             strict_divergence_lagging_peer_count(&heights_one_outlier, strict_reference_one, 16);
         assert_eq!(lagging_one, 1);
@@ -5631,7 +5828,7 @@ mod tests {
 
         let heights_two_outliers = vec![120_u64, 121, 149, 149];
         let strict_reference_two =
-            strict_divergence_reference_height_from_samples(heights_two_outliers.clone());
+            strict_divergence_reference_height_from_samples(heights_two_outliers.clone(), 1);
         let lagging_two =
             strict_divergence_lagging_peer_count(&heights_two_outliers, strict_reference_two, 16);
         assert_eq!(lagging_two, 2);
@@ -5643,6 +5840,10 @@ mod tests {
 
     #[test]
     fn strict_progress_timeout_enforcement_respects_bft_tolerance() {
+        assert!(
+            should_enforce_strict_progress_timeout(0, 1),
+            "global stalls with no lagging peers must enforce strict-timeout failure"
+        );
         assert!(
             !should_enforce_strict_progress_timeout(1, 1),
             "a tolerated single outlier should not force strict-timeout failure"
@@ -5941,6 +6142,91 @@ mod tests {
             "expected unmet target for soft-KPI duration test"
         );
         network.shutdown().await;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_for_target_blocks_soft_kpi_enforces_latency_gate_at_duration_end() -> Result<()> {
+        if !allow_net_for_tests() {
+            return Ok(());
+        }
+        crate::config::init_tracing_with_filter("warn");
+        init_instruction_registry();
+
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 2,
+            faulty_peers: 0,
+            duration: Duration::from_secs(4),
+            pipeline_time: Some(Duration::from_millis(250)),
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(11),
+            tps: 1.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: None,
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos {
+            state: _,
+            genesis,
+            recipes: _,
+        } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            None,
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let builder = make_network_builder(&config, genesis);
+
+        let network = match builder.start().await {
+            Ok(network) => network,
+            Err(err) => {
+                let looks_like_permission_denied = err
+                    .downcast_ref::<io::Error>()
+                    .is_some_and(|io_err| io_err.kind() == io::ErrorKind::PermissionDenied)
+                    || err.to_string().contains("Operation not permitted");
+                if looks_like_permission_denied {
+                    return Ok(());
+                }
+                return Err(err);
+            }
+        };
+
+        let run_control = RunControl::new(Instant::now() + Duration::from_secs(3));
+        let target_blocks = 10_000;
+        let result = wait_for_target_blocks(
+            network.peers(),
+            target_blocks,
+            0,
+            Duration::from_millis(200),
+            Duration::from_secs(30),
+            Some(Duration::from_millis(1)),
+            &run_control,
+            None,
+            true,
+        )
+        .await;
+        network.shutdown().await;
+
+        let err = result.expect_err(
+            "soft-KPI runs should fail when the latency p95 gate is exceeded at duration end",
+        );
+        assert!(
+            err.to_string().contains("p95 block interval")
+                && err.to_string().contains("checkpoint duration_deadline"),
+            "expected duration-end latency gate error, got: {err}"
+        );
 
         Ok(())
     }
@@ -6274,7 +6560,7 @@ mod tests {
         );
         assert_eq!(
             lookup_bool(&["sumeragi", "advanced", "pacemaker", "da_fast_reschedule"]),
-            Some(!is_reliability_first_npos_soak(&config))
+            Some(is_shared_host_balanced_latency_profile(&config))
         );
         assert_eq!(
             lookup(&[
@@ -6681,6 +6967,81 @@ mod tests {
             }
         };
         assert_eq!(network.pipeline_time(), default_izanami_pipeline_time());
+        Ok(())
+    }
+
+    #[test]
+    fn shared_host_stable_soak_pipeline_timing_keeps_block_at_or_above_min_finality() -> Result<()>
+    {
+        init_instruction_registry();
+        let mut config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(3_600),
+            pipeline_time: None,
+            target_blocks: Some(2_000),
+            progress_interval: Duration::from_secs(10),
+            progress_timeout: Duration::from_secs(600),
+            latency_p95_threshold: None,
+            seed: Some(47),
+            tps: 5.0,
+            max_inflight: 8,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([true, true, true, true]),
+            nexus: None,
+        };
+        apply_shared_host_stable_soak_profile(&mut config);
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            make_network_builder(&config, genesis).build()
+        })) {
+            Ok(network) => network,
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+                    .unwrap_or_default();
+                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
+                    return Ok(());
+                }
+                std::panic::resume_unwind(payload);
+            }
+        };
+
+        let mut params = Parameters::default();
+        for tx in network.genesis_isi() {
+            for isi in tx {
+                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
+                    continue;
+                };
+                params.set_parameter(set_param.inner().clone());
+            }
+        }
+
+        let pipeline_time = config
+            .pipeline_time
+            .expect("shared-host soak profile should materialize pipeline time");
+        let (pipeline_block_ms, pipeline_commit_ms) = split_pipeline_time(pipeline_time);
+        assert_eq!(params.sumeragi().block_time_ms(), pipeline_block_ms);
+        assert_eq!(params.sumeragi().commit_time_ms(), pipeline_commit_ms);
+        assert_eq!(params.sumeragi().min_finality_ms(), pipeline_block_ms);
+        assert!(
+            params.sumeragi().block_time_ms() >= params.sumeragi().min_finality_ms(),
+            "shared-host soak block_time must satisfy min_finality invariant"
+        );
         Ok(())
     }
 

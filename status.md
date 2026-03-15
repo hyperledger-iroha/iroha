@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-03-10
+Last updated: 2026-03-15
 
 ## Current Enforced State
 - First-release identity/deploy policy is strict (no backward aliases, shims, or migration wrappers).
@@ -9,6 +9,361 @@ Last updated: 2026-03-10
   - `../pk-deploy/scripts/cutover-ih58-mega.sh` invokes only `check-identity-surface.sh`.
 - `../pk-deploy/scripts/deploy-sbp-aed-pkr-interceptor.sh` no longer performs prior-layout trigger cleanup loops.
 - Wallet docs describe only current QR modes in neutral terms.
+
+## 2026-03-15 Sumeragi Vote-Backed Quorum-Reschedule Damping
+- Simplified the remaining vote-backed quorum-timeout path in `crates/iroha_core/src/sumeragi/main_loop/{pending_block.rs,reschedule.rs}`:
+  - added `PendingBlock::vote_backed_reschedule_due(...)` so a vote-backed quorum reschedule is only rearmed after real new progress (`last_progress > last_quorum_reschedule`);
+  - `reschedule_stale_pending_blocks_with_now(...)` now uses that stricter gate for vote-backed / QC-backed pending blocks while keeping the old zero-vote path unchanged;
+  - `reschedule_pending_quorum_block(...)` no longer calls `pending.touch_progress(now)` for retained vote-backed pending state, so quorum reschedule stops resetting frontier stall age.
+- This removes another implicit recovery owner. Vote arrival / RBC activity still owns progress, but quorum reschedule is now only a bounded retransmit side effect instead of a second timer that refreshes the frontier candidate.
+- Added and updated focused regressions:
+  - `vote_backed_reschedule_requires_progress_after_last_attempt` in `crates/iroha_core/src/sumeragi/main_loop/pending_block.rs`;
+  - `stake_quorum_timeout_reschedules_without_immediate_view_change`;
+  - `reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged`;
+  - `reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress`.
+
+### Validation Matrix (Vote-Backed Quorum-Reschedule Damping)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib vote_backed_reschedule_requires_progress_after_last_attempt -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib stake_quorum_timeout_reschedules_without_immediate_view_change -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress -- --nocapture` (pass)
+
+### Runtime Signal (Vote-Backed Quorum-Reschedule Damping)
+- A fresh healthy NPoS keep-dirs probe is running on this cut:
+  - log: `/tmp/izanami_npos_healthy_probe_vote_backed_reschedule_once_20260315T075049Z.log`
+  - preserved network dir: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_oOdetz`
+- Current state at this status update:
+  - the outer `izanami` release build finished;
+  - the test-network child warmup build (`iroha3d` release) is still running;
+  - no peer stdout files exist yet, so there is no new consensus runtime verdict at this point.
+
+## 2026-03-15 Sumeragi Proposal-Owned Commit Activation
+- Simplified Sumeragi slot ownership further so `Proposal` remains the only owner of commit activation:
+  - added `slot_has_proposal_evidence(height, view)` in `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`;
+  - `crates/iroha_core/src/sumeragi/main_loop/validation.rs` now defers pre-vote validation for pending blocks that have no observed/cached `Proposal` and no commit QC;
+  - `crates/iroha_core/src/sumeragi/main_loop/commit.rs` now refuses to promote a proposal-less pending block into active commit work even if the payload was already marked valid.
+- This removes another payload-owned state path: `BlockCreated` without a matching `Proposal` may still cache payload in pending state, but it cannot dispatch validation workers, emit precommit votes, or become `commit.inflight` until a real proposal arrives or a commit QC supplies the missing ownership signal.
+- Added and updated focused regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `validation_defers_without_proposal_evidence`
+  - `commit_pipeline_defers_valid_pending_without_proposal_evidence`
+  - updated direct commit-pipeline fixtures to call `note_proposal_seen(...)` when they intentionally model proposal-owned pending blocks.
+
+### Validation Matrix (Proposal-Owned Commit Activation)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_defers_valid_pending_without_proposal_evidence -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib validation_defers_without_proposal_evidence -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_runs_without_global_cooldown -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_reports_stage_timings -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_qc_rebuild_cooldown_uses_chain_block_time -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_votes_highest_view_first_for_same_height -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_uses_epoch_for_height_when_emitting_votes -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_skips_fast_timeout_with_da_enabled -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_inlines_validation_after_fast_timeout_when_worker_queue_full -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_inlines_validation_at_queue_full_cutover -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_pipeline_keeps_deferred_validation_before_queue_full_cutover -- --nocapture` (pass)
+
+### Runtime Signal (Proposal-Owned Commit Activation)
+- The earlier healthy NPoS probe at `/tmp/izanami_npos_healthy_probe_block_created_state_reduction_20260315T000000Z.log` is now stale for this tranche because it was built before the proposal-owned commit activation cut landed.
+- Fresh healthy NPoS probes on the current code are complete:
+  - `/tmp/izanami_npos_healthy_probe_proposal_owned_commit_20260315T113400Z.log` stalled before `target_blocks=120` at quorum/strict `68/76`;
+  - `/tmp/izanami_npos_healthy_probe_proposal_owned_commit_keepdirs_20260315T114000Z.log` reran the same scenario with `IROHA_TEST_NETWORK_KEEP_DIRS=1` and stalled earlier at quorum/strict `57/64`, preserving peer logs under `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_QgNYCr`.
+- The structural result of this tranche is visible in preserved peer stdout:
+  - `no proposal observed for view before changing view` still appears on the failing height (`57`), but those entries now show `commit_inflight=None`, so the proposal-less pending/commit activation path is no longer the thing driving the rotation;
+  - dominant warnings are still `commit quorum missing past timeout; rescheduling block for reassembly`, mostly vote-backed (`votes=1` or `2`, `min_votes=3`) at ordinary frontier heights like `25`, `26`, `30`, `32`, `36`, `39`, `40`, `57`, and `62`;
+  - zero-vote `drop_pending=true` reschedules still exist in the preserved run (for example at height `20` on `assuring_stonechat`), but the old proposal-less `commit_inflight` signature did not reappear.
+- Conclusion: keep this simplification. It removes one invalid state transition, but it does not solve healthy NPoS throughput or latency by itself. The dominant remaining bottleneck has shifted back to vote-backed quorum reschedule / late missing-QC churn, not proposal-less commit activation.
+
+## 2026-03-15 Sumeragi BlockCreated Proposal-Owned Round State
+- Simplified `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` so payload delivery no longer owns round/view state:
+  - `BlockCreated` now records `CollectDa` phase only when the slot was already observed through `Proposal` handling;
+  - payload-only `BlockCreated` still populates pending payload state, but it no longer marks the slot as an observed proposal and no longer advances round/view tracking by itself.
+- Added and updated focused regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `block_created_without_cached_proposal_does_not_advance_active_view`
+  - `block_created_with_matching_proposal_advances_active_view`
+  - `block_created_records_collect_da_phase_after_proposal_seen`
+
+### Validation Matrix (BlockCreated Proposal-Owned Round State)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib block_created_without_cached_proposal_does_not_advance_active_view -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib block_created_with_matching_proposal_advances_active_view -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib block_created_records_collect_da_phase_after_proposal_seen -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib block_created_without_hint_accepts_extending_lock -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib block_created_uses_cached_proposal_when_lock_missing -- --nocapture` (pass)
+
+### Runtime Signal (BlockCreated Proposal-Owned Round State)
+- Fresh healthy NPoS probe started on this cut:
+  - command: `cargo run -p izanami --release -- --allow-net --nexus --peers 4 --faulty 0 --target-blocks 120 --latency-p95-threshold 1s --progress-interval 10s --progress-timeout 120s --tps 5 --max-inflight 8`
+  - log: `/tmp/izanami_npos_healthy_probe_block_created_state_reduction_20260315T000000Z.log`
+  - current state at status update time: still in release-build warmup; runtime verdict not available yet.
+
+## 2026-03-15 Sumeragi Zero-Vote Reschedule Rotation Removal
+- Reverted the regressed aborted-pending commit-QC experiment and restored the earlier revive semantics in `crates/iroha_core/src/sumeragi/main_loop/{main_loop.rs,commit.rs,proposal_handlers.rs,tests.rs}`:
+  - commit-QC on an aborted pending block revives it again;
+  - duplicate `BlockCreated` on an aborted pending block revives the payload and now preserves the existing `commit_qc_seen` marker on that path;
+  - removed the temporary commit-pipeline-specific pending counter and the proof tests that depended on the non-revive model.
+- Simplified quorum-timeout ownership in `crates/iroha_core/src/sumeragi/main_loop/{reschedule.rs,commit.rs}`:
+  - `reschedule_pending_quorum_block(...)` no longer returns an immediate-rotation flag;
+  - zero-vote quorum reschedules may still drop/requeue stale pending frontier state, but they no longer trigger a direct `MissingQc` / quorum-timeout view change from the reschedule or commit pipeline paths;
+  - the frontier timeout controller remains the only owner of post-reschedule view rotation.
+- Updated focused regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - restored `commit_qc_revives_aborted_pending_block`;
+  - restored `block_created_revives_aborted_pending`;
+  - renamed zero-vote coverage to `zero_vote_quorum_timeout_drops_pending_without_immediate_view_change` and asserted `missing_qc_total == 0` on the reschedule path;
+  - updated `reschedule_defers_zero_vote_quorum_timeout_while_block_queue_backlogged` to assert that the zero-vote drop still does not rotate immediately.
+
+### Validation Matrix (2026-03-15 Zero-Vote Reschedule Rotation Removal)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib commit_qc_revives_aborted_pending_block -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib block_created_revives_aborted_pending -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib finalize_pending_block_revives_aborted_on_tip_with_commit_qc -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib commit_inflight_timeout_triggers_view_change_and_retains_aborted_pending -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib block_sync_update_keeps_aborted_next_height_payload_sparse_without_commit_evidence -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib stake_quorum_timeout_reschedules_without_immediate_view_change -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib zero_vote_quorum_timeout_drops_pending_without_immediate_view_change -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib reschedule_defers_zero_vote_quorum_timeout_while_block_queue_backlogged -- --nocapture` (pass)
+
+### Soak Signal (2026-03-15 Zero-Vote Reschedule Rotation Removal)
+- The temporary aborted-pending non-revive experiment was a real regression:
+  - `/tmp/izanami_npos_healthy_probe_commit_qc_state_reduction_20260315T055734Z.log` stalled at quorum/strict `66/73` before `target_blocks=160`;
+  - `/tmp/izanami_npos_healthy_probe_commit_qc_state_reduction_retry_20260315T061708Z.log` reproduced the regression at quorum/strict `65/69` before `target_blocks=120`.
+- Reverting that experiment restored the previous healthy-failure envelope:
+  - `/tmp/izanami_npos_healthy_probe_commit_qc_revert_20260315T062616Z.log` stalled later at quorum/strict `69/73`, confirming the aborted-pending cut was responsible for the sharper regression.
+- A live-inspection probe isolated the remaining recurring bad path:
+  - `/tmp/izanami_npos_healthy_probe_snapshot_20260315T063717Z.log` timed out at quorum/strict `65/71`;
+  - timed snapshots captured repeated `commit quorum missing past timeout; rescheduling block for reassembly` warnings in peer stdout at ordinary frontier heights `3`, `7`, `15`, `21`, `24`, `33`, and `40`;
+  - the most important recurring pattern was zero-vote reschedules with `drop_pending=true` and `rotate_immediately=true` at heights like `21`, showing that `reschedule.rs` still had a second direct view-change authority.
+- After removing the reschedule-owned rotation:
+  - `/tmp/izanami_npos_healthy_probe_no_resched_rotate_20260315T064146Z.log` still timed out, but moved slightly to quorum/strict `66/71`;
+  - conclusion: the simplification is structurally correct and should stay, but the dominant healthy NPoS stall remains elsewhere. The next cut should target why zero-vote pending state is reaching the reschedule path so often, not add more recovery gates.
+
+## 2026-03-14 Sumeragi Pending-Frontier Timeout Simplification
+- Simplified the remaining quorum-timeout ownership split in `crates/iroha_core/src/sumeragi/main_loop/{reschedule.rs,commit.rs,main_loop.rs}`:
+  - vote-backed quorum reschedules no longer trigger an immediate view change; `reschedule_pending_quorum_block(...)` now returns whether the pending block was dropped as zero-evidence zombie state, and only that path emits an immediate `MissingQc`/`StakeQuorumTimeout` rotation.
+  - the generic `maybe_force_view_change_for_stalled_pending(...)` path now uses one bounded long grace for non-fast-path frontier pending blocks: `max(backlog_timeout, 2 * recovery_deferred_qc_ttl)`. This replaces the earlier short backlog-driven rotation window for active frontier pending blocks.
+  - the reduced near-quorum missing-payload fast path is still intact; only the non-fast-path frontier branch was simplified.
+- Added and updated focused regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `stake_quorum_timeout_reschedules_without_immediate_view_change`
+  - `zero_vote_quorum_timeout_reschedules_and_records_missing_qc_view_change`
+  - `maybe_force_view_change_for_stalled_pending_vote_backed_blocks_wait_for_deferred_qc_ttl`
+  - `maybe_force_view_change_for_stalled_pending_non_near_path_waits_for_frontier_pending_timeout`
+  - `maybe_force_view_change_for_stalled_pending_uses_frontier_pending_timeout_when_view_age_lags_pending_stall`
+  - `maybe_force_view_change_for_stalled_pending_applies_frontier_pending_timeout_with_residual_round_state`
+
+### Validation Matrix (Pending-Frontier Timeout Simplification)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib maybe_force_view_change_for_stalled_pending_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib stake_quorum_timeout_reschedules_without_immediate_view_change -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib zero_vote_quorum_timeout_reschedules_and_records_missing_qc_view_change -- --nocapture` (pass)
+
+### Soak Signal (Pending-Frontier Timeout Simplification)
+- Baseline short healthy NPoS probe before the new long frontier-pending timeout:
+  - log: `/tmp/izanami_npos_healthy_probe_vote_backed_resched_20260314T212202Z.log`
+  - result: reached `target_blocks=260` at height `262`, but still failed the latency gate with `interval_p50=1429ms`, `interval_p95=2501ms`, `samples=257`, `elapsed=440.099561083s`.
+  - peer logs in that run showed the old pattern directly: vote-backed reschedule (`rotate_immediately=false`) followed by `active pending block stalled past quorum timeout; forcing deterministic view change`, then `revived aborted pending block after commit QC`.
+- Intermediate probe with the narrower vote-backed deferred-QC TTL gate only:
+  - log: `/tmp/izanami_npos_healthy_probe_deferred_qc_ttl_20260314T213707Z.log`
+  - result: regressed to a fixed-height stall at `height 94` after repeated `10001ms` single-block intervals.
+  - conclusion: gating only on locally counted commit votes was too narrow and did not remove the underlying early healthy wedge.
+- Current probe after the non-fast-path frontier pending timeout simplification:
+  - log: `/tmp/izanami_npos_healthy_probe_frontier_pending_timeout_20260314T214737Z.log`
+  - result: reached `target_blocks=120` at height `123` with no replay of the old `68-94` fixed-height wedge, but still failed the latency gate with `interval_p50=1429ms`, `interval_p95=2501ms`, `samples=118`, `elapsed=200.047094208s`.
+  - peer-log sampling during the run no longer showed `active pending block stalled past quorum timeout; forcing deterministic view change` through the old hotspot band; a late `revived aborted pending block after commit QC` signal still reappeared later at height `102`.
+  - conclusion: the simplified timeout ownership improved the early healthy failure shape, but it did not improve the `p95` latency envelope and did not eliminate all late revive churn.
+
+## 2026-03-14 Sumeragi Frontier Cleanup NEW_VIEW Reset
+- Tightened `crates/iroha_core/src/sumeragi/main_loop.rs` frontier cleanup so the contiguous-frontier reset now also owns `NEW_VIEW` state:
+  - `apply_frontier_recovery_cleanup(...)` now clears `new_view_tracker` entries at/above the frontier, clears `forced_view_after_timeout` markers at/above the frontier, and drops `Phase::NewView` vote history at/above the frontier from `vote_log`.
+  - committed-edge conflict cleanup in `crates/iroha_core/src/sumeragi/main_loop/votes.rs` now reuses the same `NEW_VIEW` vote-history clearing helper, keeping the frontier reset behavior consistent across both cleanup paths.
+- Tightened RBC cleanup ownership for the same frontier reset paths:
+  - `purge_rbc_sessions_at_or_above_height(...)` now purges per-key RBC state from `pending`, rebroadcast cooldowns, deferrals, persisted markers, and seed-inflight state even when no live RBC session object exists.
+  - `clean_rbc_sessions_for_block(...)` now reuses the same per-key purge behavior for orphan RBC state keyed by the block hash, instead of only draining maps that still had a live `sessions` entry.
+- Added focused regression `frontier_recovery_cleanup_clears_frontier_new_view_state` in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- Added focused RBC cleanup regressions:
+  - `frontier_recovery_cleanup_purges_orphan_pending_rbc_without_sessions`
+  - `clean_rbc_sessions_for_block_clears_seed_inflight` now also covers orphan pending/rebroadcast cleanup.
+
+### Validation Matrix (Frontier Cleanup NEW_VIEW Reset)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib frontier_recovery_cleanup_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib observe_new_view_highest_qc_suppression_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib clean_rbc_sessions_for_block_clears_seed_inflight -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib frontier_recovery_cleanup_purges_rbc_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib frontier_recovery_cleanup_purges_orphan_pending_rbc_without_sessions -- --nocapture` (pass)
+
+### Soak Signal (Frontier Cleanup NEW_VIEW Reset)
+- 15-minute NPoS healthy canary on the frontier-cleanup NEW_VIEW reset build:
+  - log: `/tmp/izanami_npos_healthy_canary_frontier_cleanup_new_view_reset_20260314T204030Z.log`
+  - result: reached `target_blocks=400` and stopped at quorum/strict height `406`, with no fixed-height stall and no late `293/294` wedge.
+  - latency gate still failed: quorum/strict interval `p50=1429ms`, `p95=2501ms`, `samples=399`, `elapsed=660.146095459s`.
+  - peer state at the target checkpoint stayed aligned (`view_changes=0` on the sampled peers, no strict/quorum divergence).
+  - remaining follow-up signal: the stability regressions appear fixed for this canary, but latency remains well above the `< 1000ms` acceptance gate. The next branch should rerun the same canary on the orphan-RBC cleanup patch to see whether clearing residual `da_rbc.rbc.pending` state changes the latency envelope or merely removes another dormant state leak.
+
+## 2026-03-14 Sumeragi Frontier Follow-Up (Far-Future RBC Clamp + Committed-Edge Vote Cleanup)
+- Simplified `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` so far-future RBC sessions no longer create independent missing-block recovery state:
+  - future-window RBC `Init`/`Chunk`/`Ready`/delivery recovery now suppresses per-height missing-block fetches beyond the contiguous frontier.
+  - far-future RBC recovery now purges that RBC session state and emits one canonical committed-frontier range pull (`reason = "rbc_far_future_missing_block"`) instead of opening a second recovery machine for the far height.
+- Simplified QC-backed block-sync/RBC interaction in `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`:
+  - removed the old non-roster-only `force_rbc_delivery_for_block_sync(...)` special case.
+  - when a validated incoming QC is applied for a locally known block, the block-sync path now cleans RBC session state for that block and continues through the normal commit pipeline instead of preserving a separate forced-delivery state.
+- Simplified committed-edge conflict cleanup in `crates/iroha_core/src/sumeragi/main_loop/votes.rs`:
+  - committed-edge suppression already clamped the frontier round, cleared forced-view markers, and dropped NEW_VIEW tracker entries.
+  - it now also clears frontier/future `Phase::NewView` votes from `vote_log`, so stale higher-view local vote history cannot veto later canonical frontier NEW_VIEW recovery after the committed edge is realigned.
+
+### Validation Matrix (Frontier Follow-Up)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core --lib future_consensus_window_rbc_messages_reanchor_frontier_without_far_height_requests -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib request_missing_block_for_pending_rbc_far_future_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib recover_block_from_rbc_session_far_future_reanchors_contiguous_frontier -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib recover_block_from_rbc_session_requests_missing_block_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib request_missing_block_for_pending_rbc_with_aborted_payload -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib observe_new_view_highest_qc_suppression_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib block_sync_update_known_block_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib clean_rbc_sessions_for_block_clears_seed_inflight -- --nocapture` (pass)
+
+### Soak Signal (Frontier Follow-Up)
+- 15-minute NPoS healthy canary with the far-future RBC clamp:
+  - log: `/tmp/izanami_npos_healthy_canary_far_future_rbc_clamp_20260314T195603Z.log`
+  - result: failed `target_blocks=400` at strict/quorum height `265`.
+  - narrowed failure shape: three peers advanced to `324` while one peer (`necessary_dingo`, API `32371`) stalled at `265`.
+  - the previous far-future `rbc_*_future_window` churn did not recur; the stuck peer instead showed committed-edge conflict suppression at height `265`, stale higher-view NEW_VIEW vote history (`already voted in a higher view`), repeated `missing_qc` frontier recovery at `266`, and fallback-anchor sharing from height `202`.
+- Follow-up canary on the committed-edge NEW_VIEW vote cleanup build:
+  - log: `/tmp/izanami_npos_healthy_canary_committed_edge_vote_cleanup_20260314T2017Z.log`
+  - result: failed `target_blocks=400` at strict/quorum height `292`.
+  - this build removed the earlier `265` committed-edge wedge but still stalled globally at the late contiguous frontier, with repeated `missing_qc`/`no proposal observed` loops around `293/294` and stale higher-view NEW_VIEW vote history (`higher_view=10`) still blocking canonical frontier votes on lagging peers.
+
+## 2026-03-14 Sumeragi Frontier-Recovery Simplification
+- Simplified timeout-driven Sumeragi recovery in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - introduced a single frontier-scoped recovery controller with `CatchUp` and `RotateArmed` phases.
+  - timeout-driven recovery is now contiguous-frontier-only (`committed + 1`); future heights no longer create independent timeout-recovery state.
+  - repeated no-progress windows now follow one deterministic path: bounded catch-up reanchor, one cleanup + all-peer reanchor, then one bounded rotation on the next window if progress still does not resume.
+- Removed same-height timeout choreography from the idle and committed-edge paths:
+  - `force_view_change_if_idle(...)` now routes dependency-backed timeout handling through the unified frontier controller instead of layering hysteresis/backoff/storm-break/frontier-window reservations.
+  - committed-edge conflict recovery in `crates/iroha_core/src/sumeragi/main_loop/votes.rs` now routes through the same unified controller instead of directly invoking the storm breaker.
+- Preserved the existing public status surface:
+  - `consensus_no_proposal_storm_*` and `blocksync_range_pull_expiry_streak_*` remain exposed, but are now driven by the unified frontier controller rather than separate same-height storm state.
+
+### Validation Matrix (Frontier-Recovery Simplification)
+- `cargo test -p iroha_core --lib frontier_recovery_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib same_height_no_proposal_storm_breaker_ -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib same_height_no_proposal_storm_counter_persists_until_true_progress -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib repeated_range_pull_expiry_forces_tier_jump_cooldown_clear_and_reanchor -- --nocapture` (pass)
+- `cargo test -p iroha_core --lib committed_edge_conflict_ -- --nocapture` (pass)
+
+## 2026-03-14 Block-Sync Unknown-Prev Fallback Simplification
+- Simplified `crates/iroha_core/src/block_sync.rs` unknown-prev rewind selection:
+  - removed the half-chain-to-256 fallback window.
+  - unknown-prev fallback rewind now keeps short-chain half-window behavior but caps mid/deep rewinds to `UNKNOWN_PREV_RECENT_CHAIN_HASH_WINDOW` (64 blocks), matching the existing recent-hash hint surface.
+  - added regression `unknown_prev_fallback_caps_mid_height_rewind_to_recent_window`.
+- Narrow validation for the kept variant:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib unknown_prev_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib get_blocks_after_repeated_unknown_prev_probe_requests_latest_on_incremental_repeats -- --nocapture` (pass)
+- 15-minute NPoS healthy canary for the kept variant:
+  - log: `/tmp/izanami_npos_healthy_canary_unknown_prev_cap_20260314T175113Z.log`
+  - result: improved from the prior `height 345` plateau to `height 384`, but still failed `target_blocks=400` before duration end.
+  - interval summary: `count=61`, `median=1449ms`, `p95=2501ms`, `max=3335ms`.
+  - peer behavior improved materially before the final stall: no fallback-anchor sharing through height `324`, then late same-height `385` missing-QC / fallback-anchor churn reappeared.
+- Rejected follow-up variant:
+  - tried clamping repeated incremental unknown-prev sharing directly to the committed edge in `crates/iroha_core/src/block_sync.rs`.
+  - 15-minute NPoS healthy canary for that variant regressed to an earlier `height 280` stall with broader cleanup/rotate churn; the patch was reverted and is not kept in the tree.
+  - regression canary log: `/tmp/izanami_npos_healthy_canary_incremental_edge_clamp_20260314T181402Z.log`
+
+## 2026-03-13 Timeout-Driven Sumeragi Recovery Stabilization (bounded suppression + deterministic escalation)
+- Implemented strict global-stall enforcement in `crates/izanami/src/chaos.rs`:
+  - `should_enforce_strict_progress_timeout(...)` now enforces strict timeout for healthy/global stalls (`lagging_peers == 0`) and for lag beyond tolerated failures (`lagging_peers > tolerated_failures`), while preserving tolerated-failure behavior for true outlier lag.
+  - strict-stall warning text now explicitly distinguishes tolerated outlier lag from globally enforced strict stalls.
+- Implemented same-height missing-QC storm tracking and bounded suppression in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - added dedicated per-height storm state/counters independent from timeout-marker cleanup.
+  - storm reset now happens only on true progress signals (commit height advances past tracked height, proposal observed at tracked height/view, or dependency-progress timestamp advance).
+  - storm breaker now uses storm count (not timeout marker streak), supports backlog-driven trigger when `pending_blocks == 0`, and records forced-cleanup state for one post-cleanup rotation allowance after the next timeout window.
+  - fixed regression where deterministic frontier reset could clear same-height state before suppression checks: same-height rotation is now still suppressed for that timeout cycle when an in-window canonical frontier reanchor remained unresolved at timeout, unless explicit post-cleanup allowance is active.
+- Hardened repeated range-pull expiry escalation continuity in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - added per-height expiry streak persistence (`missing_block_range_pull_expiry_streaks`) across cleanup paths until actual dependency progress.
+  - repeated no-progress expiry (`>= 2` windows) now immediately advances escalation tier, clears range-pull cooldown gates for the height/frontier, emits canonical all-target reanchor, and reserves the round-recovery window token to avoid immediate same-tier reentry.
+- Updated committed-edge conflict cleanup gating in `crates/iroha_core/src/sumeragi/main_loop/votes.rs`:
+  - committed-edge conflict path keeps canonical cleanup/reanchor behavior but now only invokes storm-break when dedicated storm threshold is reached, preventing suppression bypass before forced-escalation threshold.
+- Extended observability in `crates/iroha_core/src/sumeragi/status.rs`:
+  - added `consensus_no_proposal_storm_last_height`, `consensus_no_proposal_storm_last_count`, and `consensus_no_proposal_storm_max_count` to status snapshot state/counters.
+
+### Validation Matrix (Timeout-Driven Stabilization)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_core missing_qc_view_change_suppressed_when_frontier_reanchor_already_emitted -- --nocapture` (pass)
+- `cargo test -p iroha_core highest_qc_fetch_suppresses_committed_height_hash_conflict -- --nocapture` (pass)
+- `cargo test -p iroha_core same_height_no_proposal_storm -- --nocapture` (pass)
+- `cargo test -p iroha_core repeated_range_pull_expiry_forces_tier_jump_cooldown_clear_and_reanchor -- --nocapture` (pass)
+- `cargo test -p izanami strict_progress_timeout_enforcement_respects_bft_tolerance -- --nocapture` (pass)
+
+## 2026-03-12 Sub-1s Soak Recovery Plan (Fail-Open Gating + Deterministic Catch-Up)
+- `crates/izanami/src/chaos.rs` now applies configured fault budget to strict progress semantics:
+  - `effective_tolerated_peer_failures(peer_count, configured_faulty_peers)` now honors `configured_faulty_peers` and bounds it by protocol BFT tolerance.
+  - strict stall/quorum divergence calculations now consistently use this effective tolerance, so healthy runs (`faulty=0`) fail on unexpected stragglers while frozen-peer runs (`faulty=1`) tolerate one lagging peer.
+  - updated regressions: `effective_tolerated_peer_failures_honors_configured_fault_budget`, `quorum_min_height_respects_effective_tolerance`, and `strict_divergence_reference_height_trims_only_effectively_tolerated_outliers`.
+- `crates/iroha_core/src/sumeragi/main_loop.rs` and `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` now escalate repeated sidecar mismatch loops into deterministic recovery:
+  - repeated sidecar mismatch recovery now increments a dedicated recovery-trigger counter.
+  - no-verifiable-roster drop path now clears stale same-height missing dependencies when sidecar is quarantined and requests canonical `committed+1` reanchor/range-pull.
+  - repeated range-pull expiry without progress now increments per-height expiry streak and immediately advances one additional range-pull tier once streak is repeated (avoids re-entering identical incremental loops).
+- Added bounded same-height no-proposal storm breaker in `crates/iroha_core/src/sumeragi/main_loop.rs` with committed-edge integration in `crates/iroha_core/src/sumeragi/main_loop/votes.rs`:
+  - when repeated same-height no-proposal rounds occur with stale pending blocks but no actionable dependencies, perform one deterministic stale-state cleanup and canonical reanchor.
+  - idle missing-QC and committed-edge conflict paths both use this breaker to prevent stale/non-actionable hashes repeatedly rearming view-change loops.
+- Extended consensus observability in `crates/iroha_core/src/sumeragi/status.rs`:
+  - new counters/fields: `consensus_sidecar_recovery_trigger_total`, `consensus_no_proposal_storm_total`, `blocksync_range_pull_expiry_streak_last`, `blocksync_range_pull_expiry_streak_max`.
+  - status snapshot and unit coverage updated (`missing_block_fetch_counters_surface_in_snapshot`).
+- Targeted validation in this tree:
+  - `cargo test -p izanami effective_tolerated_peer_failures_honors_configured_fault_budget -- --nocapture`
+  - `cargo test -p iroha_core missing_block_fetch_counters_surface_in_snapshot -- --nocapture`
+  - `cargo test -p iroha_core same_height_no_proposal_storm_breaker_cleans_stale_state -- --nocapture`
+
+## 2026-03-12 Localnet Sub-1s Follow-Up (Hard-Gate Enforcement + Actionable-Only Rotation)
+- Enforced latency hard-gate at duration completion in `crates/izanami/src/chaos.rs`:
+  - added `enforce_latency_p95_gate(...)`.
+  - gate now applies at `target_reached` and also at `duration_deadline` in soft-KPI mode.
+  - error output now includes `checkpoint` context (`target_reached` or `duration_deadline`).
+- Added regression in `crates/izanami/src/chaos.rs`:
+  - `wait_for_target_blocks_soft_kpi_enforces_latency_gate_at_duration_end`.
+- Tightened no-actionable missing-QC rotation behavior in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - proposal-gap backlog grace and RBC-progress grace deferrals now apply only when actionable dependency signals remain.
+  - deterministic frontier/lock-lag cleanup no longer defers rotation when dependencies are non-actionable.
+  - same-height no-actionable cleanup now also clears `round_recovery_bundle_window_gates` for that height.
+  - `try_reserve_round_recovery_bundle_window(...)` no longer suppresses no-actionable rotations.
+- Compile and targeted validations now pass on this tree:
+  - `cargo check -p iroha_core --all-targets`
+  - `cargo check -p izanami --all-targets`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_no_actionable_dependency_rotates_after_base_timeout -- --nocapture`
+  - `cargo test -p iroha_core --lib highest_qc_fetch_suppresses_committed_height_hash_conflict -- --nocapture`
+  - `cargo test -p izanami wait_for_target_blocks_soft_kpi -- --nocapture`
+- 15-minute gated canary matrix (explicit `--latency-p95-threshold 1s`, `target_blocks=400`) confirms hard-gate behavior:
+  - permissioned healthy: `/tmp/izanami_permissioned_canary_gate_20260312T060142Z.log` → failed on gate (`quorum p95=2502ms > 1000ms`).
+  - permissioned + frozen peer: `/tmp/izanami_permissioned_frozen_canary_gate_20260312T062318Z.log` → failed on gate (`quorum p95=2502ms > 1000ms`), strict lag persisted (`strict min 105` at gate trip).
+  - NPoS healthy: `/tmp/izanami_npos_canary_gate_20260312T063343Z.log` → failed on gate (`quorum p95=2502ms > 1000ms`).
+  - NPoS + frozen peer: `/tmp/izanami_npos_frozen_canary_gate_20260312T064516Z.log` → failed on gate (`quorum p95=2502ms > 1000ms`), strict lag persisted (`strict min 102` at gate trip).
+
+## 2026-03-11 Localnet Sub-1s Block Production Plan (Permissioned + NPoS)
+- Implemented missing-QC actionable-only timeout gating in `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - same-height no-actionable cleanup now runs before timeout hysteresis/defer/backoff decisions.
+  - stale no-actionable cleanup clears height recovery budget plus missing-QC timeout/reacquire markers for the active height.
+  - missing-QC hysteresis/defer/backoff now require actionable dependency signals (including unresolved actionable frontier dependency), so stale/non-actionable backlog does not extend rotation timing.
+- Implemented committed-edge fallback hardening in `crates/iroha_core/src/sumeragi/main_loop/votes.rs`:
+  - committed-edge conflicting highest-QC suppression still clears obsolete request state.
+  - bounded canonical reanchor is now emitted only when contiguous frontier dependency is still actionable.
+- Implemented shared-host stable profile retuning in `crates/izanami/src/chaos.rs`:
+  - pipeline floor: `180ms`.
+  - shared-host NPoS timeout floors: `propose=60ms`, `prevote=90ms`, `precommit=120ms`, `commit=320ms`, `da=320ms`, `aggregator=20ms`.
+  - recovery windows: `height_window=2000ms`, `missing_qc_reacquire_window=800ms`, `deferred_qc_ttl=2000ms`.
+  - recovery escalation: `hash_miss_cap_before_range_pull=1`, `range_pull_escalation_after_hash_misses=1`.
+  - shared-host pending-stall grace: `300ms`.
+  - shared-host `da_fast_reschedule` enabled.
+  - stable shared-host soak default latency gate: `latency_p95_threshold=1s` when unset.
+  - startup override log now includes latency profile marker and effective latency p95 gate fields.
+- Added/updated targeted regressions:
+  - `force_view_change_if_idle_no_actionable_dependency_rotates_after_base_timeout`.
+  - `force_view_change_if_idle_prunes_stale_round_state_during_repeated_same_height_missing_qc` now asserts stale timeout streak reset.
+  - committed-edge suppression regression now asserts no reanchor for non-actionable conflict hashes.
+  - shared-host stable profile tests now assert sub-1s latency gate default and updated timeout/pending-stall constants.
+- Validation attempts in this workspace were blocked by pre-existing branch compile errors unrelated to this patch:
+  - `iroha_core` tests: `AccountId::new(...)` signature mismatch in `crates/iroha_core/src/smartcontracts/isi/triggers/set.rs` and pre-existing test code.
+  - `izanami` check/test: ongoing `ScopedAccountId` migration mismatches in `crates/izanami/src/{chaos.rs,instructions.rs}`.
+  - successful local compile gate for touched core runtime path: `cargo check -p iroha_core --lib`.
 
 ## 2026-03-11 Full 60-Min Cross-Mode Soak Replay (Fresh Rerun)
 - Replayed both full soaks on the current tree with unchanged stable envelope and `progress-timeout=600s`:
