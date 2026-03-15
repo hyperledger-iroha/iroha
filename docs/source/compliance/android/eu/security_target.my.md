@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | ဖွဲ့စည်းမှုပုံစံကို ကမောက်ကမဖြစ်စေခြင်း | `ClientConfig` သည် အသုံးမပြုမီတွင် manifests (hash + schema) ကို အတည်ပြုပြီး `android.telemetry.config.reload` မှတစ်ဆင့် ပြန်လည်စတင်ခြင်းများကို ငြင်းဆိုထားသည့် မှတ်တမ်းများ။ | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2။ |
 | လက်မှတ်ထိုးသော့များ | StrongBox-လိုအပ်သောမူဝါဒများ၊ သက်သေပြကြိုးများနှင့် စက်ပစ္စည်း-မက်ထရစ်စစ်ဆေးမှုများသည် ပျံ့လွင့်မှုကို ခွဲခြားသတ်မှတ်သည်။ အဖြစ်အပျက်တစ်ခုစီကို မှတ်တမ်းတင်ထားသော နောက်ခံများ | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`။ |
 | တယ်လီမီတာ | Blake2b-hashed အာဏာပိုင်များ၊ ရေပုံးထည့်ထားသော စက်ပရိုဖိုင်များ၊ ဝန်ဆောင်မှုပေးသူ ပျက်ကွက်မှု၊ မှတ်တမ်းကို အစားထိုးပါ။ | `docs/source/sdk/android/telemetry_redaction.md`; Playbook §8 ကို ပံ့ပိုးပါ။ |
-| Torii RPC | တွင် ပြန်ဖွင့်ပါ သို့မဟုတ် အဆင့်နှိမ့်ချပါ။ `/v2/pipeline` တောင်းဆိုမှုတည်ဆောက်သူသည် TLS ပင်ထိုးခြင်း၊ ဆူညံသံချန်နယ်မူဝါဒကို တွန်းအားပေးပြီး hashed authority context ဖြင့် ဘတ်ဂျက်များကို ထပ်စမ်းကြည့်ပါ။ | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (စီစဉ်ထားသည်)။ |
+| Torii RPC | တွင် ပြန်ဖွင့်ပါ သို့မဟုတ် အဆင့်နှိမ့်ချပါ။ `/v1/pipeline` တောင်းဆိုမှုတည်ဆောက်သူသည် TLS ပင်ထိုးခြင်း၊ ဆူညံသံချန်နယ်မူဝါဒကို တွန်းအားပေးပြီး hashed authority context ဖြင့် ဘတ်ဂျက်များကို ထပ်စမ်းကြည့်ပါ။ | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (စီစဉ်ထားသည်)။ |
 | လက်မှတ်မထိုးထားသော သို့မဟုတ် ပြန်လည်ထုတ်လုပ်၍မရသော ထုတ်ဝေမှုများ | CycloneDX SBOM + Sigstore AND6 စစ်ဆေးရန်စာရင်းမှ ကန့်သတ်ချက်များ၊ RFC များသည် `docs/source/release/provenance/android/` တွင် အထောက်အထား လိုအပ်ပါသည်။ | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`။ |
 | မပြည့်စုံသော အဖြစ်အပျက်ကို ကိုင်တွယ်ခြင်း | Runbook + playbook သည် overrides များ၊ ပရမ်းပတာလေ့ကျင့်မှုများ နှင့် တိုးမြင့်မှုသစ်ပင်ကို သတ်မှတ်ပါသည်။ တယ်လီမီတာကို အစားထိုးခြင်းများသည် Norito လက်မှတ်ထိုး တောင်းဆိုမှုများ လိုအပ်သည်။ | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`။ |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 ဝင်ရောက်ထိန်းချုပ်မှု | StrongBox မူဝါဒများ + Norito လက်မှတ်ထိုးထားသော အထောက်အထားများ လိုအပ်သော အလုပ်အသွားအလာကို အစားထိုးပါ။ |
 | 7.5 ကူးယူဖော်ပြမှု ထိန်းချုပ်မှုများ | AND2 (သော့စီမံခန့်ခွဲမှုလမ်းညွှန်) မှ သော့ထုတ်လုပ်ခြင်း၊ သိုလှောင်မှုနှင့် အထောက်အထားလိုအပ်ချက်များ။ |
 | 7.6 စစ်ဆင်ရေး လုံခြုံရေး | Telemetry hashing၊ ပရမ်းပတာ အစမ်းလေ့ကျင့်မှု၊ အဖြစ်အပျက်တုံ့ပြန်မှု၊ သက်သေအထောက်အထားများ ထုတ်ပေးခြင်း။ |
-| 7.7 ဆက်သွယ်ရေး လုံခြုံရေး | `/v2/pipeline` TLS မူဝါဒ + hashed အာဏာပိုင်များ (telemetry redaction doc)။ |
+| 7.7 ဆက်သွယ်ရေး လုံခြုံရေး | `/v1/pipeline` TLS မူဝါဒ + hashed အာဏာပိုင်များ (telemetry redaction doc)။ |
 | 7.8 စနစ်ရယူခြင်း/ဖွံ့ဖြိုးတိုးတက်မှု | AND5/AND6 အစီအစဉ်များတွင် ပြန်လည်ထုတ်လုပ်နိုင်သော Gradle တည်ဆောက်မှုများ၊ SBOM နှင့် သက်သေတံခါးများ။ |
 | 7.9 ပေးသွင်းသူ ဆက်ဆံရေး | Buildkite + Sigstore ပြင်ပအဖွဲ့အစည်းမှီခိုမှု SBOM များနှင့်အတူ မှတ်တမ်းတင်ထားသည်။ |
 | 7.10 အဖြစ်အပျက်စီမံခန့်ခွဲမှု | Runbook/Playbook အရှိန်မြှင့်ခြင်း၊ မှတ်တမ်းရေးခြင်းကို အစားထိုးခြင်း၊ တယ်လီမီတာ မအောင်မြင်သောကောင်တာများ။ |

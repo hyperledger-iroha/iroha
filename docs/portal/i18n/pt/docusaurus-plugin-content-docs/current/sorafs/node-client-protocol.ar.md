@@ -66,13 +66,13 @@ Veja mais:
 
 Verifique se o HTTP não está funcionando corretamente.
 
-###`GET /v2/sorafs/storage/car/{manifest_id}`| المتطلب | التفاصيل |
+###`GET /v1/sorafs/storage/car/{manifest_id}`| المتطلب | التفاصيل |
 |--------|----------|
 | **Cabeçalhos** | `Range` (`dag-scope: block`), `X-SoraFS-Chunker`, `X-SoraFS-Nonce` Base64 e `X-SoraFS-Stream-Token` base64. |
 | **Respostas** | `206` com `Content-Type: application/vnd.ipld.car`, و`Content-Range` يصف النافذة المقدمة, وبيانات `X-Sora-Chunk-Range`, وإعادة إرسال O chunker/token. |
 | **Modos de falha** | `416` para um dispositivo de armazenamento, `401` para um dispositivo de armazenamento/referência, `429` تجاوز ميزانيات stream/byte. |
 
-###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 جلب شريحة واحدة بنفس الرؤوس بالإضافة إلى digest الحتمي للشريحة. مفيد لإعادة
 O carro ou o carro estão funcionando corretamente.
@@ -120,11 +120,11 @@ Você pode usar o SF-6 para usar (CLI Rust عبر `sorafs_fetch`, وSDKs عبر
 
 - `iroha app sorafs pin list|show` e `alias list` e `replication list` para REST
   Os pinos Norito JSON são usados para atestação.
-- `iroha app sorafs storage pin` e `torii /v2/sorafs/pin/register` manifestos
+- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` manifestos
   بنمط Norito e JSON com provas اختيارية للـ alias e sucessor; Provas
   `400`, e provas de `503`, `Warning: 110`, بينما تعيد
   provas `412`.
-- RESTO (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
+- RESTO (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل atestado حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.## المراجع
 

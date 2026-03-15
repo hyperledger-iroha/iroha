@@ -126,8 +126,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > 評価 Torii 評価 `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — يعيد マニフェスト Norito المخزن (base64) ダイジェスト/メタデータ。【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — يعيد خطة القطع الحتمية JSON (`chunk_fetch_specs`) لأدوات ダウンストリーム。【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — يعيد マニフェスト Norito المخزن (base64) ダイジェスト/メタデータ。【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — يعيد خطة القطع الحتمية JSON (`chunk_fetch_specs`) لأدوات ダウンストリーム。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > スクリプト スクリプト スクリプト HTTP スクリプト スクリプト スクリプト スクリプト スクリプト スクリプト スクリプト HTTP スクリプト【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -154,9 +154,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 
 ### تكامل إعلان السعة والجدولة
 
-- تعيد Torii تحديثات `CapacityDeclarationRecord` من `/v2/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كلチャンカー/レーンを表示します。 يكشف المدير لقطات read-only للتليمترية (`GET /v2/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو レーン قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- エンドポイント `/v2/sorafs/capacity/schedule` と `ReplicationOrderV1` が必要です。チャンカー/レーンの管理管理者は、`ReplicationPlan` を使用して、オーケストレーションを実行します。 بالأوامر الخاصة بمزوّدين آخرين باستجابة `ignored` لتسهيل سير العمل متعدد المشغلين.【crates/iroha_torii/src/routing.rs:4845】
-- フック الإكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v2/sorafs/capacity/complete` لإطلاق الحجوزات عبر `CapacityManager::complete_order`。 `ReplicationRelease` (チャンカー/レーン) のオーケストレーションを行う投票。 سيُوصل هذا بخط أنابيب مخزن القطع عند اكتمال منطق 【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- تعيد Torii تحديثات `CapacityDeclarationRecord` من `/v1/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كلチャンカー/レーンを表示します。 يكشف المدير لقطات read-only للتليمترية (`GET /v1/sorafs/capacity/state`) ويفرض حجوزات لكل ملف تعريف أو レーン قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- エンドポイント `/v1/sorafs/capacity/schedule` と `ReplicationOrderV1` が必要です。チャンカー/レーンの管理管理者は、`ReplicationPlan` を使用して、オーケストレーションを実行します。 بالأوامر الخاصة بمزوّدين آخرين باستجابة `ignored` لتسهيل سير العمل متعدد المشغلين.【crates/iroha_torii/src/routing.rs:4845】
+- フック الإكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v1/sorafs/capacity/complete` لإطلاق الحجوزات عبر `CapacityManager::complete_order`。 `ReplicationRelease` (チャンカー/レーン) のオーケストレーションを行う投票。 سيُوصل هذا بخط أنابيب مخزن القطع عند اكتمال منطق 【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - 評価 `TelemetryAccumulator` 評価 `NodeHandle::update_telemetry` 評価 評価 - PoR/稼働時間 وفي `CapacityTelemetryV1` 内部構造スケジューラ.【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### عرض المزيد- **الحوكمة**: توسيع `sorafs_pin_registry_tracker.md` بتليمترية التخزين (معدل نجاح PoR، استغلال القرص)。広告を掲載しています。

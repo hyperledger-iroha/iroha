@@ -30,7 +30,7 @@ A configuração SoraFS usa a determinação, para que o CI seja processado em u
 
 ## Configuração de configuração
 
-- Os gateways oferecem streaming à prova de endpoint (`POST /v2/sorafs/proof/stream`), a CLI pode usar a rede telefônica.
+- Os gateways oferecem streaming à prova de endpoint (`POST /v1/sorafs/proof/stream`), a CLI pode usar a rede telefônica.
 - Altere a política `sorafs_alias_cache` com a ajuda de um auxiliar de `iroha_config` ou CLI (`sorafs_cli manifest submit --alias-*`).
 - Transfira tokens de fluxo (ou учетные данные Torii) para um gerenciador de segredos exclusivo.
 - Включите телеметрические exportadores (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) e отправляйте их в ваш стек Prometheus/OTel.

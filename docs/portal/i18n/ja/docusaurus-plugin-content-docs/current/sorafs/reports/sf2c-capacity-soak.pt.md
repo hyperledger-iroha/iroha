@@ -47,7 +47,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii アゴラは、OS ダッシュボードにある料金台帳とプロバイダーのクレジットのスナップショットを公開します
 ポッサム・ファザー・ゲート・エム・サルドス・バイショスとペナルティーストライク:
 
-- 残り: `GET /v2/sorafs/capacity/state` レトルナ エントラダス `credit_ledger[*]` クエリ
+- 残り: `GET /v1/sorafs/capacity/state` レトルナ エントラダス `credit_ledger[*]` クエリ
   refletem os Campos は元帳の検証を行いません。テストは行われません。ヴェジャ
   `crates/iroha_torii/src/sorafs/registry.rs`。
 - Importacao Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` プロット OS

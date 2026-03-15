@@ -90,7 +90,7 @@ La tabla no cambia el estado del dispositivo `sorafs.sf1@1.0.0` en los component
 Развертывание телеметрии:
 
 - **Телеметрия fetch чанков** — CLI Iroha `sorafs toolkit pack` emite resúmenes de чанков, метаданные CAR y корни PoR para la ingestión en los tableros.
-- **Anuncios de proveedores**: anuncios de carga útil que incluyen capacidades y alias de metadatos; Compruebe la capacidad de `/v2/sorafs/providers` (por ejemplo, la capacidad de `range`).
+- **Anuncios de proveedores**: anuncios de carga útil que incluyen capacidades y alias de metadatos; Compruebe la capacidad de `/v1/sorafs/providers` (por ejemplo, la capacidad de `range`).
 - **Monitorización de puerta de enlace**: los operadores que utilizan los pares `Content-Chunker`/`Content-Digest`, que bloquean nuevas degradaciones; ожидается, что использование bridge снизится до нуля до депрекации.Avisos políticos: как только утвержден профиль-преемник, запланируйте окно двойной публикации
 Puente CARv1 y puertas de enlace de producción.
 

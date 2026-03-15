@@ -46,7 +46,7 @@ Para obter mais informações, consulte `sorafs-node` ou Torii. يتطابق
   ```
 
 - Verifique se o Torii é usado para substituir o `data_dir`.
-- تحقّق من أن العقدة تعلن السعة المتوقعة عبر `GET /v2/sorafs/capacity/state` بعد
+- تحقّق من أن العقدة تعلن السعة المتوقعة عبر `GET /v1/sorafs/capacity/state` بعد
   Você pode fazer isso.
 - عند تمكين التنعيم, تعرض لوحات المتابعة عدادات GiB·hour/PoR الخام والمُنعّمة
   Para obter mais informações, consulte o site.
@@ -95,8 +95,8 @@ Você pode fazer isso com antecedência. `--verdict` `--verdict` sem fio
 Use Torii para configurar o HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 يتم تقديم كلا نقطتي النهاية بواسطة عامل التخزين المضمّن, لذا تبقى اختبارات
@@ -109,7 +109,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Definindo a base64:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -119,7 +119,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Definições de segurança:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -136,7 +136,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Verifique o Torii (ou seja, o valor do arquivo).
 3. Limpe o local. يجب أن تبقى الحمولة قابلة للاسترجاع e يتطابق digest
    Você pode usar o aplicativo para obter mais informações.
-4. Coloque `GET /v2/sorafs/storage/state` no lugar de `bytes_used`
+4. Coloque `GET /v1/sorafs/storage/state` no lugar de `bytes_used`
    Você pode fazer isso sem problemas.
 
 ## 4. اختبار رفض الحصة1. Use o `torii.sorafs.storage.max_capacity_bytes` para fazer o download
@@ -152,7 +152,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. اطلب عينة PoR:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -177,7 +177,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - يجب أن تتابع لوحات المتابعة:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` e `torii_sorafs_storage_fetch_inflight`
-  - عدادات نجاح/فشل PoR المعروضة عبر `/v2/sorafs/capacity/state`
+  - عدادات نجاح/فشل PoR المعروضة عبر `/v1/sorafs/capacity/state`
   - محاولات نشر التسوية عبر `sorafs_node_deal_publish_total{result=success|failure}`
 
 يضمن اتباع هذه التدريبات, أن عامل التخزين المضمّن قادر على إدخال البيانات,

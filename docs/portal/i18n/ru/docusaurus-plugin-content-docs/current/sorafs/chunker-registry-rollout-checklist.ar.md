@@ -73,7 +73,7 @@ Sidebar_label: Добавление фрагмента
    `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Открытие, сделанное в 1990-х годах в Колумбийском университете:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Создание манифеста/плана для проверки:
    ```bash

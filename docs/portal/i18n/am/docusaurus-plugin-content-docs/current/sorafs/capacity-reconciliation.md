@@ -14,7 +14,7 @@ translation_last_reviewed: 2026-02-07
 የመንገድ ካርታ ንጥል **SF-2c** የግምጃ ቤት የአቅም ክፍያ ደብተር እንዲያረጋግጥ ያዛል
 በእያንዳንዱ ምሽት ከሚፈጸሙ የXOR ዝውውሮች ጋር ይዛመዳል። የሚለውን ተጠቀም
 ለማነፃፀር `scripts/telemetry/capacity_reconcile.py` አጋዥ
-`/v2/sorafs/capacity/state` ቅጽበታዊ ገጽ እይታ ከተገደለው የዝውውር ባች እና
+`/v1/sorafs/capacity/state` ቅጽበታዊ ገጽ እይታ ከተገደለው የዝውውር ባች እና
 ለአለርት አስተዳዳሪ Prometheus የጽሑፍ ፋይል መለኪያዎችን ያወጣል።
 
 ## ቅድመ ሁኔታዎች

@@ -78,10 +78,10 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 1. Соберите `.norito` пейлоад с помощью CLI или сниппетов из [Norito quickstart](./quickstart.md). Прокси пересылает тела `application/x-norito` без изменений, поэтому можно использовать тот же артефакт, который вы отправили бы с `curl`.
 2. Откройте `/reference/torii-rapidoc` (предпочтительно для бинарных пейлоадов) или `/reference/torii-swagger`.
 3. Выберите нужный snapshot Torii из выпадающего списка. Снимки подписаны; панель показывает дайджест манифеста, записанный в `static/openapi/manifest.json`.
-4. Выберите тип контента `application/x-norito` в панели "Try it", нажмите **Choose File** и выберите свой пейлоад. Прокси переписывает запрос на `/proxy/v2/pipeline/submit` и помечает его `X-TryIt-Client=docs-portal-rapidoc`.
+4. Выберите тип контента `application/x-norito` в панели "Try it", нажмите **Choose File** и выберите свой пейлоад. Прокси переписывает запрос на `/proxy/v1/pipeline/submit` и помечает его `X-TryIt-Client=docs-portal-rapidoc`.
 5. Чтобы скачать ответы Norito, установите `Accept: application/x-norito`. Swagger/RapiDoc показывают селектор заголовка в той же панели и стримят бинарные данные обратно через прокси.
 
-Для маршрутов только с JSON встроенный Try it sandbox часто быстрее: введите путь (например, `/v2/accounts/i105.../assets`), выберите HTTP-метод, вставьте JSON-тело при необходимости и нажмите **Send request**, чтобы сразу увидеть заголовки, длительность и пейлоады.
+Для маршрутов только с JSON встроенный Try it sandbox часто быстрее: введите путь (например, `/v1/accounts/i105.../assets`), выберите HTTP-метод, вставьте JSON-тело при необходимости и нажмите **Send request**, чтобы сразу увидеть заголовки, длительность и пейлоады.
 
 ## Устранение неполадок
 

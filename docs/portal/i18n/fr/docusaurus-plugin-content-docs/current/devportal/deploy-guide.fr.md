@@ -23,7 +23,7 @@ votre coffre CI; les exécutions locales peuvent les charger via des exports du 
 
 ## Prérequis- Nœud 18.18+ avec `npm` ou `pnpm`.
 - `sorafs_cli` via `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL Torii qui expose `/v2/sorafs/*` plus un compte/cle privé d'autorité qui peut soumettre
+- URL Torii qui expose `/v1/sorafs/*` plus un compte/cle privé d'autorité qui peut soumettre
   des manifestes et des alias.
 - Emmeteur OIDC (GitHub Actions, GitLab, Workload Identity, etc.) pour émettre un `SIGSTORE_ID_TOKEN`.
 - Optionnel : `examples/sorafs_cli_quickstart.sh` pour des essais à sec et
@@ -813,7 +813,7 @@ Configurez les secrets/variables suivants avant de déclencher le travail :
 
 | Nom | Mais |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Hôte Torii qui expose `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Hôte Torii qui expose `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identifiant d'époque enregistré avec les soumissions. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autorite de signature pour la soumission manifeste. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | L'alias du tuple se manifeste lorsque `perform_submit` est `true`. |

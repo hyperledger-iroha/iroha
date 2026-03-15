@@ -73,11 +73,11 @@ default_margin_percent = "0.025"
 
 ### 3.1 Post-Approval Configuration Snapshots
 
-referendum もしくは governance vote が完了し、`[settlement.repo]` 変更がロールアウトされた後、各 peer の `/v2/configuration` snapshots を取得します。監査人が承認済みポリシーがクラスタ全体で有効であることを証明できるようにします (`docs/source/finance/repo_ops.md` sec 2.9 参照)。
+referendum もしくは governance vote が完了し、`[settlement.repo]` 変更がロールアウトされた後、各 peer の `/v1/configuration` snapshots を取得します。監査人が承認済みポリシーがクラスタ全体で有効であることを証明できるようにします (`docs/source/finance/repo_ops.md` sec 2.9 参照)。
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v2/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
+curl -fsSL https://peer01.example/v1/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
 | Peer / source | File | SHA-256 | Block height | Notes |

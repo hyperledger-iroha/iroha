@@ -41,7 +41,7 @@ impl<'a> SnsApi<'a> {
         Self { client }
     }
 
-    /// POST `/v2/sns/registrations` to register a name.
+    /// POST `/v1/sns/registrations` to register a name.
     ///
     /// # Errors
     ///
@@ -65,7 +65,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// GET `/v2/sns/policies/{suffix_id}`.
+    /// GET `/v1/sns/policies/{suffix_id}`.
     ///
     /// # Errors
     ///
@@ -85,7 +85,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// GET `/v2/sns/registrations/{selector}`.
+    /// GET `/v1/sns/registrations/{selector}`.
     ///
     /// # Errors
     ///
@@ -107,7 +107,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v2/sns/registrations/{selector}/renew`.
+    /// POST `/v1/sns/registrations/{selector}/renew`.
     ///
     /// # Errors
     ///
@@ -128,7 +128,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v2/sns/registrations/{selector}/transfer`.
+    /// POST `/v1/sns/registrations/{selector}/transfer`.
     ///
     /// # Errors
     ///
@@ -157,7 +157,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v2/sns/registrations/{selector}/controllers`.
+    /// POST `/v1/sns/registrations/{selector}/controllers`.
     ///
     /// # Errors
     ///
@@ -186,7 +186,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v2/sns/registrations/{selector}/freeze`.
+    /// POST `/v1/sns/registrations/{selector}/freeze`.
     ///
     /// # Errors
     ///
@@ -207,7 +207,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// DELETE `/v2/sns/registrations/{selector}/freeze`.
+    /// DELETE `/v1/sns/registrations/{selector}/freeze`.
     ///
     /// # Errors
     ///
@@ -232,7 +232,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v2/sns/governance/cases` to create an arbitration record.
+    /// POST `/v1/sns/governance/cases` to create an arbitration record.
     ///
     /// Returns the created case envelope as raw JSON so CLI tools can attach it to
     /// transparency artefacts without depending on generated structs.
@@ -260,7 +260,7 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// GET `/v2/sns/governance/cases` with optional filters to export disputes.
+    /// GET `/v1/sns/governance/cases` with optional filters to export disputes.
     ///
     /// # Errors
     ///

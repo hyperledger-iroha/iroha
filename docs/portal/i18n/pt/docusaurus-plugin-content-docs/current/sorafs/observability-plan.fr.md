@@ -84,7 +84,7 @@ Quando a aplicação PoR/PoTR é intensificada.
 | `sorafs_node_por_failure_total` | Contador | `provider_id` | Compteur monotone des échantillons PoR échoués. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Medidor | `provider` | Medidores Prometheus existentes para octetos utilizados, profundor de arquivo, conta PoR e vol. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Medidor | `provider` | Dados de capacidade/tempo de atividade relatados pelo fornecedor expostos no painel de capacidade. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | Profondeur du backlog mais contas acumuladas de cheques exportados para cada interrogação de `/v2/sorafs/por/ingestion/{manifest}`, alimenta o painel/alerta "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Medidor | `provider`, `manifest` | Profondeur du backlog mais contas acumuladas de cheques exportados para cada interrogação de `/v1/sorafs/por/ingestion/{manifest}`, alimenta o painel/alerta "PoR Stalls". |
 
 ### Prevenção de recuperação em tempo útil (PoTR) e SLA de pedaços
 

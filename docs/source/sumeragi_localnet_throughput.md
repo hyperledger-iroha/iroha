@@ -67,7 +67,7 @@ Defaults used by the integration test:
 - `sumeragi.tx_queue_depth`
 - `sumeragi.tx_queue_saturated`
 
-### `/v2/sumeragi/status`
+### `/v1/sumeragi/status`
 - `view_change_install_total`
 - `pacemaker_backpressure_deferrals_total`
 - `tx_queue_depth`

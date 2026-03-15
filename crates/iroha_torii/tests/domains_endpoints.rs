@@ -51,12 +51,12 @@ async fn domains_endpoints_exist() {
     );
     let app = torii.api_router_for_tests();
 
-    // GET /v2/domains
+    // GET /v1/domains
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v2/domains?offset=0")
+                .uri("/v1/domains?offset=0")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -67,12 +67,12 @@ async fn domains_endpoints_exist() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // POST /v2/domains/query
+    // POST /v1/domains/query
     let resp = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/domains/query")
+                .uri("/v1/domains/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),

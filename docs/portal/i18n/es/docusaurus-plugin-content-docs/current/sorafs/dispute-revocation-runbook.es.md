@@ -26,7 +26,7 @@ Este runbook guía a los operadores de gobernanza para presentar disputas de cap
 ## 1. Evaluar el incidente
 
 - **Condiciones de activación:** detección de incumplimiento de SLA (tiempo de actividad/fallo de PoR), déficit de replicación o desacuerdo de facturación.
-- **Confirmar telemetría:** captura instantáneas de `/v2/sorafs/capacity/state` y `/v2/sorafs/capacity/telemetry` para el proveedor.
+- **Confirmar telemetría:** captura instantáneas de `/v1/sorafs/capacity/state` y `/v1/sorafs/capacity/telemetry` para el proveedor.
 - **Notificar a las partes interesadas:** Storage Team (operaciones del proveedor), Governance Council (órgano decisorio), Observability (actualizaciones de tableros).
 
 ## 2. Preparar el paquete de evidencias1. Recopila artefactos en bruto (telemetría JSON, logs de CLI, notas de auditoría).
@@ -72,7 +72,7 @@ Este runbook guía a los operadores de gobernanza para presentar disputas de cap
    ```
 
 3. Revisa `dispute_summary.json` (confirma tipo, resumen de evidencias y marcas de tiempo).
-4. Envía el JSON de la solicitud a Torii `/v2/sorafs/capacity/dispute` a través de la cola de transacciones de gobernanza. Captura el valor de respuesta `dispute_id_hex`; ancla las acciones de revocación posteriores y los informes de auditoría.
+4. Envía el JSON de la solicitud a Torii `/v1/sorafs/capacity/dispute` a través de la cola de transacciones de gobernanza. Captura el valor de respuesta `dispute_id_hex`; ancla las acciones de revocación posteriores y los informes de auditoría.
 
 ## 4. Evacuación y revocación1. **Ventana de gracia:** notifica al proveedor sobre la revocación inminente; permite la evacuación de datos fijados cuando la política lo permite.
 2. **Género `ProviderAdmissionRevocationV1`:**

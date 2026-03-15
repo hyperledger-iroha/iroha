@@ -30,7 +30,7 @@ Norito codificado en ہیں؛ ESCALA یا ad-hoc JSON نہیں۔
   estado de disponibilidad دوبارہ بنا سکیں۔
 - pruebas de membresía deterministas فراہم کرنا تاکہ clientes ligeros verifican کر سکیں
   کہ hash de manifiesto کسی مخصوص بلاک میں finalizado ہوا تھا۔
-- Consultas Torii (`/v2/da/commitments/*`) y pruebas de relés.
+- Consultas Torii (`/v1/da/commitments/*`) y pruebas de relés.
   SDK, automatización de gobernanza, reproducción, disponibilidad
   auditoría کر سکیں۔
 - `SignedBlockWire` envolvente کو canonical رکھنا، نئی estructuras کو Norito
@@ -43,7 +43,7 @@ Norito codificado en ہیں؛ ESCALA یا ad-hoc JSON نہیں۔
 3. **Persistencia/índices** تاکہ Consultas de compromisos de WSV تیزی سے manejar کرے
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii Adiciones de RPC** enumerar/consultar/probar puntos finales کیلئے
-   `/v2/da/commitments` کے تحت۔
+   `/v1/da/commitments` کے تحت۔
 5. **Pruebas de integración + accesorios**, diseño de cables, flujo de prueba y validación
    Número de modelo `integration_tests/tests/da/commitments.rs` Número de modelo
 
@@ -131,9 +131,9 @@ ataques سے بچا جا سکے۔
 
 Torii تین puntos finales فراہم کرتا ہے:| Ruta | Método | Carga útil | Notas |
 |-------|--------|---------|-------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (filtro de rango de carril/época/secuencia, paginación) | `DaCommitmentPage` incluye un recuento total de compromisos y un hash de bloque. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto یا tupla `(epoch, sequence)`) ۔ | `DaCommitmentProof` واپس کرتا ہے (registro + ruta Merkle + hash de bloque) ۔ |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ayudante sin estado جو cálculo de hash de bloque دوبارہ کرتا ہے اور inclusión validar کرتا ہے؛ ایسے SDK کیلئے جو `iroha_crypto` سے براہ راست link نہیں کر سکتے۔ |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtro de rango de carril/época/secuencia, paginación) | `DaCommitmentPage` incluye un recuento total de compromisos y un hash de bloque. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto یا tupla `(epoch, sequence)`) ۔ | `DaCommitmentProof` واپس کرتا ہے (registro + ruta Merkle + hash de bloque) ۔ |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ayudante sin estado جو cálculo de hash de bloque دوبارہ کرتا ہے اور inclusión validar کرتا ہے؛ ایسے SDK کیلئے جو `iroha_crypto` سے براہ راست link نہیں کر سکتے۔ |
 
 Cargas útiles de تمام `iroha_data_model::da::commitment` کے تحت ہیں۔ Enrutadores Torii
 controladores کو موجودہ DA ingest endpoints کے ساتھ mount کرتے ہیں تاکہ token/mTLS

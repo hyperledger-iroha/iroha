@@ -18,14 +18,14 @@ translator: machine-google-reviewed
 საგზაო რუკის მითითება: TORII-APP-1 — `app_api` პარიტეტული აუდიტი
 
 ეს გვერდი ასახავს შიდა `TORII-APP-1` აუდიტს (`docs/source/torii/app_api_parity_audit.md`)
-ასე რომ, მონო-რეპოს გარეთ მყოფმა მკითხველებმა დაინახეს, რომელი `/v2/*` ზედაპირებია სადენიანი, შემოწმებული,
+ასე რომ, მონო-რეპოს გარეთ მყოფმა მკითხველებმა დაინახეს, რომელი `/v1/*` ზედაპირებია სადენიანი, შემოწმებული,
 და დოკუმენტირებული. აუდიტი აკონტროლებს `Torii::add_app_api_routes`-ით რეექსპორტირებულ მარშრუტებს,
 `add_contracts_and_vk_routes` და `add_connect_routes`.
 
 ## სფერო და მეთოდი
 
 აუდიტი ამოწმებს საჯარო რეექსპორტს `crates/iroha_torii/src/lib.rs:256-522`-ში და
-ფუნქციური კარიბჭე მარშრუტების შემქმნელები. საგზაო რუქის ყოველი `/v2/*` ზედაპირისთვის ჩვენ დავადასტურეთ:
+ფუნქციური კარიბჭე მარშრუტების შემქმნელები. საგზაო რუქის ყოველი `/v1/*` ზედაპირისთვის ჩვენ დავადასტურეთ:
 
 - დამმუშავებლის დანერგვა და DTO განმარტებები `crates/iroha_torii/src/routing.rs`-ში.
 - როუტერის რეგისტრაცია `app_api` ან `connect` ფუნქციების ჯგუფებში.
@@ -44,25 +44,25 @@ translator: machine-google-reviewed
 - ფრაგმენტების მაგალითები:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## საბოლოო წერტილის ინვენტარი
 
-### ანგარიშის ნებართვები (`/v2/accounts/{id}/permissions`) — დაფარული
+### ანგარიშის ნებართვები (`/v1/accounts/{id}/permissions`) — დაფარული
 - დამმუშავებელი: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - როუტერის დაკავშირება: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -70,7 +70,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - მფლობელი: Torii პლატფორმა.
 - შენიშვნები: Response არის Norito JSON კორპუსი `items`/`total`, რომელიც შეესაბამება SDK პაგინაციის დამხმარეებს.
 
-### Alias OPRF შეფასება (`POST /v2/aliases/voprf/evaluate`) — დაფარული
+### Alias OPRF შეფასება (`POST /v1/aliases/voprf/evaluate`) — დაფარული
 - დამმუშავებელი: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -80,7 +80,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - მფლობელი: Torii პლატფორმა.
 - შენიშვნები: საპასუხო ზედაპირი ახორციელებს დეტერმინისტულ ექვსკუთხა და უკანა იდენტიფიკატორებს; SDK-ები მოიხმარენ DTO-ს.
 
-### დამადასტურებელი მოვლენები SSE (`GET /v2/events/sse`) — დაფარული
+### დამადასტურებელი მოვლენები SSE (`GET /v1/events/sse`) — დაფარული
 - დამმუშავებელი: `handle_v1_events_sse` ფილტრის მხარდაჭერით (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) პლუს ფილტრის გაყვანილობა.
 - როუტერის დაკავშირება: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -90,7 +90,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - მფლობელი: Torii პლატფორმა (გაშვების დრო), ინტეგრაციის ტესტები WG (მოწყობილობები).
 - შენიშვნები: მტკიცებულების ფილტრის ბილიკები დამოწმებულია ბოლომდე; დოკუმენტაცია მოქმედებს `docs/source/zk_app_api.md`-ის ქვეშ.
 
-### კონტრაქტის სიცოცხლის ციკლი (`/v2/contracts/*`) — დაფარული
+### კონტრაქტის სიცოცხლის ციკლი (`/v1/contracts/*`) — დაფარული
 - დამმუშავებლები: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -105,7 +105,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - მფლობელი: Smart Contract WG Torii პლატფორმით.
 - შენიშვნები: ბოლო წერტილების რიგში ხელმოწერილი ტრანზაქციები და ხელახლა გამოიყენე საერთო ტელემეტრიის მეტრიკა (`handle_transaction_with_metrics`).
 
-### გასაღების სასიცოცხლო ციკლის გადამოწმება (`/v2/zk/vk/*`) — დაფარული
+### გასაღების სასიცოცხლო ციკლის გადამოწმება (`/v1/zk/vk/*`) — დაფარული
 - დამმუშავებლები: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) და `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -117,7 +117,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - მფლობელი: ZK სამუშაო ჯგუფი Torii პლატფორმის მხარდაჭერით.
 - შენიშვნები: DTO-ები შეესაბამება Norito სქემებს, რომლებიც მითითებულია SDK-ებით; განაკვეთის შეზღუდვა ძალაშია `limits.rs`-ის მეშვეობით.
 
-### Nexus დაკავშირება (`/v2/connect/*`) — დაფარული (ფუნქცია `connect`)
+### Nexus დაკავშირება (`/v1/connect/*`) — დაფარული (ფუნქცია `connect`)
 - დამმუშავებლები: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTO: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

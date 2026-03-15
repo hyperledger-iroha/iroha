@@ -25,12 +25,12 @@ Ko'prikni tasdiqlovchi taqdimotlar standart ko'rsatmalar yo'lidan (`SubmitBridge
 
 ## Torii API yuzasi
 
-- `GET /v2/zk/proofs` va `GET /v2/zk/proofs/count` ko'prikdan xabardor filtrlarni qabul qiladi:
+- `GET /v1/zk/proofs` va `GET /v1/zk/proofs/count` ko'prikdan xabardor filtrlarni qabul qiladi:
   - `bridge_only=true` faqat ko'prik dalillarini qaytaradi.
   - `bridge_pinned_only=true` mahkamlangan ko'prik isbotlariga torayadi.
   - `bridge_start_from_height` / `bridge_end_until_height` ko'prik diapazoni oynasini mahkamlang.
-- `GET /v2/zk/proof/{backend}/{hash}` ko'prik metama'lumotlarini (diapazon, manifest xesh, foydali yuk xulosasi) isbot identifikatori/status/VK ulanishlari bilan birga qaytaradi.
-- To'liq Norito isbot yozuvi (shu jumladan foydali yuk baytlari) tugundan tashqari tekshiruvchilar uchun `GET /v2/proofs/{proof_id}` orqali mavjud bo'lib qoladi.
+- `GET /v1/zk/proof/{backend}/{hash}` ko'prik metama'lumotlarini (diapazon, manifest xesh, foydali yuk xulosasi) isbot identifikatori/status/VK ulanishlari bilan birga qaytaradi.
+- To'liq Norito isbot yozuvi (shu jumladan foydali yuk baytlari) tugundan tashqari tekshiruvchilar uchun `GET /v1/proofs/{proof_id}` orqali mavjud bo'lib qoladi.
 
 ## Ko'prik olish hodisalari
 

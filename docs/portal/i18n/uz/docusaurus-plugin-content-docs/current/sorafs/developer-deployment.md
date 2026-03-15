@@ -32,7 +32,7 @@ asboblarni haqiqiy shlyuzlar va saqlash provayderlariga tarqatish.
 
 ## Atrof-muhit konfiguratsiyasi
 
-- Shlyuzlar isbot oqimining oxirgi nuqtasini yoqishi kerak (`POST /v2/sorafs/proof/stream`)
+- Shlyuzlar isbot oqimining oxirgi nuqtasini yoqishi kerak (`POST /v1/sorafs/proof/stream`)
   shuning uchun CLI telemetriya xulosalarini chiqarishi mumkin.
 - Standart sozlamalardan foydalanib, `sorafs_alias_cache` siyosatini sozlang
   `iroha_config` yoki CLI yordamchisi (`sorafs_cli manifest submit --alias-*`).

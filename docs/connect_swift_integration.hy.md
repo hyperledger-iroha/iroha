@@ -45,7 +45,7 @@ import NoritoBridge            // Clang module from the XCFramework
 ստացեք Connect ստեղները և սպասեք հաստատման պատասխանին:
 
 ```swift
-let connectURL = URL(string: "wss://node.example/v2/connect/ws?sid=\(sidB64)&role=app")!
+let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
 var connectRequest = URLRequest(url: connectURL)
 connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 let connectClient = ConnectClient(request: connectRequest)

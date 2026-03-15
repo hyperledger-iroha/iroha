@@ -180,7 +180,7 @@ of which policy a relay enforces.
   and `max_future_skew_secs` bounds. Verification rejects expired tickets, TTLs that
   fall below the policy minimum, or expiry windows that exceed the allowed skew.
 - **Issuance service.** The `tools/soranet-puzzle-service` daemon exposes Norito JSON
-  endpoints at `/v2/puzzle/config` and `/v2/puzzle/mint`, allowing edge relays to delegate
+  endpoints at `/v1/puzzle/config` and `/v1/puzzle/mint`, allowing edge relays to delegate
   ticket minting. Config responses surface the active difficulty and TTL bounds, while
   mint requests accept an optional `ttl_secs` override and return a base64-encoded ticket
   with expiry metadata. A `/healthz` endpoint publishes readiness for relay supervisors.
@@ -231,14 +231,14 @@ every minted puzzle ticket to the relay identifier + supplied transcript hash so
 cannot be replayed against other relays. It derives the puzzle parameters from
 `pow.*`/`pow.puzzle.*` and offers two endpoints:
 
-- `GET /v2/puzzle/config` — returns the active difficulty, timing bounds, and puzzle cost
+- `GET /v1/puzzle/config` — returns the active difficulty, timing bounds, and puzzle cost
   factors so clients can size their workloads.
-- `POST /v2/puzzle/mint` — mints a fresh ticket and returns a base64 payload. Callers may
+- `POST /v1/puzzle/mint` — mints a fresh ticket and returns a base64 payload. Callers may
   supply `{ "ttl_secs": <override> }` and `transcript_hash_hex` to bind the ticket to a
   resume hash; the service clamps TTL overrides to the configured policy.
-- `GET /v2/token/config` — surfaces the ML-DSA admission-token policy (suite, TTL bounds,
+- `GET /v1/token/config` — surfaces the ML-DSA admission-token policy (suite, TTL bounds,
   issuer fingerprint, relay identifier, and active revocations) when `pow.token.enabled = true`.
-- `POST /v2/token/mint` — returns a base64 admission token bound to the supplied
+- `POST /v1/token/mint` — returns a base64 admission token bound to the supplied
   `transcript_hash_hex`. Configure the issuer secret via CLI (`--token-secret-hex` or
   `--token-secret-path`); operators may optionally point the service at a revocation file
   (`--token-revocation-file`) and control the reload cadence with
@@ -435,7 +435,7 @@ struct SaltAnnouncementV1 {
 - **Regression vectors.** Once the Salt Council approves the production key set,
   the council generates three signed announcements (normal rotation, emergency
   rotation, and recovery catch-up) and stores them under
-  `docs/assets/soranet/salt_vectors/v2/`. Each vector includes: Norito binary
+  `docs/assets/soranet/salt_vectors/v1/`. Each vector includes: Norito binary
   (`.to`), JSON projection, Dilithium3 signature, Ed25519 witness signature, and
   a README describing the validation procedure. CI jobs use these artefacts to
 - **Validation tooling.** `tools/soranet-handshake-harness` exposes a
@@ -820,8 +820,8 @@ interactive media latency remains minimal.
 
 ### Torii CLI helpers
 
-- `iroha app sorafs handshake show` fetches `/v2/config` and prints the live descriptor commit, capability vectors, negotiated suite identifiers, resume hash, and PoW admission window. Operators can diff this output against the directory bundle before rotating relays.
-- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-difficulty <u8> ...` submits a partial update via `/v2/config`. Any combination of flags is accepted, and `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs.
+- `iroha app sorafs handshake show` fetches `/v1/config` and prints the live descriptor commit, capability vectors, negotiated suite identifiers, resume hash, and PoW admission window. Operators can diff this output against the directory bundle before rotating relays.
+- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. Any combination of flags is accepted, and `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs.
 
 ## Open Design Items
 

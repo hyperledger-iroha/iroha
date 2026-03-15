@@ -30,7 +30,7 @@ el número requerido de épocas y réplicas sin depender de la intención del em
 | `nexus_lane_sidecar` | 6 horas | 7 días | 4 | `warm` | `da.sidecar` |
 | `governance_artifact` | 12 horas | 180 días | 3 | `cold` | `da.governance` |
 | _Predeterminado (todas las demás clases)_ | 6 horas | 30 días | 3 | `warm` | `da.default` |Estos valores se incrustan en `torii.da_ingest.replication_policy` y se aplican a
-todas las solicitudes `/v2/da/ingest`. Torii reescribe manifests con el perfil de
+todas las solicitudes `/v1/da/ingest`. Torii reescribe manifests con el perfil de
 retencion impuesto y emite una advertencia cuando los llamantes entregan valores
 No hay coincidencias para que los operadores detecten SDKs desactualizados.
 
@@ -149,5 +149,5 @@ fuera de cumplimiento de forma automática.
 
 La cobertura de regresión vive en
 `integration_tests/tests/da/replication_policy.rs`; la suite envia una politica de
-retencion no coincidente a `/v2/da/ingest` y verifica que el manifiesto obtenido
+retencion no coincidente a `/v1/da/ingest` y verifica que el manifiesto obtenido
 Expone el perfil impuesto en lugar de la intención del llamante.

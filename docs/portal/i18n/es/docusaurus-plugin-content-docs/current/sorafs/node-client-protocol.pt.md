@@ -67,13 +67,13 @@ Soporte de herramientas:
 Gateways aceitam requisicoes HTTP deterministas que espelham os metadados do
 anuncio.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`| Requisito | Detalles |
+### `GET /v1/sorafs/storage/car/{manifest_id}`| Requisito | Detalles |
 |-----------|----------|
 | **Encabezados** | `Range` (janela unica alinhada aos offsets de chunk), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` opcional e `X-SoraFS-Stream-Token` base64 obrigator. |
 | **Respuestas** | `206` con `Content-Type: application/vnd.ipld.car`, `Content-Range` descrevendo a janela servida, metadados `X-Sora-Chunk-Range` y encabezados de fragmentador/token ecoados. |
 | **falsas** | `416` para rangos desalinhados, `401` para tokens ausentes/invalidos, `429` cuando presupuestos de flujo/bytes sao excedidos. |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Recupera el fragmento único con varios encabezados y el resumen determinista del fragmento.
 Util para reintentos o descargas forenses cuando cortes de CAR sao desnecesarios.
@@ -121,11 +121,11 @@ Errores comunes presentados a operadores/SDK:
 - `iroha app sorafs pin list|show`, `alias list` e `replication list` involucran sistemas operativos
   endpoints REST do pin-registry e imprimem Norito JSON bruto con bloques de
   atestación para evidencias de auditoria.
-- `iroha app sorafs storage pin` e `torii /v2/sorafs/pin/register` aceitam manifiestos
+- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` aceitam manifiestos
   Norito o JSON con alias de pruebas y sucesores opcionales; pruebas malformadas
   Geram `400`, pruebas obsoletas retornam `503` con `Warning: 110`, y pruebas vencidas
   retorno `412`.
-- Puntos finales REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
+- Puntos finales REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   Incluye estructuras de atestación para que los clientes verifiquen datos contra el sistema operativo.
   ultimos headers de bloco antes de agir.
 

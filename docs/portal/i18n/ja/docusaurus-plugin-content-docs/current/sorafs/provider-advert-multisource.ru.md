@@ -67,7 +67,7 @@ SDK を使用して、SDK を使用して、必要な情報を取得します。
 ## Инструменты および 備品
 
 - ペイロード объявлений провайдеров должны включать `range_capability`、`stream_budget`
-  `transport_hints`。 Проверяйте через ответы `/v2/sorafs/providers` および入場設備。
+  `transport_hints`。 Проверяйте через ответы `/v1/sorafs/providers` および入場設備。
   JSON-резюме должны включать разобранную 能力、ストリームバジェット、およびヒント
   取り込みます。
 - `cargo xtask sorafs-admission-fixtures` ストリーム バジェットとトランスポート ヒント
@@ -79,7 +79,7 @@ SDK を使用して、SDK を使用して、必要な情報を取得します。
 
 ## Интеграция с оркестратором и Torii
 
-- Torii `/v2/sorafs/providers` を表示します。
+- Torii `/v1/sorafs/providers` を表示します。
   `stream_budget` または `transport_hints` です。 Предупреждения ダウングレード срабатывают, когда
   範囲エンドポイントの範囲のエンドポイントを取得します。
   для прямых клиентов.

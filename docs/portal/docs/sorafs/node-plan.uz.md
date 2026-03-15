@@ -61,7 +61,7 @@ Amalga oshirish bo'yicha eslatmalar:
 - `norito::json` foydali yuklari bilan Torii Axum stekidan foydalaning.
 - Javoblar uchun Norito sxemalarini qo'shing (`PinResultV1`, `FetchErrorV1`, telemetriya tuzilmalari).
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` endi kechikish chuqurligini va eng qadimgi davrni/muddatni va
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` endi kechikish chuqurligini va eng qadimgi davrni/muddatni va
   tomonidan quvvatlangan har bir provayder uchun eng so'nggi muvaffaqiyat/muvaffaqiyat vaqt belgilari
   `sorafs_node::NodeHandle::por_ingestion_status` va Torii qayd qiladi
   `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` uchun o'lchagichlar asboblar paneli.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】

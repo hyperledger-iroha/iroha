@@ -48,7 +48,7 @@ superficie gobernada `ProviderAdvertV1` требуется для рекупер
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` с определенным `max_span`
      - `allow_unknown_capabilities=<true|false>` cuando haya TLVs СМАЗКА
-   - Действительно через `/v2/sorafs/providers` и `sorafs_fetch`; las advertencias sobre
+   - Действительно через `/v1/sorafs/providers` и `sorafs_fetch`; las advertencias sobre
      возможности desconocidas deben ser triageadas.
 3. **Валидарная готовность для нескольких источников.**
    - Выброс `sorafs_fetch` с `--provider-advert=<path>`; эль CLI сейчас падает
@@ -193,9 +193,9 @@ groups:
 - **Почтовое сообщение в штате**. DevRel рассылает краткие сведения о возобновлении работы
   Прием, объявления, ожидаемые сроки и ближайшие сроки.
 - **Ответ на инцидент.** Если оповещения `reject` активированы, дежурный:
-  1. Восстановите атаку с помощью объявления Torii (`/v2/sorafs/providers`).
+  1. Восстановите атаку с помощью объявления Torii (`/v1/sorafs/providers`).
   2. Повторно выполните проверку объявления в конвейере поставщика и сравните его.
-     `/v2/sorafs/providers` для воспроизведения ошибки.
+     `/v1/sorafs/providers` для воспроизведения ошибки.
   3. Координируйте ротацию рекламы с поставщиком перед последующим обновлением.
      срок.
 - **Связывание камбий.** Нет подходящих вариантов схемы возможностей.

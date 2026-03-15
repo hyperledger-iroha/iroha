@@ -57,12 +57,12 @@ Sidebar_label: محرك الأقراص
 ## التكامل مع Torii
 
 يعرض Torii نقاط النهاية المخصصة لكي يقوم الموردون بالإبلاغ عن الاستخدام وتوصيل الدائرة
-de vida del acuerdo sin الأسلاك الشخصية:- `POST /v2/sorafs/deal/usage` يقبل القياس عن بعد `DealUsageReport` ويعود
+de vida del acuerdo sin الأسلاك الشخصية:- `POST /v1/sorafs/deal/usage` يقبل القياس عن بعد `DealUsageReport` ويعود
   نتائج تحديد البيانات (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` الانتهاء من النافذة الفعلية، وإرسالها
+- `POST /v1/sorafs/deal/settle` الانتهاء من النافذة الفعلية، وإرسالها
   نتيجة `DealSettlementRecord` مع `DealSettlementV1` في base64
   قائمة للنشر في DAG de gobernanza.
-- El Feed `/v2/events/sse` de Torii الآن سجلات الإرسال `SorafsGatewayEvent::DealUsage`
+- El Feed `/v1/events/sse` de Torii الآن سجلات الإرسال `SorafsGatewayEvent::DealUsage`
   يمكنك استئناف كل إرسال من الاستخدام (العصر، وسائط GiB-hora، محاسبي التذاكر،
   تحديد الشحنات)، السجلات `SorafsGatewayEvent::DealSettlement`
   يتضمن اللقطة الأساسية لدفتر الأستاذ للتصفية الأكثر ملخصًا/الحجم/base64

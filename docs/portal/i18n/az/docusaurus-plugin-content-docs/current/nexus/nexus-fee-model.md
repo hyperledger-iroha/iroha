@@ -34,7 +34,7 @@ operatorlar qaz debetlərini Nexus ödəniş modelinə uyğunlaşdıra bilərlə
   XOR'un dərhal səbəbi, XOR'un gözlənilən saç kəsimindən sonra reallaşdı
   dispersiya (`xor_variance_micro`) və millisaniyələrdə blok vaxt damğası.
 - Blok icrası hər zolaq/məlumat məkanı üzrə daxilolmaları toplayır və onları dərc edir
-  `/v2/sumeragi/status`-də `lane_settlement_commitments` vasitəsilə.  Cəmilər
+  `/v1/sumeragi/status`-də `lane_settlement_commitments` vasitəsilə.  Cəmilər
   `total_local_micro`, `total_xor_due_micro` və
   `total_xor_after_haircut_micro` gecə üçün blokun üzərində cəmləndi
   uzlaşma ixracı.

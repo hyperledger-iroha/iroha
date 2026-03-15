@@ -46,7 +46,7 @@ description: Torii Pièce de rechange `sorafs-node` Pièce de rechange
   ```
 
 - Le lecteur Torii est en lecture/écriture et le lecteur `data_dir` est en lecture/écriture.
-- déclaration ریکارڈ ہونے کے بعد `GET /v2/sorafs/capacity/state` کے ذریعے تصدیق
+- déclaration ریکارڈ ہونے کے بعد `GET /v1/sorafs/capacity/state` کے ذریعے تصدیق
   کریں کہ نوڈ متوقع کپیسٹی اعلان کرتا ہے۔
 - Le lissage des valeurs est brut et lissé GiB·heure/PoR.
   Des valeurs ponctuelles sans gigue et des valeurs ponctuelles sont prises en compte par les utilisateurs.
@@ -96,8 +96,8 @@ Il s'agit d'un résumé des artefacts et des éléments probants d'audit.
 Torii vous permet de créer des artefacts HTTP et de créer des liens :
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Voici les points de terminaison pour les tests de fumée CLI et les tests de fumée CLI.
@@ -108,7 +108,7 @@ sondes de passerelle
 2. manifeste et encodage base64 pour votre texte :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -118,7 +118,7 @@ sondes de passerelle
 3. épinglé ڈیٹا chercher کریں :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -135,7 +135,7 @@ sondes de passerelle
 2. Torii پروسس (یا پورا نوڈ) ری اسٹارٹ کریں۔
 3. Récupérez les fichiers ریکوئسٹ دوبارہ جمع کریں۔ payload بدستور دستیاب رہے اور واپس آنے والا
    digest ری اسٹارٹ سے پہلے والی قدر کے مطابق ہو۔
-4. `GET /v2/sorafs/storage/state` چیک کریں تاکہ تصدیق ہو کہ `bytes_used` ری بوٹ کے
+4. `GET /v1/sorafs/storage/state` چیک کریں تاکہ تصدیق ہو کہ `bytes_used` ری بوٹ کے
    بعد persiste manifestes کو ظاہر کرتا ہے۔
 
 ## 4. کوٹا ریجیکشن ٹیسٹ
@@ -154,7 +154,7 @@ sondes de passerelle
 2. Échantillon PoR en cours :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -177,7 +177,7 @@ sondes de passerelle
 - ڈیش بورڈز کو یہ ٹریک کرنا چاہیے:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
-  - `/v2/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
+  - `/v1/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` pour les tentatives de publication de règlement
 
 ان forets کی پیروی سے یہ یقینی ہوتا ہے کہ ایمبیڈڈ اسٹوریج ورکر ڈیٹا ingérer کر

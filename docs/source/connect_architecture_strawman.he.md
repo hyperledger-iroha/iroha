@@ -81,7 +81,7 @@ translator: manual
 
 ## חוזה התמסורת
 
-- תמסורת עיקרית: WebSocket ‏(`‎/v2/connect/ws?sid=<session_id>`‏).
+- תמסורת עיקרית: WebSocket ‏(`‎/v1/connect/ws?sid=<session_id>`‏).
 - אופציה עתידית: WebRTC (מחוץ להיקף טיוטה זו).
 - אחריות ה-SDK:
   - לשמר heartbeat מסוג ping/pong ולחסוך בסוללה במובייל.

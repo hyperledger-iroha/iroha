@@ -136,8 +136,8 @@ JS4/JS7.
 
 ## Կրկնվող ցուցակներ և էջադրում
 
-Էջավորման օգնականները արտացոլում են Python SDK էրգոնոմիկան `/v2/accounts`-ի համար,
-`/v2/domains`, `/v2/assets/definitions`, NFT-ներ, մնացորդներ, ակտիվների սեփականատերեր և
+Էջավորման օգնականները արտացոլում են Python SDK էրգոնոմիկան `/v1/accounts`-ի համար,
+`/v1/domains`, `/v1/assets/definitions`, NFT-ներ, մնացորդներ, ակտիվների սեփականատերեր և
 հաշվի գործարքների պատմություն.
 
 ```ts
@@ -187,7 +187,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) ընդգծում է հաջորդ ավարտվող ժամկետը (թարմացնել → քաղաքականություն
 → վկայագիր), այնպես որ UI կրծքանշանները կարող են նախազգուշացնել օպերատորներին, երբ որևէ արտոնություն կա
 Մնաց <24 ժամ։ SDK-ն
-արտացոլում է REST ֆիլտրերը, որոնք ենթարկվում են `/v2/offline/allowances`-ի կողմից.
+արտացոլում է REST ֆիլտրերը, որոնք ենթարկվում են `/v1/offline/allowances`-ի կողմից.
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` և
 `requireVerdict` / `onlyMissingVerdict` բուլյաններ: Անվավեր համակցություններ (համար
@@ -270,8 +270,8 @@ WebSocket վերջնակետեր. Բոլոր հոսքային օգնականնե
 
 ## Explorer-ի նկարներ և QR օգտակար բեռներ
 
-Explorer հեռաչափությունը տրամադրում է տպագրված օգնականներ `/v2/explorer/metrics` և
-`/v2/explorer/accounts/{account_id}/qr` վերջնակետերը, որպեսզի վահանակները կարողանան վերարտադրել այն
+Explorer հեռաչափությունը տրամադրում է տպագրված օգնականներ `/v1/explorer/metrics` և
+`/v1/explorer/accounts/{account_id}/qr` վերջնակետերը, որպեսզի վահանակները կարողանան վերարտադրել այն
 նույն նկարները, որոնք ապահովում են պորտալը: `getExplorerMetrics()`-ը նորմալացնում է
 օգտակար բեռ և վերադարձնում է `null`, երբ երթուղին անջատված է: Զուգակցել այն
 `getExplorerAccountQr()`, երբ ձեզ անհրաժեշտ է I105 (նախընտրելի)/սորա (երկրորդ լավագույն) բառացի գումարած ներդիր
@@ -380,7 +380,7 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 ### Միացնել WebSocket-ի հավաքումը
 
 `ToriiClient.openConnectWebSocket()`-ը հավաքում է կանոնականը
-`/v2/connect/ws` URL (ներառյալ `sid`, `role` և նշանի պարամետրերը), բարելավումներ
+`/v1/connect/ws` URL (ներառյալ `sid`, `role` և նշանի պարամետրերը), բարելավումներ
 `http→ws` / `https→wss` և վերջնական URL-ը հանձնում է WebSocket-ին
 իրականացում, որը դուք մատակարարում եք: Բրաուզերներն ավտոմատ կերպով նորից օգտագործում են գլոբալը
 `WebSocket`. Node.js զանգահարողները պետք է անցնեն այնպիսի կոնստրուկտոր, ինչպիսին է `ws`:
@@ -462,7 +462,7 @@ async function dialWithTelemetry(client: ToriiClient) {
 
 ## Հոսքային դիտորդներ և իրադարձությունների կուրսորներ
 
-`ToriiClient.streamEvents()`-ը ցուցադրում է `/v2/events/sse`-ը որպես ավտոմատ կրկնվող համաժամացման
+`ToriiClient.streamEvents()`-ը ցուցադրում է `/v1/events/sse`-ը որպես ավտոմատ կրկնվող համաժամացման
 կրկնում է, այնպես որ Node/Bun CLI-ները կարող են հետևել խողովակաշարի գործունեությունը նույն կերպ, ինչպես Rust CLI-ն է անում:
 Պահեք `Last-Event-ID` կուրսորը ձեր runbook արտեֆակտների կողքին, որպեսզի օպերատորները կարողանան
 վերսկսել հոսքը՝ առանց իրադարձությունները բաց թողնելու, երբ գործընթացը վերսկսվում է:
@@ -501,7 +501,7 @@ for await (const event of torii.streamEvents({
   ազդանշան է ստացվել; անցեք `STREAM_MAX_EVENTS=25`, երբ ձեզ անհրաժեշտ են միայն առաջին մի քանի իրադարձությունները
   ծխի փորձարկման համար.
 - `ToriiClient.streamSumeragiStatus()`-ը արտացոլում է նույն ինտերֆեյսը
-  `/v2/sumeragi/status/sse`, այնպես որ կոնսենսուսային հեռաչափությունը կարող է լինել առանձին, և
+  `/v1/sumeragi/status/sse`, այնպես որ կոնսենսուսային հեռաչափությունը կարող է լինել առանձին, և
   iterator-ը նույն կերպ պատվում է `Last-Event-ID`-ին:
 - Տե՛ս `javascript/iroha_js/recipes/streaming.mjs` ստեղնաշարի CLI-ի համար (կուրսորի համառություն,
   env-var ֆիլտրի վերացումները և `extractPipelineStatusKind` գրանցումը) օգտագործվում է JS4-ում
@@ -608,14 +608,14 @@ JS ճանապարհային քարտեզը պահանջում է նաև Roadrunn
 ապացուցել, որ բլոկը, որը նրանք վերցրել են Sumeragi-ի միջոցով, համընկնում է նրանց կողմից հաստատված ապացույցների հետ:
 Ձեռքով օգտակար բեռներ կառուցելու փոխարեն օգտագործեք ներկառուցված օգնականները.
 
-1. `getSumeragiRbcSessions()` հայելիներ `/v2/sumeragi/rbc/sessions` և
+1. `getSumeragiRbcSessions()` հայելիներ `/v1/sumeragi/rbc/sessions` և
    `findRbcSamplingCandidate()`-ն ավտոմատ ընտրում է առաջին առաքված նիստը բլոկային հեշով
    (ինտեգրման փաթեթը հետ է ընկնում դրան, երբ
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` կարգավորված չէ):
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` նորմալացնում է `{blockHash,height,view}`
    գումարած կամընտիր `{count,seed,apiToken}`-ը երբեք չի վերացնում այդքան սխալ ձևավորված վեցանկյուն կամ բացասական ամբողջ թվերը
    հասնել Torii:
-3. `sampleRbcChunks()`-ը փակցնում է հարցումը `/v2/sumeragi/rbc/sample`-ին՝ վերադարձնելով ամբողջական ապացույցները
+3. `sampleRbcChunks()`-ը փակցնում է հարցումը `/v1/sumeragi/rbc/sample`-ին՝ վերադարձնելով ամբողջական ապացույցները
    և Մերկլի ուղիները (`samples[].chunkHex`, `chunkRoot`, `payloadHash`), որոնցով պետք է արխիվացնեք
    մնացած ձեր որդեգրման ապացույցները:
 4. `getSumeragiRbcDelivered(height, view)`-ը գրավում է խմբի առաքման մետատվյալները, որպեսզի աուդիտորները

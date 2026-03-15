@@ -21,7 +21,7 @@ translator: machine-google-reviewed
 ## የመጨረሻ ነጥብ
 
 ```
-POST /v2/sumeragi/rbc/sample
+POST /v1/sumeragi/rbc/sample
 ```
 
 የመጨረሻው ነጥብ ከተዋቀረው አንዱን የሚዛመድ `X-API-Token` ራስጌ ያስፈልገዋል

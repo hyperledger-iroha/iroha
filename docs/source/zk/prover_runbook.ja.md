@@ -13,8 +13,8 @@ translator: manual
 本ランブックは、Torii の添付ファイルサービスとバックグラウンド ZK プローバーワーカーを監視・アラート・トリアージするための手引きです。Prometheus メトリクスを公開するテレメトリプロファイル（`telemetry_profile = "extended"` または `"full"`）が有効で、ダッシュボードが `/metrics` を取得していることを前提とします。
 
 ## コンポーネント
-- **添付 API** — `POST /v2/zk/attachments` で証明やトランスクリプトなどのペイロードを保存。ワーカー有効時に順次スキャン。`iroha_cli app zk attachments *` で操作可能。
-- **バックグラウンドプローバー** — `torii.zk_prover_enabled=true` で有効化。添付キューを処理し `ProofAttachment` を検証、JSON レポート（`/v2/zk/prover/reports`）を生成。リソース上限は `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, `torii.zk_prover_max_scan_millis`。スコープは `torii.zk_prover_allowed_backends`/`torii.zk_prover_allowed_circuits` で制御。インライン VK がない場合は `torii.zk_prover_keys_dir` から `<backend>__<name>.vk` を読み込む。
+- **添付 API** — `POST /v1/zk/attachments` で証明やトランスクリプトなどのペイロードを保存。ワーカー有効時に順次スキャン。`iroha_cli app zk attachments *` で操作可能。
+- **バックグラウンドプローバー** — `torii.zk_prover_enabled=true` で有効化。添付キューを処理し `ProofAttachment` を検証、JSON レポート（`/v1/zk/prover/reports`）を生成。リソース上限は `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, `torii.zk_prover_max_scan_millis`。スコープは `torii.zk_prover_allowed_backends`/`torii.zk_prover_allowed_circuits` で制御。インライン VK がない場合は `torii.zk_prover_keys_dir` から `<backend>__<name>.vk` を読み込む。
 - **テレメトリ** — `crates/iroha_telemetry::metrics` で登録され `/metrics` に露出。
 
 ## クイックチェックリスト

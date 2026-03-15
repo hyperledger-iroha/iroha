@@ -39,7 +39,7 @@ serde/JSON ليس مسموحًا به.
 ## واجهة برمجة تطبيقات السطح (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -229,7 +229,7 @@ pub struct DaIngestReceipt {
   ديجا `iroha app sorafs fetch`. يمكن للمشغلين رؤية المؤشر على القطع الأثرية
   البيان + خطة القطعة (`--manifest`، `--plan`، `--manifest-id`) **ou**
   تذكرة تخزين الأمم المتحدة Torii عبر `--storage-ticket`. Quand le chemin تذكرة مؤسسة
-  استخدم CLI لاستعادة البيان من `/v2/da/manifests/<ticket>`،
+  استخدم CLI لاستعادة البيان من `/v1/da/manifests/<ticket>`،
   استمرار الحزمة الفرعية `artifacts/da/fetch_<timestamp>/` (تجاوز avec
   `--manifest-cache-dir`)، اشتقاق تجزئة النقطة من أجل `--manifest-id`، ثم
   قم بتنفيذ المُنسق باستخدام القائمة `--gateway-provider`. كل شيء
@@ -240,7 +240,7 @@ pub struct DaIngestReceipt {
   التوفر الشامل يعيش بشكل كامل داخل مساحة الاسم `da` sans
   تكرار منطق الأوركسترا.
 - `iroha app da get-blob` يستعيد البيانات الأساسية مباشرة من Torii
-  عبر `GET /v2/da/manifests/{storage_ticket}`. لا أمر مكتوب
+  عبر `GET /v1/da/manifests/{storage_ticket}`. لا أمر مكتوب
   `manifest_{ticket}.norito`، `manifest_{ticket}.json` وآخرون
   `chunk_plan_{ticket}.json` sous `artifacts/da/fetch_<timestamp>/` (أو
   `--output-dir` يقدمه المستخدم) لعرض الأمر الدقيق

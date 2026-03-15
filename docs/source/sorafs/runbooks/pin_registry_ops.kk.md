@@ -15,7 +15,7 @@ This runbook documents how to monitor and triage the SoraFS pin registry and its
 service-level agreements (SLAs). The metrics originate from `iroha_torii` and are exported
 via Prometheus under the `torii_sorafs_*` namespace. Torii samples the registry state on a 30 second
 interval in the background, so dashboards remain current even when no operators are polling
-the `/v2/sorafs/pin/*` endpoints. Import the curated dashboard
+the `/v1/sorafs/pin/*` endpoints. Import the curated dashboard
 (`docs/source/grafana_sorafs_pin_registry.json`) for a ready-to-use Grafana layout that maps
 directly to the sections below.
 
@@ -115,7 +115,7 @@ groups:
 
 1. **Identify cause**
    - If SLA misses spike while backlog remains low, focus on provider performance (PoR failures, late completions).
-   - If backlog grows with stable misses, inspect admission (`/v2/sorafs/pin/*`) to confirm manifests awaiting council approval.
+   - If backlog grows with stable misses, inspect admission (`/v1/sorafs/pin/*`) to confirm manifests awaiting council approval.
 2. **Validate provider status**
    - Run `iroha app sorafs providers list` and verify the advertised capabilities match replication requirements.
    - Check `torii_sorafs_capacity_*` gauges to confirm provisioned GiB and PoR success.
@@ -143,7 +143,7 @@ Follow this staged procedure when enabling or tightening the alias cache policy 
    - Deploy the config change to a staging cluster that mirrors production topology.
    - Run `cargo xtask sorafs-pin-fixtures` to confirm the canonical alias fixtures still decode and
      round-trip; any mismatch implies upstream manifest drift that must be addressed first.
-   - Exercise the `/v2/sorafs/pin/{digest}` and `/v2/sorafs/aliases` endpoints with synthetic proofs
+   - Exercise the `/v1/sorafs/pin/{digest}` and `/v1/sorafs/aliases` endpoints with synthetic proofs
      covering fresh, refresh-window, expired, and hard-expired cases. Validate the HTTP status codes,
      headers (`Sora-Proof-Status`, `Retry-After`, `Warning`), and JSON body fields against this
      runbook.

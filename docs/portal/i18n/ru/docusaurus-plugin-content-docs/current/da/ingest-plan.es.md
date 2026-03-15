@@ -39,7 +39,7 @@ _Отредактировано: 20 февраля 2026 г. — Ответств
 ## API-интерфейс Superficie (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -222,7 +222,7 @@ hashear, фрагментация и проверка дополнительны
   какая у тебя сила `iroha app sorafs fetch`. Лос-операторы могут apuntarlo a
   артефакты манифеста + план фрагмента (`--manifest`, `--plan`, `--manifest-id`)
   **o** передать билет хранения Torii через `--storage-ticket`. Где бы вы ни находились, США
-  путь к билету, CLI Баха-эль-манифест от `/v2/da/manifests/<ticket>`,
+  путь к билету, CLI Баха-эль-манифест от `/v1/da/manifests/<ticket>`,
   сохраняться в пакете bajo `artifacts/da/fetch_<timestamp>/` (переопределить
   `--manifest-cache-dir`), извлеките хэш большого двоичного объекта для `--manifest-id`, и добавьте
   извлеките оркеста из списка `--gateway-provider` suministrada. Тодос
@@ -233,7 +233,7 @@ hashear, фрагментация и проверка дополнительны
   какие проверки сквозной доступности выполняются в каждом пространстве имен
   `da` не может дублировать логику орвестора.
 - `iroha app da get-blob` baja манифестирует canonicos Directo от Torii через
-  `GET /v2/da/manifests/{storage_ticket}`. Эль-командо описать
+  `GET /v1/da/manifests/{storage_ticket}`. Эль-командо описать
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` у
   `chunk_plan_{ticket}.json` bajo `artifacts/da/fetch_<timestamp>/` (o un
   `--output-dir` provisto por el usuario) mientras imprime el comando точно де

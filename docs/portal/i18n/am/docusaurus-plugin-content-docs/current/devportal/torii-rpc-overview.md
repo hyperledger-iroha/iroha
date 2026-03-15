@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 # Norito-RPC አጠቃላይ እይታ
 
 Norito-RPC ለTorii APIs ሁለትዮሽ መጓጓዣ ነው። ተመሳሳዩን የኤችቲቲፒ ዱካዎች እንደገና ይጠቀማል
-እንደ `/v2/pipeline` ነገር ግን በ Norito የተቀረጹ የክፈፍ ጭነቶችን ይለዋወጣል ይህም ንድፍ ያካተቱ
+እንደ `/v1/pipeline` ነገር ግን በ Norito የተቀረጹ የክፈፍ ጭነቶችን ይለዋወጣል ይህም ንድፍ ያካተቱ
 hashes እና checksums. ቆራጥ፣ የተረጋገጡ ምላሾች ወይም ሲፈልጉ ይጠቀሙበት
 የቧንቧ መስመር JSON ምላሾች ማነቆ ሲሆኑ.
 
@@ -30,7 +30,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v2/transactions/submit
+  https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. ክፍያዎን በNorito ኮድ (`iroha_client`፣ ኤስዲኬ አጋዥዎች ወይም
@@ -56,7 +56,7 @@ curl \
 1. [ተኪውን ጀምር](./try-it.md#start-the-proxy-locally) እና አዘጋጅ
    `TRYIT_PROXY_PUBLIC_URL` ስለዚህ መግብሮቹ ትራፊክ የት እንደሚልኩ ያውቃሉ።
 2. ** ሞክሩት *** ካርዱን በዚህ ገጽ ወይም `/reference/torii-swagger` ይክፈቱ
-   ፓነል እና እንደ `POST /v2/pipeline/submit` ያለ የመጨረሻ ነጥብ ይምረጡ።
+   ፓነል እና እንደ `POST /v1/pipeline/submit` ያለ የመጨረሻ ነጥብ ይምረጡ።
 3. **የይዘት አይነት** ወደ `application/x-norito` ይቀይሩ፣ **ሁለትዮሽ** ይምረጡ።
    አርታዒ፣ እና `fixtures/norito_rpc/transfer_asset.norito` ስቀል
    (ወይም ማንኛውም የተጫነ ጭነት

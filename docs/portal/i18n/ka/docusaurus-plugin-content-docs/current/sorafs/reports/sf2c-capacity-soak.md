@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii ახლა ამჟღავნებს პროვაიდერის საკრედიტო კადრებს საკომისიოს ჩანაწერებთან ერთად, ასე რომ, დაფები
 შეუძლია კარიბჭე დაბალ ბალანსზე და პენალტების დარტყმებზე:
 
-- დასვენება: `GET /v2/sorafs/capacity/state` აბრუნებს `credit_ledger[*]` ჩანაწერებს, რომლებიც
+- დასვენება: `GET /v1/sorafs/capacity/state` აბრუნებს `credit_ledger[*]` ჩანაწერებს, რომლებიც
   ასახეთ ლეჯერის ველები, რომლებიც დამოწმებულია გაჟღენთის ტესტში. იხ
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana იმპორტი: `dashboards/grafana/sorafs_capacity_penalties.json` გამოსახავს

@@ -70,7 +70,7 @@ SN13-C 审查期望每次演习或事件都运送所列的相同物品
    哪个路由清单 (TRM) 和沿袭窗口处于活动状态。帮手
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    将复制假脱机文件，发出哈希值，并可选择签署摘要。
-2.记录`/v2/status`输出过滤到
+2.记录`/v1/status`输出过滤到
    `.telemetry.taikai_alias_rotations[]` 并将其存储在假脱机文件旁边。
    审阅者将报告的 `manifest_digest_hex` 和窗口边界与
    复制的假脱机状态。

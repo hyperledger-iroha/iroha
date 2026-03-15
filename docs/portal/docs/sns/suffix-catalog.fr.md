@@ -82,7 +82,7 @@ scraper les docs de statut.
 
 1. Charger le snapshot JSON et le hasher/signer avant distribution aux operateurs.
 2. Les outils du registrar doivent exposer `suffix_id`, les limites de terme et la
-   tarification du catalogue quand une requete atteint `/v2/sns/*`.
+   tarification du catalogue quand une requete atteint `/v1/sns/*`.
 3. Les helpers DNS/Gateway lisent les metadonnees des labels reserves lors de la
    generation des templates GAR pour que les reponses DNS restent alignees avec les
    controles de gouvernance.

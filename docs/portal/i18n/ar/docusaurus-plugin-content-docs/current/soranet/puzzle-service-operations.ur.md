@@ -27,17 +27,17 @@ Sidebar_label: عمليات خدمة الألغاز
 وسيط رموز القبول کرتا ہے۔ تعرض نقاط نهاية HTTP ما يلي:
 
 - `GET /healthz` - مسبار الحياة.
-- `GET /v2/puzzle/config` - تتابع JSON (`handshake.descriptor_commit_hex`, `pow.*`) سے
+- `GET /v1/puzzle/config` - تتابع JSON (`handshake.descriptor_commit_hex`, `pow.*`) سے
   المزيد من معلمات إثبات العمل/الألغاز أكثر دقة.
-- `POST /v2/puzzle/mint` - تذكرة Argon2 بالنعناع کرتا ہے؛ هيئة JSON اختيارية
+- `POST /v1/puzzle/mint` - تذكرة Argon2 بالنعناع کرتا ہے؛ هيئة JSON اختيارية
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   TTL TTL TTL (مشبك نافذة السياسة)، تجزئة التذكرة والنص
   سے ربط كرتا ہے، ومفاتيح التوقيع التي تم تكوينها ہوں لترحيل التذكرة الموقعة +
   التوقيع بصمة الإصبع واپس کرتا ہے۔
-- `GET /v2/token/config` - جب `pow.token.enabled = true` ہو تو رمز القبول النشط
+- `GET /v1/token/config` - جب `pow.token.enabled = true` ہو تو رمز القبول النشط
   سياسة واپس کرتا ہے (بصمة المُصدر، حدود انحراف TTL/الساعة، معرف التتابع، و
   مجموعة الإلغاء المدمجة).
-- `POST /v2/token/mint` - رمز قبول ML-DSA بالنعناع کرتا ہے جو تجزئة السيرة الذاتية المقدمة
+- `POST /v1/token/mint` - رمز قبول ML-DSA بالنعناع کرتا ہے جو تجزئة السيرة الذاتية المقدمة
   سے ملزمة ہوتا ہے؛ نص الطلب `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`
   أقبل كرتا ہے۔خدمة کے بنئے گئے تذاكر کو اختبار التكامل
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo` يمكن التحقق من صحة ما قمت به
@@ -78,17 +78,17 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` هو جهاز يعمل على إدارة خط أنابيب الأدوات السري خارج النطاق.
-مراقب ملف الإلغاء `/v2/token/config` رکھتا ہے؛ التحديثات کو
+مراقب ملف الإلغاء `/v1/token/config` رکھتا ہے؛ التحديثات کو
 `soranet-admission-token revoke` إدارة تنسيق حالة الإلغاء
 لا يوجد تأخير.Relay JSON `pow.signed_ticket_public_key_hex` مجموعة تذاكر PoW الموقعة
-تحقق من إعلان المفتاح العام ML-DSA-44؛ `/v2/puzzle/config` هو مفتاح و
+تحقق من إعلان المفتاح العام ML-DSA-44؛ `/v1/puzzle/config` هو مفتاح و
 إنها بصمة BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) وتردد صدى
 دبوس التحقق من العملاء. معرف ترحيل التذاكر الموقعة وروابط النص كانت مختلفة
 التحقق من صحة التفويض ومتجر الإلغاء هذا ومشاركة البطاقة؛ تذاكر إثبات العمل (PoW) الخام ذات 74 بايت
 تم تكوين أداة التحقق من التذكرة الموقعة مرة واحدة لتكون صالحة. سر الموقع کو
 `--signed-ticket-secret-hex` أو `--signed-ticket-secret-path` إطلاق الخدمة
 پر تمرير کریں؛ أزواج المفاتيح غير المتطابقة عند بدء التشغيل ترفض المفتاح السري
-`pow.signed_ticket_public_key_hex` لا يوجد خطأ في التحقق من الصحة. `POST /v2/puzzle/mint`
+`pow.signed_ticket_public_key_hex` لا يوجد خطأ في التحقق من الصحة. `POST /v1/puzzle/mint`
 `"signed": true` (و `"transcript_hash_hex"` اختياري) قبول کرتا ہے تاکہ Norito مشفر
 بايتات التذكرة الأولية الموقعة کے ساتھ واپس ہو؛ الردود موجودة `signed_ticket_b64`
 و`signed_ticket_fingerprint_hex` يتضمن ميزة إعادة تشغيل مسار بصمات الأصابع.
@@ -104,10 +104,10 @@ cargo run -p soranet-puzzle-service -- \
 3. **مرحلة إعادة التشغيل.** يعلن تغيير تناوب الإدارة عن وحدة systemd أو
    إعادة تحميل الحاوية. لا توجد خدمة إعادة التحميل السريع؛ لا يوجد واصف يرتكب لینے کے لئے
    إعادة التشغيل ضروري ہے۔
-4. **التحقق من صحة البطاقة.** `POST /v2/puzzle/mint` إصدار التذكرة وفحصها
+4. **التحقق من صحة البطاقة.** `POST /v1/puzzle/mint` إصدار التذكرة وفحصها
    `difficulty` و`expires_at` سياسة جديدة متطابقة. تقرير نقع
    (`docs/source/soranet/reports/pow_resilience.md`) مرجع کے لئے حدود زمن الوصول المتوقعة
-   القبض على كرتا ہے۔ الرموز المميزة تمكنك من جلب `/v2/token/config` إلى جهة الإصدار المعلن عنها
+   القبض على كرتا ہے۔ الرموز المميزة تمكنك من جلب `/v1/token/config` إلى جهة الإصدار المعلن عنها
    بصمة الإصبع وعدد الإبطال القيم المتوقعة سے تتطابق مع ہوں۔
 
 ## إجراء تعطيل الطوارئ1. تعيين تكوين التتابع المشترك `pow.puzzle.enabled = false`.
@@ -116,7 +116,7 @@ cargo run -p soranet-puzzle-service -- \
    الواصفات التي لا معنى لها ترفض ہوں۔
 3. خدمة التتابع والألغاز دون إعادة تشغيل التطبيق.
 4. `soranet_handshake_pow_difficulty` مراقبة صعوبة قيمة التجزئة المتوقعة
-   قم بإسقاط السجل وتحقق من السجل `/v2/puzzle/config` `puzzle = null`.
+   قم بإسقاط السجل وتحقق من السجل `/v1/puzzle/config` `puzzle = null`.
 
 ## المراقبة والتنبيه- **زمن الوصول SLO:** `soranet_handshake_latency_seconds` تتبع المسار وP95 لا يزيد عن 300 مللي ثانية.
   إزاحة اختبار النقع صمامات الحماية لبيانات المعايرة.
@@ -124,14 +124,14 @@ cargo run -p soranet-puzzle-service -- \
 - **ضغط الحصص:** `soranet_guard_capacity_report.py` مقاييس التتابع المستخدمة في الاستخدام
   `pow.quotas` Cooldowns (`soranet_abuse_remote_cooldowns`, `soranet_handshake_throttled_remote_quota_total`) لحن ہوں۔
   【docs/source/soranet/relay_audit_pipeline.md:68】
-- **محاذاة اللغز:** `soranet_handshake_pow_difficulty` إلى `/v2/puzzle/config` متواصلة
+- **محاذاة اللغز:** `soranet_handshake_pow_difficulty` إلى `/v1/puzzle/config` متواصلة
   صعوبة المباراة هانا چائے. تكوين ترحيل التباعد الذي لا معنى له أو فشل في إعادة التشغيل.
-- **جاهزية الرمز المميز:** إذا حدث `/v2/token/config` بعد المتوقع `enabled = false` أو حدث ذلك
+- **جاهزية الرمز المميز:** إذا حدث `/v1/token/config` بعد المتوقع `enabled = false` أو حدث ذلك
   `revocation_source` تقرير الطوابع الزمنية القديمة لتنبيهك. مشغلي واجهة CLI Norito
   قم بتدوير ملف الإلغاء مرة أخرى عند تقاعد الرمز المميز أو نقطة النهاية الصحيحة.
 - **سلامة الخدمة:** `/healthz` هو الإيقاع المعتاد للحيوية عند التحقيق والتنبيه إذا حدث ذلك
-  `/v2/puzzle/mint` استجابات HTTP 500 د (عدم تطابق معلمة Argon2 أو فشل RNG).
-  أخطاء سك الرمز المميز `/v2/token/mint` لاستجابات HTTP 4xx/5xx التي تبدو رائعة؛ الإخفاقات المتكررة
+  `/v1/puzzle/mint` استجابات HTTP 500 د (عدم تطابق معلمة Argon2 أو فشل RNG).
+  أخطاء سك الرمز المميز `/v1/token/mint` لاستجابات HTTP 4xx/5xx التي تبدو رائعة؛ الإخفاقات المتكررة
   حالة الترحيل مسموح بها.
 
 ##الامتثال وتسجيل التدقيقتنطلق أحداث `handshake` المنظمة من أسباب الاختناق وفترات التهدئة.

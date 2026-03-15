@@ -30,7 +30,7 @@ pub enum Command {
     /// Contract code helpers
     #[command(subcommand)]
     Code(CodeCommand),
-    /// Deploy compiled `.to` code via Torii (POST /v2/contracts/deploy)
+    /// Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
     Deploy(DeployArgs),
     /// Deploy bytecode, register manifest, and activate a namespace binding in one transaction
     DeployActivate(DeployActivateArgs),

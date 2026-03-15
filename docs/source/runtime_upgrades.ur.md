@@ -122,12 +122,12 @@ Operator Rollout (No Downtime)
 
 Torii & CLI
 - Torii
-  - `GET /v2/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
-  - `GET /v2/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
-  - `GET /v2/runtime/upgrades` -> records کی فہرست (implemented)۔
-  - `POST /v2/runtime/upgrades/propose` -> `ProposeRuntimeUpgrade` کو wrap کرتا ہے (instruction skeleton واپس کرتا ہے; implemented)۔
-  - `POST /v2/runtime/upgrades/activate/:id` -> `ActivateRuntimeUpgrade` کو wrap کرتا ہے (instruction skeleton واپس کرتا ہے; implemented)۔
-  - `POST /v2/runtime/upgrades/cancel/:id` -> `CancelRuntimeUpgrade` کو wrap کرتا ہے (instruction skeleton واپس کرتا ہے; implemented)۔
+  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
+  - `GET /v1/runtime/upgrades` -> records کی فہرست (implemented)۔
+  - `POST /v1/runtime/upgrades/propose` -> `ProposeRuntimeUpgrade` کو wrap کرتا ہے (instruction skeleton واپس کرتا ہے; implemented)۔
+  - `POST /v1/runtime/upgrades/activate/:id` -> `ActivateRuntimeUpgrade` کو wrap کرتا ہے (instruction skeleton واپس کرتا ہے; implemented)۔
+  - `POST /v1/runtime/upgrades/cancel/:id` -> `CancelRuntimeUpgrade` کو wrap کرتا ہے (instruction skeleton واپس کرتا ہے; implemented)۔
 - CLI
   - `iroha runtime abi active` (implemented)
   - `iroha runtime abi hash` (implemented)

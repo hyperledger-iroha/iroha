@@ -76,14 +76,14 @@ const client = new ToriiClient(baseUrl, {
 The hook runs inside a try/catch block so exceptions never interfere with the
 retry loop.
 
-Pipeline submissions (`/v2/pipeline/transactions` + `/v2/pipeline/transactions/status`)
+Pipeline submissions (`/v1/pipeline/transactions` + `/v1/pipeline/transactions/status`)
 automatically use the `pipeline` profile (POST retries enabled, 250 ms base backoff, 5 attempts),
 while SSE endpoints use the `streaming` profile (longer retry window, 6 attempts). Override the
 profiles via `resolveToriiClientConfig({ overrides: { retryProfiles: { … } } })` or by passing
 `retryProfiles` directly to the `ToriiClient` constructor when you need different budgets.
-If `/v2/pipeline/transactions/status` returns `404`, the JS client treats it as "pending" and
+If `/v1/pipeline/transactions/status` returns `404`, the JS client treats it as "pending" and
 returns `null` so polling can continue after Torii restarts or cache eviction.
-`ToriiClient.submitTransaction` validates `data_model_version` from `/v2/node/capabilities` and
+`ToriiClient.submitTransaction` validates `data_model_version` from `/v1/node/capabilities` and
 throws `ToriiDataModelCompatibilityError` when it differs from the SDK's built-in value.
 See {doc}`torii_retry_policy` for the full table of defaults, override knobs,
 and error-handling expectations that governance audits during JS4/JS7 reviews.

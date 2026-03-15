@@ -16,7 +16,7 @@ translator: machine-google-reviewed
 - Les propositions de gouvernance sont présentées comme suit : proposant → référendum → décompte → promulgation. Les fenêtres référendaires et les seuils de participation/approbation sont appliqués comme décrit dans `gov.md` ; les verrous sont uniquement extensibles et se déverrouillent à l'expiration.
 - La sélection du Parlement utilise des tirages au sort basés sur le VRF avec un ordre déterministe et des limites de termes ; lorsqu'aucune liste persistante n'existe, Torii dérive une solution de secours en utilisant la configuration `gov.parliament_*`. Le contrôle du conseil et les contrôles de quorum sont effectués dans les tests `gov_parliament_bodies` / `gov_pipeline_sla`.
 - Modes de vote : ZK (par défaut, nécessite `Active` VK avec octets en ligne) et Plain (poids quadratique). Les discordances de mode sont rejetées ; la création/extension du verrou est monotone dans les deux modes avec des tests de régression pour ZK et des revotes simples.
-- L'inconduite du validateur est traitée via le pipeline de preuves (`/v2/sumeragi/evidence*`, assistants CLI) avec des transferts par consensus conjoints appliqués par `NextMode` + `ModeActivationHeight`.
+- L'inconduite du validateur est traitée via le pipeline de preuves (`/v1/sumeragi/evidence*`, assistants CLI) avec des transferts par consensus conjoints appliqués par `NextMode` + `ModeActivationHeight`.
 - Les espaces de noms protégés, les hooks de mise à niveau d'exécution et l'admission du manifeste de gouvernance sont documentés dans `governance_api.md` et couverts par la télémétrie (`governance_manifest_*`, `governance_protected_namespace_total`).
 
 # En vol/arriéré

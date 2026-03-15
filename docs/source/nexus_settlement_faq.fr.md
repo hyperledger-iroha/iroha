@@ -145,7 +145,7 @@ Archivez les deux outputs sous `artifacts/` avec la preuve routed-trace (capture
 ### Les SDKs ont-ils besoin d'un traitement special pour le settlement ?
 
 - Les SDKs doivent :
-  - Fournir des helpers pour interroger les evenements de settlement (`/v2/settlement/records`) et
+  - Fournir des helpers pour interroger les evenements de settlement (`/v1/settlement/records`) et
     interpreter les logs `SettlementApplied`.
   - Exposer les IDs de lane + settlement handles dans la configuration client pour que les
     operateurs routent correctement les transactions.

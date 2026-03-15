@@ -35,7 +35,7 @@ Sora 名稱服務的支付層。每次註冊、續訂或退款
 
 |組件|目的|證據|
 |------------|---------|----------|
-| `sns_settlementd` |應用政策、簽署捆綁包、表面 `/v2/sns/settlements`。 | JSON 捆綁 + 哈希。 |
+| `sns_settlementd` |應用政策、簽署捆綁包、表面 `/v1/sns/settlements`。 | JSON 捆綁 + 哈希。 |
 |結算隊列和寫入器|由 `iroha_cli app sns settlement ledger` 驅動的冪等隊列 + 賬本提交器。 |捆綁哈希 ↔ tx 哈希清單。 |
 |對賬工作| `docs/source/sns/reports/` 下的每日差異 + 月度報表。 | Markdown + JSON 摘要。 |
 |退款櫃檯 |通過 `/settlements/{id}/refund` 獲得治理批准的退款。 | `RefundRecordV1` + 票。 |

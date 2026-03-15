@@ -58,7 +58,7 @@ languages and platforms.
 An Iroha node runs several cooperating services:
 
 - **Torii (`iroha_torii`)** exposes HTTP/WebSocket APIs for transactions, queries, streaming events, and
-  telemetry (`/v2/...` endpoints).
+  telemetry (`/v1/...` endpoints).
 - **Core (`iroha_core`)** coordinates validation, consensus, execution, governance, and state management.
 - **Sumeragi (`iroha_core::sumeragi`)** implements the NPoS-ready consensus pipeline with view changes,
   reliable broadcast data availability, and commit certificates. See the

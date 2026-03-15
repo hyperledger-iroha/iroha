@@ -64,9 +64,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |---------|-----------|---------|--------|
 | Draft | مالك الـ dataspace | استنساخ fixture، تعديل صلاحيات/حوكمة، تشغيل `cargo test -p iroha_data_model nexus::manifest`. | فرق Git، سجل الاختبارات. |
 | Review | مجموعة الحوكمة | التحقق من JSON الخاص بالـ manifest + بايتات Norito، وتوقيع سجل القرار. | محضر موقَّع، هاش manifest (BLAKE3 + Norito `.to`). |
-| Publish | مشغلو الـ lane | الإرسال عبر CLI (`iroha app space-directory manifest publish`) باستخدام payload Norito `.to` أو JSON خام **أو** إرسال POST إلى `/v2/space-directory/manifests` مع JSON للـ manifest + سبب اختياري، ثم التحقق من استجابة Torii والتقاط `SpaceDirectoryEvent`. | إيصال CLI/Torii، سجل الأحداث. |
+| Publish | مشغلو الـ lane | الإرسال عبر CLI (`iroha app space-directory manifest publish`) باستخدام payload Norito `.to` أو JSON خام **أو** إرسال POST إلى `/v1/space-directory/manifests` مع JSON للـ manifest + سبب اختياري، ثم التحقق من استجابة Torii والتقاط `SpaceDirectoryEvent`. | إيصال CLI/Torii، سجل الأحداث. |
 | Expire | مشغلو الـ lane / الحوكمة | تشغيل `iroha app space-directory manifest expire` (UAID، dataspace، epoch) عندما يصل manifest لنهاية عمره، التحقق من `SpaceDirectoryEvent::ManifestExpired`، وأرشفة دلائل تنظيف الـ bindings. | مخرجات CLI، سجل الأحداث. |
-| Revoke | الحوكمة + مشغلو الـ lane | تشغيل `iroha app space-directory manifest revoke` (UAID، dataspace، epoch، reason) **أو** إرسال POST إلى `/v2/space-directory/manifests/revoke` بالـ payload نفسه إلى Torii، التحقق من `SpaceDirectoryEvent::ManifestRevoked` وتحديث حزمة الأدلة. | إيصال CLI/Torii، سجل الأحداث، ملاحظة في التذكرة. |
+| Revoke | الحوكمة + مشغلو الـ lane | تشغيل `iroha app space-directory manifest revoke` (UAID، dataspace، epoch، reason) **أو** إرسال POST إلى `/v1/space-directory/manifests/revoke` بالـ payload نفسه إلى Torii، التحقق من `SpaceDirectoryEvent::ManifestRevoked` وتحديث حزمة الأدلة. | إيصال CLI/Torii، سجل الأحداث، ملاحظة في التذكرة. |
 | Monitor | SRE/الامتثال | مراقبة الـ telemetry + سجلات التدقيق، وضبط تنبيهات لحالات revocation/expiry. | لقطة شاشة من Grafana، سجلات مؤرشفة. |
 | Rotate/Revoke | مشغلو الـ lane + الحوكمة | تجهيز manifest بديل (epoch جديد)، إجراء تمرين tabletop، فتح incident (في حالة revoke). | تذكرة روتेशन، تقرير post‑mortem. |
 
@@ -149,7 +149,7 @@ allow و deny:
 يمكن للمشغلين نشر manifests مباشرة عبر Torii من دون الاعتماد على CLI.
 
 ```
-POST /v2/space-directory/manifests
+POST /v1/space-directory/manifests
 ```
 
 | الحقل | النوع | الوصف |
@@ -203,7 +203,7 @@ Directory (بوابات CIDR / token / سياسة الرسوم).
 `CanPublishSpaceDirectoryManifest { dataspace }`، كما في workflow الخاص بالـ CLI.
 
 ```
-POST /v2/space-directory/manifests/revoke
+POST /v1/space-directory/manifests/revoke
 ```
 
 | الحقل | النوع | الوصف |

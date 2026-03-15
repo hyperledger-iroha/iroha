@@ -43,7 +43,7 @@ evidence without leaving the portal preview build.
 | `taikai_ingest_segment_latency_ms` | CMAF ingest latency histogram per cluster/stream (target: p95 < 750 ms, p99 < 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | Live-edge drift between encoder and anchor workers (pages at p99 > 1.5 s for 10 min). |
 | `taikai_ingest_segment_errors_total{reason}` | Error counters by reason (`decode`, `manifest_mismatch`, `lineage_replay`, …). Any increase triggers `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Increments whenever `/v2/da/ingest` accepts a new TRM for an alias; use `rate()` to validate rotation cadence. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Increments whenever `/v1/da/ingest` accepts a new TRM for an alias; use `rate()` to validate rotation cadence. |
 | `/status → telemetry.taikai_alias_rotations[]` | JSON snapshot with `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total`, and timestamps for evidence bundles. |
 | `taikai_viewer_*` (rebuffer, CEK rotation age, PQ health, alerts) | Viewer-side KPIs to ensure CEK rotation + PQ circuits remain healthy during anchors. |
 

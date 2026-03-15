@@ -165,7 +165,7 @@ Le schéma vit dans `crates/iroha_data_model/src/sorafs/moderation.rs` et est va
   - Répertoire `models/` avec des poids ONNX hashés.
   - Point d’entrée `run_moderation.py` (ou équivalent Rust) exposant une API HTTP/gRPC.
 - Publier les artefacts dans `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`.
-- Le binaire du runner est livré dans le crate `sorafs_ai_runner`. La pipeline de build embarque le hash du manifeste dans le binaire (exposé via `/v2/info`).
+- Le binaire du runner est livré dans le crate `sorafs_ai_runner`. La pipeline de build embarque le hash du manifeste dans le binaire (exposé via `/v1/info`).
 
 ## 8. Télémétrie et observabilité
 - Métriques Prometheus :

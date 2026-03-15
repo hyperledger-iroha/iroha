@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Umumiy ko'rinish
 
-Ushbu runbook SoraFS pin registrini va uning replikatsiya xizmati darajasidagi kelishuvlarini (SLAs) qanday kuzatish va triajlashni hujjatlashtiradi. Ko'rsatkichlar `iroha_torii` dan kelib chiqadi va `torii_sorafs_*` nom maydoni ostida Prometheus orqali eksport qilinadi. Torii fonda 30 soniya oralig'ida ro'yxatga olish kitobi holatidan namuna oladi, shuning uchun hech bir operator `/v2/sorafs/pin/*` so'nggi nuqtalarini so'ramasa ham asboblar paneli joriy bo'lib qoladi. Foydalanishga tayyor Grafana tartibi uchun tanlangan asboblar panelini (`docs/source/grafana_sorafs_pin_registry.json`) import qiling, u toʻgʻridan-toʻgʻri quyidagi boʻlimlarga mos keladi.
+Ushbu runbook SoraFS pin registrini va uning replikatsiya xizmati darajasidagi kelishuvlarini (SLAs) qanday kuzatish va triajlashni hujjatlashtiradi. Ko'rsatkichlar `iroha_torii` dan kelib chiqadi va `torii_sorafs_*` nom maydoni ostida Prometheus orqali eksport qilinadi. Torii fonda 30 soniya oralig'ida ro'yxatga olish kitobi holatidan namuna oladi, shuning uchun hech bir operator `/v1/sorafs/pin/*` so'nggi nuqtalarini so'ramasa ham asboblar paneli joriy bo'lib qoladi. Foydalanishga tayyor Grafana tartibi uchun tanlangan asboblar panelini (`docs/source/grafana_sorafs_pin_registry.json`) import qiling, u toʻgʻridan-toʻgʻri quyidagi boʻlimlarga mos keladi.
 
 ## Metrik havola
 
@@ -118,7 +118,7 @@ groups:
 
 1. **Sababini aniqlang**
    - Agar SLA ko'tarilishni o'tkazib yuborsa, kechikish pastligicha qolsa, provayderning ishlashiga e'tibor qarating (PoR nosozliklari, kech yakunlash).
-   - Agar kechikish barqaror o'tkazib yuborishlar bilan o'ssa, kengash ma'qullanishini kutayotgan manifestlarni tasdiqlash uchun qabulni tekshiring (`/v2/sorafs/pin/*`).
+   - Agar kechikish barqaror o'tkazib yuborishlar bilan o'ssa, kengash ma'qullanishini kutayotgan manifestlarni tasdiqlash uchun qabulni tekshiring (`/v1/sorafs/pin/*`).
 2. **Provayder holatini tekshirish**
    - `iroha app sorafs providers list` dasturini ishga tushiring va reklama qilingan imkoniyatlar replikatsiya talablariga mos kelishini tekshiring.
    - Ta'minlangan GiB va PoR muvaffaqiyatini tasdiqlash uchun `torii_sorafs_capacity_*` o'lchagichlarini tekshiring.
@@ -139,7 +139,7 @@ Ishlab chiqarishda taxallus kesh siyosatini yoqish yoki kuchaytirishda ushbu bos
 2. **Sahnadagi quruq yugurish**
    - Konfiguratsiya o'zgarishini ishlab chiqarish topologiyasini aks ettiruvchi bosqichli klasterga o'rnating.
    - `cargo xtask sorafs-pin-fixtures` ni ishga tushiring va kanonik taxallus moslamalari hali ham dekodlanishi va aylanmasini tasdiqlash; har qanday nomuvofiqlik birinchi navbatda hal qilinishi kerak bo'lgan yuqori oqimdagi manifest driftni nazarda tutadi.
-   - `/v2/sorafs/pin/{digest}` va `/v2/sorafs/aliases` so'nggi nuqtalarini yangi, yangilash oynasi, muddati o'tgan va muddati o'tgan holatlarni qamrab oluvchi sintetik dalillar bilan ishlating. HTTP holat kodlari, sarlavhalari (`Sora-Proof-Status`, `Retry-After`, `Warning`) va JSON asosiy maydonlarini ushbu runbook bilan taqqoslang.
+   - `/v1/sorafs/pin/{digest}` va `/v1/sorafs/aliases` so'nggi nuqtalarini yangi, yangilash oynasi, muddati o'tgan va muddati o'tgan holatlarni qamrab oluvchi sintetik dalillar bilan ishlating. HTTP holat kodlari, sarlavhalari (`Sora-Proof-Status`, `Retry-After`, `Warning`) va JSON asosiy maydonlarini ushbu runbook bilan taqqoslang.
 3. **Ishlab chiqarishni yoqish**
    - Yangi konfiguratsiyani standart o'zgartirish oynasi orqali chiqaring. Avval uni Torii ga qo‘llang, so‘ngra tugun jurnallardagi yangi siyosatni tasdiqlaganidan so‘ng shlyuzlar/SDK xizmatlarini qayta ishga tushiring.
    - `docs/source/grafana_sorafs_pin_registry.json` ni Grafana ga import qiling (yoki mavjud asboblar panelini yangilang) va taxallus kesh yangilash panellarini NOC ish maydoniga mahkamlang.

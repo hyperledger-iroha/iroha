@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii አሁን የአቅራቢ ክሬዲት ቅጽበተ-ፎቶዎችን ከክፍያ ደብተሮች እና ዳሽቦርዶች ጋር አጋልጧል
 በዝቅተኛ ሒሳቦች እና የቅጣት ምልክቶች ላይ ሊገባ ይችላል-
 
-- አርፈው፡ `GET /v2/sorafs/capacity/state` የ `credit_ledger[*]` ግቤቶችን ይመልሳል
+- አርፈው፡ `GET /v1/sorafs/capacity/state` የ `credit_ledger[*]` ግቤቶችን ይመልሳል
   በሶክ ሙከራ ውስጥ የተረጋገጡትን የሂሳብ መመዝገቢያ መስኮችን ያንጸባርቁ። ተመልከት
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana ማስመጣት፡ `dashboards/grafana/sorafs_capacity_penalties.json` ያሴራል።

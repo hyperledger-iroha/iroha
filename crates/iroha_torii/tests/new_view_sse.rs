@@ -9,14 +9,14 @@ async fn new_view_sse_content_type() {
 
     // Router with SSE endpoint, using minimal poll interval
     let app = Router::new().route(
-        "/v2/sumeragi/new_view/sse",
+        "/v1/sumeragi/new_view/sse",
         get(|| async move { iroha_torii::handle_v1_new_view_sse(200) }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v2/sumeragi/new_view/sse")
+                .uri("/v1/sumeragi/new_view/sse")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

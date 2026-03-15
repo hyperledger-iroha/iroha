@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 - **Norito კოდეკის მიმოხილვა** – `reference/norito-codec.md` ბმულებს პირდაპირ ავტორიტეტულთან
   `norito.md` სპეციფიკაცია პორტალის ცხრილის შევსებისას.
 - **Torii OpenAPI** – `/reference/torii-openapi` გადმოსცემს უახლეს Torii REST სპეციფიკაციას გამოყენებით
-- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v2/mcp`.
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
   რედოკ. განაახლეთ სპეციფიკაცია `npm run sync-openapi -- --version=current --latest`-ით (დაამატეთ
   `--mirror=<label>` სნეპშოტის დამატებით ისტორიულ ვერსიებში კოპირებისთვის).
 - **კონფიგურაციის ცხრილები** - სრული პარამეტრის კატალოგი ინახება

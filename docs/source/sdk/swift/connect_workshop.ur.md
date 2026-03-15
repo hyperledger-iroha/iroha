@@ -82,7 +82,7 @@ PRs are scoped and testable.
 
 - **Balance stream facade:** add `ConnectSession.balancePublisher(accountID:)`
   returning `AnyPublisher<BalanceSnapshot, ConnectSessionError>` powered by the
-  existing `/v2/connect/ws` envelopes. The publisher should expose metadata
+  existing `/v1/connect/ws` envelopes. The publisher should expose metadata
   (`ConnectQueueDiagnostics.latestLatency`) via Combine `map` so UI consumers can
   render queue state. Tests live in
   `IrohaSwift/Tests/IrohaSwiftTests/ConnectSessionBalanceTests.swift` (new file)
@@ -124,7 +124,7 @@ roadmap/status updates can cite concrete API names.
   - `swift test --package-path IrohaSwift --filter ConnectClientTests`
   - `swift test --package-path IrohaSwift --filter ConnectSessionTests`
 - Optional replay drill: use the mock Torii harness fixtures to replay a
-  `/v2/connect/ws` session and confirm telemetry emission (`connect.queue_*`,
+  `/v1/connect/ws` session and confirm telemetry emission (`connect.queue_*`,
   `connect.resume_attempts_total`) is still dark—evidence for the gap list.
 - Capture logs/artifacts in `artifacts/swift/connect_workshop/<date>/` so the
   weekly digest can link back to deterministic runs.

@@ -61,13 +61,13 @@ Cobertura de regressão یہاں موجود ہے:
 ## Ferramentas e acessórios
 
 - Cargas úteis de anúncio do provedor `range_capability`, `stream_budget`, اور `transport_hints` شامل ہونا لازم ہے۔
-  Respostas `/v2/sorafs/providers` e luminárias de admissão کے ذریعے validar کریں؛ Resumos JSON میں capacidade analisada, orçamento de fluxo, اور matrizes de dicas شامل ہونے چاہئیں تاکہ ingestão de telemetria ہو سکے۔
+  Respostas `/v1/sorafs/providers` e luminárias de admissão کے ذریعے validar کریں؛ Resumos JSON میں capacidade analisada, orçamento de fluxo, اور matrizes de dicas شامل ہونے چاہئیں تاکہ ingestão de telemetria ہو سکے۔
 - `cargo xtask sorafs-admission-fixtures` Artefatos JSON میں orçamentos de fluxo e dicas de transporte دکھاتا ہے تاکہ painéis apresentam faixa de adoção کر سکیں۔
 - `fixtures/sorafs_manifest/provider_admission/` کے تحت fixtures اب شامل کرتے ہیں:
   - anúncios canônicos de várias fontes,
   - `multi_fetch_plan.json` تاکہ Conjuntos SDK determinísticos de repetição do plano de busca multi-peer کر سکیں۔
 
-## Orquestrador Torii Orquestrado- Torii `/v2/sorafs/providers` metadados de capacidade de intervalo analisado
+## Orquestrador Torii Orquestrado- Torii `/v1/sorafs/providers` metadados de capacidade de intervalo analisado
   provedores جب نئی metadados چھوڑ دیں تو avisos de downgrade چلتے ہیں, اور terminais de intervalo de gateway براہ راست clientes کے لیے یہی restrições نافذ کرتے ہیں۔
 - Orquestrador multifonte (`sorafs_car::multi_fetch`) اب limites de intervalo, alinhamento de capacidade, اور orçamentos de fluxo کو atribuição de trabalho کے دوران impor کرتا ہے۔ Testes de unidade são pedaços muito grandes, busca esparsa e cenários de limitação.
 - Sinais de downgrade `sorafs_car::multi_fetch` (falhas de alinhamento, solicitações limitadas) fluxo کرتا ہے تاکہ operadores دیکھ سکیں کہ پلانگ کے دوران مخصوص provedores کیوں pular ہوئے۔

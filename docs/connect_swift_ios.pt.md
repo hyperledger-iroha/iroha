@@ -19,7 +19,7 @@ Veja `docs/connect_swift_integration.md` para o guia de empacotamento ponta a po
 
 O SDK de Swift traz uma stack Connect apoiada por Norito:
 
-- `ConnectClient` mantém o transporte WebSocket (`/v2/connect/ws?...`) sobre
+- `ConnectClient` mantém o transporte WebSocket (`/v1/connect/ws?...`) sobre
   `URLSessionWebSocketTask`.
 - `ConnectSession` orquestra o ciclo de vida (open → approve/reject → sign → close) e
   descriptografa frames de ciphertext depois que as chaves de direção são instaladas.
@@ -40,7 +40,7 @@ Antes de iniciar uma sessão:
 ```swift
 import IrohaSwift
 
-let connectURL = URL(string: "wss://node.example/v2/connect/ws?sid=\(sidB64)&role=app")!
+let connectURL = URL(string: "wss://node.example/v1/connect/ws?sid=\(sidB64)&role=app")!
 var connectRequest = URLRequest(url: connectURL)
 connectRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 let connectClient = ConnectClient(request: connectRequest)
@@ -176,7 +176,7 @@ func base64url(_ data: Data) -> String {
               .replacingOccurrences(of: "=", with: "")
 }
 
-// Create Connect session: client computes sid and POSTs to /v2/connect/session
+// Create Connect session: client computes sid and POSTs to /v1/connect/session
 func createConnectSession(node: String, chainId: String, appEphemeralPk: Data, completion: @escaping (Result<(sidB64: String, tokenApp: String, tokenWallet: String), Error>) -> Void) {
     // Compute sid = BLAKE2b-256("iroha-connect|sid|" || chain_id || app_pk || nonce16)
     let nonce16 = (0..<16).map { _ in UInt8.random(in: 0...255) }
@@ -188,7 +188,7 @@ func createConnectSession(node: String, chainId: String, appEphemeralPk: Data, c
     let sidB64 = base64url(sid)
 
     // POST JSON { sid, node }
-    let url = URL(string: node + "/v2/connect/session")!
+    let url = URL(string: node + "/v1/connect/session")!
     var req = URLRequest(url: url)
     req.httpMethod = "POST"
     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -211,7 +211,7 @@ func createConnectSession(node: String, chainId: String, appEphemeralPk: Data, c
 
 // Join WS with token (URLSessionWebSocketTask)
 func joinWs(node: String, sid: String, role: String, token: String, onMessage: @escaping (Data)->Void) {
-    let wsUrl = node.replacingOccurrences(of: "http", with: "ws") + "/v2/connect/ws?sid=\(sid)&role=\(role)"
+    let wsUrl = node.replacingOccurrences(of: "http", with: "ws") + "/v1/connect/ws?sid=\(sid)&role=\(role)"
     var request = URLRequest(url: URL(string: wsUrl)!)
     request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     let task = URLSession.shared.webSocketTask(with: request)
@@ -239,7 +239,7 @@ func joinWs(node: String, sid: String, role: String, token: String, onMessage: @
 ```
 
 Notas:
-- Calcule `sid` no lado do cliente e depois faça POST para `/v2/connect/session` com esse
+- Calcule `sid` no lado do cliente e depois faça POST para `/v1/connect/session` com esse
   `sid` para obter tokens por papel; junte-se ao WS com o token.
 - Depois de `Approve`, envie `Close`/`Reject` como payloads cifrados.
 - É necessário um framing Norito real para encapsular `aead` em `ConnectFrameV1` como

@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - מטא נתונים של מדיניות ומעברים ממתינים זמינים דרך
-  `GET /v2/confidential/assets/{definition_id}/transitions`
+  `GET /v1/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`), שיקוף על ידי Swift SDK
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) ומתועד ב
   גם מדריכי עיצוב הנכסים הסודיים וגם מדריכי ה-SDK

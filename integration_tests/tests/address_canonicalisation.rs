@@ -166,7 +166,7 @@ async fn find_asset_definition_with_holders(
     base: &reqwest::Url,
 ) -> Result<Option<String>> {
     let definitions_url = base
-        .join("/v2/assets/definitions?limit=64")
+        .join("/v1/assets/definitions?limit=64")
         .expect("join asset definitions url");
     let definitions_resp = http
         .get(definitions_url)
@@ -804,7 +804,7 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v2/accounts?limit=32")
+        .join("/v1/accounts?limit=32")
         .expect("join accounts url");
     let resp = http
         .get(url)
@@ -854,7 +854,7 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v2/accounts/query")
+        .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
         .post(url)
@@ -900,7 +900,7 @@ async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result
     let mut url = network
         .client()
         .torii_url
-        .join("/v2/accounts")
+        .join("/v1/accounts")
         .expect("join accounts url");
     {
         let mut pairs = url.query_pairs_mut();
@@ -951,7 +951,7 @@ async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<(
     let url = network
         .client()
         .torii_url
-        .join("/v2/accounts/query")
+        .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
         .post(url)
@@ -990,7 +990,7 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v2/accounts?limit=8")
+        .join("/v1/accounts?limit=8")
         .expect("join accounts url");
     let resp = http
         .get(url)
@@ -1034,7 +1034,7 @@ async fn accounts_query_supports_i105_response() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v2/accounts/query")
+        .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
         .post(url)
@@ -1612,7 +1612,7 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
     let base = network
         .client()
         .torii_url
-        .join("/v2/explorer/transactions")
+        .join("/v1/explorer/transactions")
         .expect("join explorer transactions url");
 
     let default_url = {
@@ -1733,7 +1733,7 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
     let base = network
         .client()
         .torii_url
-        .join("/v2/explorer/instructions")
+        .join("/v1/explorer/instructions")
         .expect("join explorer instructions url");
 
     let default_url = {
@@ -1969,7 +1969,7 @@ async fn accounts_query_rejects_local8_filter_literals() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v2/accounts/query")
+        .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
         .post(url)
@@ -2016,7 +2016,7 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
     let url = network
         .client()
         .torii_url
-        .join("/v2/accounts/query")
+        .join("/v1/accounts/query")
         .expect("join accounts query url");
     let resp = http
         .post(url)
@@ -2064,7 +2064,7 @@ async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -
     let client = network.client();
     let url = client
         .torii_url
-        .join("/v2/accounts/query")
+        .join("/v1/accounts/query")
         .expect("join accounts query url");
     let expected = account_id.to_string();
     let http = http_client();
@@ -2195,7 +2195,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     let i105_alice = i105_alice.clone();
     let i105_bob = i105_bob.clone();
 
-    let mut default_url = base.join("/v2/repo/agreements")?;
+    let mut default_url = base.join("/v1/repo/agreements")?;
     {
         let mut qp = default_url.query_pairs_mut();
         qp.append_pair("limit", "8");
@@ -2236,7 +2236,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         "repo agreements must default to I105 counterparties"
     );
 
-    let mut i105_url = base.join("/v2/repo/agreements")?;
+    let mut i105_url = base.join("/v1/repo/agreements")?;
     {
         let mut qp = i105_url.query_pairs_mut();
         qp.append_pair("limit", "8");
@@ -2271,7 +2271,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         "repo agreements should honour canonical i105 for counterparties"
     );
 
-    let query_url = base.join("/v2/repo/agreements/query")?;
+    let query_url = base.join("/v1/repo/agreements/query")?;
     let query_body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
     );
@@ -2364,7 +2364,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let http = http_client();
     let base = &client.torii_url;
 
-    let summary_url = base.join("/v2/kaigi/relays")?;
+    let summary_url = base.join("/v1/kaigi/relays")?;
     let summary_resp = http
         .get(summary_url)
         .header("Accept", "application/json")
@@ -2396,7 +2396,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         seed.relay_i105
     );
 
-    let i105_summary_url = base.join("/v2/kaigi/relays")?;
+    let i105_summary_url = base.join("/v1/kaigi/relays")?;
     let i105_resp = http
         .get(i105_summary_url)
         .header("Accept", "application/json")
@@ -2428,7 +2428,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     );
 
     let legacy_relay_literal = legacy_dotted_i105_bob_literal();
-    let detail_url = base.join(&format!("/v2/kaigi/relays/{legacy_relay_literal}"))?;
+    let detail_url = base.join(&format!("/v1/kaigi/relays/{legacy_relay_literal}"))?;
     let detail_resp = http
         .get(detail_url)
         .header("Accept", "application/json")
@@ -2450,7 +2450,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         "response body should mention {reason}, got {body}"
     );
 
-    let formatted_detail_url = base.join(&format!("/v2/kaigi/relays/{}", seed.relay_i105))?;
+    let formatted_detail_url = base.join(&format!("/v1/kaigi/relays/{}", seed.relay_i105))?;
     let formatted_resp = http
         .get(formatted_detail_url)
         .header("Accept", "application/json")
@@ -2519,7 +2519,7 @@ async fn offline_allowances_listing_emit_i105_literals() -> Result<()> {
     let http = http_client();
 
     let default_url = base
-        .join("/v2/offline/allowances?limit=4&include_expired=true")
+        .join("/v1/offline/allowances?limit=4&include_expired=true")
         .expect("offline allowances url");
     let resp = http
         .get(default_url)
@@ -2544,7 +2544,7 @@ async fn offline_allowances_listing_emit_i105_literals() -> Result<()> {
     );
 
     let i105_url = base
-        .join("/v2/offline/allowances?limit=4&include_expired=true")
+        .join("/v1/offline/allowances?limit=4&include_expired=true")
         .expect("offline allowances url");
     let resp = http
         .get(i105_url)
@@ -2604,7 +2604,7 @@ async fn offline_allowances_query_emit_i105_literals() -> Result<()> {
     let base = client.torii_url.clone();
     let http = http_client();
     let url = base
-        .join("/v2/offline/allowances/query")
+        .join("/v1/offline/allowances/query")
         .expect("offline allowances query url");
 
     let default_body = r#"{"filter":null,"sort":[],"pagination":{"limit":4,"offset":0},"fetch_size":null,"select":null}"#;

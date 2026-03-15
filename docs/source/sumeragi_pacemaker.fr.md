@@ -34,7 +34,7 @@ Mise a jour de la fenetre effective sur timeout:
 
 Telemetrie exposee (voir telemetry.md):
 - Runtime: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=...}`
-- Snapshot REST: `/v2/sumeragi/phases` inclut maintenant `ema_ms` a cote des latences par phase les plus recentes afin que les dashboards puissent tracer la tendance EMA sans interroger Prometheus directement.
+- Snapshot REST: `/v1/sumeragi/phases` inclut maintenant `ema_ms` a cote des latences par phase les plus recentes afin que les dashboards puissent tracer la tendance EMA sans interroger Prometheus directement.
 - Config: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`
 
 ## Politique de jitter

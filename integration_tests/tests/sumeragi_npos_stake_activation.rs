@@ -246,7 +246,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     .await?;
     let collectors_url = client
         .torii_url
-        .join("v2/sumeragi/collectors")
+        .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     assert_no_single_collector(
         &collectors_url,
@@ -430,7 +430,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
 
     let collectors_url = client
         .torii_url
-        .join("v2/sumeragi/collectors")
+        .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     let http = reqwest::Client::new();
     let deadline = Instant::now() + COLLECTOR_RETRY;

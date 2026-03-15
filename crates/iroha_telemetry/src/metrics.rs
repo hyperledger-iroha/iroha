@@ -17365,12 +17365,12 @@ mod test {
     fn records_torii_explorer_metrics() {
         let metrics = Metrics::default();
         metrics.record_torii_explorer_request(
-            "/v2/explorer/transactions",
+            "/v1/explorer/transactions",
             "ok",
             Duration::from_millis(4),
         );
         metrics.record_torii_explorer_request(
-            "/v2/explorer/transactions",
+            "/v1/explorer/transactions",
             "error",
             Duration::from_millis(7),
         );
@@ -17378,7 +17378,7 @@ mod test {
         assert_eq!(
             metrics
                 .torii_explorer_requests_total
-                .with_label_values(&["/v2/explorer/transactions", "ok"])
+                .with_label_values(&["/v1/explorer/transactions", "ok"])
                 .get(),
             1,
             "explorer request counter increments for ok outcomes"
@@ -17386,7 +17386,7 @@ mod test {
         assert_eq!(
             metrics
                 .torii_explorer_requests_total
-                .with_label_values(&["/v2/explorer/transactions", "error"])
+                .with_label_values(&["/v1/explorer/transactions", "error"])
                 .get(),
             1,
             "explorer request counter increments for error outcomes"
@@ -17394,7 +17394,7 @@ mod test {
         assert_eq!(
             metrics
                 .torii_explorer_request_duration_seconds
-                .with_label_values(&["/v2/explorer/transactions", "ok"])
+                .with_label_values(&["/v1/explorer/transactions", "ok"])
                 .get_sample_count(),
             1,
             "explorer request latency histogram records ok outcomes"
@@ -17402,7 +17402,7 @@ mod test {
         assert_eq!(
             metrics
                 .torii_explorer_request_duration_seconds
-                .with_label_values(&["/v2/explorer/transactions", "error"])
+                .with_label_values(&["/v1/explorer/transactions", "error"])
                 .get_sample_count(),
             1,
             "explorer request latency histogram records error outcomes"
@@ -17731,7 +17731,7 @@ mod test {
             "unsupported_chunker",
             "sorafs.sf1@1.0.0",
             "provider123",
-            "/v2/sorafs/storage/car/range",
+            "/v1/sorafs/storage/car/range",
         );
 
         let total = metrics
@@ -17740,7 +17740,7 @@ mod test {
                 "unsupported_chunker",
                 "sorafs.sf1@1.0.0",
                 "provider123",
-                "/v2/sorafs/storage/car/range",
+                "/v1/sorafs/storage/car/range",
             ])
             .get();
         assert_eq!(total, 1, "gateway refusal counter increments");

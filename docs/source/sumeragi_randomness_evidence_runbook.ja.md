@@ -127,7 +127,7 @@ iroha ops sumeragi evidence list --limit 100 > artifacts/evidence_snapshot.json
 iroha --output-format text ops sumeragi evidence submit --evidence-hex-file fixtures/evidence/double_prevote.hex
 ```
 
-`/v2/events/sse` をフィルタ付きで監視し、SDKs が同じデータを見ていることを示します。
+`/v1/events/sse` をフィルタ付きで監視し、SDKs が同じデータを見ていることを示します。
 {doc}`torii/sumeragi_evidence_app_api` の Python one-liner を使ってフィルタを構築し、
 生の `data:` フレームを取得してください。SSE payload は CLI 出力に出た evidence kind と
 signer をエコーするはずです。
@@ -164,7 +164,7 @@ signer をエコーするはずです。
   protection を示唆します。該当 peer を修正してから再テストしてください。
 - **Evidence ingestion stalls** — `sumeragi_evidence_records_total` が停滞し、chaos
   テストが fault を出している場合は、複数のバリデータで
-  `iroha ops sumeragi evidence count` を実行し、`/v2/sumeragi/evidence/count` が CLI
+  `iroha ops sumeragi evidence count` を実行し、`/v1/sumeragi/evidence/count` が CLI
   出力と一致することを確認します。差分があれば SSE/webhook consumers が stale の
   可能性があるため、known-good fixture を再送し、それでもカウンタが増えない場合は
   Torii メンテナにエスカレーションしてください。

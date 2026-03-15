@@ -29,7 +29,7 @@ Torii は各リクエストで `x-iroha-api-version` ヘッダーを用いてセ
   - `torii_api_version_unsupported` — バージョンがサーバーのサポート集合にない。
   - `torii_api_version_too_old` — バージョンがサーフェスごとの最小値より古い。
 
-`/v2/api/versions` エンドポイントは診断や SDK 既定値向けにサポートマトリクス
+`/v1/api/versions` エンドポイントは診断や SDK 既定値向けにサポートマトリクス
 (`default`, `supported`, `min_proof_version`, 任意の `sunset_unix`) を返す。
 クライアントはヘッダーを明示的に送るべきであり、CLI は現在 `1.1` をデフォルトに
 して `client.toml` の `torii_api_version` 経由で上書きを通す。

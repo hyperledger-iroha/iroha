@@ -1,6 +1,6 @@
 {
   "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
-  "web_socket_url": "wss://mock.torii.example/v2/connect/ws/preview/Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "web_socket_url": "wss://mock.torii.example/v1/connect/ws/preview/Y29ubmVjdC1maXh0dXJlLXNpZCE",
   "torii_base_url": "https://mock.torii.example",
   "connect_policy_hash": "mock-policy-hash-2026-05",
   "notes": "Generated from mock harness replay using ConnectReplayRecorder; replace with live Torii data for production drills."

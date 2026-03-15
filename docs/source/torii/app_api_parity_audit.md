@@ -8,7 +8,7 @@ Roadmap reference: TORII-APP-1 — `app_api` parity audit
 
 The audit inspects the public re-exports in `crates/iroha_torii/src/lib.rs:256-522` and the
 feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes`,
-`add_connect_routes`). For every `/v2/*` surface mentioned in the roadmap we verified:
+`add_connect_routes`). For every `/v1/*` surface mentioned in the roadmap we verified:
 
 - Handler implementation and DTO definitions in `crates/iroha_torii/src/routing.rs`.
 - Router registration under the `app_api` or `connect` feature groups.
@@ -32,25 +32,25 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
 - Example snippets:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ### Endpoint Inventory
 
-#### Account permissions (`/v2/accounts/{id}/permissions`) — Covered
+#### Account permissions (`/v1/accounts/{id}/permissions`) — Covered
 - Handler: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -58,7 +58,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Torii Platform.
 - Notes: Response is a Norito JSON body with `items`/`total`, matching SDK pagination helpers.
 
-#### Alias OPRF evaluate (`POST /v2/aliases/voprf/evaluate`) — Covered
+#### Alias OPRF evaluate (`POST /v1/aliases/voprf/evaluate`) — Covered
 - Handler: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -68,7 +68,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Torii Platform.
 - Notes: Response surface already enforces deterministic hex and backend identifiers; SDKs consume the DTO.
 
-#### Proof events SSE (`GET /v2/events/sse`) — Covered
+#### Proof events SSE (`GET /v1/events/sse`) — Covered
 - Handler: `handle_v1_events_sse` with filter support (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) and proof filter wiring within the handler.
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -78,7 +78,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Torii Platform (runtime), Integration Tests WG (fixtures).
 - Notes: Proof filter paths validated end-to-end; documentation updated under `docs/source/zk_app_api.md`.
 
-#### Contract lifecycle (`/v2/contracts/*`) — Covered
+#### Contract lifecycle (`/v1/contracts/*`) — Covered
 - Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -93,7 +93,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Smart Contract WG with Torii Platform.
 - Notes: Endpoints queue signed transactions and reuse shared telemetry metrics (`handle_transaction_with_metrics`).
 
-#### Verifying key lifecycle (`/v2/zk/vk/*`) — Covered
+#### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) and `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -105,7 +105,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: ZK Working Group with Torii Platform support.
 - Notes: DTOs align with Norito schemas referenced by SDKs; rate limiting enforced via `limits.rs`.
 
-#### Nexus Connect (`/v2/connect/*`) — Covered (feature `connect`)
+#### Nexus Connect (`/v1/connect/*`) — Covered (feature `connect`)
 - Handlers: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),
@@ -116,7 +116,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Owner: Nexus Connect WG.
 - Notes: Rate limit keys tracked via `limits::rate_limit_key`; telemetry counters surfaced through connect metrics.
 
-#### Push registration (`POST /v2/notify/devices`) — Covered (feature `push`)
+#### Push registration (`POST /v1/notify/devices`) — Covered (feature `push`)
 - Handler: `handler_push_register_device` (`crates/iroha_torii/src/lib.rs:1528-1577`).
 - DTOs: `RegisterDeviceRequest` (`crates/iroha_torii/src/push.rs:17-27`).
 - Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:10518-10547`, feature `push`).

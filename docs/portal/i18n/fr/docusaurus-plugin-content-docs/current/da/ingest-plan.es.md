@@ -39,7 +39,7 @@ solutions de secours serde/JSON.
 ## API Superficie (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```La charge utile est un `DaIngestRequest` codifié en Norito. Las réponses usan
 `application/norito+v1` et développé `DaIngestReceipt`.
@@ -217,7 +217,7 @@ hashear, chunking et vérifier les manifestes optionnels.
 - `iroha app da get` agrége un alias associé à DA pour l'explorateur multi-source
   que tu as la puissance `iroha app sorafs fetch`. Les opérateurs peuvent signaler un problème
   artefacts de manifeste + plan de fragments (`--manifest`, `--plan`, `--manifest-id`)**o** passer un ticket de stockage de Torii via `--storage-ticket`. Lorsque vous êtes aux États-Unis
-  le chemin du ticket, la CLI baja le manifeste depuis `/v2/da/manifests/<ticket>`,
+  le chemin du ticket, la CLI baja le manifeste depuis `/v1/da/manifests/<ticket>`,
   conserver le bundle sous `artifacts/da/fetch_<timestamp>/` (override con
   `--manifest-cache-dir`), dériver le hachage du blob pour `--manifest-id`, et ensuite
   exécutez l’orchestre avec la liste `--gateway-provider` suministrada. Toutes les tâches
@@ -228,7 +228,7 @@ hashear, chunking et vérifier les manifestes optionnels.
   que les vérifications de disponibilité de bout en bout soient totalement réalisées sous l'espace de noms
   `da` sans dupliquer la logique de l'orchestre.
 - `iroha app da get-blob` baja manifeste canonicos directo depuis Torii via
-  `GET /v2/da/manifests/{storage_ticket}`. El comando écris
+  `GET /v1/da/manifests/{storage_ticket}`. El comando écris
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` et
   `chunk_plan_{ticket}.json` sous `artifacts/da/fetch_<timestamp>/` (ou un
   `--output-dir` à condition que l'utilisateur puisse imprimer la commande exacte de

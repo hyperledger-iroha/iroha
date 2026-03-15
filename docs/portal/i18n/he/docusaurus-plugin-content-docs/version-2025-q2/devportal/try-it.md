@@ -173,7 +173,7 @@ export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 1. בחר מתקן כגון `fixtures/norito_rpc/transfer_asset.norito`. אלה
    הקבצים הם מעטפות Norito גולמיות; **לא** קודד אותם ב-base64.
 2. ב-Swagger או RapiDoc, אתר את נקודת הקצה של NRPC (לדוגמה
-   `POST /v2/pipeline/submit`) והעבר את בורר **סוג התוכן** ל
+   `POST /v1/pipeline/submit`) והעבר את בורר **סוג התוכן** ל
    `application/x-norito`.
 3. החלף את עורך גוף הבקשה ל-**בינארי** (מצב "קובץ" של סוואגר או
    בורר ה"בינארי/קובץ" של RapiDoc) והעלה את הקובץ `.norito`. הווידג'ט
@@ -201,11 +201,11 @@ curl \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: ${TOKEN}" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v2/pipeline/submit"
+  "${TORII}/v1/pipeline/submit"
 ```החלף את המתקן לכל ערך המופיע ב-`transaction_fixtures.manifest.json`
 או לקודד את המטען שלך עם `cargo xtask norito-rpc-fixtures`. כאשר Torii
 הוא במצב קנרי אתה יכול להצביע על `curl` על פרוקסי לנסות
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) לממש אותו
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) לממש אותו
 תשתית שבה משתמשים ווידג'טים של הפורטל.
 
 ## צפיות ופעולות
@@ -223,7 +223,7 @@ curl \
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 

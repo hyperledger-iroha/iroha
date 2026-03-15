@@ -78,7 +78,7 @@ Essais :
 
 | Composant | Tâche | Propriétaire(s) |
 |---------------|------|--------------|
-| Service Torii | Exposer `/v2/sorafs/pin` (soumettre), `/v2/sorafs/pin/{cid}` (recherche), `/v2/sorafs/aliases` (liste/liaison), `/v2/sorafs/replication` (commandes/reçus). Fournir pagination + filtrage. | Mise en réseau TL / Core Infra |
+| Service Torii | Exposer `/v1/sorafs/pin` (soumettre), `/v1/sorafs/pin/{cid}` (recherche), `/v1/sorafs/aliases` (liste/liaison), `/v1/sorafs/replication` (commandes/reçus). Fournir pagination + filtrage. | Mise en réseau TL / Core Infra |
 | Attestation | Inclure la hauteur/hash du registre dans les réponses ; ajouter une structure d'attestation Norito consommée par les SDK. | Infrastructure de base |
 | CLI | Étendre `sorafs_manifest_stub` ou une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
 | SDK | Générer des clients de liaisons (Rust/Go/TS) depuis le schéma Norito ; ajouter des tests d'intégration. | Équipes SDK |
@@ -133,10 +133,10 @@ Tableaux de bord :
 Chaque élément de la liste de contrôle SF-4 doit référencer ce plan lorsque la progression est enregistrée.
 La façade REST livre désormais des points de terminaison de listing attestés :
 
-- `GET /v2/sorafs/pin` et `GET /v2/sorafs/pin/{digest}` renvoient des manifestes avec
+- `GET /v1/sorafs/pin` et `GET /v1/sorafs/pin/{digest}` renvoient des manifestes avec
   liaisons d'alias, ordres de réplication et un objet d'attestation dérivé du hash
   du dernier bloc.
-- `GET /v2/sorafs/aliases` et `GET /v2/sorafs/replication` exposent le catalogue
+- `GET /v1/sorafs/aliases` et `GET /v1/sorafs/replication` exposent le catalogue
   d'alias actif et le backlog des ordres de réplication avec une pagination cohérente
   et des filtres de statut.La CLI encapsule ces appels (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) pour permettre aux opérateurs d'automatiser les audits du

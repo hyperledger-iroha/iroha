@@ -73,7 +73,7 @@ ID: چنکر رجسٹری-رول آؤٹ-چیک لسٹ
    `torii.sorafs.discovery.admission.envelopes_dir`۔
 3. ڈسکوری انٹرفیس کے ذریعہ فراہم کنندہ اشتہارات کے پھیلاؤ کو چیک کریں:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. گورننس ہیڈر کے ساتھ ٹیسٹ مینی فیسٹ/پلان پوائنٹس:
    ```bash

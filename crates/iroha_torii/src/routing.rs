@@ -243,9 +243,9 @@ fn _json_helper_sanity() {
 }
 
 #[cfg(feature = "telemetry")]
-pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v2/soranet/privacy/event";
+pub const SORANET_PRIVACY_EVENT_ENDPOINT: &str = "/v1/soranet/privacy/event";
 #[cfg(feature = "telemetry")]
-pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v2/soranet/privacy/share";
+pub const SORANET_PRIVACY_SHARE_ENDPOINT: &str = "/v1/soranet/privacy/share";
 
 pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -> Response {
     match norito::json::to_string_pretty(&crate::openapi::generate_spec()) {
@@ -1161,7 +1161,7 @@ where
 }
 
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-/// Request payload accepted by `/v2/aliases/voprf/evaluate`.
+/// Request payload accepted by `/v1/aliases/voprf/evaluate`.
 pub struct AliasVoprfEvaluateRequestDto {
     pub blinded_element_hex: String,
 }
@@ -1175,7 +1175,7 @@ pub struct AliasVoprfEvaluateRequestDto {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Backend identifier returned by `/v2/aliases/voprf/evaluate`.
+/// Backend identifier returned by `/v1/aliases/voprf/evaluate`.
 pub enum AliasVoprfBackendDto {
     /// Deterministic Blake2b512 mock evaluator used by tooling.
     #[norito(rename = "blake2b512-mock")]
@@ -1233,7 +1233,7 @@ impl norito::json::JsonDeserialize for AliasVoprfBackendDto {
 
 #[cfg(feature = "telemetry")]
 #[derive(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-/// Request payload accepted by `/v2/soranet/privacy/event`.
+/// Request payload accepted by `/v1/soranet/privacy/event`.
 pub struct RecordSoranetPrivacyEventDto {
     /// Privacy telemetry event emitted by a relay component.
     pub event: SoranetPrivacyEventV1,
@@ -1244,7 +1244,7 @@ pub struct RecordSoranetPrivacyEventDto {
 
 #[cfg(feature = "telemetry")]
 #[derive(Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-/// Request payload accepted by `/v2/soranet/privacy/share`.
+/// Request payload accepted by `/v1/soranet/privacy/share`.
 pub struct RecordSoranetPrivacyShareDto {
     /// Secret-shared Prio contribution emitted by a collector.
     pub share: SoranetPrivacyPrioShareV1,
@@ -1259,7 +1259,7 @@ pub struct RecordSoranetPrivacyShareDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Successful response emitted by `/v2/aliases/voprf/evaluate`.
+/// Successful response emitted by `/v1/aliases/voprf/evaluate`.
 pub struct AliasVoprfEvaluateResponseDto {
     pub evaluated_element_hex: String,
     pub backend: AliasVoprfBackendDto,
@@ -1889,7 +1889,7 @@ pub async fn handle_v1_confidential_asset_transitions(
 
 #[cfg(feature = "zk-proof-tags")]
 #[derive(Debug)]
-/// GET /v2/zk/proof-tags/{backend}/{hash} — return ZK1 TLV tags for ProofId (debug).
+/// GET /v1/zk/proof-tags/{backend}/{hash} — return ZK1 TLV tags for ProofId (debug).
 pub async fn handle_get_proof_tags(
     state: Arc<CoreState>,
     axum::extract::Path((backend, hash_hex)): axum::extract::Path<(String, String)>,
@@ -2261,7 +2261,7 @@ fn bridge_record_to_json(
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v2/zk/proofs — list proofs with filters
+/// GET /v1/zk/proofs — list proofs with filters
 pub async fn handle_list_proofs(
     state: Arc<CoreState>,
     limits: ProofApiLimits,
@@ -2497,7 +2497,7 @@ fn decode_confidential_seed(req: &ConfidentialKeyRequest) -> Result<[u8; 32]> {
 
 #[cfg(feature = "app_api")]
 #[iroha_futures::telemetry_future]
-/// POST /v2/confidential/derive-keyset — derive confidential key hierarchy from a seed.
+/// POST /v1/confidential/derive-keyset — derive confidential key hierarchy from a seed.
 pub async fn handle_post_confidential_derive_keyset(
     _chain_id: Arc<ChainId>,
     _queue: Arc<Queue>,
@@ -2531,7 +2531,7 @@ pub async fn handle_post_confidential_derive_keyset(
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v2/zk/proofs/count — return count for filters
+/// GET /v1/zk/proofs/count — return count for filters
 pub async fn handle_count_proofs(
     state: Arc<CoreState>,
     limits: ProofApiLimits,
@@ -2669,7 +2669,7 @@ pub struct VkListQuery {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v2/zk/vk — list verifying keys with optional filters.
+/// GET /v1/zk/vk — list verifying keys with optional filters.
 pub async fn handle_list_vk(
     state: Arc<CoreState>,
     crate::NoritoQuery(q): crate::NoritoQuery<VkListQuery>,
@@ -2847,7 +2847,7 @@ pub struct ConnectSessionResponse {
 }
 
 #[cfg(feature = "connect")]
-/// POST /v2/connect/session — create or validate a session and return a deeplink URI.
+/// POST /v1/connect/session — create or validate a session and return a deeplink URI.
 #[allow(dead_code)]
 pub async fn handle_connect_session(
     chain_id: std::sync::Arc<iroha_data_model::ChainId>,
@@ -3067,7 +3067,7 @@ impl axum::response::IntoResponse for ProofHttpResponse {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v2/zk/proof/{backend}/{hash} — read proof record by backend and proof hash (hex).
+/// GET /v1/zk/proof/{backend}/{hash} — read proof record by backend and proof hash (hex).
 pub async fn handle_get_proof(
     state: Arc<CoreState>,
     limits: ProofApiLimits,
@@ -3259,7 +3259,7 @@ pub fn signed_find_proof_by_id(
 }
 
 #[cfg(feature = "app_api")]
-/// POST /v2/zk/verify — minimal demo endpoint that accepts either Norito
+/// POST /v1/zk/verify — minimal demo endpoint that accepts either Norito
 /// (`application/x-norito`) or JSON and returns `{ "ok": true|false }`.
 ///
 /// This is a convenience, non-consensus-critical handler intended for quick
@@ -3293,7 +3293,7 @@ pub async fn handle_v1_zk_verify(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/pacemaker — snapshot of pacemaker timers and config
+/// GET /v1/sumeragi/pacemaker — snapshot of pacemaker timers and config
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_pacemaker(
@@ -3327,7 +3327,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/qc — HighestQC/LockedQC snapshot including subject hash if available
+/// GET /v1/sumeragi/qc — HighestQC/LockedQC snapshot including subject hash if available
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snap = sumeragi::status_snapshot();
@@ -3385,7 +3385,7 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/checkpoints — Bounded history of validator-set checkpoints (newest first)
+/// GET /v1/sumeragi/checkpoints — Bounded history of validator-set checkpoints (newest first)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_checkpoints(
     accept: Option<axum::http::HeaderValue>,
@@ -3409,7 +3409,7 @@ pub async fn handle_v1_sumeragi_checkpoints(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/consensus-keys — Registered consensus/committee keys (sorted by activation height desc)
+/// GET /v1/sumeragi/consensus-keys — Registered consensus/committee keys (sorted by activation height desc)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_consensus_keys(
     app: &SharedAppState,
@@ -3448,7 +3448,7 @@ pub async fn handle_v1_sumeragi_consensus_keys(
 /// Maximum number of commit certificates returned in a single response.
 const COMMIT_CERT_PAGE_CAP: u64 = 128;
 
-/// GET /v2/sumeragi/commit-certificates — Bounded history of commit certificates (newest first)
+/// GET /v1/sumeragi/commit-certificates — Bounded history of commit certificates (newest first)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_commit_qcs(
     crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
@@ -3480,7 +3480,7 @@ pub async fn handle_v1_sumeragi_commit_qcs(
     Ok(resp)
 }
 
-/// GET /v2/bridge/finality/{height} — Self-contained finality proof for a block.
+/// GET /v1/bridge/finality/{height} — Self-contained finality proof for a block.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_bridge_finality(
     state: Arc<CoreState>,
@@ -3523,7 +3523,7 @@ pub async fn handle_v1_bridge_finality(
     Ok(resp)
 }
 
-/// GET /v2/bridge/finality/bundle/{height} — Commitment + justification bundle for a block.
+/// GET /v1/bridge/finality/bundle/{height} — Commitment + justification bundle for a block.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
@@ -3566,7 +3566,7 @@ pub async fn handle_v1_bridge_finality_bundle(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
+/// GET /v1/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_validator_sets(
     crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
@@ -3598,7 +3598,7 @@ pub async fn handle_v1_sumeragi_validator_sets(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/validator-sets/{height} — Validator-set snapshot for a specific block height
+/// GET /v1/sumeragi/validator-sets/{height} — Validator-set snapshot for a specific block height
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_validator_set_by_height(
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -3644,7 +3644,7 @@ fn collect_validator_snapshots() -> Vec<ValidatorSetSnapshot> {
         .collect()
 }
 
-/// GET /v2/sumeragi/key-lifecycle — Bounded history of consensus key records (newest first)
+/// GET /v1/sumeragi/key-lifecycle — Bounded history of consensus key records (newest first)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_key_lifecycle(
     accept: Option<axum::http::HeaderValue>,
@@ -3668,7 +3668,7 @@ pub async fn handle_v1_sumeragi_key_lifecycle(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/phases — Compact JSON with latest per-phase latencies (ms)
+/// GET /v1/sumeragi/phases — Compact JSON with latest per-phase latencies (ms)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_phases(
     accept: Option<axum::http::HeaderValue>,
@@ -3703,7 +3703,7 @@ pub async fn handle_v1_sumeragi_phases(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
+/// GET /v1/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_bls_keys(
     State(state): State<Arc<CoreState>>,
@@ -3730,7 +3730,7 @@ pub async fn handle_v1_sumeragi_bls_keys(
     Ok(crate::utils::respond_with_format(obj, format))
 }
 
-/// GET /v2/sumeragi/leader — leader index snapshot; includes PRF context when available
+/// GET /v1/sumeragi/leader — leader index snapshot; includes PRF context when available
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_leader(
     accept: Option<axum::http::HeaderValue>,
@@ -3754,7 +3754,7 @@ pub async fn handle_v1_sumeragi_leader(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/collectors — current collector indices and peers derived from topology and on-chain params
+/// GET /v1/sumeragi/collectors — current collector indices and peers derived from topology and on-chain params
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_collectors(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -3887,7 +3887,7 @@ pub async fn handle_v1_sumeragi_collectors(
     };
     Ok(crate::utils::respond_with_format(payload, format))
 }
-/// GET /v2/sumeragi/params — snapshot of on-chain Sumeragi parameters
+/// GET /v1/sumeragi/params — snapshot of on-chain Sumeragi parameters
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_params(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -3919,7 +3919,7 @@ pub async fn handle_v1_sumeragi_params(
 }
 
 #[cfg(feature = "app_api")]
-/// POST /v2/zk/submit-proof — minimal demo endpoint that accepts either Norito
+/// POST /v1/zk/submit-proof — minimal demo endpoint that accepts either Norito
 /// (`application/x-norito`) or JSON and returns `{ "ok": true|false, "id": "<hex>" }`.
 ///
 /// This is a convenience, non-consensus-critical handler intended for quick
@@ -3961,7 +3961,7 @@ pub async fn handle_v1_zk_submit_proof(
 }
 
 #[cfg(feature = "zk-verify-batch")]
-/// POST /v2/zk/verify-batch — verify a batch of OpenVerify envelopes (transparent IPA)
+/// POST /v1/zk/verify-batch — verify a batch of OpenVerify envelopes (transparent IPA)
 /// and return JSON `{ "ok": true, "statuses": [true|false, ...] }`.
 ///
 /// Content types:
@@ -4029,7 +4029,7 @@ pub async fn handle_v1_zk_verify_batch(
 }
 
 #[cfg(feature = "app_api")]
-/// POST /v2/zk/roots — convenience endpoint returning recent shielded roots as JSON.
+/// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
 /// Returns recent shielded roots for the requested asset, bounded by the configured
@@ -4055,7 +4055,7 @@ fn resolve_asset_definition_selector(
     })
 }
 
-/// POST /v2/zk/roots — convenience endpoint returning recent shielded roots as JSON.
+/// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
 ///
 /// This is an example wrapper for the Norito TLV APIs available via IVM syscalls.
 /// Returns recent shielded roots for the requested asset, bounded by the configured
@@ -4101,7 +4101,7 @@ pub async fn handle_v1_zk_roots(
 }
 
 #[cfg(feature = "app_api")]
-/// POST /v2/zk/vote/tally — convenience endpoint returning election tally as JSON.
+/// POST /v1/zk/vote/tally — convenience endpoint returning election tally as JSON.
 ///
 /// Example wrapper for the Norito TLV read APIs. Current implementation returns
 /// a stub until election state is persisted.
@@ -4124,7 +4124,7 @@ pub async fn handle_v1_zk_vote_tally(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/evidence/count — returns the number of unique EvidenceV3 entries observed.
+/// GET /v1/sumeragi/evidence/count — returns the number of unique EvidenceV3 entries observed.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_count(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -4155,7 +4155,7 @@ pub struct EvidenceListQuery {
     pub kind: Option<String>,
 }
 
-/// GET /v2/sumeragi/evidence — list recent evidence entries (in-memory audit snapshot).
+/// GET /v1/sumeragi/evidence — list recent evidence entries (in-memory audit snapshot).
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_list(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -4435,14 +4435,14 @@ fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
     })
 }
 
-/// JSON payload accepted by `/v2/sumeragi/evidence/submit`.
+/// JSON payload accepted by `/v1/sumeragi/evidence/submit`.
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 pub struct EvidenceSubmitRequestDto {
     /// Hex-encoded consensus evidence payload.
     pub evidence_hex: String,
 }
 
-/// Handle POST `/v2/sumeragi/evidence/submit`, validating and forwarding consensus evidence.
+/// Handle POST `/v1/sumeragi/evidence/submit`, validating and forwarding consensus evidence.
 pub fn handle_post_sumeragi_evidence_submit(
     sumeragi: SumeragiHandle,
     request: EvidenceSubmitRequestDto,
@@ -6103,7 +6103,7 @@ pub async fn handle_post_contract_code(
         preview_tx
     };
 
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v2/contracts/code")
+    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/contracts/code")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
 }
@@ -6547,7 +6547,7 @@ pub struct ActivateInstanceResponseDto {
     pub ok: bool,
 }
 
-/// POST /v2/contracts/instance/activate — submit ActivateContractInstance.
+/// POST /v1/contracts/instance/activate — submit ActivateContractInstance.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_instance_activate(
@@ -6590,7 +6590,7 @@ pub async fn handle_post_contract_instance_activate(
         state,
         tx,
         telemetry,
-        "/v2/contracts/instance/activate",
+        "/v1/contracts/instance/activate",
     )
     .await?;
     let body = norito::json::to_json_pretty(&ActivateInstanceResponseDto { ok: true })
@@ -6603,7 +6603,7 @@ pub async fn handle_post_contract_instance_activate(
     Ok(resp)
 }
 
-/// POST /v2/contracts/instance — accept bytecode, register manifest/bytes, and activate instance.
+/// POST /v1/contracts/instance — accept bytecode, register manifest/bytes, and activate instance.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_instance(
@@ -6655,7 +6655,7 @@ pub async fn handle_post_contract_instance(
         state.clone(),
         tx,
         telemetry,
-        "/v2/contracts/instance",
+        "/v1/contracts/instance",
     )
     .await?;
 
@@ -6676,7 +6676,7 @@ pub async fn handle_post_contract_instance(
     Ok(resp)
 }
 
-/// POST /v2/contracts/call — invoke a deployed contract entrypoint with optional payload.
+/// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_call(
@@ -6756,7 +6756,7 @@ pub async fn handle_post_contract_call(
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
 
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v2/contracts/call")
+    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/contracts/call")
         .await?;
 
     let response = ContractCallResponseDto {
@@ -7465,7 +7465,7 @@ mod vk_record_input_tests {
     }
 }
 
-/// POST /v2/zk/vk/register — submit RegisterVerifyingKey as a signed transaction.
+/// POST /v1/zk/vk/register — submit RegisterVerifyingKey as a signed transaction.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_register(
     chain_id: Arc<ChainId>,
@@ -7500,12 +7500,12 @@ pub async fn handle_post_vk_register(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
         .sign(&req.private_key.0);
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v2/zk/vk/register")
+    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/register")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
 }
 
-/// POST /v2/zk/vk/update — submit UpdateVerifyingKey as a signed transaction.
+/// POST /v1/zk/vk/update — submit UpdateVerifyingKey as a signed transaction.
 #[cfg(feature = "app_api")]
 pub async fn handle_post_vk_update(
     chain_id: Arc<ChainId>,
@@ -7540,12 +7540,12 @@ pub async fn handle_post_vk_update(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
         .with_instructions(core::iter::once(dm::InstructionBox::from(isi)))
         .sign(&req.private_key.0);
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v2/zk/vk/update")
+    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/zk/vk/update")
         .await
         .map(|_| (StatusCode::ACCEPTED, ()))
 }
 
-/// GET /v2/zk/vk/{backend}/{name} — read verifying key record.
+/// GET /v1/zk/vk/{backend}/{name} — read verifying key record.
 #[cfg(feature = "app_api")]
 pub async fn handle_get_vk(
     state: Arc<CoreState>,
@@ -9085,7 +9085,7 @@ pub struct RecordReplicationFailureResponseDto {
     pub recorded: bool,
 }
 
-/// POST /v2/contracts/deploy — accept `.to` bytecode, compute hashes, and submit RegisterSmartContractCode.
+/// POST /v1/contracts/deploy — accept `.to` bytecode, compute hashes, and submit RegisterSmartContractCode.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_deploy(
@@ -9124,7 +9124,7 @@ pub async fn handle_post_contract_deploy(
         state.clone(),
         tx,
         telemetry,
-        "/v2/contracts/deploy",
+        "/v1/contracts/deploy",
     )
     .await?;
 
@@ -9144,7 +9144,7 @@ pub async fn handle_post_contract_deploy(
     Ok(resp)
 }
 
-/// POST /v2/sorafs/pin/register — submit a manifest registration transaction after validation.
+/// POST /v1/sorafs/pin/register — submit a manifest registration transaction after validation.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_register_manifest(
@@ -9233,7 +9233,7 @@ pub async fn handle_post_sorafs_register_manifest(
         state,
         tx,
         telemetry,
-        "/v2/sorafs/pin/register",
+        "/v1/sorafs/pin/register",
     )
     .await?;
 
@@ -9321,7 +9321,7 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
         state,
         tx,
         telemetry.clone(),
-        "/v2/sorafs/capacity/declare",
+        "/v1/sorafs/capacity/declare",
     )
     .await?;
 
@@ -9447,7 +9447,7 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
         state,
         tx,
         telemetry_for_tx,
-        "/v2/sorafs/capacity/telemetry",
+        "/v1/sorafs/capacity/telemetry",
     )
     .await?;
 
@@ -9752,7 +9752,7 @@ pub async fn handle_post_sorafs_register_capacity_dispute(
         state,
         tx,
         telemetry_for_tx,
-        "/v2/sorafs/capacity/dispute",
+        "/v1/sorafs/capacity/dispute",
     )
     .await?;
 
@@ -14212,125 +14212,125 @@ static SUBSCRIPTION_TRIGGER_REF_KEY: LazyLock<Name> = LazyLock::new(|| {
 });
 
 #[cfg(feature = "app_api")]
-const ENDPOINT_ACCOUNTS_LIST: &str = "/v2/accounts";
+const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 #[cfg(feature = "app_api")]
-const ENDPOINT_ACCOUNTS_QUERY: &str = "/v2/accounts/query";
+const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v2/accounts/onboard";
+pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
-    "/v2/accounts/{account_id}/transactions/query";
+    "/v1/accounts/{account_id}/transactions/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v2/accounts/{account_id}/transactions";
+pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
 #[cfg(feature = "app_api")]
-const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v2/accounts/{account_id}/permissions";
+const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNTS_ASSETS: &str = "/v2/accounts/{account_id}/assets";
+pub const ENDPOINT_ACCOUNTS_ASSETS: &str = "/v1/accounts/{account_id}/assets";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNTS_ASSETS_QUERY: &str = "/v2/accounts/{account_id}/assets/query";
+pub const ENDPOINT_ACCOUNTS_ASSETS_QUERY: &str = "/v1/accounts/{account_id}/assets/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ACCOUNTS_PORTFOLIO: &str = "/v2/accounts/{uaid}/portfolio";
+pub const ENDPOINT_ACCOUNTS_PORTFOLIO: &str = "/v1/accounts/{uaid}/portfolio";
 #[cfg(feature = "app_api")]
-const ENDPOINT_DOMAINS_LIST: &str = "/v2/domains";
+const ENDPOINT_DOMAINS_LIST: &str = "/v1/domains";
 #[cfg(feature = "app_api")]
-const ENDPOINT_DOMAINS_QUERY: &str = "/v2/domains/query";
-pub const ENDPOINT_SPACE_DIRECTORY_BINDINGS: &str = "/v2/space-directory/uaids/{uaid}";
+const ENDPOINT_DOMAINS_QUERY: &str = "/v1/domains/query";
+pub const ENDPOINT_SPACE_DIRECTORY_BINDINGS: &str = "/v1/space-directory/uaids/{uaid}";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_SPACE_DIRECTORY_MANIFESTS: &str = "/v2/space-directory/uaids/{uaid}/manifests";
+pub const ENDPOINT_SPACE_DIRECTORY_MANIFESTS: &str = "/v1/space-directory/uaids/{uaid}/manifests";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE: &str = "/v2/space-directory/manifests/revoke";
+pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE: &str = "/v1/space-directory/manifests/revoke";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH: &str = "/v2/space-directory/manifests";
+pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH: &str = "/v1/space-directory/manifests";
 #[cfg(feature = "app_api")]
-const ENDPOINT_REPO_AGREEMENTS_LIST: &str = "/v2/repo/agreements";
+const ENDPOINT_REPO_AGREEMENTS_LIST: &str = "/v1/repo/agreements";
 #[cfg(feature = "app_api")]
-const ENDPOINT_REPO_AGREEMENTS_QUERY: &str = "/v2/repo/agreements/query";
+const ENDPOINT_REPO_AGREEMENTS_QUERY: &str = "/v1/repo/agreements/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v2/assets/definitions";
+const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v1/assets/definitions";
 #[cfg(feature = "app_api")]
-const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v2/assets/definitions/query";
+const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v2/offline/allowances";
+const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v1/offline/allowances";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v2/offline/allowances/query";
+const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v1/offline/allowances/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_CERTIFICATES_ISSUE: &str = "/v2/offline/certificates/issue";
+const ENDPOINT_OFFLINE_CERTIFICATES_ISSUE: &str = "/v1/offline/certificates/issue";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_CERTIFICATES_RENEW_ISSUE: &str =
-    "/v2/offline/certificates/{certificate_id_hex}/renew/issue";
+    "/v1/offline/certificates/{certificate_id_hex}/renew/issue";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_TRANSFERS_LIST: &str = "/v2/offline/transfers";
+const ENDPOINT_OFFLINE_TRANSFERS_LIST: &str = "/v1/offline/transfers";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_TRANSFERS_QUERY: &str = "/v2/offline/transfers/query";
+const ENDPOINT_OFFLINE_TRANSFERS_QUERY: &str = "/v1/offline/transfers/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_TRANSFERS_DETAIL: &str = "/v2/offline/transfers/{bundle_id_hex}";
+const ENDPOINT_OFFLINE_TRANSFERS_DETAIL: &str = "/v1/offline/transfers/{bundle_id_hex}";
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-const ENDPOINT_OFFLINE_REJECTIONS: &str = "/v2/offline/rejections";
+const ENDPOINT_OFFLINE_REJECTIONS: &str = "/v1/offline/rejections";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_SUMMARIES_LIST: &str = "/v2/offline/summaries";
+const ENDPOINT_OFFLINE_SUMMARIES_LIST: &str = "/v1/offline/summaries";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_SUMMARIES_QUERY: &str = "/v2/offline/summaries/query";
+const ENDPOINT_OFFLINE_SUMMARIES_QUERY: &str = "/v1/offline/summaries/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_REVOCATIONS_LIST: &str = "/v2/offline/revocations";
+const ENDPOINT_OFFLINE_REVOCATIONS_LIST: &str = "/v1/offline/revocations";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_REVOCATIONS_QUERY: &str = "/v2/offline/revocations/query";
+const ENDPOINT_OFFLINE_REVOCATIONS_QUERY: &str = "/v1/offline/revocations/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_RECEIPTS_LIST: &str = "/v2/offline/receipts";
+const ENDPOINT_OFFLINE_RECEIPTS_LIST: &str = "/v1/offline/receipts";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_RECEIPTS_QUERY: &str = "/v2/offline/receipts/query";
+const ENDPOINT_OFFLINE_RECEIPTS_QUERY: &str = "/v1/offline/receipts/query";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ASSET_HOLDERS: &str = "/v2/assets/{definition_id}/holders";
+pub const ENDPOINT_ASSET_HOLDERS: &str = "/v1/assets/{definition_id}/holders";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_ASSET_HOLDERS_QUERY: &str = "/v2/assets/{definition_id}/holders/query";
+pub const ENDPOINT_ASSET_HOLDERS_QUERY: &str = "/v1/assets/{definition_id}/holders/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_NFTS_LIST: &str = "/v2/nfts";
+const ENDPOINT_NFTS_LIST: &str = "/v1/nfts";
 #[cfg(feature = "app_api")]
-const ENDPOINT_NFTS_QUERY: &str = "/v2/nfts/query";
+const ENDPOINT_NFTS_QUERY: &str = "/v1/nfts/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_SUBSCRIPTION_PLANS_LIST: &str = "/v2/subscriptions/plans";
+const ENDPOINT_SUBSCRIPTION_PLANS_LIST: &str = "/v1/subscriptions/plans";
 #[cfg(feature = "app_api")]
-const ENDPOINT_SUBSCRIPTIONS_LIST: &str = "/v2/subscriptions";
+const ENDPOINT_SUBSCRIPTIONS_LIST: &str = "/v1/subscriptions";
 #[cfg(feature = "app_api")]
-const ENDPOINT_KAIGI_RELAYS: &str = "/v2/kaigi/relays";
+const ENDPOINT_KAIGI_RELAYS: &str = "/v1/kaigi/relays";
 #[cfg(feature = "app_api")]
-const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v2/kaigi/relays/{relay_id}";
+const ENDPOINT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_BLOCKS: &str = "/v2/explorer/blocks";
+const ENDPOINT_EXPLORER_BLOCKS: &str = "/v1/explorer/blocks";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_HEALTH: &str = "/v2/explorer/health";
+const ENDPOINT_EXPLORER_HEALTH: &str = "/v1/explorer/health";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v2/explorer/blocks/{identifier}";
+const ENDPOINT_EXPLORER_BLOCK_DETAIL: &str = "/v1/explorer/blocks/{identifier}";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v2/explorer/transactions";
+const ENDPOINT_EXPLORER_TRANSACTIONS: &str = "/v1/explorer/transactions";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_TRANSACTIONS_LATEST: &str = "/v2/explorer/transactions/latest";
+const ENDPOINT_EXPLORER_TRANSACTIONS_LATEST: &str = "/v1/explorer/transactions/latest";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v2/explorer/instructions";
+const ENDPOINT_EXPLORER_INSTRUCTIONS: &str = "/v1/explorer/instructions";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST: &str = "/v2/explorer/instructions/latest";
+const ENDPOINT_EXPLORER_INSTRUCTIONS_LATEST: &str = "/v1/explorer/instructions/latest";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_TRANSACTION_DETAIL: &str = "/v2/explorer/transactions/{hash}";
+const ENDPOINT_EXPLORER_TRANSACTION_DETAIL: &str = "/v1/explorer/transactions/{hash}";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_INSTRUCTION_DETAIL: &str = "/v2/explorer/instructions/{hash}/{index}";
+const ENDPOINT_EXPLORER_INSTRUCTION_DETAIL: &str = "/v1/explorer/instructions/{hash}/{index}";
 #[cfg(feature = "app_api")]
-const ENDPOINT_EXPLORER_ACCOUNT_QR: &str = "/v2/explorer/accounts/{account_id}/qr";
+const ENDPOINT_EXPLORER_ACCOUNT_QR: &str = "/v1/explorer/accounts/{account_id}/qr";
 #[cfg(feature = "app_api")]
 const CONTEXT_ACCOUNTS_TRANSACTIONS_QUERY_FILTER: &str =
-    "/v2/accounts/{account_id}/transactions/query#filter";
+    "/v1/accounts/{account_id}/transactions/query#filter";
 #[cfg(feature = "app_api")]
-const CONTEXT_KAIGI_RELAY_DETAIL: &str = "/v2/kaigi/relays/{relay_id}";
+const CONTEXT_KAIGI_RELAY_DETAIL: &str = "/v1/kaigi/relays/{relay_id}";
 
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS: &str =
-    "/v2/nexus/public_lanes/{lane_id}/validators";
+    "/v1/nexus/public_lanes/{lane_id}/validators";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v2/nexus/public_lanes/{lane_id}/stake";
+pub const ENDPOINT_NEXUS_PUBLIC_LANE_STAKE: &str = "/v1/nexus/public_lanes/{lane_id}/stake";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS: &str =
-    "/v2/nexus/public_lanes/{lane_id}/rewards/pending";
+    "/v1/nexus/public_lanes/{lane_id}/rewards/pending";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY: &str =
-    "/v2/nexus/dataspaces/accounts/{literal}/summary";
+    "/v1/nexus/dataspaces/accounts/{literal}/summary";
 #[cfg(feature = "app_api")]
 const CONTEXT_NEXUS_PUBLIC_LANE_STAKE: &str = ENDPOINT_NEXUS_PUBLIC_LANE_STAKE;
 #[cfg(feature = "app_api")]
@@ -14779,7 +14779,7 @@ mod address_metrics_tests {
     use crate::filter::{FieldPath, FilterExpr};
 
     const TEST_CONTEXT: &str = "/tests/account-metrics";
-    const KAIGI_SSE_CONTEXT: &str = "/v2/kaigi/relays/events?relay";
+    const KAIGI_SSE_CONTEXT: &str = "/v1/kaigi/relays/events?relay";
     static DEFAULT_DOMAIN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn local8_literal() -> &'static str {
@@ -15075,7 +15075,7 @@ fn committed_transactions_snapshot(
     transactions
 }
 
-/// POST /v2/accounts/{account_id}/transactions/query
+/// POST /v1/accounts/{account_id}/transactions/query
 ///
 /// Body: JSON `QueryEnvelope` with optional `filter`, `select`, and `pagination`.
 ///
@@ -15084,7 +15084,7 @@ fn committed_transactions_snapshot(
 ///     -H 'Content-Type: application/json' \
 ///     -H 'Accept: application/json' \
 ///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"]}, "pagination": {"limit": 50}}' \
-///     http://127.0.0.1:8080/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query
+///     http://127.0.0.1:8080/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query
 ///
 /// Returns: `{ "items": [ {"authority": "...", "timestamp_ms": 0, "entrypoint_hash": "...", "result_ok": true } ], "total": N }`
 ///
@@ -15107,7 +15107,7 @@ pub async fn handle_v1_account_transactions(
     .await
 }
 
-/// POST /v2/accounts/{account_id}/transactions/query` with configurable address enforcement.
+/// POST /v1/accounts/{account_id}/transactions/query` with configurable address enforcement.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions_with_policy(
@@ -15415,7 +15415,7 @@ pub async fn handle_v1_account_transactions_with_policy(
     Ok(resp)
 }
 
-/// GET /v2/accounts/{account_id}/transactions — Convenience JSON endpoint.
+/// GET /v1/accounts/{account_id}/transactions — Convenience JSON endpoint.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions_get(
@@ -15433,7 +15433,7 @@ pub async fn handle_v1_account_transactions_get(
     .await
 }
 
-/// GET `/v2/accounts/{account_id}/transactions` with configurable address enforcement.
+/// GET `/v1/accounts/{account_id}/transactions` with configurable address enforcement.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_transactions_get_with_policy(
@@ -15506,7 +15506,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     #[cfg(feature = "telemetry")]
     if telemetry.is_enabled() {
         let metrics = telemetry.metrics().await;
-        let endpoint = "/v2/accounts/{account_id}/transactions";
+        let endpoint = "/v1/accounts/{account_id}/transactions";
         metrics
             .torii_filter_depth
             .with_label_values(&[endpoint])
@@ -15543,7 +15543,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     Ok(resp)
 }
 
-/// GET /v2/parameters — Returns current executor/system parameters as JSON.
+/// GET /v1/parameters — Returns current executor/system parameters as JSON.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_parameters(state: Arc<CoreState>) -> Result<impl IntoResponse> {
@@ -19495,7 +19495,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/transactions/query",
+            "/v1/accounts/{account_id}/transactions/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -19520,7 +19520,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(req_body))
             .unwrap();
@@ -19635,7 +19635,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/transactions/query",
+            "/v1/accounts/{account_id}/transactions/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -19666,7 +19666,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19684,7 +19684,7 @@ mod app_api_integration_tests {
             LiveQueryStore::start_test(),
         ));
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/transactions/query",
+            "/v1/accounts/{account_id}/transactions/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -19710,7 +19710,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19727,7 +19727,7 @@ mod app_api_integration_tests {
         )]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -19744,7 +19744,7 @@ mod app_api_integration_tests {
             LiveQueryStore::start_test(),
         ));
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/transactions/query",
+            "/v1/accounts/{account_id}/transactions/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -19776,7 +19776,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19795,7 +19795,7 @@ mod app_api_integration_tests {
         let body2 = json_string(obj(vec![("filter", deep)]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -19813,7 +19813,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/transactions/query",
+            "/v1/accounts/{account_id}/transactions/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -19839,7 +19839,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19858,7 +19858,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/assets/query",
+            "/v1/accounts/{account_id}/assets/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -19886,7 +19886,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("POST")
             .uri(
-                "/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
+                "/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
             )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
@@ -19903,7 +19903,7 @@ mod app_api_integration_tests {
 
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders/query",
+            "/v1/assets/{definition_id}/holders/query",
             post({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -19932,7 +19932,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -19970,7 +19970,7 @@ mod app_api_integration_tests {
 
         // Route under test
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/assets/query",
+            "/v1/accounts/{account_id}/assets/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -19993,7 +19993,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri(&format!("/v2/accounts/{}/assets/query", alice_id))
+            .uri(&format!("/v1/accounts/{}/assets/query", alice_id))
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20035,7 +20035,7 @@ mod app_api_integration_tests {
         );
 
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/assets/query",
+            "/v1/accounts/{account_id}/assets/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -20063,7 +20063,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri(format!("/v2/accounts/{}/assets/query", alice_id))
+            .uri(format!("/v1/accounts/{}/assets/query", alice_id))
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20091,7 +20091,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/assets/query",
+            "/v1/accounts/{account_id}/assets/query",
             post({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -20114,7 +20114,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("POST")
             .uri(
-                "/v2/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
+                "/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
             )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
@@ -20149,7 +20149,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/domains/query",
+            "/v1/domains/query",
             post({
                 let state = state.clone();
                 move |crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<QueryEnvelope>| async move {
@@ -20168,7 +20168,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/domains/query")
+            .uri("/v1/domains/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20201,7 +20201,7 @@ mod app_api_integration_tests {
         // Route under test
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders/query",
+            "/v1/assets/{definition_id}/holders/query",
             post({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -20227,7 +20227,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20248,7 +20248,7 @@ mod app_api_integration_tests {
 
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders/query",
+            "/v1/assets/{definition_id}/holders/query",
             post({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -20279,7 +20279,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20304,7 +20304,7 @@ mod app_api_integration_tests {
 
         let telemetry = MaybeTelemetry::disabled();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders/query",
+            "/v1/assets/{definition_id}/holders/query",
             post({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -20339,7 +20339,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -20384,7 +20384,7 @@ mod app_api_integration_tests {
 
         use axum::routing::get;
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/assets",
+            "/v1/accounts/{account_id}/assets",
             get({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -20403,7 +20403,7 @@ mod app_api_integration_tests {
         // Preserve the account literal textual representation (I105 by default)
         let req = http::Request::builder()
             .method("GET")
-            .uri(format!("/v2/accounts/{}/assets?limit=1", alice_id))
+            .uri(format!("/v1/accounts/{}/assets?limit=1", alice_id))
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -20444,7 +20444,7 @@ mod app_api_integration_tests {
 
         use axum::routing::get;
         let app = Router::new().route(
-            "/v2/accounts/{account_id}/assets",
+            "/v1/accounts/{account_id}/assets",
             get({
                 let state = state.clone();
                 move |axum::extract::Path(account_id): axum::extract::Path<String>,
@@ -20464,7 +20464,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v2/accounts/{}/assets?asset_id={}",
+                "/v1/accounts/{}/assets?asset_id={}",
                 alice_id,
                 urlencoding::encode(&asset_id)
             ))
@@ -20547,7 +20547,7 @@ mod app_api_integration_tests {
         use axum::routing::get;
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders",
+            "/v1/assets/{definition_id}/holders",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -20570,7 +20570,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v2/assets/rose%23sbp/holders?limit=1")
+            .uri("/v1/assets/rose%23sbp/holders?limit=1")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -20590,7 +20590,7 @@ mod app_api_integration_tests {
         use axum::routing::get;
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders",
+            "/v1/assets/{definition_id}/holders",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -20620,7 +20620,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v2/assets/rose%23sbp/holders?asset_id={}",
+                "/v1/assets/rose%23sbp/holders?asset_id={}",
                 urlencoding::encode(&asset_id)
             ))
             .body(axum::body::Body::empty())
@@ -20703,7 +20703,7 @@ mod app_api_integration_tests {
         let (state, alice_id, bob_id) = build_asset_holder_fixture_state();
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders",
+            "/v1/assets/{definition_id}/holders",
             get({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -20726,7 +20726,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v2/assets/rose%23sbp/holders?limit=4")
+            .uri("/v1/assets/rose%23sbp/holders?limit=4")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -20799,7 +20799,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/confidential/assets/{definition_id}/transitions",
+            "/v1/confidential/assets/{definition_id}/transitions",
             get({
                 let state = state.clone();
                 move |path: axum::extract::Path<String>| {
@@ -20811,7 +20811,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v2/confidential/assets/rose%23sbp/transitions")
+            .uri("/v1/confidential/assets/rose%23sbp/transitions")
             .body(axum::body::Body::empty())
             .unwrap();
 
@@ -20881,7 +20881,7 @@ mod app_api_integration_tests {
         ));
 
         let app = Router::new().route(
-            "/v2/parameters",
+            "/v1/parameters",
             get({
                 let state = state.clone();
                 move || async move { handle_v1_parameters(state.clone()).await }
@@ -20890,7 +20890,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v2/parameters")
+            .uri("/v1/parameters")
             .body(axum::body::Body::empty())
             .unwrap();
 
@@ -20951,7 +20951,7 @@ mod app_api_integration_tests {
         let (state, alice_id, bob_id) = build_asset_holder_fixture_state();
         let telemetry = MaybeTelemetry::for_tests();
         let app = Router::new().route(
-            "/v2/assets/{definition_id}/holders/query",
+            "/v1/assets/{definition_id}/holders/query",
             post({
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -20980,7 +20980,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v2/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23sbp/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -21260,7 +21260,7 @@ mod query_endpoint_tests {
             LiveQueryStore::start_test(),
         ));
         let app = Router::new().route(
-            "/v2/proofs/{id}",
+            "/v1/proofs/{id}",
             get({
                 let state = state.clone();
                 move |axum::extract::Path(id): axum::extract::Path<String>| async move {
@@ -21270,7 +21270,7 @@ mod query_endpoint_tests {
         );
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v2/proofs/halo2/ipa:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .uri("/v1/proofs/halo2/ipa:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -21388,7 +21388,7 @@ pub struct EventsSseParams {
     pub filter: Option<String>,
 }
 
-/// GET /v2/events/sse – Server-Sent Events stream of JSON events.
+/// GET /v1/events/sse – Server-Sent Events stream of JSON events.
 ///
 /// Notes:
 /// - Accepts an optional `?filter=` query param containing a JSON-encoded `FilterExpr`.
@@ -21401,7 +21401,7 @@ pub struct EventsSseParams {
 /// - Each SSE `data:` chunk is a single JSON-encoded event object.
 ///
 /// curl example:
-///   curl -N "http://127.0.0.1:8080/v2/events/sse"
+///   curl -N "http://127.0.0.1:8080/v1/events/sse"
 #[cfg(feature = "app_api")]
 pub fn handle_v1_events_sse(
     events: EventsSender,
@@ -21735,7 +21735,7 @@ struct TelemetryLiveState {
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-/// GET `/v2/telemetry/live` — SSE stream with peer and network telemetry deltas.
+/// GET `/v1/telemetry/live` — SSE stream with peer and network telemetry deltas.
 pub fn handle_v1_telemetry_live(
     state: Arc<CoreState>,
     kura: Arc<Kura>,
@@ -22002,7 +22002,7 @@ fn telemetry_live_json(value: &Value) -> String {
 }
 
 #[cfg(feature = "app_api")]
-/// GET `/v2/gov/stream` — SSE stream of governance refresh hints.
+/// GET `/v1/gov/stream` — SSE stream of governance refresh hints.
 pub fn handle_v1_gov_stream(
     events: EventsSender,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -22254,7 +22254,7 @@ mod governance_stream_tests {
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-/// GET `/v2/kaigi/relays` — summary snapshot of registered relays and health indicators.
+/// GET `/v1/kaigi/relays` — summary snapshot of registered relays and health indicators.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_kaigi_relays(
     state: Arc<CoreState>,
@@ -22312,7 +22312,7 @@ pub async fn handle_v1_kaigi_relays(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-/// GET `/v2/kaigi/relays/{relay_id}` — detailed metadata and metrics for a relay.
+/// GET `/v1/kaigi/relays/{relay_id}` — detailed metadata and metrics for a relay.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_kaigi_relay_detail(
     state: Arc<CoreState>,
@@ -22330,7 +22330,7 @@ pub async fn handle_v1_kaigi_relay_detail(
     .await
 }
 
-/// GET `/v2/kaigi/relays/{relay_id}` with configurable address enforcement.
+/// GET `/v1/kaigi/relays/{relay_id}` with configurable address enforcement.
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_kaigi_relay_detail_with_policy(
@@ -22429,7 +22429,7 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-/// GET `/v2/kaigi/relays/health` — aggregated health totals and domain counters.
+/// GET `/v1/kaigi/relays/health` — aggregated health totals and domain counters.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_kaigi_relays_health(
     state: Arc<CoreState>,
@@ -22567,7 +22567,7 @@ fn convert_kaigi_event(
 }
 
 #[cfg(feature = "app_api")]
-/// GET `/v2/kaigi/relays/events` — Server-Sent Events stream of relay telemetry updates.
+/// GET `/v1/kaigi/relays/events` — Server-Sent Events stream of relay telemetry updates.
 pub fn handle_v1_kaigi_relays_sse(
     events: EventsSender,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiRelayEventsParams>,
@@ -22624,7 +22624,7 @@ pub fn handle_v1_kaigi_relays_sse(
 }
 
 #[cfg(feature = "app_api")]
-/// GET `/v2/soradns/directory/latest` — return the latest resolver directory record.
+/// GET `/v1/soradns/directory/latest` — return the latest resolver directory record.
 pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<NoritoJsonBody, Error> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
@@ -22649,7 +22649,7 @@ pub fn handle_v1_soradns_directory_latest(state: Arc<CoreState>) -> Result<Norit
 }
 
 #[cfg(feature = "app_api")]
-/// GET `/v2/soradns/directory/events` — SSE stream of resolver directory governance events.
+/// GET `/v1/soradns/directory/events` — SSE stream of resolver directory governance events.
 pub fn handle_v1_soradns_directory_events_sse(
     events: EventsSender,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -22778,7 +22778,7 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v2/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
+/// GET /v1/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
 pub fn handle_v1_new_view_sse(
     poll_ms: u64,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -25972,7 +25972,7 @@ mod status_tests {
     }
 }
 
-/// GET /v2/sumeragi/status — latest consensus status snapshot
+/// GET /v1/sumeragi/status — latest consensus status snapshot
 /// Returns leader index and HighestQC (height, view).
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_status(
@@ -26623,7 +26623,7 @@ pub async fn handle_v1_sumeragi_status(
     Ok(resp)
 }
 
-/// SSE stream for `/v2/sumeragi/status/sse`, emitting the same payload as the JSON snapshot.
+/// SSE stream for `/v1/sumeragi/status/sse`, emitting the same payload as the JSON snapshot.
 pub fn handle_v1_sumeragi_status_sse(
     poll_ms: u64,
     nexus_enabled: bool,
@@ -26725,7 +26725,7 @@ fn vrf_summary_not_found_json(epoch: u64) -> norito::json::Value {
     ])
 }
 
-/// GET /v2/sumeragi/telemetry — aggregated collector/QC/RBC metrics snapshot.
+/// GET /v1/sumeragi/telemetry — aggregated collector/QC/RBC metrics snapshot.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl IntoResponse> {
     let availability = status::availability_snapshot();
@@ -26817,7 +26817,7 @@ pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl 
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/vrf/penalties/{epoch} — epoch VRF penalties snapshot
+/// GET /v1/sumeragi/vrf/penalties/{epoch} — epoch VRF penalties snapshot
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_vrf_penalties(
     epoch: axum::extract::Path<String>,
@@ -26891,7 +26891,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
     }
 }
 
-/// GET /v2/sumeragi/vrf/epoch/{epoch} — persisted VRF epoch snapshot
+/// GET /v1/sumeragi/vrf/epoch/{epoch} — persisted VRF epoch snapshot
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_vrf_epoch(
     state: Arc<CoreState>,
@@ -27085,7 +27085,7 @@ pub struct RbcSampleResponseDto {
     pub samples: Vec<RbcChunkProofDto>,
 }
 
-/// GET /v2/sumeragi/rbc/sessions — RBC session snapshot
+/// GET /v1/sumeragi/rbc/sessions — RBC session snapshot
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
     let items = rbc_status::snapshot();
@@ -27161,7 +27161,7 @@ pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/rbc — RBC session/throughput counters
+/// GET /v1/sumeragi/rbc — RBC session/throughput counters
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_rbc_status(
@@ -27219,7 +27219,7 @@ pub async fn handle_v1_sumeragi_rbc_status(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/rbc/delivered/{height}/{view} — delivery status for a specific (height, view)
+/// GET /v1/sumeragi/rbc/delivered/{height}/{view} — delivery status for a specific (height, view)
 /// Returns a compact JSON with `delivered` boolean and a minimal summary when a session exists.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
@@ -27284,7 +27284,7 @@ pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
+/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -28508,7 +28508,7 @@ pub struct ListFilterParams {
     pub sort: Option<String>,
 }
 
-/// GET parameters for `/v2/offline/allowances`.
+/// GET parameters for `/v1/offline/allowances`.
 ///
 /// Extends [`ListFilterParams`] with roadmap-required verdict/expiry filters while keeping the
 /// compact query string layout.
@@ -28557,7 +28557,7 @@ pub struct OfflineAllowanceListParams {
     pub include_expired: bool,
 }
 
-/// GET parameters for `/v2/offline/transfers`.
+/// GET parameters for `/v1/offline/transfers`.
 ///
 /// Mirrors [`OfflineAllowanceListParams`] so operators can filter bundles by attestation metadata
 /// without crafting JSON filters in the query string.
@@ -28611,7 +28611,7 @@ pub struct OfflineTransferListParams {
     pub platform_policy: Option<String>,
 }
 
-/// Request payload for `/v2/offline/transfers/proof`.
+/// Request payload for `/v1/offline/transfers/proof`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineTransferProofRequest {
@@ -28697,7 +28697,7 @@ impl OfflineWalletCertificateDraft {
     }
 }
 
-/// Request payload for POST `/v2/offline/certificates/issue`.
+/// Request payload for POST `/v1/offline/certificates/issue`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateIssueRequest {
@@ -28705,7 +28705,7 @@ pub struct OfflineCertificateIssueRequest {
     pub certificate: OfflineWalletCertificateDraft,
 }
 
-/// Response payload for POST `/v2/offline/certificates/issue`.
+/// Response payload for POST `/v1/offline/certificates/issue`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineCertificateIssueResponse {
@@ -28715,7 +28715,7 @@ pub struct OfflineCertificateIssueResponse {
     pub certificate: OfflineWalletCertificate,
 }
 
-/// Request payload for POST `/v2/offline/build-claims/issue`.
+/// Request payload for POST `/v1/offline/build-claims/issue`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineBuildClaimIssueRequest {
@@ -28739,7 +28739,7 @@ pub struct OfflineBuildClaimIssueRequest {
     pub expires_at_ms: Option<u64>,
 }
 
-/// Response payload for POST `/v2/offline/build-claims/issue`.
+/// Response payload for POST `/v1/offline/build-claims/issue`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineBuildClaimIssueResponse {
@@ -28749,7 +28749,7 @@ pub struct OfflineBuildClaimIssueResponse {
     pub build_claim: OfflineBuildClaim,
 }
 
-/// Request payload for POST `/v2/offline/allowances`.
+/// Request payload for POST `/v1/offline/allowances`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineAllowanceIssueRequest {
@@ -28761,7 +28761,7 @@ pub struct OfflineAllowanceIssueRequest {
     pub certificate: OfflineWalletCertificate,
 }
 
-/// Response payload for POST `/v2/offline/allowances`.
+/// Response payload for POST `/v1/offline/allowances`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineAllowanceIssueResponse {
@@ -28769,7 +28769,7 @@ pub struct OfflineAllowanceIssueResponse {
     pub certificate_id_hex: String,
 }
 
-/// Request payload for POST `/v2/offline/certificates/revoke`.
+/// Request payload for POST `/v1/offline/certificates/revoke`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRevokeRequest {
@@ -28790,7 +28790,7 @@ pub struct OfflineCertificateRevokeRequest {
     pub metadata: Metadata,
 }
 
-/// Response payload for POST `/v2/offline/certificates/revoke`.
+/// Response payload for POST `/v1/offline/certificates/revoke`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineCertificateRevokeResponse {
@@ -28798,7 +28798,7 @@ pub struct OfflineCertificateRevokeResponse {
     pub verdict_id_hex: String,
 }
 
-/// Request payload for POST `/v2/offline/allowances/{certificate_id_hex}/renew`.
+/// Request payload for POST `/v1/offline/allowances/{certificate_id_hex}/renew`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRenewRequest {
@@ -28810,7 +28810,7 @@ pub struct OfflineCertificateRenewRequest {
     pub certificate: OfflineWalletCertificate,
 }
 
-/// Response payload for POST `/v2/offline/allowances/{certificate_id_hex}/renew`.
+/// Response payload for POST `/v1/offline/allowances/{certificate_id_hex}/renew`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineCertificateRenewResponse {
@@ -28818,7 +28818,7 @@ pub struct OfflineCertificateRenewResponse {
     pub certificate_id_hex: String,
 }
 
-/// Request payload for POST `/v2/offline/settlements`.
+/// Request payload for POST `/v1/offline/settlements`.
 #[cfg(feature = "app_api")]
 #[derive(
     crate::json_macros::JsonSerialize,
@@ -28845,7 +28845,7 @@ pub struct OfflineSettlementBuildClaimOverride {
     pub expires_at_ms: Option<u64>,
 }
 
-/// Request payload for POST `/v2/offline/settlements`.
+/// Request payload for POST `/v1/offline/settlements`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitRequest {
@@ -28863,7 +28863,7 @@ pub struct OfflineSettlementSubmitRequest {
     pub repair_existing_build_claims: bool,
 }
 
-/// Response payload for POST `/v2/offline/settlements`.
+/// Response payload for POST `/v1/offline/settlements`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitResponse {
@@ -28873,7 +28873,7 @@ pub struct OfflineSettlementSubmitResponse {
     pub transaction_hash_hex: String,
 }
 
-/// Request payload for POST `/v2/offline/spend-receipts`.
+/// Request payload for POST `/v1/offline/spend-receipts`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSpendReceiptsSubmitRequest {
@@ -28881,7 +28881,7 @@ pub struct OfflineSpendReceiptsSubmitRequest {
     pub receipts: Vec<OfflineSpendReceipt>,
 }
 
-/// Response payload for POST `/v2/offline/spend-receipts`.
+/// Response payload for POST `/v1/offline/spend-receipts`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineSpendReceiptsSubmitResponse {
@@ -28896,7 +28896,7 @@ pub struct OfflineSpendReceiptsSubmitResponse {
     pub asset_id: Option<String>,
 }
 
-/// GET query parameters for `/v2/offline/transfers/{bundle_id_hex}`.
+/// GET query parameters for `/v1/offline/transfers/{bundle_id_hex}`.
 #[cfg(feature = "app_api")]
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
@@ -28906,7 +28906,7 @@ pub struct OfflineTransferGetParams {
     pub reserved: Option<String>,
 }
 
-/// GET parameters for `/v2/offline/bundle/proof_status`.
+/// GET parameters for `/v1/offline/bundle/proof_status`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineBundleProofStatusParams {
@@ -28959,7 +28959,7 @@ impl OfflineBundleProofSummary {
     }
 }
 
-/// Response payload for GET `/v2/offline/bundle/proof_status`.
+/// Response payload for GET `/v1/offline/bundle/proof_status`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineBundleProofStatusResponse {
@@ -28980,7 +28980,7 @@ pub struct OfflineBundleProofStatusResponse {
     pub proof_summary: Option<OfflineBundleProofSummary>,
 }
 
-/// GET parameters for `/v2/offline/receipts`.
+/// GET parameters for `/v1/offline/receipts`.
 #[cfg(feature = "app_api")]
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
@@ -29051,7 +29051,7 @@ pub struct OfflineReceiptListResponse {
     pub total: u64,
 }
 
-/// Response payload for GET `/v2/offline/state`.
+/// Response payload for GET `/v1/offline/state`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineStateResponse {
@@ -29924,7 +29924,7 @@ pub async fn handle_v1_account_assets_with_policy(
 
 // ---------------------- Repo agreement listing ----------------------
 
-/// GET /v2/repo/agreements — List active repo agreements with optional filtering.
+/// GET /v1/repo/agreements — List active repo agreements with optional filtering.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_repo_agreements(
@@ -29990,7 +29990,7 @@ pub async fn handle_v1_repo_agreements(
     Ok(resp)
 }
 
-/// POST /v2/repo/agreements/query — Structured query for repo agreements.
+/// POST /v1/repo/agreements/query — Structured query for repo agreements.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_repo_agreements_query(
@@ -30387,7 +30387,7 @@ async fn repo_agreements_query_filter_accepts_canonical_accounts() {
 
 // ---------------------- Domains listing ----------------------
 
-/// GET /v2/domains — List domains with basic pagination.
+/// GET /v1/domains — List domains with basic pagination.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_domains(
@@ -30491,7 +30491,7 @@ fn domain_sort_key(id: &str, selectors: &[DomainSortSelector]) -> MultiSortKey {
     MultiSortKey::new(components)
 }
 
-/// POST /v2/domains/query — JSON envelope with optional pagination/sort.
+/// POST /v1/domains/query — JSON envelope with optional pagination/sort.
 ///
 /// Phase 1: ignores `filter`/`select` and applies deterministic sorting by id if requested.
 #[iroha_futures::telemetry_future]
@@ -31652,7 +31652,7 @@ pub async fn handle_v1_accounts_onboard(
     Ok((StatusCode::ACCEPTED, resp))
 }
 
-/// GET /v2/accounts — List accounts with basic pagination.
+/// GET /v1/accounts — List accounts with basic pagination.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts(
@@ -31729,7 +31729,7 @@ pub async fn handle_v1_accounts(
     Ok(resp)
 }
 
-/// POST /v2/accounts/query — JSON envelope with optional pagination/sort.
+/// POST /v1/accounts/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_query(
@@ -31850,7 +31850,7 @@ pub async fn handle_v1_accounts_query(
     Ok(resp)
 }
 
-/// GET /v2/accounts/{uaid}/portfolio — aggregated holdings for a UAID.
+/// GET /v1/accounts/{uaid}/portfolio — aggregated holdings for a UAID.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_portfolio(
@@ -32059,7 +32059,7 @@ fn commitments_summary_json(
     Value::Object(map)
 }
 
-/// GET /v2/nexus/dataspaces/accounts/{literal}/summary — joined dataspace view by account literal.
+/// GET /v1/nexus/dataspaces/accounts/{literal}/summary — joined dataspace view by account literal.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_nexus_dataspaces_account_summary(
@@ -32470,7 +32470,7 @@ impl DataspaceAliasLookup {
     }
 }
 
-/// GET /v2/space-directory/uaids/{uaid} — UAID dataspace bindings snapshot.
+/// GET /v1/space-directory/uaids/{uaid} — UAID dataspace bindings snapshot.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_space_directory_bindings(
@@ -32521,7 +32521,7 @@ pub async fn handle_v1_space_directory_bindings(
     Ok(resp)
 }
 
-/// GET /v2/space-directory/uaids/{uaid}/manifests — UAID manifest inventory.
+/// GET /v1/space-directory/uaids/{uaid}/manifests — UAID manifest inventory.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_space_directory_manifests(
@@ -32611,7 +32611,7 @@ pub async fn handle_v1_space_directory_manifests(
     Ok(resp)
 }
 
-/// POST /v2/space-directory/manifests — enqueue a manifest publication.
+/// POST /v1/space-directory/manifests — enqueue a manifest publication.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_publish(
@@ -32658,7 +32658,7 @@ pub async fn handle_post_space_directory_manifest_publish(
     .map(|_| (StatusCode::ACCEPTED, ()))
 }
 
-/// POST /v2/space-directory/manifests/revoke — enqueue a manifest revocation.
+/// POST /v1/space-directory/manifests/revoke — enqueue a manifest revocation.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_space_directory_manifest_revoke(
@@ -36051,7 +36051,7 @@ fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionL
     }
 }
 
-/// GET /v2/assets/definitions — List asset definitions with basic pagination.
+/// GET /v1/assets/definitions — List asset definitions with basic pagination.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions(
@@ -36124,7 +36124,7 @@ pub async fn handle_v1_assets_definitions(
     Ok(resp)
 }
 
-/// POST /v2/assets/definitions/query — JSON envelope with optional pagination/sort.
+/// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions_query(
@@ -40278,7 +40278,7 @@ pub async fn handle_v1_offline_transfers_query(
     Ok(resp)
 }
 
-/// GET /v2/offline/transfers/{bundle_id_hex} — fetch a specific transfer bundle summary.
+/// GET /v1/offline/transfers/{bundle_id_hex} — fetch a specific transfer bundle summary.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_transfer_get(
@@ -40303,7 +40303,7 @@ pub async fn handle_v1_offline_transfer_get(
     json_response(&value)
 }
 
-/// GET /v2/offline/receipts — list flattened offline receipts for auditing.
+/// GET /v1/offline/receipts — list flattened offline receipts for auditing.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_receipts(
@@ -40466,7 +40466,7 @@ pub async fn handle_v1_offline_receipts(
     })
 }
 
-/// POST /v2/offline/receipts/query — list flattened receipts via QueryEnvelope.
+/// POST /v1/offline/receipts/query — list flattened receipts via QueryEnvelope.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_receipts_query(
@@ -40574,7 +40574,7 @@ pub async fn handle_v1_offline_receipts_query(
     })
 }
 
-/// GET /v2/offline/bundle/proof_status — fetch lightweight proof status for an offline bundle.
+/// GET /v1/offline/bundle/proof_status — fetch lightweight proof status for an offline bundle.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_bundle_proof_status(
@@ -40585,7 +40585,7 @@ pub async fn handle_v1_offline_bundle_proof_status(
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let bundle_id = parse_hash_hex(&p.bundle_id_hex, "bundle_id_hex")?;
-    record_account_literal_selection(&telemetry, "/v2/offline/bundle/proof_status");
+    record_account_literal_selection(&telemetry, "/v1/offline/bundle/proof_status");
 
     let world = state.world_view();
     let record = world
@@ -41259,7 +41259,7 @@ fn sign_offline_certificate(
     Ok(certificate)
 }
 
-/// POST /v2/offline/certificates/issue — issue a signed offline wallet certificate.
+/// POST /v1/offline/certificates/issue — issue a signed offline wallet certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_certificates_issue(
@@ -41282,7 +41282,7 @@ pub async fn handle_post_v1_offline_certificates_issue(
     })
 }
 
-/// POST /v2/offline/certificates/{certificate_id_hex}/renew/issue — issue a renewed certificate.
+/// POST /v1/offline/certificates/{certificate_id_hex}/renew/issue — issue a renewed certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_certificates_renew_issue(
@@ -41350,7 +41350,7 @@ pub async fn handle_post_v1_offline_certificates_renew_issue(
     })
 }
 
-/// POST /v2/offline/build-claims/issue — issue an operator-signed build claim.
+/// POST /v1/offline/build-claims/issue — issue an operator-signed build claim.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_build_claims_issue(
@@ -41387,7 +41387,7 @@ pub async fn handle_post_v1_offline_build_claims_issue(
     })
 }
 
-/// POST /v2/offline/allowances — register an offline wallet certificate on-ledger.
+/// POST /v1/offline/allowances — register an offline wallet certificate on-ledger.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_allowances_issue(
@@ -41421,7 +41421,7 @@ pub async fn handle_post_v1_offline_allowances_issue(
     json_response(&OfflineAllowanceIssueResponse { certificate_id_hex })
 }
 
-/// GET /v2/offline/allowances/{certificate_id_hex} — fetch a specific offline allowance record.
+/// GET /v1/offline/allowances/{certificate_id_hex} — fetch a specific offline allowance record.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_allowance_get(
@@ -41485,7 +41485,7 @@ fn offline_allowance_verdict_id_or_error(
     Ok((verdict_id, verdict_id_hex))
 }
 
-/// POST /v2/offline/allowances/{certificate_id_hex}/renew — renew an offline allowance certificate.
+/// POST /v1/offline/allowances/{certificate_id_hex}/renew — renew an offline allowance certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_allowances_renew(
@@ -41527,7 +41527,7 @@ pub async fn handle_post_v1_offline_allowances_renew(
         state.clone(),
         tx,
         telemetry,
-        "/v2/offline/allowances/{certificate_id_hex}/renew",
+        "/v1/offline/allowances/{certificate_id_hex}/renew",
     )
     .await?;
 
@@ -41536,7 +41536,7 @@ pub async fn handle_post_v1_offline_allowances_renew(
     })
 }
 
-/// POST /v2/offline/certificates/revoke — register a verdict revocation for an offline certificate.
+/// POST /v1/offline/certificates/revoke — register a verdict revocation for an offline certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_certificates_revoke(
@@ -41583,14 +41583,14 @@ pub async fn handle_post_v1_offline_certificates_revoke(
         state.clone(),
         tx,
         telemetry,
-        "/v2/offline/certificates/revoke",
+        "/v1/offline/certificates/revoke",
     )
     .await?;
 
     json_response(&OfflineCertificateRevokeResponse { verdict_id_hex })
 }
 
-/// POST /v2/offline/settlements — submit an offline-to-online transfer bundle for settlement.
+/// POST /v1/offline/settlements — submit an offline-to-online transfer bundle for settlement.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_settlements_submit(
@@ -41637,7 +41637,7 @@ pub async fn handle_post_v1_offline_settlements_submit(
         state,
         tx,
         telemetry,
-        "/v2/offline/settlements",
+        "/v1/offline/settlements",
     )
     .await?;
 
@@ -41647,7 +41647,7 @@ pub async fn handle_post_v1_offline_settlements_submit(
     })
 }
 
-/// POST /v2/offline/spend-receipts — validate receipts and return their Poseidon root.
+/// POST /v1/offline/spend-receipts — validate receipts and return their Poseidon root.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_spend_receipts(
@@ -41726,7 +41726,7 @@ pub async fn handle_post_v1_offline_spend_receipts(
     })
 }
 
-/// GET /v2/offline/state — return a full offline state snapshot for wallet sync.
+/// GET /v1/offline/state — return a full offline state snapshot for wallet sync.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_state(
@@ -42139,7 +42139,7 @@ fn nft_filter_projection(expr: &FilterExpr, proj: &NftListItem) -> bool {
     }
 }
 
-/// GET /v2/nfts — List NFTs with basic pagination.
+/// GET /v1/nfts — List NFTs with basic pagination.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_nfts(
@@ -42220,7 +42220,7 @@ pub async fn handle_v1_nfts(
     Ok(resp)
 }
 
-/// POST /v2/nfts/query — JSON envelope with optional pagination/sort.
+/// POST /v1/nfts/query — JSON envelope with optional pagination/sort.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_nfts_query(
@@ -45413,7 +45413,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
     }
 }
 
-/// POST /v2/accounts/{account_id}/assets/query — JSON envelope with pagination/sort
+/// POST /v1/accounts/{account_id}/assets/query — JSON envelope with pagination/sort
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_account_assets_query(
@@ -45875,7 +45875,7 @@ pub async fn handle_v1_asset_holders(
     Ok(resp)
 }
 
-/// POST /v2/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
+/// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
 /// Supports filter fields: `account_id`, `asset_id`, and `quantity`.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -46507,7 +46507,7 @@ pub async fn profiling_not_implemented() -> impl IntoResponse {
 
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
-/// Handle POST `/v2/soranet/privacy/event`, forwarding relay observations into the secure aggregator.
+/// Handle POST `/v1/soranet/privacy/event`, forwarding relay observations into the secure aggregator.
 pub async fn handle_post_soranet_privacy_event(
     telemetry: MaybeTelemetry,
     crate::NoritoJson(req): crate::NoritoJson<RecordSoranetPrivacyEventDto>,
@@ -46560,7 +46560,7 @@ pub async fn handle_post_soranet_privacy_event(
 
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
-/// Handle POST `/v2/soranet/privacy/share`, ingesting Prio collector contributions.
+/// Handle POST `/v1/soranet/privacy/share`, ingesting Prio collector contributions.
 pub async fn handle_post_soranet_privacy_share(
     telemetry: MaybeTelemetry,
     crate::NoritoJson(req): crate::NoritoJson<RecordSoranetPrivacyShareDto>,
@@ -46892,9 +46892,9 @@ mod tests {
                 .get("paths")
                 .and_then(norito::json::Value::as_object)
                 .expect("paths section");
-            assert!(paths.contains_key("/v2/aliases/voprf/evaluate"));
-            assert!(paths.contains_key("/v2/aliases/resolve"));
-            assert!(paths.contains_key("/v2/aliases/resolve_index"));
+            assert!(paths.contains_key("/v1/aliases/voprf/evaluate"));
+            assert!(paths.contains_key("/v1/aliases/resolve"));
+            assert!(paths.contains_key("/v1/aliases/resolve_index"));
         });
     }
 

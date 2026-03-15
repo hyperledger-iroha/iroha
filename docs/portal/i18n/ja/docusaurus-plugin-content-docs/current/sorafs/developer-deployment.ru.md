@@ -30,7 +30,7 @@ ID: 開発者デプロイメント
 
 ## Конфигурация окружения
 
-- ゲートウェイは、エンドポイント プルーフ ストリーミング (`POST /v2/sorafs/proof/stream`)、CLI でのテストを実行します。
+- ゲートウェイは、エンドポイント プルーフ ストリーミング (`POST /v1/sorafs/proof/stream`)、CLI でのテストを実行します。
 - `sorafs_alias_cache` の機能と `iroha_config` または CLI ヘルパー (`sorafs_cli manifest submit --alias-*`)。
 - ストリーム トークン (Torii) のシークレット マネージャー。
 - エクスポーター (`torii_sorafs_proof_stream_*`、`torii_sorafs_chunk_range_*`) と Prometheus/OTel をサポートします。

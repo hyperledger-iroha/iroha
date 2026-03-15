@@ -546,7 +546,7 @@ struct OkIdResponse {
     id: String,
 }
 
-/// GET /v2/sumeragi/pacemaker — snapshot of pacemaker timers and config
+/// GET /v1/sumeragi/pacemaker — snapshot of pacemaker timers and config
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_pacemaker(
@@ -580,7 +580,7 @@ pub async fn handle_v1_sumeragi_pacemaker(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/qc — HighestQC/LockedQC snapshot including subject hash if available
+/// GET /v1/sumeragi/qc — HighestQC/LockedQC snapshot including subject hash if available
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snap = sumeragi::status_snapshot();
@@ -678,7 +678,7 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/phases — Compact JSON with latest per-phase latencies (ms)
+/// GET /v1/sumeragi/phases — Compact JSON with latest per-phase latencies (ms)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_phases(
     accept: Option<axum::http::HeaderValue>,
@@ -713,7 +713,7 @@ pub async fn handle_v1_sumeragi_phases(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
+/// GET /v1/sumeragi/bls_keys — map of network public keys -> BLS public keys (hex strings)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_bls_keys(
     State(state): State<Arc<CoreState>>,
@@ -740,7 +740,7 @@ pub async fn handle_v1_sumeragi_bls_keys(
     Ok(crate::utils::respond_with_format(obj, format))
 }
 
-/// GET /v2/sumeragi/leader — leader index snapshot; includes PRF context when available
+/// GET /v1/sumeragi/leader — leader index snapshot; includes PRF context when available
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_leader(
     accept: Option<axum::http::HeaderValue>,
@@ -764,7 +764,7 @@ pub async fn handle_v1_sumeragi_leader(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/collectors — current collector indices and peers derived from topology and on-chain params
+/// GET /v1/sumeragi/collectors — current collector indices and peers derived from topology and on-chain params
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_collectors(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -898,7 +898,7 @@ pub async fn handle_v1_sumeragi_collectors(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/params — snapshot of on-chain Sumeragi parameters
+/// GET /v1/sumeragi/params — snapshot of on-chain Sumeragi parameters
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_params(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -929,7 +929,7 @@ pub async fn handle_v1_sumeragi_params(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v2/sumeragi/evidence/count — returns the number of unique EvidenceV3 entries observed.
+/// GET /v1/sumeragi/evidence/count — returns the number of unique EvidenceV3 entries observed.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_count(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -962,7 +962,7 @@ pub struct EvidenceListQuery {
     pub kind: Option<String>,
 }
 
-/// GET /v2/sumeragi/evidence — list recent evidence entries (in-memory audit snapshot).
+/// GET /v1/sumeragi/evidence — list recent evidence entries (in-memory audit snapshot).
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_evidence_list(
     State(state): State<std::sync::Arc<CoreState>>,
@@ -1039,7 +1039,7 @@ pub struct EvidenceSubmitRequestDto {
     pub evidence_hex: String,
 }
 
-/// Handle POST `/v2/sumeragi/evidence/submit`, validating and forwarding consensus evidence.
+/// Handle POST `/v1/sumeragi/evidence/submit`, validating and forwarding consensus evidence.
 pub fn handle_post_sumeragi_evidence_submit(
     sumeragi: SumeragiHandle,
     request: EvidenceSubmitRequestDto,
@@ -1535,7 +1535,7 @@ mod evidence_submit_tests {
 }
 
 #[cfg(feature = "app_api")]
-/// GET /v2/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
+/// GET /v1/sumeragi/new_view/sse — SSE stream of NEW_VIEW counts polled periodically.
 pub fn handle_v1_new_view_sse(
     poll_ms: u64,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
@@ -4144,7 +4144,7 @@ mod status_tests {
     }
 }
 
-/// GET /v2/sumeragi/status — latest consensus status snapshot
+/// GET /v1/sumeragi/status — latest consensus status snapshot
 /// Returns leader index and HighestQC (height, view).
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_status(
@@ -4792,7 +4792,7 @@ pub async fn handle_v1_sumeragi_status(
     Ok(resp)
 }
 
-/// SSE stream for `/v2/sumeragi/status/sse`, emitting the same payload as the JSON snapshot.
+/// SSE stream for `/v1/sumeragi/status/sse`, emitting the same payload as the JSON snapshot.
 pub fn handle_v1_sumeragi_status_sse(
     poll_ms: u64,
     nexus_enabled: bool,
@@ -4894,7 +4894,7 @@ fn vrf_summary_not_found_json(epoch: u64) -> norito::json::Value {
     ])
 }
 
-/// GET /v2/sumeragi/telemetry — aggregated collector/QC/RBC metrics snapshot.
+/// GET /v1/sumeragi/telemetry — aggregated collector/QC/RBC metrics snapshot.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl IntoResponse> {
     let availability = status::availability_snapshot();
@@ -4984,7 +4984,7 @@ pub async fn handle_v1_sumeragi_telemetry(state: Arc<CoreState>) -> Result<impl 
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/vrf/penalties/{epoch} — epoch VRF penalties snapshot
+/// GET /v1/sumeragi/vrf/penalties/{epoch} — epoch VRF penalties snapshot
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_vrf_penalties(
     epoch: axum::extract::Path<String>,
@@ -5058,7 +5058,7 @@ pub async fn handle_v1_sumeragi_vrf_penalties(
     }
 }
 
-/// GET /v2/sumeragi/vrf/epoch/{epoch} — persisted VRF epoch snapshot
+/// GET /v1/sumeragi/vrf/epoch/{epoch} — persisted VRF epoch snapshot
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_vrf_epoch(
     state: Arc<CoreState>,
@@ -5188,7 +5188,7 @@ pub fn handle_post_sumeragi_vrf_reveal(
     Ok(StatusCode::ACCEPTED.into_response())
 }
 
-/// GET /v2/sumeragi/rbc/sessions — RBC session snapshot
+/// GET /v1/sumeragi/rbc/sessions — RBC session snapshot
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
     let items = rbc_status::snapshot();
@@ -5264,7 +5264,7 @@ pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/rbc — RBC session/throughput counters
+/// GET /v1/sumeragi/rbc — RBC session/throughput counters
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_rbc_status(
@@ -5322,7 +5322,7 @@ pub async fn handle_v1_sumeragi_rbc_status(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/rbc/delivered/{height}/{view} — delivery status for a specific (height, view)
+/// GET /v1/sumeragi/rbc/delivered/{height}/{view} — delivery status for a specific (height, view)
 /// Returns a compact JSON with `delivered` boolean and a minimal summary when a session exists.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
@@ -5387,7 +5387,7 @@ pub async fn handle_v1_sumeragi_rbc_delivered_height_view(
     Ok(resp)
 }
 
-/// GET /v2/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
+/// GET /v1/sumeragi/commit_qc/{hash} — return full commit QC record for a block hash (if present)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_commit_qc(
     State(state): State<std::sync::Arc<CoreState>>,

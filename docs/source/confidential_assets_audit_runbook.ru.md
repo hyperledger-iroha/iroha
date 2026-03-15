@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - Метаданные политики и ожидающие переходы доступны через
-  `GET /v2/confidential/assets/{definition_id}/transitions`
+  `GET /v1/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`), отражено Swift SDK
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) и описано в
   как дизайн конфиденциальных активов, так и руководства по SDK

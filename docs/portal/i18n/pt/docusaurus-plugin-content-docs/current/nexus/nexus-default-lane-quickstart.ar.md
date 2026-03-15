@@ -166,7 +166,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` e crate عميل Rust يحذفان حقل `lane_id` عندما لا تمرر `--lane-id` / `LaneSelector`. O roteador de fila é o `default_lane`. Verifique se o `--lane-id`/`--dataspace-id` está localizado na pista mais próxima.
 - **JS/Swift/Android.** أحدث إصدارات SDK `laneId`/`lane_id` كاختيارية وتعود إلى القيمة المعلنة Em `/status`. حافظ على سياسة التوجيه متزامنة بين preparação e produção حتى لا تحتاج تطبيقات الهاتف لإعادة تهيئة Sim.
-- **Testes de pipeline/SSE.** Testes de pipeline/SSE.** Testes de pipeline `tx_lane_id == <u32>` (`docs/source/pipeline.md`). Coloque o `/v2/pipeline/events/transactions` na faixa de rodagem da faixa de rodagem, na faixa de rodagem الاحتياطي.
+- **Testes de pipeline/SSE.** Testes de pipeline/SSE.** Testes de pipeline `tx_lane_id == <u32>` (`docs/source/pipeline.md`). Coloque o `/v1/pipeline/events/transactions` na faixa de rodagem da faixa de rodagem, na faixa de rodagem الاحتياطي.
 
 ## 7. المراقبة وروابط الحوكمة
 

@@ -21,8 +21,8 @@ translation_last_reviewed: 2026-01-01
 - ✅ חשיפת טיפוסי Norito `Proposal`/`Vote`/`Qc` ב-`BlockMessage` והרצת round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ חסימת המסגרות הישנות `BlockSigned/BlockCommitted`; מתג ההגירה נשאר `false` לפני ההוצאה משימוש.
 - ✅ הסרת מתג ההגירה שהחליף בין מסרי הבלוקים הישנים; מסלול Vote/commit certificate הוא כעת המסלול היחיד על wire.
-- ✅ עדכון נתבי Torii, פקודות CLI וצרכני הטלמטריה להעדיף snapshots JSON של `/v2/sumeragi/*` על פני מסגרות הבלוק הישנות.
-- ✅ כיסוי אינטגרציה מפעיל את נקודות הקצה `/v2/sumeragi/*` אך ורק דרך צינור Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ עדכון נתבי Torii, פקודות CLI וצרכני הטלמטריה להעדיף snapshots JSON של `/v1/sumeragi/*` על פני מסגרות הבלוק הישנות.
+- ✅ כיסוי אינטגרציה מפעיל את נקודות הקצה `/v1/sumeragi/*` אך ורק דרך צינור Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ הסרת המסגרות הישנות לאחר השגת שוויון יכולות ובדיקות תאימות.
 
 ### תוכנית הסרת מסגרות
@@ -63,7 +63,7 @@ translation_last_reviewed: 2026-01-01
 ### צעדים מידיים
 1. ✅ harness של jitter מוגבל מפעיל את מדדי jitter של pacemaker (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
 2. ✅ חיזוק assertions של deferral RBC ב-`npos_queue_backpressure_triggers_metrics` באמצעות יצירת לחץ דטרמיניסטי על store RBC (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. ✅ הרחבת soak של `/v2/sumeragi/telemetry` לכיסוי epochs ארוכים ו-collectors עוינים, עם השוואת snapshots למוני Prometheus לאורך מספר heights. מכוסה ע"י `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
+3. ✅ הרחבת soak של `/v1/sumeragi/telemetry` לכיסוי epochs ארוכים ו-collectors עוינים, עם השוואת snapshots למוני Prometheus לאורך מספר heights. מכוסה ע"י `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
 
 מעקב אחרי הרשימה כאן שומר על `roadmap.md` ממוקד באבני דרך ובמקביל נותן לצוות רשימת בדיקה חיה לביצוע. עדכנו את הערכים (וסמנו השלמות) עם נחיתת התיקונים.
 

@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-02-07
 
 | Проверка | Валидация | Доказательство |
 |------|-----------|----------|
-|レジストリ канонические декларации емкости | `/v2/sorafs/capacity/declare` アプリ API、メタデータ、レジストリの情報ね。 | `crates/iroha_torii/src/routing.rs:7654` |
+|レジストリ канонические декларации емкости | `/v1/sorafs/capacity/declare` アプリ API、メタデータ、レジストリの情報ね。 | `crates/iroha_torii/src/routing.rs:7654` |
 |スマート コントラクト ペイロード |ユニットは、ID プロバイダーとコミットされた GiB を使用して、最新の情報を提供します。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI のアーティファクト онбординга | канонические CLI ハーネスは、Norito/JSON/Base64 の往復接続、および接続を実行します。オフラインで。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 |ワークフローとガードレールの管理 |議会のデフォルトポリシーを確認してください。 | `../storage-capacity-marketplace.md` |

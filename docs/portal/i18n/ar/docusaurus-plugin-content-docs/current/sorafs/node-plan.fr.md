@@ -55,7 +55,7 @@ SF-3 يحرر الصندوق الأول القابل للتنفيذ `sorafs-node
 ملاحظات التنفيذ:
 
 - استخدم مكدس Axum de Torii مع الحمولات الصافية `norito::json`.
-- إضافة المخططات Norito للإجابات (`PinResultV1`, `FetchErrorV1`, هياكل القياس عن بعد).- ✅ يعرض `/v2/sorafs/por/ingestion/{manifest_digest_hex}` عمق التراكم بالإضافة إلى العصر/التحديث القديم والطوابع الزمنية للنجاح/التحقق من أحدث الأحداث من قبل الموفر، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وTorii قم بتسجيل المقاييس `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للي لوحات المعلومات.[crates/sorafs_node/src/lib.rs:510][crates/iroha_torii/src/sorafs/api.rs:1883][crates/iroha_torii/src/routing.rs:7244][crates/iroha_telemetry/src/metrics.rs:5390]
+- إضافة المخططات Norito للإجابات (`PinResultV1`, `FetchErrorV1`, هياكل القياس عن بعد).- ✅ يعرض `/v1/sorafs/por/ingestion/{manifest_digest_hex}` عمق التراكم بالإضافة إلى العصر/التحديث القديم والطوابع الزمنية للنجاح/التحقق من أحدث الأحداث من قبل الموفر، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وTorii قم بتسجيل المقاييس `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للي لوحات المعلومات.[crates/sorafs_node/src/lib.rs:510][crates/iroha_torii/src/sorafs/api.rs:1883][crates/iroha_torii/src/routing.rs:7244][crates/iroha_telemetry/src/metrics.rs:5390]
 
 ### د. جدولة وتطبيق الحصص
 

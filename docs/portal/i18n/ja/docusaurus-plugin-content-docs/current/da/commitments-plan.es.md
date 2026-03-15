@@ -31,7 +31,7 @@ cliente ligero y las superficies Torii/RPC que deben aterrizar antes de que los
   アルマセナミエントの燃料帳簿の可用性を調べます。
 - クライアントの検証結果を確認するための決定事項を証明する
   マニフェスト ハッシュ ファイルの最終処理はブロック ダドで行われます。
-- 公開者は、Torii (`/v2/da/commitments/*`) y の許可を取得します。
+- 公開者は、Torii (`/v1/da/commitments/*`) y の許可を取得します。
   リレー、SDK、および自動監査による再現性の可用性
   カダブロック。
 - 封筒 `SignedBlockWire` canonico al enhebrar las nuevas
@@ -47,7 +47,7 @@ cliente ligero y las superficies Torii/RPC que deben aterrizar antes de que los
 3. **永続化/インデックス** による WSV の侵害対応の相談
    ラピド (`iroha_core/src/wsv/mod.rs`)。
 4. **Adiciones RPC en Torii** エンドポイントのリスト/コンサルタ/プルエババジョ
-   `/v2/da/commitments`。
+   `/v1/da/commitments`。
 5. **統合テストとフィクスチャ** ワイヤ レイアウトとフルホの検証
    証明 en `integration_tests/tests/da/commitments.rs`。
 
@@ -139,9 +139,9 @@ Torii トレス エンドポイントを説明します:
 
 |ルタ |メトド |ペイロード |メモ |
 |------|--------|-----------|----------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンス、ページのランゴ フィルター) | Devuelve `DaCommitmentPage` 合計、ブロックのハッシュが侵害されています。 |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ値 `(epoch, sequence)`)。 | `DaCommitmentProof` (レコード + ルタ マークル + ハッシュ デ ブロック) に応答します。 |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` |ヘルパーステートレスクエリのブロックとブロックのハッシュと検証の計算を実行します。 SDK を使用して、`iroha_crypto` を直接参照することはできません。 |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンス、ページのランゴ フィルター) | Devuelve `DaCommitmentPage` 合計、ブロックのハッシュが侵害されています。 |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ値 `(epoch, sequence)`)。 | `DaCommitmentProof` (レコード + ルタ マークル + ハッシュ デ ブロック) に応答します。 |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |ヘルパーステートレスクエリのブロックとブロックのハッシュと検証の計算を実行します。 SDK を使用して、`iroha_crypto` を直接参照することはできません。 |
 
 Todos のペイロードは、バホ `iroha_data_model::da::commitment` に表示されます。ルーターの紛失
 Torii モンタン ロス ハンドラー ジュント ロス エンドポイント デ インジェスタ DA 存在パラ

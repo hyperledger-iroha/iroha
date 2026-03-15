@@ -41,7 +41,7 @@ _الحالة: قيد التنفيذ -- المالكون: Core Protocol WG / Sto
 | _Default (كل الفئات الاخرى)_ | 6 ساعات | 30 يوما | 3 | `warm` | `da.default` |
 
 تدمج هذه القيم في `torii.da_ingest.replication_policy` وتطبق على جميع
-طلبات `/v2/da/ingest`. يعيد Torii كتابة manifests مع ملف الاحتفاظ المفروض ويصدر
+طلبات `/v1/da/ingest`. يعيد Torii كتابة manifests مع ملف الاحتفاظ المفروض ويصدر
 تحذيرا عندما يوفر المتصلون قيما غير متطابقة حتى يتمكن المشغلون من كشف SDKs
 المتقادمة.
 
@@ -156,5 +156,5 @@ governance_tag = "da.taikai.archive"
    ودليل PDP.
 
 توجد تغطية الانحدار في `integration_tests/tests/da/replication_policy.rs`؛ تقوم
-الحزمة بارسال سياسة احتفاظ غير متطابقة الى `/v2/da/ingest` وتتحقق من ان
+الحزمة بارسال سياسة احتفاظ غير متطابقة الى `/v1/da/ingest` وتتحقق من ان
 manifest المسترجع يعرض الملف المفروض بدلا من نية المتصل.

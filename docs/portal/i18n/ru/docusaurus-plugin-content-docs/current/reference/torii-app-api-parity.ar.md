@@ -18,11 +18,11 @@ translation_last_reviewed: 2026-02-07
 Место: Torii Platform, руководитель программы SDK.  
 Приложение создано: TORII-APP-1 — добавлено `app_api`.
 
-Установите флажок `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`). Пожалуйста, проверьте, как работает `/v2/*`. Для этого используйте `Torii::add_app_api_routes` и `add_contracts_and_vk_routes` и `add_connect_routes`.
+Установите флажок `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`). Пожалуйста, проверьте, как работает `/v1/*`. Для этого используйте `Torii::add_app_api_routes` и `add_contracts_and_vk_routes` и `add_connect_routes`.
 
 ## النطاق والمنهج
 
-Для получения дополнительной информации обратитесь к `crates/iroha_torii/src/lib.rs:256-522`. المحمية بالميزات. На странице `/v2/*` в разделе "Программы" написано:
+Для получения дополнительной информации обратитесь к `crates/iroha_torii/src/lib.rs:256-522`. المحمية بالميزات. На странице `/v1/*` в разделе "Программы" написано:
 
 - Выполнено обновление DTO для `crates/iroha_torii/src/routing.rs`.
 - Установите флажок `app_api` или `connect`.
@@ -40,25 +40,25 @@ translation_last_reviewed: 2026-02-07
 - Ответ:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## جرد نقاط النهاية
 
-### اذونات الحساب (`/v2/accounts/{id}/permissions`) — مغطى
+### اذونات الحساب (`/v1/accounts/{id}/permissions`) — مغطى
 - Код: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTO: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Код: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -66,7 +66,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Сообщение: Torii Платформа.
 - Код: Загрузка в формате JSON Norito и `items`/`total`, а также в формате JSON Norito. Доступно изменение в SDK.
 
-### تقييم OPRF للاسماء المستعارة (`POST /v2/aliases/voprf/evaluate`) — مغطى
+### تقييم OPRF للاسماء المستعارة (`POST /v1/aliases/voprf/evaluate`) — مغطى
 - Код: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`.
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -76,7 +76,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Сообщение: Платформа Torii.
 - Значение: шестнадцатеричное числовое значение для серверной части; Используйте SDK для DTO.
 
-### احداث доказательство عبر SSE (`GET /v2/events/sse`) — مغطى
+### احداث доказательство عبر SSE (`GET /v1/events/sse`) — مغطى
 - Код: `handle_v1_events_sse` в случае необходимости (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTO: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) для проверки подлинности.
 - Код: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -84,7 +84,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
   `sse_proof_callhash.rs`, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) واختبار Smoke لSSE في خط الانابيب
   (`integration_tests/tests/events/sse_smoke.rs`).
 - Добавлено: Torii Платформа (среда выполнения), WG Integration Tests (фикстуры).
-- Сообщение: تم التحقق من مسارات فلتر доказательство طرفا لطرف؛ Создан для `docs/source/zk_app_api.md`.### دورة حياة العقود (`/v2/contracts/*`) — مغطى
+- Сообщение: تم التحقق من مسارات فلتر доказательство طرفا لطرف؛ Создан для `docs/source/zk_app_api.md`.### دورة حياة العقود (`/v1/contracts/*`) — مغطى
 - Код: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   И18НИ00000089Х (И18НИ00000090Х),
   И18НИ00000091Х (И18НИ00000092Х),
@@ -99,7 +99,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Сообщение: Рабочая группа по смарт-контрактам на платформе Torii.
 - Видео: Вспомните, что произошло в 2017 году. Установите флажок для проверки подлинности (`handle_transaction_with_metrics`).
 
-### دورة حياة مفاتيح التحقق (`/v2/zk/vk/*`) — مغطى
+### دورة حياة مفاتيح التحقق (`/v1/zk/vk/*`) — مغطى
 - Коды: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`.
   (`crates/iroha_torii/src/routing.rs:4282-4382`) و`handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`.
@@ -111,7 +111,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - Сообщение: Рабочая группа ZK создала платформу Torii.
 - Добавлено: добавление DTO в Norito для установки SDK; Установлено ограничение скорости `limits.rs`.
 
-### Nexus Connect (`/v2/connect/*`) — مغطى (функция `connect`)
+### Nexus Connect (`/v1/connect/*`) — مغطى (функция `connect`)
 - Коды: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   И18НИ00000134Х (И18НИ00000135Х).
 - DTO: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

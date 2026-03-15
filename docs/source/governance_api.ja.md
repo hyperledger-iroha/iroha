@@ -27,7 +27,7 @@ translator: manual
 
 ## エンドポイント一覧
 
-### POST `/v2/gov/proposals/deploy-contract`
+### POST `/v1/gov/proposals/deploy-contract`
 - リクエスト JSON
   ```json
   {
@@ -48,14 +48,14 @@ translator: manual
 - バリデーション: ノードは指定された `abi_version` に従って `abi_hash` を正規化し、値が一致しない場合に拒否します。`abi_version = "v1"` の場合、期待値は `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` です。
 
 ### Contracts API（デプロイ）
-- POST `/v2/contracts/deploy`
+- POST `/v1/contracts/deploy`
   - リクエスト: `{ "authority": "i105...", "private_key": "…", "code_b64": "…" }`
   - 挙動: IVM プログラム本体から `code_hash` を計算し、ヘッダの `abi_version` から `abi_hash` を導出したうえで、`RegisterSmartContractCode`（マニフェスト）と `RegisterSmartContractBytes`（完全な `.to` バイト列）を `authority` の代理で送信します。
   - レスポンス: `{ "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }`
   - 関連エンドポイント:
-    - GET `/v2/contracts/code/{code_hash}` → 保管済みマニフェストを返す
-    - GET `/v2/contracts/code-bytes/{code_hash}` → `{ "code_b64": "…" }` を返す
-- POST `/v2/contracts/instance`
+    - GET `/v1/contracts/code/{code_hash}` → 保管済みマニフェストを返す
+    - GET `/v1/contracts/code-bytes/{code_hash}` → `{ "code_b64": "…" }` を返す
+- POST `/v1/contracts/instance`
   - リクエスト: `{ "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }`
   - 挙動: バイトコードのデプロイと `(namespace, contract_id)` へのバインドを単一トランザクションで行います（`RegisterSmartContractCode` + `RegisterSmartContractBytes` + `ActivateContractInstance`）。
   - レスポンス: `{ "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }`
@@ -66,7 +66,7 @@ translator: manual
   - 既定値は 16 MiB。`.to` イメージのサイズが上限を超える `RegisterSmartContractBytes` は不変条件違反として拒否されます。
   - オペレーターは `id = "max_contract_code_bytes"`、数値ペイロードの `SetParameter(Custom)` 命令で調整できます。
 
-### POST `/v2/gov/ballots/zk`
+### POST `/v1/gov/ballots/zk`
 - リクエスト: `{ "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": { … } }`
 - レスポンス: `{ "ok": true, "accepted": true, "tx_instructions": [{ … }] }`
 - 備考:
@@ -74,12 +74,12 @@ translator: manual
   - 金額や有効期限を縮小しようとする ZK 再投票は `BallotRejected` で拒否されます。
   - コントラクトは `SubmitBallot` をキューに入れる前に `ZK_VOTE_VERIFY_BALLOT` を呼び出す必要があり、ホストはワンショットラッチを強制します。
 
-### POST `/v2/gov/ballots/plain`
+### POST `/v1/gov/ballots/plain`
 - リクエスト: `{ "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }`
 - レスポンス: `{ "ok": true, "accepted": true, "tx_instructions": [{ … }] }`
 - 備考: 再投票は延長のみ許可され、既存ロックの金額や期限を減らすことはできません。`owner` はトランザクションの `authority` と一致している必要があります。最小学習期間は `conviction_step_blocks` に基づきます。
 
-### POST `/v2/gov/finalize`
+### POST `/v1/gov/finalize`
 - リクエスト: `{ "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "…?" }`
 - レスポンス: `{ "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }`
 - オンチェーン効果（現時点のスケルトン）: 承認済みデプロイ提案を実行すると、`code_hash` をキーに期待される `abi_hash` を持つ最小限の `ContractManifest` を登録し、提案を Enacted に設定します。すでに同じ `code_hash` に別の `abi_hash` を持つマニフェストが存在する場合は enact を拒否します。
@@ -88,25 +88,25 @@ translator: manual
   - `h_end` の自動クローズは Plain レファレンダムのみ Approved/Rejected を発行します。ZK は集計が確定して `FinalizeReferendum` が実行されるまで Closed のままです。
   - ターンアウト判定は approve+reject のみを使用し、abstain はカウントしません。
 
-### POST `/v2/gov/enact`
+### POST `/v1/gov/enact`
 - リクエスト: `{ "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }`
 - レスポンス: `{ "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }`
 - 備考: `authority`/`private_key` が提供されると Torii が署名・送信し、それ以外は命令スケルトンを返します。`preimage_hash` は任意で現在は情報目的のみ。
 
-### GET `/v2/gov/proposals/{id}`
+### GET `/v1/gov/proposals/{id}`
 - パス `{id}`: 提案 ID（16 進文字列 64 桁）
 - レスポンス: `{ "found": bool, "proposal": { … }? }`
 
-### GET `/v2/gov/locks/{rid}`
+### GET `/v1/gov/locks/{rid}`
 - パス `{rid}`: レファレンダム ID 文字列
 - レスポンス: `{ "locks": [ { "owner": "…", "amount": "…", "expires_at": … }, … ] }`
 
-### GET `/v2/gov/locks/summary`
+### GET `/v1/gov/locks/summary`
 - クエリパラメータ: `rid`（レファレンダム ID）
 - レスポンス例: `{ "lock_count": 10, "total_amount": "12345", "expired_locks_now": 2, "last_sweep_height": 98765 }`
 - 備考: `last_sweep_height` は期限切れロックを掃除して永続化した最新ブロック高、`expired_locks_now` は現在の高さにおいて期限切れとなるロック数です。
 
-### POST `/v2/gov/ballots/zk-v1`
+### POST `/v1/gov/ballots/zk-v1`
 - リクエスト（v1 形式 DTO）
   ```json
   {
@@ -126,7 +126,7 @@ translator: manual
   ```
 - レスポンス: `{ "ok": true, "accepted": true, "tx_instructions": [{ … }] }`
 
-### POST `/v2/gov/ballots/zk-v1/ballot-proof`（feature: `zk-ballot`）
+### POST `/v1/gov/ballots/zk-v1/ballot-proof`（feature: `zk-ballot`）
 - `BallotProof` JSON を直接受け取り、`CastZkBallot` スケルトンを返します。
 - リクエスト
   ```json

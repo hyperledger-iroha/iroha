@@ -72,10 +72,10 @@ OAuth 変数が設定されている場合、sandbox は **Sign in with device c
 1. CLI または [Norito クイックスタート](./quickstart.md) で紹介しているスニペットで `.norito` ペイロードを作成します。プロキシは `application/x-norito` の本文をそのまま転送するため、`curl` で送る場合と同じ成果物を再利用できます。
 2. `/reference/torii-rapidoc`（バイナリペイロード向け）または `/reference/torii-swagger` を開きます。
 3. ドロップダウンから目的の Torii スナップショットを選択します。スナップショットは署名済みで、パネルには `static/openapi/manifest.json` に記録されたマニフェストダイジェストが表示されます。
-4. "Try it" ドロワーで `application/x-norito` のコンテンツタイプを選択し、**Choose File** をクリックしてペイロードを選びます。プロキシはリクエストを `/proxy/v2/pipeline/submit` に書き換え、`X-TryIt-Client=docs-portal-rapidoc` でタグ付けします。
+4. "Try it" ドロワーで `application/x-norito` のコンテンツタイプを選択し、**Choose File** をクリックしてペイロードを選びます。プロキシはリクエストを `/proxy/v1/pipeline/submit` に書き換え、`X-TryIt-Client=docs-portal-rapidoc` でタグ付けします。
 5. Norito のレスポンスをダウンロードするには `Accept: application/x-norito` を設定します。Swagger/RapiDoc は同じドロワーにヘッダーセレクタを表示し、バイナリをプロキシ経由でストリームします。
 
-JSON のみのルートでは、組み込みの Try it sandbox の方が速い場合があります。パス（例: `/v2/accounts/i105.../assets`）を入力し、HTTP メソッドを選択し、必要なら JSON ボディを貼り付け、**Send request** を押してヘッダー、所要時間、ペイロードをその場で確認します。
+JSON のみのルートでは、組み込みの Try it sandbox の方が速い場合があります。パス（例: `/v1/accounts/i105.../assets`）を入力し、HTTP メソッドを選択し、必要なら JSON ボディを貼り付け、**Send request** を押してヘッダー、所要時間、ペイロードをその場で確認します。
 
 ## トラブルシューティング
 

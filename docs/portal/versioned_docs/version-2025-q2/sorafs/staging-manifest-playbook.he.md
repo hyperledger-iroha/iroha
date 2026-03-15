@@ -73,13 +73,13 @@ slug: /sorafs/staging-manifest-playbook-he
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. חפש את נקודת הקצה של הגילוי ואשר שהמודעה מופיעה עם כינויים קנוניים:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    ודא ש-`profile_aliases` כולל את `"sorafs.sf1@1.0.0"` בתור הערך הראשון.

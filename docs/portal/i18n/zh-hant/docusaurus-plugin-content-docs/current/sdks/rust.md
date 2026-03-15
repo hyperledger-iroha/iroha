@@ -156,7 +156,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` 鏡像 `/v2/explorer/accounts/{id}/qr` JSON
+`ExplorerAccountQrSnapshot` 鏡像 `/v1/explorer/accounts/{id}/qr` JSON
 表面：它包括規範的帳戶ID，用
 規範 I105 字面量、網絡前綴/糾錯元數據、QR 尺寸以及
 錢包/瀏覽器可以直接嵌入的內聯 SVG 有效負載。

@@ -40,7 +40,7 @@ async fn contracts_call_enqueues_transaction() {
 
     let app = Router::new()
         .route(
-            "/v2/contracts/deploy",
+            "/v1/contracts/deploy",
             post({
                 let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
@@ -61,7 +61,7 @@ async fn contracts_call_enqueues_transaction() {
             }),
         )
         .route(
-            "/v2/contracts/instance/activate",
+            "/v1/contracts/instance/activate",
             post({
                 let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
@@ -82,7 +82,7 @@ async fn contracts_call_enqueues_transaction() {
             }),
         )
         .route(
-            "/v2/contracts/call",
+            "/v1/contracts/call",
             post({
                 let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
@@ -112,7 +112,7 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
     let deploy_req = http::Request::builder()
         .method("POST")
-        .uri("/v2/contracts/deploy")
+        .uri("/v1/contracts/deploy")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(deploy_body))
         .unwrap();
@@ -139,7 +139,7 @@ async fn contracts_call_enqueues_transaction() {
     );
     let activate_req = http::Request::builder()
         .method("POST")
-        .uri("/v2/contracts/instance/activate")
+        .uri("/v1/contracts/instance/activate")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(activate_body))
         .unwrap();
@@ -159,7 +159,7 @@ async fn contracts_call_enqueues_transaction() {
     let missing_limit_body = json::to_json(&missing_limit_payload).expect("serialize call request");
     let missing_limit_req = http::Request::builder()
         .method("POST")
-        .uri("/v2/contracts/call")
+        .uri("/v1/contracts/call")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(missing_limit_body))
         .unwrap();
@@ -180,7 +180,7 @@ async fn contracts_call_enqueues_transaction() {
     );
     let zero_limit_req = http::Request::builder()
         .method("POST")
-        .uri("/v2/contracts/call")
+        .uri("/v1/contracts/call")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(zero_limit_body))
         .unwrap();
@@ -202,7 +202,7 @@ async fn contracts_call_enqueues_transaction() {
     );
     let call_req = http::Request::builder()
         .method("POST")
-        .uri("/v2/contracts/call")
+        .uri("/v1/contracts/call")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(call_body))
         .unwrap();

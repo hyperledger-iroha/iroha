@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 路线图参考：TORII-APP-1 — `app_api` 奇偶校验审核
 
 此页面镜像内部 `TORII-APP-1` 审核 (`docs/source/torii/app_api_parity_audit.md`)
-因此 mono-repo 之外的读者可以看到哪些 `/v2/*` 表面已接线、经过测试、
+因此 mono-repo 之外的读者可以看到哪些 `/v1/*` 表面已接线、经过测试、
 并记录下来。审计跟踪通过`Torii::add_app_api_routes`再导出的路由，
 `add_contracts_and_vk_routes` 和 `add_connect_routes`。
 
 ## 范围和方法
 
 审计检查了`crates/iroha_torii/src/lib.rs:256-522`中的公开再出口和
-功能门控路线构建器。对于路线图中的每个 `/v2/*` 表面，我们验证了：
+功能门控路线构建器。对于路线图中的每个 `/v1/*` 表面，我们验证了：
 
 - `crates/iroha_torii/src/routing.rs` 中的处理程序实现和 DTO 定义。
 - `app_api` 或 `connect` 功能组下的路由器注册。
@@ -42,25 +42,25 @@ translation_last_reviewed: 2026-02-07
 - 示例片段：
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## 端点库存
 
-### 帐户权限 (`/v2/accounts/{id}/permissions`) — 涵盖
+### 帐户权限 (`/v1/accounts/{id}/permissions`) — 涵盖
 - 处理程序：`handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`)。
 - DTO：`filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`)。
 - 路由器绑定：`Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
@@ -68,7 +68,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者：Torii 平台。
 - 注意：响应是 Norito JSON 正文，其中包含 `items`/`total`，匹配 SDK 分页助手。
 
-### 别名 OPRF 评估 (`POST /v2/aliases/voprf/evaluate`) — 已覆盖
+### 别名 OPRF 评估 (`POST /v1/aliases/voprf/evaluate`) — 已覆盖
 - 处理程序：`handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`)。
 - DTO：`AliasVoprfEvaluateRequestDto`、`AliasVoprfEvaluateResponseDto`、`AliasVoprfBackendDto`
   （`crates/iroha_torii/src/routing.rs:809-865`）。
@@ -78,7 +78,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者：Torii 平台。
 - 注意：响应面强制执行确定性十六进制和后端标识符； SDK 使用 DTO。
 
-### 证明事件 SSE (`GET /v2/events/sse`) — 涵盖
+### 证明事件 SSE (`GET /v1/events/sse`) — 涵盖
 - 处理程序：`handle_v1_events_sse`，带过滤器支持 (`crates/iroha_torii/src/routing.rs:14008-14133`)。
 - DTO：`EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) 加上防爆滤波器接线。
 - 路由器绑定：`Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`)。
@@ -88,7 +88,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者：Torii 平台（运行时）、集成测试工作组（固定装置）。
 - 注：证明过滤器路径经过端到端验证；文档位于 `docs/source/zk_app_api.md` 下。
 
-### 合同生命周期 (`/v2/contracts/*`) — 涵盖
+### 合同生命周期 (`/v1/contracts/*`) — 涵盖
 - 处理程序：`handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`)，
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -103,7 +103,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者：拥有 Torii 平台的智能合约工作组。
 - 注意：端点对签名事务进行排队并重用共享遥测指标（`handle_transaction_with_metrics`）。
 
-### 验证密钥生命周期 (`/v2/zk/vk/*`) — 涵盖
+### 验证密钥生命周期 (`/v1/zk/vk/*`) — 涵盖
 - 处理程序：`handle_post_vk_register`、`handle_post_vk_update`、`handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) 和 `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`)。
 - DTO：`ZkVkRegisterDto`、`ZkVkUpdateDto`、`ZkVkDeprecateDto`、`VkListQuery`、`ProofFindByIdQueryDto`
@@ -115,7 +115,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - 所有者：ZK 工作组，提供 Torii 平台支持。
 - 注意：DTO 与 SDK 引用的 Norito 架构保持一致；通过 `limits.rs` 强制执行速率限制。
 
-### Nexus 连接 (`/v2/connect/*`) — 涵盖（功能 `connect`）
+### Nexus 连接 (`/v1/connect/*`) — 涵盖（功能 `connect`）
 - 处理程序：`handle_connect_session`、`handler_connect_session_delete`、`handle_connect_ws`、
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`)。
 - DTO：`ConnectSessionRequest`、`ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`)、

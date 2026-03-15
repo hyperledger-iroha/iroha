@@ -135,7 +135,7 @@ Alertmanager، و `nexus_lane_rules.yml`).
 ### هل تحتاج SDK الى معالجة خاصة للـ settlement؟
 
 - يجب على SDKs:
-  - توفير helpers للاستعلام عن احداث settlement (`/v2/settlement/records`) وتفسير سجلات
+  - توفير helpers للاستعلام عن احداث settlement (`/v1/settlement/records`) وتفسير سجلات
     `SettlementApplied`.
   - اظهار IDs الخاصة بالـ lane و settlement handles في اعدادات العميل حتى يوجه المشغلون
     المعاملات بشكل صحيح.

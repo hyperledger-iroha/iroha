@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 1. **التوثيق**
    - أضف ملحق امتثال إلى `docs/source/crypto/sm_program.md` يشير إلى حالة التشفير التجاري للدولة وتوقعات التقديم ونقاط الاتصال.
    - نشر حقل البيان Norito (`crypto.sm.enabled=true`، `crypto.sm.approval=l0|l1`) الذي يمكن للمشغلين استخدامه عند إعداد الملفات.
-   - تأكد من أن الإعلان Torii `/v2/node/capabilities` (والاسم المستعار `iroha runtime capabilities` CLI) يأتي مع كل إصدار حتى يتمكن المشغلون من التقاط لقطة بيان `crypto.sm` للحصول على أدلة MLPS/密评.
+   - تأكد من أن الإعلان Torii `/v1/node/capabilities` (والاسم المستعار `iroha runtime capabilities` CLI) يأتي مع كل إصدار حتى يتمكن المشغلون من التقاط لقطة بيان `crypto.sm` للحصول على أدلة MLPS/密评.
    - توفير التوافق السريع ثنائي اللغة (EN / ZH) وتلخيص الالتزامات.
 2. **حرر القطع الأثرية**
    - شحن ملفات SBOM/CycloneDX للبنيات التي تدعم SM.

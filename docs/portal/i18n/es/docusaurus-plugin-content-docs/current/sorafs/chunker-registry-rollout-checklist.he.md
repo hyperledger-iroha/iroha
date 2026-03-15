@@ -80,7 +80,7 @@ recorrido detallado de estos pasos.
    de staging referenciado por `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Verifica que los provider adverts se propaguen vía la API de discovery:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Ejecuta los endpoints de manifest/plan con headers de gobernanza:
    ```bash

@@ -53,7 +53,7 @@ portalni oldindan ko'rish qurilishidan chiqmasdan dalillar.
 | `taikai_ingest_segment_latency_ms` | Klaster/oqim uchun CMAF qabul qilish kechikish gistogrammasi (maqsad: p95<750ms, p99<900ms). |
 | `taikai_ingest_live_edge_drift_ms` | Kodlovchi va langar ishchilari o'rtasida jonli chekka o'tish (sahifalar p99>1,5 soniyada 10 daqiqa). |
 | `taikai_ingest_segment_errors_total{reason}` | Sabablari bo'yicha hisoblagichlar xatosi (`decode`, `manifest_mismatch`, `lineage_replay`, …). Har qanday o'sish `TaikaiIngestFailure` ni keltirib chiqaradi. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v2/da/ingest` taxallus uchun yangi TRM qabul qilganda oshadi; aylanish kadansini tekshirish uchun `rate()` dan foydalaning. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | `/v1/da/ingest` taxallus uchun yangi TRM qabul qilganda oshadi; aylanish kadansini tekshirish uchun `rate()` dan foydalaning. |
 | `/status → telemetry.taikai_alias_rotations[]` | JSON surati `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total` va dalillar toʻplamlari uchun vaqt belgilari. |
 | `taikai_viewer_*` (rebufer, CEK aylanish yoshi, PQ salomatligi, ogohlantirishlar) | CEK aylanishini ta'minlash uchun tomoshabin tomonidagi KPIlar + PQ davrlari langar paytida sog'lom bo'lib qoladi. |
 

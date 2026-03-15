@@ -61,7 +61,7 @@ Notas de implementação:
 - Utilize a pilha Axum de Torii com cargas úteis `norito::json`.
 - Adicionar esquemas Norito para respostas (`PinResultV1`, `FetchErrorV1`, estruturas de telefonia).
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` expõe a manutenção da profundidade do backlog até a época/chegada ao passado e os carimbos de data e hora de sucesso/cheque dos mais recentes pelo provedor, via `sorafs_node::NodeHandle::por_ingestion_status`, e Torii registra os medidores `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para os painéis.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` expõe a manutenção da profundidade do backlog até a época/chegada ao passado e os carimbos de data e hora de sucesso/cheque dos mais recentes pelo provedor, via `sorafs_node::NodeHandle::por_ingestion_status`, e Torii registra os medidores `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para os painéis.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Agendador e aplicativo de cotas| Tache | Detalhes |
 |------|---------|

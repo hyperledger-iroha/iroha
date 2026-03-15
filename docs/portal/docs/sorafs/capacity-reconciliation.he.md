@@ -15,7 +15,7 @@ title: התאמת קיבולת SoraFS
 description: זרימה לילית להתאמת ספרי עמלות קיבולת לייצואי העברות XOR.
 ---
 
-פריט מפת הדרכים **SF-2c** מחייב את צוות האוצר להוכיח שפנקס עמלות הקיבולת תואם להעברות XOR המבוצעות מדי לילה. השתמשו בכלי `scripts/telemetry/capacity_reconcile.py` כדי להשוות את snapshot של `/v2/sorafs/capacity/state` מול אצוות ההעברות שבוצעו ולהפיק מטריקות טקסט של Prometheus ל-Alertmanager.
+פריט מפת הדרכים **SF-2c** מחייב את צוות האוצר להוכיח שפנקס עמלות הקיבולת תואם להעברות XOR המבוצעות מדי לילה. השתמשו בכלי `scripts/telemetry/capacity_reconcile.py` כדי להשוות את snapshot של `/v1/sorafs/capacity/state` מול אצוות ההעברות שבוצעו ולהפיק מטריקות טקסט של Prometheus ל-Alertmanager.
 
 ## דרישות מקדימות
 - Snapshot של מצב הקיבולת (רשומות `fee_ledger`) מיוצא מ-Torii.

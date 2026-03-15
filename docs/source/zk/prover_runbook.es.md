@@ -18,14 +18,14 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
 
 ## Components
 
-- **Attachment API** – `POST /v2/zk/attachments` stores opaque payloads (proofs,
+- **Attachment API** – `POST /v1/zk/attachments` stores opaque payloads (proofs,
   transcripts). Stored entries are scanned by the background prover when
   enabled. Operators can list, download, and delete attachments through the API
   or `iroha_cli app zk attachments *`.
 - **Background prover** – Controlled by
   `torii.zk_prover_enabled=true`. The worker drains the attachment queue,
   verifies `ProofAttachment` payloads, and produces JSON reports
-  (`/v2/zk/prover/reports`). It enforces resource budgets:
+  (`/v1/zk/prover/reports`). It enforces resource budgets:
   `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, and
   `torii.zk_prover_max_scan_millis`. Backend and circuit scope is governed by
   `torii.zk_prover_allowed_backends` and `torii.zk_prover_allowed_circuits`.
@@ -114,14 +114,14 @@ source UID if necessary.
    `torii.zk_prover_scan_period_secs`.
 4. Consider increasing `torii.zk_prover_max_inflight` (parallelism) or reducing
    scan interval.
-5. If attachments are stale, use `DELETE /v2/zk/attachments/:id` or the CLI
+5. If attachments are stale, use `DELETE /v1/zk/attachments/:id` or the CLI
    equivalent to prune unused entries.
 
 ### 3. Reports missing or delayed
 
 1. Verify retention: `torii.zk_prover_reports_ttl_secs`.
 2. Inspect `torii_zk_prover_gc_total` to see if GC is deleting reports.
-3. Check that clients poll `/v2/zk/prover/reports` before TTL expiry.
+3. Check that clients poll `/v1/zk/prover/reports` before TTL expiry.
 4. For urgent analysis, manually fetch raw attachments and reprocess offline.
 
 ## Integration with CLI & SDKs

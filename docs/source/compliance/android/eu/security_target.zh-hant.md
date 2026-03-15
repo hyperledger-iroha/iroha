@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 |被篡改的配置清單| `ClientConfig` 在應用之前驗證清單（哈希+架構），並通過 `android.telemetry.config.reload` 記錄拒絕的重新加載。 | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`； `docs/source/android_runbook.md` §1–2。 |
 |簽名密鑰的洩露 | StrongBox 所需的策略、證明工具和設備矩陣審核可識別偏差；覆蓋每個事件記錄的內容。 | `docs/source/sdk/android/key_management.md`； `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`； `scripts/android_strongbox_attestation_ci.sh`。 |
 |遙測中的 PII 洩露 | Blake2b 散列權限、分桶設備配置文件、運營商遺漏、覆蓋日誌記錄。 | `docs/source/sdk/android/telemetry_redaction.md`；支持 Playbook §8。 |
-| Torii RPC 上的重放或降級 | `/v2/pipeline` 請求構建器使用散列權限上下文強制執行 TLS 固定、噪聲通道策略和重試預算。 | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`； `docs/source/sdk/android/networking.md`（計劃）。 |
+| Torii RPC 上的重放或降級 | `/v1/pipeline` 請求構建器使用散列權限上下文強制執行 TLS 固定、噪聲通道策略和重試預算。 | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`； `docs/source/sdk/android/networking.md`（計劃）。 |
 |未簽名或不可複制的版本 | CycloneDX SBOM + Sigstore 由 AND6 檢查表門控的證明；發布 RFC 需要 `docs/source/release/provenance/android/` 中的證據。 | `docs/source/sdk/android/developer_experience_plan.md`； `docs/source/compliance/android/eu/sbom_attestation.md`。 |
 |不完整的事件處理| Runbook + playbook 定義覆蓋、混亂演練和升級樹；遙測覆蓋需要簽名的 Norito 請求。 | `docs/source/android_runbook.md`； `docs/source/android_support_playbook.md`。 |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 訪問控制| StrongBox 策略 + 覆蓋需要簽名 Norito 工件的工作流程。 |
 | 7.5 加密控制 | AND2（密鑰管理指南）的密鑰生成、存儲和證明要求。 |
 | 7.6 操作安全 |遙測哈希、混亂排練、事件響應和發布證據門控。 |
-| 7.7 通信安全| `/v2/pipeline` TLS 策略 + 哈希授權（遙測編輯文檔）。 |
+| 7.7 通信安全| `/v1/pipeline` TLS 策略 + 哈希授權（遙測編輯文檔）。 |
 | 7.8 系統獲取/開發| AND5/AND6 計劃中可重現的 Gradle 構建、SBOM 和來源門。 |
 | 7.9 供應商關係| Buildkite + Sigstore 證明與第三方依賴項 SBOM 一起記錄。 |
 | 7.10 事件管理| Runbook/Playbook 升級、覆蓋日誌記錄、遙測失敗計數器。 |

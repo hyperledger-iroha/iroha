@@ -91,7 +91,7 @@ Block builders record pending receipts through `SettlementAccumulator`
 `BlockBuilder::finalize` the accumulator drains into per-lane builders
 (`crates/iroha_core/src/block.rs:3124-3401`), producing a list of
 `LaneSettlementReceipt`s that are embedded in `LaneBlockCommitment`. The latest
-commitments are exposed through `/v2/sumeragi/status` as
+commitments are exposed through `/v1/sumeragi/status` as
 `lane_settlement_commitments` (`crates/iroha_core/src/sumeragi/status.rs`),
 mirroring the summary described in `docs/source/nexus_fee_model.md`.
 
@@ -151,7 +151,7 @@ or a treasury swapline top-up when buffers fall. When adding those hooks:
    `liquidity_profile`. The settlement router rejects a zero TWAP to avoid
    undefined conversion ratios.
 2. **Receipt reconciliation** - Pull `lane_settlement_commitments` from
-   `/v2/sumeragi/status` or the nightly export, verify that the sums of
+   `/v1/sumeragi/status` or the nightly export, verify that the sums of
    `xor_due_micro` and `xor_after_haircut_micro` match ledger expectations, and
    archive the attached parameters.
 3. **Buffer monitoring** - Track the buffer soft/hard thresholds via telemetry.
@@ -171,7 +171,7 @@ or a treasury swapline top-up when buffers fall. When adding those hooks:
 ## Status
 
 The NX-3 settlement router is live: swap metadata and per-transaction receipts
-are embedded in `LaneBlockCommitment`, exposed through `/v2/sumeragi/status`,
+are embedded in `LaneBlockCommitment`, exposed through `/v1/sumeragi/status`,
 and mirrored into the settlement telemetry surface (buffer headroom, haircut
 tiers, swap utilisation) for dashboards and alerts. Operators should use this
 document as the reconciler’s guide; no roadmap items remain open for NX-3.

@@ -30,7 +30,7 @@ sidebar_label: Notes de déploiement
 
 ## Configuration de l'environnement
 
-- Les gateways doivent activer l'endpoint de proof streaming (`POST /v2/sorafs/proof/stream`) pour que le CLI puisse émettre des resumés de télémétrie.
+- Les gateways doivent activer l'endpoint de proof streaming (`POST /v1/sorafs/proof/stream`) pour que le CLI puisse émettre des resumés de télémétrie.
 - הגדר את מדיניות `sorafs_alias_cache` en utilisant les valeurs par défaut de `iroha_config` או le helper CLI (`sorafs_cli manifest submit --alias-*`).
 - אסימוני זרם של Fournissez les (או מזהים Torii) באמצעות un gestionnaire de secrets sécurisé.
 - Activez les Exporters de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) ו-envoyez-les vers votre stack Prometheus/OTel.

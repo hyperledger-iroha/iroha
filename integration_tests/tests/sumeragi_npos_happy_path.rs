@@ -109,10 +109,10 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     let http = reqwest::Client::new();
     let torii = client.torii_url.clone();
     let collectors_url = torii
-        .join("v2/sumeragi/collectors")
+        .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     let sessions_url = torii
-        .join("v2/sumeragi/rbc/sessions")
+        .join("v1/sumeragi/rbc/sessions")
         .wrap_err("compose RBC sessions URL")?;
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
 
@@ -202,14 +202,14 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
 
     let sessions_url_primary = client
         .torii_url
-        .join("v2/sumeragi/rbc/sessions")
+        .join("v1/sumeragi/rbc/sessions")
         .wrap_err("compose primary RBC sessions URL")?;
     let status_url_primary = client
         .torii_url
         .join("status")
         .wrap_err("compose primary status URL")?;
     let restart_sessions_url = reqwest::Url::parse(&format!(
-        "{}/v2/sumeragi/rbc/sessions",
+        "{}/v1/sumeragi/rbc/sessions",
         restart_peer.torii_url()
     ))
     .wrap_err("compose restart peer sessions URL")?;
@@ -322,7 +322,7 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
     let http = reqwest::Client::new();
     let sessions_url = client
         .torii_url
-        .join("v2/sumeragi/rbc/sessions")
+        .join("v1/sumeragi/rbc/sessions")
         .wrap_err("compose RBC sessions URL")?;
     let status_url = client
         .torii_url

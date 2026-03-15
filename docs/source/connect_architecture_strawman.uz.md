@@ -88,7 +88,7 @@ hali ham ko'prik integratsiyasiga olib kelgan mandatni egallab turibdi:
 - Umumiy: doimiy kalit hosilasi bilan hujjat shifrlash (X25519 kalit almashinuvi, AEAD)
   Norito spetsifikatsiyasi bo'yicha va Rust ko'prigi yordamida namunaviy integratsiya testlarini taqdim eting.
 
-## Transport shartnomasi- Asosiy transport: WebSocket (`/v2/connect/ws?sid=<session_id>`).
+## Transport shartnomasi- Asosiy transport: WebSocket (`/v1/connect/ws?sid=<session_id>`).
 - Majburiy emas kelajak: WebRTC (TBD) - boshlang'ich strawman uchun imkoniyatdan tashqarida.
 - Qayta ulanish strategiyasi: to'liq jitter bilan eksponensial orqaga qaytish (baza 5s, maksimal 60s); Swift, Android va JS bo'ylab umumiy konstantalar, shuning uchun qayta urinishlar oldindan aytish mumkin bo'lib qoladi.
 - Ping/pong kadansi: qayta ulanishdan oldin uchta o'tkazib yuborilgan tennis uchun tolerantlik bilan 30s yurak urishi; JS brauzerni qisqartirish qoidalarini qondirish uchun minimal intervalni 15 soniyagacha qisqartiradi.
@@ -107,7 +107,7 @@ hali ham ko'prik integratsiyasiga olib kelgan mandatni egallab turibdi:
 ### Seans identifikatorlari va tuzlari
 
 - `sid` `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` dan olingan 32 baytli identifikator.  
-  DApps uni `/v2/connect/session` ga qo'ng'iroq qilishdan oldin hisoblab chiqadi; hamyonlar buni `approve` ramkalarida aks ettiradi, shuning uchun har ikki tomon ham jurnallar va telemetriyani doimiy ravishda kaliti mumkin.
+  DApps uni `/v1/connect/session` ga qo'ng'iroq qilishdan oldin hisoblab chiqadi; hamyonlar buni `approve` ramkalarida aks ettiradi, shuning uchun har ikki tomon ham jurnallar va telemetriyani doimiy ravishda kaliti mumkin.
 - Xuddi shu tuz har bir kalit hosila bosqichini oziqlantiradi, shuning uchun SDK hech qachon xost platformasidan olingan entropiyaga tayanmaydi.
 
 ### Efemer kalit bilan ishlash

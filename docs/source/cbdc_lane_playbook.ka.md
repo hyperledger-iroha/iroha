@@ -233,7 +233,7 @@ iroha app space-directory manifest audit-bundle \
 
 1. **ჩიხი გამოიხატება:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **განრიგის კვოტები:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **მექანიკური კვამლი:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` manifest დირექტორიათ, რომელიც მიუთითებს CBDC ფაილებზე, შემდეგ დააჭირეთ `/v2/sumeragi/status` და გადაამოწმეთ `lane_governance.manifest_ready=true` CBDC ზოლისთვის.
+3. **მექანიკური კვამლი:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` manifest დირექტორიათ, რომელიც მიუთითებს CBDC ფაილებზე, შემდეგ დააჭირეთ `/v1/sumeragi/status` და გადაამოწმეთ `lane_governance.manifest_ready=true` CBDC ზოლისთვის.
 4. **თეთრი სიის თანმიმდევრულობის ტესტი:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` სავარჯიშოები `integration_tests/tests/nexus/cbdc_whitelist.rs`, `fixtures/space_directory/profile/cbdc_lane_profile.json`-ის ანალიზი და მითითებული შესაძლებლობა ცხადყოფს, რომ თეთრ სიაში ყველა ჩანაწერის UAID, მონაცემთა სივრცე, აქტივაციის ეპოქა და დაშვებული სია800X001-ის ქვეშ შეესაბამება Nexus-ს. `fixtures/space_directory/capability/`. მიამაგრეთ ტესტის ჟურნალი NX-6 მტკიცებულების პაკეტს, როდესაც იცვლება თეთრი სია ან მანიფესტები.
 
 ### 2.2 CLI ფრაგმენტები
@@ -243,7 +243,7 @@ iroha app space-directory manifest audit-bundle \
 - გამოაქვეყნეთ HTTP-ით, თუ ოპერაციული მაგიდა მუშაობს დისტანციურ ავტომატიზაციაზე:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ iroha app space-directory manifest audit-bundle \
 - გადაუდებელი გაუქმება შეიძლება გაიცეს დისტანციურად POST-ით Torii-ზე:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

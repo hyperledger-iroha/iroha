@@ -68,7 +68,7 @@ Operatorlar:1. **Blokcheyn tizimini** jamoat xavfsizligi byurosida roʻyxatdan o
 1. **Hujjatlar**
    - `docs/source/crypto/sm_program.md` ga davlat tijoriy kriptografiya holati, ariza topshirish kutilmalari va aloqa nuqtalarini ko'rsatuvchi muvofiqlik ilovasini qo'shing.
    - Operatorlar arizalarni tayyorlashda foydalanishi mumkin bo'lgan Norito manifest maydonini (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) nashr qiling.
-   - Torii `/v2/node/capabilities` reklamasi (va `iroha runtime capabilities` CLI taxalluslari) har bir nashrda yuborilishiga ishonch hosil qiling, shunda operatorlar MLPS/gàngín uchun `crypto.sm` manifest suratini olishlari mumkin.
+   - Torii `/v1/node/capabilities` reklamasi (va `iroha runtime capabilities` CLI taxalluslari) har bir nashrda yuborilishiga ishonch hosil qiling, shunda operatorlar MLPS/gàngín uchun `crypto.sm` manifest suratini olishlari mumkin.
    - Ikki tilda (EN/ZH) muvofiqlikni tezkor boshlash majburiyatlarini umumlashtirish.
 2. **Artefaktlarni chiqarish**
    - SM-ni qo'llab-quvvatlaydigan tuzilmalar uchun SBOM/CycloneDX fayllarini jo'natish.

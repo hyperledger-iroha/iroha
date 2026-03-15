@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for /v2/zk/roots using a minimal in-memory state.
+//! Integration test for /v1/zk/roots using a minimal in-memory state.
 #![allow(clippy::too_many_lines)]
 
 use std::{collections::HashSet, sync::Arc};
@@ -184,7 +184,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     let state = Arc::new(state);
     // Prepare router with handler
     let app = Router::new().route(
-        "/v2/zk/roots",
+        "/v1/zk/roots",
         post({
             let state = state.clone();
             move |NoritoJson(req): NoritoJson<iroha_torii::ZkRootsGetRequestDto>| async move {
@@ -201,7 +201,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     .expect("json serialization");
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/roots")
+        .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
@@ -241,7 +241,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     .expect("json serialization");
     let req_second = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/roots")
+        .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_second_body))
         .unwrap();

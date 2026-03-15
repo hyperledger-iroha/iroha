@@ -44,7 +44,7 @@ title: "مخطط بدء تشغيل إعلانات الموفرين SoraFS"
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` com `max_span` محدد
      - `allow_unknown_capabilities=<true|false>` quando houver TLVs GREASE
-   - صالح عبر `/v2/sorafs/providers` و`sorafs_fetch`؛ تحذيرات من القدرات الفوقية
+   - صالح عبر `/v1/sorafs/providers` و`sorafs_fetch`؛ تحذيرات من القدرات الفوقية
      Desconhecidas Devem ser Triageadas.
 3. **جاهزية Validar متعددة المصادر.**
    - تنفيذ `sorafs_fetch` com `--provider-advert=<path>`؛ o CLI Agora falha quando
@@ -179,9 +179,9 @@ Todos os horarios usam UTC. بيانات تطبيق القانون لا هجرة
 ## التواصل ومعالجة الحوادث- **رسالة الحالة الأسبوعية.** شارك DevRel في ملخص مقاييس القبول،
   التحذيرات المعلقة والمواعيد النهائية القريبة.
 - **الاستجابة للحوادث.** عند إرسال تنبيهات `reject` للمهندسين تحت الطلب:
-  1. قم بالتصوير أو الإعلان عن الجهاز عبر اكتشاف Torii (`/v2/sorafs/providers`).
+  1. قم بالتصوير أو الإعلان عن الجهاز عبر اكتشاف Torii (`/v1/sorafs/providers`).
   2. قم بإعادة تنفيذ عملية التحقق من صحة الإعلان عن عدم وجود خط أنابيب لموفر الخدمة ومقارنة com
-     `/v2/sorafs/providers` لإعادة إنتاج الخطأ.
+     `/v1/sorafs/providers` لإعادة إنتاج الخطأ.
   3. قم بالتنسيق مع مزود خدمة rotacao للإعلان قبل الموعد النهائي للتحديث التقريبي.
 - **تغيير التجميد.** لا يوجد مخطط للإمكانيات خلال R1/R2 a
   ما عليك سوى الموافقة على لجنة الطرح؛ المحاكمات GREASE ستكون أجندة

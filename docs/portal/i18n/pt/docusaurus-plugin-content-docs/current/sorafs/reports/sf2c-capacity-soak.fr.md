@@ -46,7 +46,7 @@ necessário nenhum acessório externo.
 Torii expõe a manutenção de instantâneos de provedores de crédito nos registros de taxas nos painéis
 puissent gate sur les faibles soldes et penal strikes:
 
-- REST: `GET /v2/sorafs/capacity/state` envio de entradas `credit_ledger[*]` aqui
+- REST: `GET /v1/sorafs/capacity/state` envio de entradas `credit_ledger[*]` aqui
   reflete os campos do livro-razão verificados no teste de imersão. Voir
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importar arquivos de rastreamento Grafana: `dashboards/grafana/sorafs_capacity_penalties.json`

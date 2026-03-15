@@ -76,13 +76,13 @@ slug: /sorafs/staging-manifest-playbook-zh-hant
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. 查詢發現端點並確認廣告以規範別名出現：
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    確保 `profile_aliases` 包含 `"sorafs.sf1@1.0.0"` 作為第一個條目。

@@ -79,13 +79,13 @@ Este playbook describe cómo habilitar el perfil de chunker ratificado por el Pa
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. Consulta el endpoint de discovery y confirma que el advert aparece con aliases canónicos:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    Asegura que `profile_aliases` incluya `"sorafs.sf1@1.0.0"` como primera entrada.

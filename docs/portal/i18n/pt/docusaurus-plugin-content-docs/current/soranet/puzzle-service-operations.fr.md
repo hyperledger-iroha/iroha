@@ -26,17 +26,17 @@ retransmitir e, ao configurar, orquestrar tokens de admissão ML-DSA para os
 borda dos relés. Ele expõe os endpoints cinq HTTP:
 
 - `GET /healthz` - sonda de vivacidade.
-- `GET /v2/puzzle/config` - retorna os parâmetros de efeito do PoW/quebra-cabeça
+- `GET /v1/puzzle/config` - retorna os parâmetros de efeito do PoW/quebra-cabeça
   do relé JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v2/puzzle/mint` - emite um ticket Argon2; uma opção JSON de corpo
+- `POST /v1/puzzle/mint` - emite um ticket Argon2; uma opção JSON de corpo
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   exigir um TTL mais tribunal (clamp au window de policy), mentir le ticket a un
   transcrição hash e reenvio de um bilhete assinado pelo relé + a impressão de
   assinatura quando os itens de assinatura são configurados.
-- `GET /v2/token/config` - quando `pow.token.enabled = true`, retorne à política
+- `GET /v1/token/config` - quando `pow.token.enabled = true`, retorne à política
   d'admission-token ativo (impressão digital do emissor, limites TTL/inclinação do relógio, ID do relé,
   e o conjunto de revogação fusionne).
-- `POST /v2/token/mint` - emite um token de admissão ML-DSA no hash de currículo
+- `POST /v1/token/mint` - emite um token de admissão ML-DSA no hash de currículo
   quatroni; o corpo aceita `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Os tickets produzidos pelo serviço são verificados no teste de integração
@@ -79,10 +79,10 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` também está disponível quando o segredo é gerado por um
-pipeline fora da banda. O observador do arquivo de revogação guarda `/v2/token/config`
+pipeline fora da banda. O observador do arquivo de revogação guarda `/v1/token/config`
 um dia; coordonnez les mises a jour com o comando `soranet-admission-token revoke`
 para evitar um estado de revogação retardado.Defina `pow.signed_ticket_public_key_hex` no relé JSON para anunciar
-o arquivo público ML-DSA-44 é usado para verificar as assinaturas de tickets PoW; `/v2/puzzle/config`
+o arquivo público ML-DSA-44 é usado para verificar as assinaturas de tickets PoW; `/v1/puzzle/config`
 repete la cle et son empreinte BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) afin
 que os clientes possam fixar o verificador. Os ingressos assinados são válidos
 contre o ID de retransmissão e as ligações de transcrição e compartilhe o armazenamento de meme de
@@ -90,7 +90,7 @@ revogação; os tickets PoW brutos de 74 octetos permanecem válidos quando o ve
 O ticket assinado está configurado. Passe o segredo da assinatura via `--signed-ticket-secret-hex`
 ou `--signed-ticket-secret-path` no lançamento do serviço de quebra-cabeça; a desmarcação
 rejeite os pares de chaves incoerentes se o segredo não for válido
-`pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` aceita `"signed": true`
+`pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` aceita `"signed": true`
 (e opcional `"transcript_hash_hex"`) para enviar um bilhete assinado Norito en
 mais os bytes do ticket bruto; as respostas incluem `signed_ticket_b64` e
 `signed_ticket_fingerprint_hex` para reproduzir impressões digitais. Les
@@ -111,11 +111,11 @@ configurar.
    foi que a governança anunciou a mudança de rotação. O serviço não é suportado
    não recarregar a quente; uma redemarrage é necessária para obter o novo descritor
    cometer.
-4. **Validador.** Emita um ticket via `POST /v2/puzzle/mint` e confirme que
+4. **Validador.** Emita um ticket via `POST /v1/puzzle/mint` e confirme que
    `difficulty` e `expires_at` correspondentes à nova política. O relacionamento
    imersão (`docs/source/soranet/reports/pow_resilience.md`) captura des bornes de
    presenças de latência para referência. Quando os tokens estão ativos, lisez
-   `/v2/token/config` para verificar se a impressão digital do emissor anuncia e le
+   `/v1/token/config` para verificar se a impressão digital do emissor anuncia e le
    compte de revogation correspondente aux valeurs atendentes.
 
 ## Procedimento de desativação de urgência
@@ -128,7 +128,7 @@ configurar.
 3. Redemarrez a la fois le relay et le puzzle service for applique le
    mudança.
 4. Verifique `soranet_handshake_pow_difficulty` para verificar se há dificuldade
-   tombe o valor hashcash comparecimento, e valide que `/v2/puzzle/config`
+   tombe o valor hashcash comparecimento, e valide que `/v1/puzzle/config`
    relatório `puzzle = null`.
 
 ## Monitoramento e alertas- **Latency SLO:** Suivez `soranet_handshake_latency_seconds` e gardez le P95
@@ -138,16 +138,16 @@ configurar.
   relé de métricas para ajustar os cooldowns `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Alinhamento do quebra-cabeça:** `soranet_handshake_pow_difficulty` faça a correspondência
-  difícil retorno par `/v2/puzzle/config`. Uma divergência indica uma configuração
+  difícil retorno par `/v1/puzzle/config`. Uma divergência indica uma configuração
   retransmitir obsoleto ou uma taxa de redemarrage.
-- **Prontidão do token:** Alerte si `/v2/token/config` chute a `enabled = false`
+- **Prontidão do token:** Alerte si `/v1/token/config` chute a `enabled = false`
   de ser desatendido ou se `revocation_source` relatar carimbos de data / hora obsoletos.
   Os operadores devem fazer o tour do arquivo de revogação Norito via CLI
   aquele token foi retirado para fornecer informações precisas sobre o endpoint.
 - **Saúde do serviço:** Sonda `/healthz` com a cadência de vida habitual e
-  alertar se `/v2/puzzle/mint` enviar respostas HTTP 500 (indicar uma incompatibilidade
+  alertar se `/v1/puzzle/mint` enviar respostas HTTP 500 (indicar uma incompatibilidade
   parâmetros Argon2 ou echecs RNG). Erros de cunhagem de token se
-  manifesto via respostas HTTP 4xx/5xx em `/v2/token/mint`; trai-los
+  manifesto via respostas HTTP 4xx/5xx em `/v1/token/mint`; trai-los
   echecs repete como uma condição de paginação.
 
 ## Registro de conformidade e auditoria

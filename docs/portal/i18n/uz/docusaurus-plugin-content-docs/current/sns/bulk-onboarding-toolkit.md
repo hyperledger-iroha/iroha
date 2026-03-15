@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Yordamchi har bir so'rov uchun bitta `POST /v2/sns/registrations` chiqaradi va uni bekor qiladi
+- Yordamchi har bir so'rov uchun bitta `POST /v1/sns/registrations` chiqaradi va uni bekor qiladi
   birinchi HTTP xatosi. Javoblar jurnal yo'liga NDJSON sifatida qo'shiladi
   yozuvlar.
-- `--poll-status` har bir so'rovdan keyin `/v2/sns/registrations/{selector}` so'rovlarini qayta so'raydi
+- `--poll-status` har bir so'rovdan keyin `/v1/sns/registrations/{selector}` so'rovlarini qayta so'raydi
   yozuv mavjudligini tasdiqlash uchun topshirish (`--poll-attempts` gacha, standart 5)
   ko'rinadigan. `--suffix-map` (JSON `suffix_id` dan `"suffix"` qiymatlarigacha) taqdim eting.
   asbob so'rov uchun `{label}.{suffix}` literallarini olishi mumkin.

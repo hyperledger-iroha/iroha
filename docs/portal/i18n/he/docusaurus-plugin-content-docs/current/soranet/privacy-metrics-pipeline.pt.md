@@ -75,8 +75,8 @@ SNNet-8a implanta אספנים דופלו que emitem דליים Prio com compart
 
 ## נקודות קצה de ingestao do Torii
 
-Torii agora expone dois נקודות קצה HTTP com gating de telemetria para que relays e collectors possam encaminhar observacoes sem embutir um transporte bespoke:- `POST /v2/soranet/privacy/event` aceita um מטען `RecordSoranetPrivacyEventDto`. O corpo envolve um `SoranetPrivacyEventV1` ועם תווית `source` אופציונלי. Torii valida a requisicao contra o perfil de telemetria ativo, registra o evento, e response com HTTP `202 Accepted` junto com um envelope Norito JSON contendo a janela NI30I0ada ( `bucket_duration_secs`) e o modo do ממסר.
-- `POST /v2/soranet/privacy/share` aceita um מטען `RecordSoranetPrivacyShareDto`. O corpo carrega um `SoranetPrivacyPrioShareV1` e uma dica `forwarded_by` אופציונלי עבור מפעילי possam auditar fluxos de collectors. Submissoes bem-sucedidas retornam HTTP `202 Accepted` com um envelope Norito JSON resumindo o אספן, a janela de bucket e a dica de supressao; falhas de validacao mapeiam para uma resposta de telemetria `Conversion` para preservar tratamento deterministico de erros entre collectors. O loop de eventos do orchestrator agora emite essas shares ao fazer polling dos relays, mantendo o acumulador Prio do Torii sincronizado com os buckets no relay.
+Torii agora expone dois נקודות קצה HTTP com gating de telemetria para que relays e collectors possam encaminhar observacoes sem embutir um transporte bespoke:- `POST /v1/soranet/privacy/event` aceita um מטען `RecordSoranetPrivacyEventDto`. O corpo envolve um `SoranetPrivacyEventV1` ועם תווית `source` אופציונלי. Torii valida a requisicao contra o perfil de telemetria ativo, registra o evento, e response com HTTP `202 Accepted` junto com um envelope Norito JSON contendo a janela NI30I0ada ( `bucket_duration_secs`) e o modo do ממסר.
+- `POST /v1/soranet/privacy/share` aceita um מטען `RecordSoranetPrivacyShareDto`. O corpo carrega um `SoranetPrivacyPrioShareV1` e uma dica `forwarded_by` אופציונלי עבור מפעילי possam auditar fluxos de collectors. Submissoes bem-sucedidas retornam HTTP `202 Accepted` com um envelope Norito JSON resumindo o אספן, a janela de bucket e a dica de supressao; falhas de validacao mapeiam para uma resposta de telemetria `Conversion` para preservar tratamento deterministico de erros entre collectors. O loop de eventos do orchestrator agora emite essas shares ao fazer polling dos relays, mantendo o acumulador Prio do Torii sincronizado com os buckets no relay.
 
 נקודות הקצה של Ambos OS חוזרות על פרופיל טלמטריה: emitem `503 Service Unavailable` quando as metricas estao desativadas. לקוחות פודם enviar corpos Norito בינארי (`application/x.norito`) או Norito JSON (`application/x.norito+json`); o servidor negocia automaticamente o formato via extractors padrao do Torii.
 
@@ -155,7 +155,7 @@ cargo xtask soranet-privacy-report \
 
 גוברננקה איינדה אקסיג'י פרובר que a primeira execucao automatizada atendeu ao budget de supressao. O helper agora aceita `--max-suppression-ratio <0-1>` para que CI ou operadores falhem rapidamente quando buckets suprimidos excederem a janela permitida (ברירת מחדל 10%) או quando ainda nao houver buckets. Fluxo recomendado:
 
-1. ייצא את נקודות הקצה של NDJSON dos admin לעשות ממסר או זרם `/v2/soranet/privacy/event|share` לעשות מתזמר עבור `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. ייצא את נקודות הקצה של NDJSON dos admin לעשות ממסר או זרם `/v1/soranet/privacy/event|share` לעשות מתזמר עבור `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. נסע או עוזר com o budget de politica:
 
    ```bash

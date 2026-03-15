@@ -121,14 +121,14 @@ mantener acumuladores stale en memoria.
 ## נקודות קצה de ingesta Torii
 
 Torii ahora expone dos endpoints HTTP con telemetria gateada para que relays y
-אספנים reenvien observaciones sin incrustar un הובלה בהתאמה אישית:- `POST /v2/soranet/privacy/event` מקבל מטען
+אספנים reenvien observaciones sin incrustar un הובלה בהתאמה אישית:- `POST /v1/soranet/privacy/event` מקבל מטען
   `RecordSoranetPrivacyEventDto`. El body envuelve un `SoranetPrivacyEventV1`
   יש אופציונלי כללי התנהגות `source`. Torii valida la solicitud contra el
   פרופיל טלמטריה פעיל, רישום אירועים ותגובה עם HTTP
   `202 Accepted` junto con un envelope Norito JSON que contiene la ventana
   computada del bucket (`bucket_start_unix`, `bucket_duration_secs`) y el
   מוד דל ממסר.
-- `POST /v2/soranet/privacy/share` מקבל מטען `RecordSoranetPrivacyShareDto`.
+- `POST /v1/soranet/privacy/share` מקבל מטען `RecordSoranetPrivacyShareDto`.
   El body lleva un `SoranetPrivacyPrioShareV1` y un רמז אופציונלי `forwarded_by`
   para que los operadores Auditen flujos de collectors. Las entregas exitosas
   devuelven HTTP `202 Accepted` עם מעטפה Norito JSON עם קורות חיים
@@ -262,7 +262,7 @@ ventana permitida (ברירת מחדל 10%) o cuando aun no hay buckets presente
 מומלץ:
 
 1. ייצא את NDJSON למנהל נקודת הקצה של הממסר והזרם
-   `/v2/soranet/privacy/event|share` del מתזמר hacia
+   `/v1/soranet/privacy/event|share` del מתזמר hacia
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Ejecuta el helper con el presupuesto de policy:
 

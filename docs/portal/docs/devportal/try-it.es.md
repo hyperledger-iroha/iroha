@@ -83,7 +83,7 @@ npm run start
 Los siguientes componentes leen estos valores desde `docusaurus.config.js`:
 
 - **Swagger UI** - renderizado en `/reference/torii-swagger`; preautoriza el esquema
-- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v2/mcp` agent workflows.
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
   bearer cuando hay un token, etiqueta las solicitudes con `X-TryIt-Client`,
   inyecta `X-TryIt-Auth`, y reescribe las llamadas a traves del proxy cuando
   `TRYIT_PROXY_PUBLIC_URL` esta definido.
@@ -166,7 +166,7 @@ owners de SDK y reviewers puedan reproducir los bytes exactos que usa CI.
 1. Elige un fixture como `fixtures/norito_rpc/transfer_asset.norito`. Estos
    archivos son envelopes Norito en bruto; **no** los codifiques en base64.
 2. En Swagger o RapiDoc, localiza el endpoint NRPC (por ejemplo
-   `POST /v2/pipeline/submit`) y cambia el selector **Content-Type** a
+   `POST /v1/pipeline/submit`) y cambia el selector **Content-Type** a
    `application/x-norito`.
 3. Cambia el editor del cuerpo de solicitud a **binary** (modo "File" de Swagger o
    selector "Binary/File" de RapiDoc) y carga el archivo `.norito`. El widget
@@ -190,13 +190,13 @@ cuando validas el proxy o depuras respuestas del gateway:
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
 Cambia el fixture por cualquier entrada listada en `transaction_fixtures.manifest.json`
 o codifica tu propio payload con `cargo xtask norito-rpc-fixtures`. Cuando Torii esta en
 modo canary puedes apuntar `curl` al proxy try-it
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) para ejercitar la misma
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) para ejercitar la misma
 infraestructura que usan los widgets del portal.
 
 ## Observabilidad y operaciones
@@ -212,7 +212,7 @@ Ejecuta el probe incluido durante despliegues o en un schedule:
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
 Knobs de entorno:

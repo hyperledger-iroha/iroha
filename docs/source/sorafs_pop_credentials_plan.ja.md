@@ -89,12 +89,12 @@ This specification completes **SFM-4b1 — POP credential pipeline**.
 - CLI `sorafs pop prove --case <id>` generates proof offline using stored credential + latest commitment root.
 
 ## APIs
-- `POST /v2/pop/enroll` — submit enrollment request (with DID + attestation).
-- `GET /v2/pop/manifest` — fetch latest commitment root and revocation list (versioned).
-- `GET /v2/pop/revocations?since=` — incremental updates.
-- `POST /v2/pop/renew` — ack renewal.
-- `POST /v2/pop/revoke` — governance/issuer endpoint to revoke credential.
-- `GET /v2/pop/status/{did}` — view credential metadata (authorized roles only).
+- `POST /v1/pop/enroll` — submit enrollment request (with DID + attestation).
+- `GET /v1/pop/manifest` — fetch latest commitment root and revocation list (versioned).
+- `GET /v1/pop/revocations?since=` — incremental updates.
+- `POST /v1/pop/renew` — ack renewal.
+- `POST /v1/pop/revoke` — governance/issuer endpoint to revoke credential.
+- `GET /v1/pop/status/{did}` — view credential metadata (authorized roles only).
 - All endpoints require mTLS + JWT scopes (`pop.enroll`, `pop.manage`, etc.).
 
 ## CLI & SDK

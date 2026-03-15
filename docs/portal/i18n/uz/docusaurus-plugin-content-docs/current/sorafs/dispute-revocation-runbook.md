@@ -22,7 +22,7 @@ Ushbu runbook boshqaruv operatorlariga SoraFS sig'imiga oid nizolarni topshirish
 ## 1. Hodisani baholang
 
 - **Trigger shartlari:** SLA buzilishini aniqlash (ish vaqti/PoR ishlamay qolishi), replikatsiya etishmovchiligi yoki hisob-kitob kelishmovchiligi.
-- **Telemetriyani tasdiqlang:** provayder uchun `/v2/sorafs/capacity/state` va `/v2/sorafs/capacity/telemetry` suratlarini oling.
+- **Telemetriyani tasdiqlang:** provayder uchun `/v1/sorafs/capacity/state` va `/v1/sorafs/capacity/telemetry` suratlarini oling.
 - **Manfaatdor tomonlarni xabardor qilish:** Saqlash guruhi (provayder operatsiyalari), Boshqaruv kengashi (qaror qabul qiluvchi organ), Kuzatish imkoniyati (boshqaruv paneli yangilanishlari).
 
 ## 2. Dalillar to'plamini tayyorlang
@@ -70,7 +70,7 @@ Ushbu runbook boshqaruv operatorlariga SoraFS sig'imiga oid nizolarni topshirish
    ```
 
 3. `dispute_summary.json` ni ko'rib chiqing (turni tasdiqlang, dalillar dayjesti, vaqt belgilari).
-4. JSON so‘rovini Torii `/v2/sorafs/capacity/dispute` raqamiga boshqaruv tranzaksiya navbati orqali yuboring. `dispute_id_hex` javob qiymatini oling; u keyingi bekor qilish harakatlari va audit hisobotlarini belgilaydi.
+4. JSON so‘rovini Torii `/v1/sorafs/capacity/dispute` raqamiga boshqaruv tranzaksiya navbati orqali yuboring. `dispute_id_hex` javob qiymatini oling; u keyingi bekor qilish harakatlari va audit hisobotlarini belgilaydi.
 
 ## 4. Evakuatsiya va bekor qilish
 

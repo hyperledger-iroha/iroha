@@ -26,7 +26,7 @@ Este é um conjunto de operações de governança que pode fornecer suporte para
 ## 1. Incidente de ocorrência
 
 - **Trigger:** você usa SLA de tempo de atividade/PoR de atividade, configuração de replicação ou configuração de faturamento.
-- **Termômetro:** Gere snapshots `/v2/sorafs/capacity/state` e `/v2/sorafs/capacity/telemetry` para prova.
+- **Termômetro:** Gere snapshots `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` para prova.
 - **Уведомить стейкхолдеров:** Equipe de Armazenamento (операции провайдера), Conselho de Governança (орган решения), Observabilidade (обновления дашбордов).
 
 ## 2. Baixe o pacote de download
@@ -74,7 +74,7 @@ Este é um conjunto de operações de governança que pode fornecer suporte para
    ```
 
 3. Verifique `dispute_summary.json` (tipo de resumo, resumo de dados e métodos atuais).
-4. Abra o JSON em Torii `/v2/sorafs/capacity/dispute` para executar o processamento de governança. A chave de segurança é `dispute_id_hex`; оно якорит последующие действия по отзыву и аудиторские отчеты.
+4. Abra o JSON em Torii `/v1/sorafs/capacity/dispute` para executar o processamento de governança. A chave de segurança é `dispute_id_hex`; оно якорит последующие действия по отзыву и аудиторские отчеты.
 
 ## 4. Evacuação e avaliação
 

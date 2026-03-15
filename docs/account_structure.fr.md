@@ -669,8 +669,8 @@ leurs billets de change.
 
 ### Formats de réponse Torii
 
-- `GET /v2/accounts` accepte un paramètre de requête `canonical I105 rendering` facultatif et
-  `POST /v2/accounts/query` accepte le même champ à l'intérieur de l'enveloppe JSON.
+- `GET /v1/accounts` accepte un paramètre de requête `canonical I105 rendering` facultatif et
+  `POST /v1/accounts/query` accepte le même champ à l'intérieur de l'enveloppe JSON.
   Les valeurs prises en charge sont :
   - `i105` (par défaut) — les réponses émettent des charges utiles I105 Base58 canoniques (par exemple,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
@@ -679,7 +679,7 @@ leurs billets de change.
 - Les valeurs non valides renvoient `400` (`QueryExecutionFail::Conversion`). Cela permet
   les portefeuilles et les explorateurs pour demander des chaînes compressées pour l'UX Sora uniquement tout en
   en gardant I105 comme valeur par défaut interopérable.
-- Listes des détenteurs d'actifs (`GET /v2/assets/{definition_id}/holders`) et leur JSON
+- Listes des détenteurs d'actifs (`GET /v1/assets/{definition_id}/holders`) et leur JSON
   la contrepartie de l'enveloppe (`POST …/holders/query`) honore également `canonical I105 rendering`.
   Le champ `items[*].account_id` émet des littéraux compressés chaque fois que le
   Le champ paramètre/enveloppe est défini sur `i105_default`, reflétant les comptes

@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 - **Norito codec ခြုံငုံသုံးသပ်ချက်** – `reference/norito-codec.md` သည် တရားဝင်စာထံသို့ တိုက်ရိုက်လင့်ခ်များ
   ပေါ်တယ်ဇယားကို လူဦးရေဖြည့်နေစဉ် `norito.md` သတ်မှတ်ချက်။
 - **Torii OpenAPI** – `/reference/torii-openapi` သည် နောက်ဆုံးထွက် Torii REST သတ်မှတ်ချက်ကို အသုံးပြုပြီး ပြန်ဆိုသည်
-- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v2/mcp`.
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
   ပြန်ယူပါ။ spec ကို `npm run sync-openapi -- --version=current --latest` ဖြင့် ပြန်ထုတ်ပါ (ထည့်ပါ။
   လျှပ်တစ်ပြက်ရိုက်ချက်အား နောက်ထပ်သမိုင်းဝင်ဗားရှင်းများသို့ ကူးယူရန် `--mirror=<label>`)။
 - **Configuration tables** – ကန့်သတ်ချက်အပြည့်အစုံကို ကတ်တလောက်တွင် သိမ်းဆည်းထားသည်။

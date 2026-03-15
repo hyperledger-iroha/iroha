@@ -67,7 +67,7 @@ Registre a configuração de acesso em
 ##Instrumentos e luminárias
 
 - Cargas úteis fornecidas com `range_capability`, `stream_budget`
-  e `transport_hints`. Проверяйте через ответы `/v2/sorafs/providers` e acessórios de admissão;
+  e `transport_hints`. Проверяйте через ответы `/v1/sorafs/providers` e acessórios de admissão;
   JSON-резюме должны включать разобранную capacidade, orçamento de fluxo e muitas dicas
   para ingestão telemétrica.
 - `cargo xtask sorafs-admission-fixtures` выводит orçamentos de fluxo e dicas de transporte
@@ -77,7 +77,7 @@ Registre a configuração de acesso em
   - `multi_fetch_plan.json`, este SDK pode ser configurado para determinar
     plano de busca multi-peer.
 
-## Integração com organização e Torii- Torii `/v2/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
+## Integração com organização e Torii- Torii `/v1/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
   use `stream_budget` e `transport_hints`. Предупреждения downgrade срабатывают, когда
   провайдеры пропускают новые метаданные, um range endpoints шлюза применяют те же ограничения
   para clientes de negócios.

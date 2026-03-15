@@ -61,11 +61,11 @@ and is consumed by automation to emit concrete `Transfer` ISIs.
 
 | Component | Responsibilities | Artefacts |
 |-----------|-----------------|-----------|
-| `sns_settlementd` | Applies policy, validates payment proofs, emits settlement bundles, exposes `/v2/sns/settlements`. | Schema: `PaymentBundleV1`, `InvoiceLineV1`, `RefundRecordV1`. |
+| `sns_settlementd` | Applies policy, validates payment proofs, emits settlement bundles, exposes `/v1/sns/settlements`. | Schema: `PaymentBundleV1`, `InvoiceLineV1`, `RefundRecordV1`. |
 | Settlement queue (`sns_settlement_queue`) | Idempotent pipeline (Kafka/SQS/Norito queue) that stores pending bundles and retries ledger commits. | Each record carries hash + `X-Iroha-Dedup-Key`. |
 | Ledger writer (`sns_settlement_writer`) | Converts bundle projections into `Transfer` ISIs and submits them via Torii. | Reuses `iroha_cli app sns settlement ledger`. |
 | Reconciliation job | Generates daily diff JSON + Markdown statements (`docs/source/sns/reports/settlement_<YYYYMMDD>.md`). | Links bundle hash → ledger tx hash + alert status. |
-| Refund desk | Wraps governance approval, generates `RefundRecordV1`, calls `/v2/sns/settlements/{id}/refund`. | CLI helper + template. |
+| Refund desk | Wraps governance approval, generates `RefundRecordV1`, calls `/v1/sns/settlements/{id}/refund`. | CLI helper + template. |
 
 All components must emit structured logs (`PaymentEventV1`) so downstream
 systems can reproduce the audit trail without scraping stdout.
@@ -76,10 +76,10 @@ systems can reproduce the audit trail without scraping stdout.
 
 | Route | Method | Description |
 |-------|--------|-------------|
-| `/v2/sns/settlements` | POST | Submit a signed `PaymentBundleV1` for execution (registrar or automation). |
-| `/v2/sns/settlements/{id}` | GET | Fetch bundle status (`Pending`, `Posted`, `Failed`, `Refunded`). |
-| `/v2/sns/settlements/{id}/refund` | POST | Attach `RefundRecordV1` once governance approves a partial or full refund. |
-| `/v2/sns/settlements/statements?period=YYYY-MM` | GET | Return reconciliation digest (`StatementSummaryV1`). |
+| `/v1/sns/settlements` | POST | Submit a signed `PaymentBundleV1` for execution (registrar or automation). |
+| `/v1/sns/settlements/{id}` | GET | Fetch bundle status (`Pending`, `Posted`, `Failed`, `Refunded`). |
+| `/v1/sns/settlements/{id}/refund` | POST | Attach `RefundRecordV1` once governance approves a partial or full refund. |
+| `/v1/sns/settlements/statements?period=YYYY-MM` | GET | Return reconciliation digest (`StatementSummaryV1`). |
 
 ### CLI helpers
 

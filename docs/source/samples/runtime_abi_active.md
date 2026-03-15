@@ -1,7 +1,7 @@
 # Runtime ABI — Active Versions (Torii)
 
 Endpoint
-- `GET /v2/runtime/abi/active`
+- `GET /v1/runtime/abi/active`
 
 Response (first release; single ABI)
 ```json

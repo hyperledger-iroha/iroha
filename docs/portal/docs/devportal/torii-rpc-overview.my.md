@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 #Norito-RPC ခြုံငုံသုံးသပ်ချက်
 
 Norito-RPC သည် Torii APIs အတွက် ဒွိသယ်ယူပို့ဆောင်ရေးဖြစ်သည်။ ၎င်းသည် တူညီသော HTTP လမ်းကြောင်းများကို ပြန်လည်အသုံးပြုသည်။
-`/v2/pipeline` အနေဖြင့်၊ သို့သော် schema ပါဝင်သော Norito-framed payload များကို လဲလှယ်သည်
+`/v1/pipeline` အနေဖြင့်၊ သို့သော် schema ပါဝင်သော Norito-framed payload များကို လဲလှယ်သည်
 hashes နှင့် checksums များ။ တိကျသေချာသော၊ အတည်ပြုထားသော တုံ့ပြန်မှုများ လိုအပ်သည့်အခါ သို့မဟုတ် ၎င်းကို အသုံးပြုပါ။
 ပိုက်လိုင်း JSON တုံ့ပြန်မှုများသည် ပိတ်ဆို့မှုဖြစ်လာသောအခါ။
 
@@ -32,7 +32,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v2/transactions/submit
+  https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. သင်၏ payload ကို Norito codec (`iroha_client`၊ SDK ကူညီသူများ၊ သို့မဟုတ်
@@ -59,7 +59,7 @@ SDK ၏ သီးခြားလမ်းညွှန်ချက်-
    `TRYIT_PROXY_PUBLIC_URL` ထို့ကြောင့် ဝစ်ဂျက်များသည် အသွားအလာပေးပို့ရမည့်နေရာကို သိသည်။
 2. ဤစာမျက်နှာရှိ **စမ်းသုံးကြည့်ပါ** ကတ် သို့မဟုတ် `/reference/torii-swagger` ကိုဖွင့်ပါ။
    For MCP/agent flows, use `/reference/torii-mcp`.
-   အကန့်နှင့် `POST /v2/pipeline/submit` ကဲ့သို့သော အဆုံးမှတ်တစ်ခုကို ရွေးပါ။
+   အကန့်နှင့် `POST /v1/pipeline/submit` ကဲ့သို့သော အဆုံးမှတ်တစ်ခုကို ရွေးပါ။
 3. **Content-Type** ကို `application/x-norito` သို့ပြောင်းပါ၊ **Binary** ကို ရွေးပါ။
    တည်းဖြတ်ပြီး `fixtures/norito_rpc/transfer_asset.norito` ကို အပ်လုဒ်လုပ်ပါ။
    (သို့) တွင်ဖော်ပြထားသော payload တစ်ခုခု

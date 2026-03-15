@@ -99,7 +99,7 @@ fn register_device_request() -> Request<axum::body::Body> {
     let account_id = ALICE_ID.to_string();
     Request::builder()
         .method("POST")
-        .uri("/v2/notify/devices")
+        .uri("/v1/notify/devices")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(format!(
             r#"{{"account_id":"{account_id}","platform":"FCM","token":"t0"}}"#

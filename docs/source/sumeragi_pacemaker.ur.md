@@ -37,7 +37,7 @@ timeout پر effective window اپ ڈیٹ:
 
 Exposed telemetria (telemetry.md دیکھیں):
 - Runtime: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=...}`
-- REST snapshot: `/v2/sumeragi/phases` اب تازہ ترین per-phase latencies کے ساتھ `ema_ms` شامل کرتا ہے تاکہ dashboards براہ راست Prometheus scrape کیے بغیر EMA trend دکھا سکیں۔
+- REST snapshot: `/v1/sumeragi/phases` اب تازہ ترین per-phase latencies کے ساتھ `ema_ms` شامل کرتا ہے تاکہ dashboards براہ راست Prometheus scrape کیے بغیر EMA trend دکھا سکیں۔
 - Config: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`
 
 ## Jitter پالیسی

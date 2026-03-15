@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
   የ XOR ክፍያ ወዲያውኑ፣ ከፀጉር አቆራረጥ በኋላ የሚጠበቀው XOR፣ የተረጋገጠው።
   ልዩነት (`xor_variance_micro`)፣ እና የጊዜ ማህተም በሚሊሰከንዶች።
 - የአፈፃፀም ድምር ደረሰኞችን በሌይን/በመረጃ ቦታ ያግዱ እና ያትሟቸዋል።
-  በ `lane_settlement_commitments` በ `/v2/sumeragi/status` በኩል።  ድምር
+  በ `lane_settlement_commitments` በ `/v1/sumeragi/status` በኩል።  ድምር
   `total_local_micro`፣ I18NI0000020X፣ እና
   `total_xor_after_haircut_micro` የማታ ላይ ማጠቃለያ ላይ
   ማስታረቅ ወደ ውጭ መላክ.

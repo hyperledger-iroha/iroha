@@ -83,7 +83,7 @@ translator: machine-google-reviewed
 ယခု တံခါးပေါက်သည် ကွန်ကရစ် JSON စာအိတ်များကို တစ်လုံးမှ တစ်ခုသို့ ပုံဖော်ပေးသည်။
 Norito အမျိုးအစားများ `crates/iroha_data_model::fraud`
 
-- **စွန့်စားမှု** – `POST /v2/fraud/query` သည် `RiskQuery` အစီအစဉ်ကို လက်ခံသည်-
+- **စွန့်စားမှု** – `POST /v1/fraud/query` သည် `RiskQuery` အစီအစဉ်ကို လက်ခံသည်-
   - `query_id` (`[u8; 32]`၊ hex ကုဒ်လုပ်ထားသည်)
   - `subject` (`AccountId`၊ canonical I105 literal; ရွေးချယ်နိုင်သော `@<domain>` အရိပ်အမြွက် သို့မဟုတ် နာမည်တူ)
   - `operation` (`RiskOperation`၊ JSON `type` နှင့် ကိုက်ညီသော enum ကို tag လုပ်ထားသည်
@@ -94,14 +94,14 @@ Norito အမျိုးအစားများ `crates/iroha_data_model::frau
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; `tenant_id`၊ ရွေးချယ်နိုင်သော `session_id`၊
     ရွေးချယ်နိုင်သော `reason`)
-- **အန္တရာယ် ဆုံးဖြတ်ချက်** – `POST /v2/fraud/assessment` ကို စားသုံးသည်။
+- **အန္တရာယ် ဆုံးဖြတ်ချက်** – `POST /v1/fraud/assessment` ကို စားသုံးသည်။
   `FraudAssessment` ပေးဆောင်မှု (အုပ်ချုပ်မှု ပို့ကုန်များတွင်လည်း ထင်ဟပ်နေသည်)
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`၊
     `decision` (`AssessmentDecision` enum), `rule_outcomes`
     (`{ rule_id, score_delta_bps, rationale? }`)
   - `generated_at_ms`
   - `signature` (Norito-ကုဒ်ဝှက်ထားသော အကဲဖြတ်ချက်ကို ခြုံငုံ၍ ချန်လှပ်ထားနိုင်သော base64)
-- **Governance export** – `GET /v2/fraud/governance/export` ကို ပြန်ပေးသည်။
+- **Governance export** – `GET /v1/fraud/governance/export` ကို ပြန်ပေးသည်။
   `GovernanceExport` အင်္ဂါရပ်ကို `governance` ကိုဖွင့်ထားသောအခါတွင် အစုအဝေး၊
   တက်ကြွသောကန့်သတ်ချက်များ၊ နောက်ဆုံးအတည်ပြုချက်၊ မော်ဒယ်ဗားရှင်း၊ မူဝါဒအနှစ်ချုပ်နှင့်
   `DecisionAggregate` ဟစ်စတိုဂရမ်။

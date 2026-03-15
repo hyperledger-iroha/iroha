@@ -66,13 +66,13 @@ SoraFS فراہم کنندگان `ProviderAdvertV1` پے لوڈ نشر کرتے 
 
 گیٹ وے ڈٹرمینسٹک HTTP درخواستوں کو قبول کرتے ہیں جو اشتہاری اعداد و شمار کی عکاسی کرتے ہیں۔
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`| ضرورت | تفصیلات |
+### `GET /v1/sorafs/storage/car/{manifest_id}`| ضرورت | تفصیلات |
 | --------- | ------------ |
 | ** ہیڈر ** | `Range` (ایک ونڈو سلائیڈ آفسیٹس کے ساتھ کھڑی ہے) ، `dag-scope: block` ، `X-SoraFS-Chunker` ، `X-SoraFS-Nonce` اختیاری ہے ، اور `X-SoraFS-Stream-Token` Base64 لازمی ہے۔ |
 | ** جوابات ** | `206` کے ساتھ `Content-Type: application/vnd.ipld.car` ، `Content-Range` پیش کردہ ونڈو ، `X-Sora-Chunk-Range` ڈیٹا ، اور Chuncer/ٹوکن ہیڈروں کو بازیافت کرتا ہے۔ |
 | ** ناکامی کے طریقوں ** | `416` سیدھ سے باہر ، `401` گمشدہ/غلط علامتوں کے لئے ، `429` جب اسٹریم/بائٹ بجٹ سے تجاوز کیا جاتا ہے۔ |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 ایک ہی ہیڈر کے ساتھ ایک سلائس لائیں نیز سلائس کے لازمی ڈائجسٹ۔ ری پلے کے لئے مفید ہے
 جب کار کے چپس ضروری نہیں ہوں تو کوشش کریں یا فرانزک ڈاؤن لوڈ کریں۔
@@ -120,11 +120,11 @@ SoraFS فراہم کنندگان `ProviderAdvertV1` پے لوڈ نشر کرتے 
 
 - `iroha app sorafs pin list|show` ، `alias list` اور `replication list` آرام سے نوڈس کو انکولیٹ کریں
   Norito آڈٹ شواہد کے لئے تصدیق شدہ بلاکس کے ساتھ خام JSON کو ریکارڈ کرتا ہے اور پرنٹ کرتا ہے۔
-- `iroha app sorafs storage pin` اور `torii /v2/sorafs/pin/register` ظاہر قبول کریں
+- `iroha app sorafs storage pin` اور `torii /v1/sorafs/pin/register` ظاہر قبول کریں
   Norito یا JSON میں عرف اور جانشین کے لئے اختیاری ثبوتوں کے ساتھ۔ لیڈ ثبوت
   `400` میں مسخ شدہ ، اور پرانے ثبوت `503` کو `Warning: 110` کے ساتھ دکھاتے ہیں ، جبکہ بحالی کرتے ہوئے
   مکمل طور پر ختم ہونے والے ثبوت `412`۔
-- ریسٹ پوائنٹس (`/v2/sorafs/pin` ، `/v2/sorafs/aliases` ، `/v2/sorafs/replication`)
+- ریسٹ پوائنٹس (`/v1/sorafs/pin` ، `/v1/sorafs/aliases` ، `/v1/sorafs/replication`)
   تصدیق کے ڈھانچے پر مشتمل ہے تاکہ کلائنٹ تازہ ترین کے خلاف ڈیٹا چیک کرسکیں
   پھانسی سے پہلے ہیڈر بلاک کریں۔## حوالہ جات
 

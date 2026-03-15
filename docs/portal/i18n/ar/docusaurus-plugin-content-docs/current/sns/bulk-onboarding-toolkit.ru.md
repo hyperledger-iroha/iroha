@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- المساعدة في الاتصال بأحد `POST /v2/sns/registrations` والتوقف عنه
+- المساعدة في الاتصال بأحد `POST /v1/sns/registrations` والتوقف عنه
   خطأ HTTP الأول. يتم إضافة الإجابات إلى السجل عن طريق كتابة NDJSON.
-- `--poll-status` تم الاتصال به مرة أخرى `/v2/sns/registrations/{selector}` بعد ذلك
+- `--poll-status` تم الاتصال به مرة أخرى `/v1/sns/registrations/{selector}` بعد ذلك
   بعض الإجراءات (إلى `--poll-attempts`، من خلال 5)، للتأكيد
   видимость записи. قم بتنزيل `--suffix-map` (رسم خرائط JSON `suffix_id` في البداية)
   "suffix")، يمكن للأداة أن تظهر `{label}.{suffix}` للاقتراع.

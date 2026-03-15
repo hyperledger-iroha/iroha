@@ -78,7 +78,7 @@ A medida que se intensifica la aplicación PoR/PoTR.
 | `sorafs_node_por_failure_total` | Mostrador | `provider_id` | Compteur monotone des échantillons PoR échoués. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Calibre | `provider` | Calibres Prometheus existentes para octetos utilizados, profundidad de archivo, cuentas PoR en vol. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Calibre | `provider` | Données de capacité/uptime réussies du fournisseur exposées dans le tablero de capacidad. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | Profondeur du backlog plus compteurs cumulés d'échecs exportés à cada interrogation de `/v2/sorafs/por/ingestion/{manifest}`, alimentant le panel/alerta "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Calibre | `provider`, `manifest` | Profondeur du backlog plus compteurs cumulés d'échecs exportés à cada interrogation de `/v1/sorafs/por/ingestion/{manifest}`, alimentant le panel/alerta "PoR Stalls". |
 
 ### Preuve de récupération en temps utile (PoTR) y SLA de fragmentos| Métrico | Tipo | Etiquetas | Productor | Notas |
 |---------|------|------------|------------|-------|

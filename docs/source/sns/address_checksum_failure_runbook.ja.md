@@ -67,7 +67,7 @@ follow the steps below.
 
 1. **Acknowledge the alert** in PagerDuty/Slack and post the Grafana link +
    PromQL output to the incident thread. Note affected `context` labels (e.g.,
-   `/v2/accounts/{account_id}/transactions`).
+   `/v1/accounts/{account_id}/transactions`).
 2. **Freeze risky deploys:** pause manifest promotions and SDK releases touching
    address parsing until the root cause is understood.
 3. **Collect telemetry snapshots:** download PNG/JSON snapshots from

@@ -39,7 +39,7 @@ DA-1). עוד פורמטים של מטען DOIVENT משתמש של קודקים 
 ## Surface API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -225,7 +225,7 @@ le hashing, le chunking ו-la verification des manifests optionnels.
   deja `iroha app sorafs fetch`. Les Operaurs peuvent le pointer vers des artefacts
   מניפסט + תוכנית נתח (`--manifest`, `--plan`, `--manifest-id`) **ou** fournir
   un כרטיס אחסון Torii דרך `--storage-ticket`. כרטיס Quand le chemin est
-  utilise, la CLI recupere le manifest depuis `/v2/da/manifests/<ticket>`,
+  utilise, la CLI recupere le manifest depuis `/v1/da/manifests/<ticket>`,
   persiste le bundle sous `artifacts/da/fetch_<timestamp>/` (עקוף avec
   `--manifest-cache-dir`), נגזר את ה-hash du blob pour `--manifest-id`, puis
   execute l'orchestrateur avec la list `--gateway-provider` fournie. Tous les
@@ -236,7 +236,7 @@ le hashing, le chunking ו-la verification des manifests optionnels.
   זמינות מקצה לקצה vivent entierement sous le namespace `da` sans
   dupliquer la logique d'orchestrateur.
 - `iroha app da get-blob` recupere les manifests canoniques directement depuis Torii
-  דרך `GET /v2/da/manifests/{storage_ticket}`. La commande ecrit
+  דרך `GET /v1/da/manifests/{storage_ticket}`. La commande ecrit
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` et
   `chunk_plan_{ticket}.json` sous `artifacts/da/fetch_<timestamp>/` (ou un
   `--output-dir` fourni par l'utilisateur) tout en affichant la commande exacte

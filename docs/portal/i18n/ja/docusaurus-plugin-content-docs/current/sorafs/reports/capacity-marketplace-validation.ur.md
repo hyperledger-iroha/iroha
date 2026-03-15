@@ -28,7 +28,7 @@ title: SoraFS 容量マーケットプレイスの検証
 
 |チェック |検証 |証拠 |
 |------|-----------|----------|
-|レジストリの正規の容量宣言統合テスト アプリ API の実行 `/v2/sorafs/capacity/declare` 署名の処理 メタデータのキャプチャ ノード レジストリのハンドオフ 検証| `crates/iroha_torii/src/routing.rs:7654` |
+|レジストリの正規の容量宣言統合テスト アプリ API の実行 `/v1/sorafs/capacity/declare` 署名の処理 メタデータのキャプチャ ノード レジストリのハンドオフ 検証| `crates/iroha_torii/src/routing.rs:7654` |
 |スマート コントラクトの不一致ペイロードが拒否されました |単体テスト プロバイダー ID コミットされた GiB フィールドの署名済み宣言 テスト 永続性| `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | CLI の正規オンボーディング アーティファクトが生成する | CLI ハーネス決定論的 Norito/JSON/Base64 出力 ラウンドトリップ検証 演算子のオフライン宣言| `crates/sorafs_car/tests/capacity_cli.rs:17` |
 |オペレーター ガイド 入場ワークフロー ガバナンス ガードレール 表紙文書宣言スキーマ、ポリシーのデフォルト、評議会レビュー手順の列挙| `../storage-capacity-marketplace.md` |

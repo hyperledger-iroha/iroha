@@ -12,7 +12,7 @@ reconciliation using the `capacity_reconcile.py` helper and the alert hook in
 
 ## Prerequisites
 
-- A capacity state snapshot captured from `/v2/sorafs/capacity/state` that
+- A capacity state snapshot captured from `/v1/sorafs/capacity/state` that
   includes `fee_ledger` entries.
 - The XOR ledger export for the same window, encoded as JSON or NDJSON with
   `provider_id_hex`, `kind` (`settlement` or `penalty`), and `amount_nano`
@@ -26,7 +26,7 @@ reconciliation using the `capacity_reconcile.py` helper and the alert hook in
 1. **Export inputs**
    ```bash
    # Capacity snapshot (state API)
-   curl -sS "$TORII/v2/sorafs/capacity/state" \
+   curl -sS "$TORII/v1/sorafs/capacity/state" \
      > artifacts/sorafs/capacity/state_$(date +%F).json
 
    # Ledger export (after XOR transfers are executed)

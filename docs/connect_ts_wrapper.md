@@ -4,7 +4,7 @@
 type SessionResp = { sid: string; wallet_uri: string; app_uri: string; token_app: string; token_wallet: string };
 
 export async function createSession(node: string): Promise<SessionResp> {
-  const res = await fetch(`${node}/v2/connect/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const res = await fetch(`${node}/v1/connect/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   if (!res.ok) throw new Error(`session: ${res.status}`);
   return res.json();
 }
@@ -17,7 +17,7 @@ function base64UrlToken(token: string): string {
 }
 
 export async function joinWs(node: string, sid: string, role: 'app'|'wallet', token: string): Promise<WebSocket> {
-  const wsUrl = `${node.replace('http', 'ws')}/v2/connect/ws?sid=${sid}&role=${role}`;
+  const wsUrl = `${node.replace('http', 'ws')}/v1/connect/ws?sid=${sid}&role=${role}`;
   const protocol = `iroha-connect.token.v1.${base64UrlToken(token)}`;
   const ws = new WebSocket(wsUrl, protocol);
   await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = (e) => reject(e); });

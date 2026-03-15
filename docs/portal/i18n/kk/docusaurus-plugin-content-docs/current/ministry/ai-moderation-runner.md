@@ -200,7 +200,7 @@ struct AdversarialPerceptualVariantV1 {
   - HTTP/gRPC API ашатын `run_moderation.py` (немесе Rust баламасы) кіру нүктесі.
 - `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>` артефактілерін жариялау.
 - `sorafs_ai_runner` жәшігінің бөлігі ретінде жүгіруші екілік кемелер. Құрылыс құбыры
-  манифест хэшін екілік жүйеге енгізеді (`/v2/info` арқылы көрсетіледі).
+  манифест хэшін екілік жүйеге енгізеді (`/v1/info` арқылы көрсетіледі).
 
 №# 8. Телеметрия және бақылау мүмкіндігі
 - Prometheus көрсеткіштері:

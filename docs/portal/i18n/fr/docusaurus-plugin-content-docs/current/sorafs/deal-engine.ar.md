@@ -54,12 +54,12 @@ Il s'agit d'une connexion pour le SF-12, qui est également compatible avec Open
 ## تكامل Torii
 
 تعرض Torii نقاط نهاية مخصصة كي يتمكن المزوّدون من الإبلاغ عن الاستخدام وتحريك
-دورة حياة الصفقة بدون câblage مخصص:- `POST /v2/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
+دورة حياة الصفقة بدون câblage مخصص:- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
   نتائج محاسبة حتمية (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
+- `POST /v1/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
   `DealSettlementRecord` Version `DealSettlementV1` en base64
   وجاهزًا للنشر في DAG الحوكمة.
-- `/v2/events/sse` à Torii pour `SorafsGatewayEvent::DealUsage`
+- `/v1/events/sse` à Torii pour `SorafsGatewayEvent::DealUsage`
   التي تلخص كل إرسال استخدام (epoch، ساعات GiB المقاسة، عدّادات التذاكر،
   الرسوم الحتمية) et `SorafsGatewayEvent::DealSettlement`
   Le grand livre est également disponible dans digest/الحجم/base64 par BLAKE3

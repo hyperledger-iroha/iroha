@@ -229,7 +229,7 @@ la liste blanche prouve des malicios ou des alertes suprêmes.
 **Donde mirar après:**- Le cache de relecture et la persistance des curseurs sont terrifiés sur DA-2. Voir la
   implémentation en `crates/iroha_core/src/da/replay_cache.rs` (logique de cache)
   et l'intégration Torii en `crates/iroha_torii/src/da/ingest.rs`, qui enhebra las
-  vérifications des empreintes digitales à travers le `/v2/da/ingest`.
+  vérifications des empreintes digitales à travers le `/v1/da/ingest`.
 - Les simulations de streaming PDP/PoTR sont exécutées via le faisceau proof-stream
   en `crates/sorafs_car/tests/sorafs_cli.rs`, cubriendo flux de sollicitude
   PoR/PDP/PoTR et scénarios de chute animés dans le modèle de mesures.

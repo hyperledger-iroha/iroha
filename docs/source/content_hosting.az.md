@@ -28,7 +28,7 @@ fərdi fayllar birbaşa Torii-dən.
   `sponsor:<uaid>`), saxlama siyasəti yertutanı və MIME ləğv edir.
 - **Deduping**: tar yükləri parçalanır (defolt 64KiB) və hər dəfə bir dəfə saxlanılır
   istinad sayıları ilə hash; bir paketin təqaüdə çıxması parçaları azaldır və budaqlanır.
-- **Xidmət et**: Torii `GET /v2/content/{bundle}/{path}`-i ifşa edir. Cavab axını
+- **Xidmət et**: Torii `GET /v1/content/{bundle}/{path}`-i ifşa edir. Cavab axını
   birbaşa yığın mağazasından `ETag` = fayl hash, `Accept-Ranges: bytes`,
   Range dəstəyi və manifestdən əldə edilən Cache-Control. Şərəf oxuyur
   manifest auth rejimi: rol qapılı və sponsor qapalı cavablar kanonik tələb edir

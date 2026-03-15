@@ -47,7 +47,7 @@ Lançamento do modelo SF-2b/2c em
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` com `max_span`
      - `allow_unknown_capabilities=<true|false>` при наличии GREASE TLV
-   - Verifique a configuração `/v2/sorafs/providers` e `sorafs_fetch`; предупреждения o
+   - Verifique a configuração `/v1/sorafs/providers` e `sorafs_fetch`; предупреждения o
      capacidades неизвестных нужно триажить.
 3. **Prontidão de múltiplas fontes.**
    - Verifique `sorafs_fetch` com `--provider-advert=<path>`; CLI теперь падает,
@@ -190,9 +190,9 @@ fatura e razão em PR.
 - **Еженедельная рассылка статуса.** DevRel рассылает краткое резюме métrica
   admissão, avisos técnicos e prazos de entrega.
 - **Resposta a incidentes.** Если срабатывают alertas `reject`, alertas de plantão:
-  1. Resolva o problema do anúncio da descoberta Torii (`/v2/sorafs/providers`).
+  1. Resolva o problema do anúncio da descoberta Torii (`/v1/sorafs/providers`).
   2. Valide o anúncio no pipeline do provedor e crie-o
-     `/v2/sorafs/providers`, este é o valor de referência.
+     `/v1/sorafs/providers`, este é o valor de referência.
   3. Organize a rotação do anúncio antes do prazo de atualização.
 - **Exibição de recursos.** Capacidade de configuração de recursos de esquema em R1/R2, exceto
   a implementação do комитет não foi executada; GREASE испытания проводите только в еженедельное

@@ -13,7 +13,7 @@ translator: manual
 # ‏ABI בזמן ריצה — גרסאות פעילות (Torii)
 
 נקודת קצה
-- `GET /v2/runtime/abi/active`
+- `GET /v1/runtime/abi/active`
 
 תגובה (מהדורה ראשונה; ABI יחיד)
 ```json

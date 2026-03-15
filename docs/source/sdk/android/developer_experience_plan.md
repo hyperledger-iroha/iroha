@@ -14,7 +14,7 @@ AND5 packages the Android SDK for external adoption once AND2 (key management) a
 
 Objectives:
 
-- Provide two canonical sample apps that demonstrate secure-element signing, offline workflows, and `/v2/pipeline` networking behaviour.
+- Provide two canonical sample apps that demonstrate secure-element signing, offline workflows, and `/v1/pipeline` networking behaviour.
 - Publish developer guides that explain key management, offline signing, telemetry/observability hooks, configuration, and troubleshooting with explicit `iroha_config` mappings.
 - Automate artifact distribution (signed AAR/Maven packages) with reproducible metadata, SBOMs, and provenance attestations aligned with the workspace release policy.
 - Localize the quickstart/key-management/troubleshooting guides into Japanese ahead of beta, with Hebrew following for GA.
@@ -23,7 +23,7 @@ Objectives:
 
 | Sample | Capabilities | Dependencies | Notes |
 |--------|--------------|--------------|-------|
-| **Operator Console** | Governance transaction builder, StrongBox signing, Torii `/v2/pipeline` retries, telemetry dashboards (AND7 hooks) | AND2 attestation harness, AND4 mock Torii harness, `docs/source/android_support_playbook.md` for ops alignment | Target audience: validator/operators. Must expose provenance hashes, pending queue inspector, and attestation upload workflow. Scaffold lives at `examples/android/operator-console`. |
+| **Operator Console** | Governance transaction builder, StrongBox signing, Torii `/v1/pipeline` retries, telemetry dashboards (AND7 hooks) | AND2 attestation harness, AND4 mock Torii harness, `docs/source/android_support_playbook.md` for ops alignment | Target audience: validator/operators. Must expose provenance hashes, pending queue inspector, and attestation upload workflow. Scaffold lives at `examples/android/operator-console`. |
 | **Retail Wallet** | Offline signing envelope creation, device-to-device handoff, wire-framed instruction payloads (transfer/mint), recovery + rotation playbooks | AND2 fallback derivation, `TransactionBuilder.encodeAndSignEnvelopeWithAttestation`, Norito fixture regeneration SLA | Demonstrates deterministic offline flows and queue reconciliation when connectivity returns. Ships with mocked ledger + CLI to replay envelopes. Scaffold lives at `examples/android/retail-wallet`. |
 
 Implementation notes:
@@ -74,7 +74,7 @@ Implementation notes:
 | SDK quickstart refresh | `docs/source/sdk/android/index.md` | Update | Expand setup section with sample app references, Managed Device requirements, and Torii pipeline pointers. |
 | Key management & attestation guide | `docs/source/sdk/android/key_management.md` | ✅ Published | Explains `IrohaKeyManager` providers, StrongBox preference, alias lifecycle, and attestation bundle handling with references to `android_strongbox_device_matrix.md`. |
 | Offline signing & envelopes | `docs/source/sdk/android/offline_signing.md` | ✅ Published | Details the envelope schema, Norito payload reuse, recovery workflows, and CLI helpers for verification. |
-| Networking & telemetry guide | `docs/source/sdk/android/networking.md` | ✅ Published | Captures `/v2/pipeline` HTTP client configuration, retry/queue plumbing, Norito RPC usage, and telemetry observer alignment with `telemetry_redaction.md`. |
+| Networking & telemetry guide | `docs/source/sdk/android/networking.md` | ✅ Published | Captures `/v1/pipeline` HTTP client configuration, retry/queue plumbing, Norito RPC usage, and telemetry observer alignment with `telemetry_redaction.md`. |
 | Configuration & manifest guide | `docs/source/sdk/android/configuration.md` | ✅ Published | Documents the `iroha_config` → `ClientConfig` pipeline, manifest hashing, telemetry redaction knobs, pending-queue wiring, and the schema diff/override workflows referenced by `android_runbook.md`. |
 | Sample app walkthroughs | `docs/source/sdk/android/samples/{operator_console,retail_wallet}.md` | ✅ Drafted | Step-by-step guides for operator console and retail wallet, including `iroha_config` excerpts and troubleshooting tables. |
 | Localization tracking | `docs/source/sdk/android/i18n_plan.md` | ✅ Drafted | Checklist covering JP (beta) + HE (GA) translations with reviewer assignments and SLA to mirror English sources within 5 business days. |

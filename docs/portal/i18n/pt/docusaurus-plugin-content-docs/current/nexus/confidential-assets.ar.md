@@ -46,7 +46,7 @@ SPDX-License-Identifier: Apache-2.0
 
 اغلفة memo السرية تشحن الان مع fixture قانوني في `fixtures/confidential/encrypted_payload_v1.json`. O envelope v1 do envelope v1 pode ser usado para configurar SDKs e SDKs. التحليل. Use o modelo de dados Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) e Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) para definir o fixture مباشرة, لضمان توافق Codificação Norito وسطوح الاخطاء وتغطية الانحدار مع تطور الكودك.
 
-Os SDKs do Swift são protegidos por escudo e cola JSON, como: `ShieldRequest` com nota de compromisso, 32 dias, carga útil e débito metadados, você pode usar `IrohaSDK.submit(shield:keypair:)` (e `submitAndWait`) para obter informações e usar `/v2/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال compromissos, ويمرر `ConfidentialEncryptedPayload` como codificador Norito, ويعكس layout `zk::Shield` الموضح ادناه حتى تبقى المحافظ متزامنة مع Rust.
+Os SDKs do Swift são protegidos por escudo e cola JSON, como: `ShieldRequest` com nota de compromisso, 32 dias, carga útil e débito metadados, você pode usar `IrohaSDK.submit(shield:keypair:)` (e `submitAndWait`) para obter informações e usar `/v1/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال compromissos, ويمرر `ConfidentialEncryptedPayload` como codificador Norito, ويعكس layout `zk::Shield` الموضح ادناه حتى تبقى المحافظ متزامنة مع Rust.
 
 ## Compromissos الاجماع e gating القدرات
 - تكشف رؤوس الكتل `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; Não digerir o hash do site e não fazer o download do arquivo.
@@ -75,7 +75,7 @@ Os SDKs do Swift são protegidos por escudo e cola JSON, como: `ShieldRequest` c
 
 #### مراقبة الانتقالات عبر Torii
 
-Verifique se o `GET /v2/confidential/assets/{definition_id}/transitions` é o `AssetConfidentialPolicy`. O JSON de carga útil é definido como ID de ativo, mas o valor do `current_mode` é definido como `current_mode`. Placa de identificação (referência de código de barras `Convertible`), e placa de identificação `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
+Verifique se o `GET /v1/confidential/assets/{definition_id}/transitions` é o `AssetConfidentialPolicy`. O JSON de carga útil é definido como ID de ativo, mas o valor do `current_mode` é definido como `current_mode`. Placa de identificação (referência de código de barras `Convertible`), e placa de identificação `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
 
 - `transition_id` - identificador de auditoria baseado em `ScheduleConfidentialPolicyTransition`.
 -`previous_mode`/`new_mode`.
@@ -121,7 +121,7 @@ Certifique-se de que o produto esteja funcionando corretamente. O tempo de execu
 
 1. **Preparar registros:** فعّل كل مدخلات verificador والمعلمات المشار اليها في السياسة المستهدفة. O código `conf_features` está disponível para os pares do site.
 2. **Prepare a transição:** Escolha `ScheduleConfidentialPolicyTransition` para `effective_height` ou `policy_transition_delay_blocks`. O código `ShieldedOnly` é o mesmo que o `window ≥ policy_transition_window_blocks`.
-3. **Publicar orientação do operador:** سجّل `transition_id` المعاد ووزع runbook para on/off-ramp. Verifique o valor do produto em `/v2/confidential/assets/{id}/transitions` para obter mais informações.
+3. **Publicar orientação do operador:** سجّل `transition_id` المعاد ووزع runbook para on/off-ramp. Verifique o valor do produto em `/v1/confidential/assets/{id}/transitions` para obter mais informações.
 4. **Aplicação de janela:** عند فتح النافذة يحول runtime السياسة الى `Convertible`, ويصدر `PolicyTransitionWindowOpened { transition_id }` ويبدأ في رفض طلبات الحوكمة المتعارضة.
 5. **Finalizar ou abortar:** عند `effective_height` يتحقق runtime من الشروط المسبقة (عرض شفاف صفر, عدم وجود سحب طارئ، sim). النجاح يقلب السياسة للوضع المطلوب؛ Se você usar `PolicyTransitionPrerequisiteFailed`, verifique se está tudo bem.
 6. **Atualizações de esquema:** بعد نجاح الانتقال ترفع الحوكمة نسخة مخطط الاصل (مثلا `asset_definition.v2`) e CLI O `confidential_policy` não contém manifestos. توجه وثائق ترقية genesis المشغلين لاضافة اعدادات السياسة وبصمات registro قبل اعادة تشغيل المدققين.
@@ -233,7 +233,7 @@ Certifique-se de que o produto esteja funcionando corretamente. O tempo de execu
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - تستخدم notas de cargas úteis المشفرة AEAD مع مفاتيح مشتركة مشتقة من ECDH; يمكن ارفاق chaves de visualização do auditor اختيارية الى saídas حسب سياسة الاصل.
-- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos, والمساعد `iroha app zk envelope` Envelopes de papel/corte Norito sem problemas. O Torii é um arquivo de código aberto que `POST /v2/confidential/derive-keyset` é usado para hex e base64 para ser usado جلب هياكل المفاتيح برمجيا.
+- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos, والمساعد `iroha app zk envelope` Envelopes de papel/corte Norito sem problemas. O Torii é um arquivo de código aberto que `POST /v1/confidential/derive-keyset` é usado para hex e base64 para ser usado جلب هياكل المفاتيح برمجيا.
 
 ## الغاز, الحدود, وضوابط DoS
 - gás natural:

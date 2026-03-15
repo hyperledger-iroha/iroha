@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | རིམ་སྒྲིག་གསལ་སྟོན་ཚུ་ | `ClientConfig` གིས་ འཇུག་སྤྱོད་མ་འབད་བའི་ཧེ་མ་ གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ `android.telemetry.config.reload` བརྒྱུད་དེ་ ལོག་མངོན་གསལ་འབད་མ་བཏུབ་མི་ དྲན་ཐོ་ཚུ་གིས་ གསལ་སྟོན་འབདཝ་ཨིན། | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | མཚན་རྟགས་བཀོད་པའི་ བདེ་སྒྲིག་བཟོ་ནི། | StrongBox-དགོས་མཁོའི་སྲིད་བྱུས་དང་ བདེན་ཁུངས་བཀལ་ཐངས་ དེ་ལས་ ཐབས་འཕྲུལ་གྱི་མེ་ཊིགསི་རྩིས་ཞིབ་ཚུ་གིས་ གཡོ་འགུལ་འདི་ངོས་འཛིན་འབདཝ་ཨིན། བྱུང་རྐྱེན་རེ་ལུ་ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ། | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | PII བརྡ་འཕྲིན་ནང་ འཛེགས་ཡོདཔ། | བཱ་ལེ་ཀེ་༢བི་ཧ་ཤེཌ་དབང་འཛིན་ བཱ་ཀེཊ་ཐབས་འཕྲུལ་གྱི་གསལ་སྡུད། | `docs/source/sdk/android/telemetry_redaction.md`; རྒྱབ་སྐྱོར་དེབ་ §8. |
-| Torii RPC གུ་ བསྐྱར་རྩེད་ཡང་ན་ མར་ཕབ་འབད། | `/v2/pipeline` ཞུ་བ་ བཟོ་བསྐྲུན་པ་གིས་ ཊི་ཨེལ་ཨེསི་ པིན་ནིང་དང་ སྐད་བརྡ་རྒྱུན་སྲིད་བྱུས་ དེ་ལས་ འཆར་དངུལ་ཚུ་ ཧ་ཤིཌ་དབང་འཛིན་གྱི་སྐབས་དོན་དང་གཅིག་ཁར་ བསྟར་སྤྱོད་འབདཝ་ཨིན། | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (འཆར་གཞི་བཟོ་མི)། |
+| Torii RPC གུ་ བསྐྱར་རྩེད་ཡང་ན་ མར་ཕབ་འབད། | `/v1/pipeline` ཞུ་བ་ བཟོ་བསྐྲུན་པ་གིས་ ཊི་ཨེལ་ཨེསི་ པིན་ནིང་དང་ སྐད་བརྡ་རྒྱུན་སྲིད་བྱུས་ དེ་ལས་ འཆར་དངུལ་ཚུ་ ཧ་ཤིཌ་དབང་འཛིན་གྱི་སྐབས་དོན་དང་གཅིག་ཁར་ བསྟར་སྤྱོད་འབདཝ་ཨིན། | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (འཆར་གཞི་བཟོ་མི)། |
 | མཚན་རྟགས་བཀོད་མེད་ ཡང་ན་ བསྐྱར་བཟོ་མ་འབད་བའི་གསར་བཏོན་ཚུ་ | CycloneDX SBOM + Sigstore བདེན་ཁུངས་ཚུ་ AND6 ཞིབ་དཔྱད་ཐོ་ཡིག་གིས་ མཐུད་ཡོདཔ་ཨིན། report RFCs ལུ་ `docs/source/release/provenance/android/` ནང་ལུ་ སྒྲུབ་བྱེད་དགོཔ་ཨིན། | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | མ་ཚང་བའི་བྱུང་རྐྱེན་འཛིན་སྐྱོང་ | རན་བུཀ་ + རྩེད་དེབ་འདི་གིས་ ཟུར་ཐོ་དང་ ཟང་ཟིང་སྦྱོང་བརྡར་ དེ་ལས་ ཡར་འཕར་ཤིང་ཚུ་ ངེས་འཛིན་འབདཝ་ཨིན། telemetry perrides ལུ་ Norito ཞུ་བ་ཚུ་ མཚན་རྟགས་བཀོད་དགོཔ་ཨིན། | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 འཛུལ་སྤྱོད་ཚད་འཛིན། | StrongBox སྲིད་བྱུས་ཚུ་ + མཚན་རྟགས་བཀོད་དགོ་པའི་ ལཱ་གི་རྒྱུན་རིམ་འདི་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན། |
 | 7.5 ཀིརིཔ་ཊོ་གཱ་ར་ཕིག་ཚོད་འཛིན། | AND2 ལས་ མི་རབས་དང་ གསོག་འཇོག་ དེ་ལས་ བདེན་ཁུངས་བཀལ་དགོ་པའི་ དགོས་མཁོ་ཚུ་ (འཛིན་སྐྱོང་གི་ལམ་སྟོན་གཙོ་བོ་) |
 | 7.6 བཀོལ་སྤྱོད་ཉེན་སྲུང་ | བརྒྱུད་འཕྲིན་ཧ་ཤིང་དང་ ཟང་ཟིང་གི་བསྐྱར་སྦྱོང་ བྱུང་རྐྱེན་ལན་འདེབས་དང་ སྒྲུབ་བྱེད་ཀྱི་སྒོ་སྒྲིང་། |
-| 7.7 བརྒྱུད་འབྲེལ་ཉེན་སྲུང་ | `/v2/pipeline` TLS སྲིད་བྱུས་ + ཧ་ཤིཌ་དབང་འཛིན་ (བརྒྱུད་འཕྲིན་བསྐྱར་བཟོ་ཡིག་ཆ་)། |
+| 7.7 བརྒྱུད་འབྲེལ་ཉེན་སྲུང་ | `/v1/pipeline` TLS སྲིད་བྱུས་ + ཧ་ཤིཌ་དབང་འཛིན་ (བརྒྱུད་འཕྲིན་བསྐྱར་བཟོ་ཡིག་ཆ་)། |
 | 7.8 ལམ་ལུགས་ཐོབ་ཐངས། / གོང་འཕེལ། | བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ གྷྲེཌ་ལི་གིས་ AND5/AND6 འཆར་གཞི་ནང་ བཟོ་བསྐྲུན་དང་ SBOMs དེ་ལས་ བྱུང་རྐྱེན་གྱི་སྒོ་ཚུ་ བཟོ་བསྐྲུན་འབདཝ་ཨིན། |
 | 7.9 བཀྲམ་སྤེལ་པ་འབྲེལ་བ། | Buildkite + Sigstore བདེན་ཁུངས་ཚུ་ ཕྱོགས་གསུམ་བརྟེན་པའི་ SBOMs དང་མཉམ་དུ་ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན། |
 | 7.10 སེམས་ཤུགས་འཛིན་སྐྱོང་ | རན་བུཀ་/རྩེད་དེབ་ཡར་འཕར་ དྲན་ཐོ་ནང་བསྐྱོད་འབད་ནི་ ཊེ་ལི་མི་ཊི་འཐུས་ཤོར་གྱི་གྱངས་ཁ་ཚུ། |

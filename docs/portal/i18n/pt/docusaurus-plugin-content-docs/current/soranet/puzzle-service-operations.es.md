@@ -27,17 +27,17 @@ del relé e, quando estiver configurado, tokens intermediários de admissão ML-
 nome da borda do relé. Expor cinco endpoints HTTP:
 
 - `GET /healthz` - sonda de vivacidade.
-- `GET /v2/puzzle/config` - devolve os parâmetros efetivos de PoW/puzzle
+- `GET /v1/puzzle/config` - devolve os parâmetros efetivos de PoW/puzzle
   feitos do JSON do relé (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v2/puzzle/mint` - abre um ticket Argon2; um corpo JSON opcional
+- `POST /v1/puzzle/mint` - abre um ticket Argon2; um corpo JSON opcional
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   solicitar um TTL mas curto (fixar na janela da política), no ticket para um
   transcrição hash e devolve um ticket firmado pelo relé + la huella de
   la firma quando hay claves de firmado ajustadas.
-- `GET /v2/token/config` - quando `pow.token.enabled = true`, devolve la
+- `GET /v1/token/config` - quando `pow.token.enabled = true`, devolve la
   política de ativação de token de admissão (impressão digital do emissor, limites de TTL/inclinação do relógio,
   relé ID e o conjunto de revogação combinado).
-- `POST /v2/token/mint` - contém um token de admissão ML-DSA vinculado ao currículo
+- `POST /v1/token/mint` - contém um token de admissão ML-DSA vinculado ao currículo
   hash fornecido; o corpo aceita `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Os ingressos produzidos pelo serviço são verificados na tentativa de integração
@@ -81,9 +81,9 @@ cargo run -p soranet-puzzle-service -- \
 
 `--token-secret-hex` também está disponível quando o segredo é gerenciado por
 um pipeline de ferramentas fora de banda. O observador do arquivo de revogação
-mantenedor `/v2/token/config` atualizado; coordenação de atualizações com o comando
+mantenedor `/v1/token/config` atualizado; coordenação de atualizações com o comando
 `soranet-admission-token revoke` para evitar desfases no estado de revogação.Configure `pow.signed_ticket_public_key_hex` no JSON do relé para anunciar
-a chave pública ML-DSA-44 usada para verificar tickets PoW firmados; `/v2/puzzle/config`
+a chave pública ML-DSA-44 usada para verificar tickets PoW firmados; `/v1/puzzle/config`
 réplica da chave e da huella BLAKE3 (`signed_ticket_public_key_fingerprint_hex`)
 para que os clientes possam fixar o selecionador. Os ingressos firmados são válidos
 contra o ID do relé e as ligações de transcrição e compara o mesmo armazenamento de revogação;
@@ -91,7 +91,7 @@ os tickets PoW brutos de 74 bytes continuam sendo válidos quando o selecionador
 O ticket assinado está configurado. Passe o segredo do firmante via `--signed-ticket-secret-hex`
 o `--signed-ticket-secret-path` para iniciar o serviço de quebra-cabeças; el arranque rechaza
 pares de chaves que não coincidem se o segredo não for válido contra `pow.signed_ticket_public_key_hex`.
-`POST /v2/puzzle/mint` aceita `"signed": true` (e opcional `"transcript_hash_hex"`) para
+`POST /v1/puzzle/mint` aceita `"signed": true` (e opcional `"transcript_hash_hex"`) para
 devolver um ticket firmado Norito junto com os bytes do ticket bruto; las
 respostas incluem `signed_ticket_b64` e `signed_ticket_fingerprint_hex` para ajudar
 a rastrear impressões digitais de repetição. Las solicitudes con `signed = true` se rechazan
@@ -110,11 +110,11 @@ se o segredo do firmante não estiver configurado.
 3. **Preparar o reinício.** Recarregue a unidade do sistema ou o conteúdo uma vez
    que a governança anuncie a mudança de rotação. O serviço não suporta hot-reload;
    é necessário reiniciar para executar o novo descritor commit.
-4. **Validar.** Emita um ticket via `POST /v2/puzzle/mint` e confirme que los
+4. **Validar.** Emita um ticket via `POST /v1/puzzle/mint` e confirme que los
    Os valores `difficulty` e `expires_at` coincidem com a nova política. O relatório
    de imersão (`docs/source/soranet/reports/pow_resilience.md`) captura de limites
    de latência esperada como referência. Quando os tokens estão habilitados,
-   consulte `/v2/token/config` para garantir que a impressão digital do emissor foi anunciada
+   consulte `/v1/token/config` para garantir que a impressão digital do emissor foi anunciada
    e o conteúdo de revogações coincide com os valores esperados.
 
 ## Procedimento de desativação de emergência
@@ -126,7 +126,7 @@ se o segredo do firmante não estiver configurado.
    obsoletos enquanto a porta Argon2 está offline.
 3. Reinicie o serviço de relé e quebra-cabeça para aplicar a mudança.
 4. Monitore `soranet_handshake_pow_difficulty` para garantir que a dificuldade
-   cae al valor hashcash esperado, e verifica que `/v2/puzzle/config` reporte
+   cae al valor hashcash esperado, e verifica que `/v1/puzzle/config` reporte
    `puzzle = null`.
 
 ## Monitoramento e alertas- **Latency SLO:** Rastrea `soranet_handshake_latency_seconds` e mantém o P95
@@ -136,16 +136,16 @@ se o segredo do firmante não estiver configurado.
   para ajustar cooldowns de `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Alinhamento do quebra-cabeça:** `soranet_handshake_pow_difficulty` deve coincidir com la
-  dificultado devido a `/v2/puzzle/config`. A divergência indica configuração
+  dificultado devido a `/v1/puzzle/config`. A divergência indica configuração
   O relé está parado ou um reinício falhado.
-- **Prontidão do token:** Alerta si `/v2/token/config` cae a `enabled = false`
+- **Prontidão do token:** Alerta si `/v1/token/config` cae a `enabled = false`
   inesperadamente ou se `revocation_source` relata timestamps obsoletos. Os operadores
   deve girar o arquivo de revogações Norito via CLI quando um token for retirado
   para manter este endpoint preciso.
 - **Saúde do serviço:** Sondea `/healthz` na cadência habitual de vivacidade e alerta
-  si `/v2/puzzle/mint` deve responder HTTP 500 (indica incompatibilidade de parâmetros
+  si `/v1/puzzle/mint` deve responder HTTP 500 (indica incompatibilidade de parâmetros
   Argon2 ou falhas de RNG). Erros de cunhagem de token aparecem como respostas
-  HTTP 4xx/5xx em `/v2/token/mint`; trata-se de falhas repetidas como condição de paginação.
+  HTTP 4xx/5xx em `/v1/token/mint`; trata-se de falhas repetidas como condição de paginação.
 
 ## Registro de conformidade e auditoria
 

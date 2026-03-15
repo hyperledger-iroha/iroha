@@ -137,8 +137,8 @@ JS4/JS7.
 
 ## Listas iterables y paginación
 
-Los ayudantes de paginación reflejan la ergonomía del SDK de Python para `/v2/accounts`,
-`/v2/domains`, `/v2/assets/definitions`, NFT, saldos, titulares de activos y el
+Los ayudantes de paginación reflejan la ergonomía del SDK de Python para `/v1/accounts`,
+`/v1/domains`, `/v1/assets/definitions`, NFT, saldos, titulares de activos y el
 historial de transacciones de la cuenta.
 
 ```ts
@@ -186,7 +186,7 @@ ayudantes de cuenta atrás (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) resalta la próxima fecha límite de vencimiento (actualizar → política
 → certificado) para que las insignias de UI puedan advertir a los operadores cada vez que se haya asignado un permiso
 Quedan <24 h. El SDK
-refleja los filtros REST expuestos por `/v2/offline/allowances`:
+refleja los filtros REST expuestos por `/v1/offline/allowances`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` y el
 `requireVerdict` / `onlyMissingVerdict` booleanos. Combinaciones no válidas (para
@@ -267,8 +267,8 @@ Devolución de llamada `onReconnect` para alimentar paneles y alertas.
 
 ## Instantáneas de Explorer y cargas útiles QR
 
-La telemetría de Explorer proporciona ayudas escritas para `/v2/explorer/metrics` y
-puntos finales `/v2/explorer/accounts/{account_id}/qr` para que los paneles puedan reproducir el
+La telemetría de Explorer proporciona ayudas escritas para `/v1/explorer/metrics` y
+puntos finales `/v1/explorer/accounts/{account_id}/qr` para que los paneles puedan reproducir el
 Las mismas instantáneas que alimentan el portal. `getExplorerMetrics()` normaliza el
 carga útil y devuelve `null` cuando la ruta está deshabilitada. Combínalo con
 `getExplorerAccountQr()` siempre que necesite literales I105 (preferido)/sora (segundo mejor) más en línea
@@ -373,7 +373,7 @@ mutaciones: la lista de verificación de gobernanza requiere evidencia de que la
 de los límites actuales de la flota.### Conectar marcación WebSocket
 
 `ToriiClient.openConnectWebSocket()` ensambla el canónico
-URL `/v2/connect/ws` (incluidos `sid`, `role` y parámetros de token), actualizaciones
+URL `/v1/connect/ws` (incluidos `sid`, `role` y parámetros de token), actualizaciones
 `http→ws` / `https→wss` y entrega la URL final a cualquier WebSocket
 implementación que usted proporciona. Los navegadores reutilizan automáticamente el global
 `WebSocket`. Las personas que llaman a Node.js deben pasar un constructor como `ws`:
@@ -453,7 +453,7 @@ Taxonomía `ConnectError` para que los interceptores HTTP/WebSocket compartidos 
 estándar `connect.queue_depth`, `connect.queue_overflow_total` y
 Métricas `connect.queue_expired_total` a las que se hace referencia en toda la hoja de ruta.
 
-## Observadores de streaming y cursores de eventos`ToriiClient.streamEvents()` expone `/v2/events/sse` como un iterador asíncrono con función automática
+## Observadores de streaming y cursores de eventos`ToriiClient.streamEvents()` expone `/v1/events/sse` como un iterador asíncrono con función automática
 reintentos, por lo que las CLI de Nodo/Bun pueden seguir la actividad de la canalización de la misma manera que lo hace la CLI de Rust.
 Mantenga el cursor `Last-Event-ID` junto a los artefactos de su runbook para que los operadores puedan
 reanudar una secuencia sin omitir eventos cuando se reinicia un proceso.
@@ -492,7 +492,7 @@ for await (const event of torii.streamEvents({
   se recibe la señal; pase `STREAM_MAX_EVENTS=25` cuando solo necesite los primeros eventos
   para una prueba de humo.
 - `ToriiClient.streamSumeragiStatus()` refleja la misma interfaz para
-  `/v2/sumeragi/status/sse` para que la telemetría de consenso se pueda seguir por separado, y el
+  `/v1/sumeragi/status/sse` para que la telemetría de consenso se pueda seguir por separado, y el
   El iterador respeta `Last-Event-ID` de la misma manera.
 - Consulte `javascript/iroha_js/recipes/streaming.mjs` para obtener una CLI llave en mano (persistencia del cursor,
   anulaciones de filtro env-var y registro `extractPipelineStatusKind`) utilizados en JS4
@@ -595,14 +595,14 @@ para muestras listas para CLI y enlaces a la guía de campo completa en
 
 La hoja de ruta de JS también requiere el muestreo del Compromiso de Bloqueo de Roadrunner (RBC) para que los operadores puedan
 demuestre que el bloque que obtuvieron a través de Sumeragi coincide con las pruebas de fragmentos que verifican.
-Utilice los asistentes integrados en lugar de crear cargas útiles a mano:1. `getSumeragiRbcSessions()` refleja `/v2/sumeragi/rbc/sessions`, y
+Utilice los asistentes integrados en lugar de crear cargas útiles a mano:1. `getSumeragiRbcSessions()` refleja `/v1/sumeragi/rbc/sessions`, y
    `findRbcSamplingCandidate()` selecciona automáticamente la primera sesión entregada con un hash de bloque
    (la suite de integración recurre a él cada vez que
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` no está configurado).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` normaliza `{blockHash,height,view}`
    además de anulaciones opcionales `{count,seed,apiToken}` para que los números hexadecimales o negativos con formato incorrecto nunca
    llegar a Torii.
-3. `sampleRbcChunks()` ENVÍA la solicitud a `/v2/sumeragi/rbc/sample`, devolviendo pruebas de fragmentos
+3. `sampleRbcChunks()` ENVÍA la solicitud a `/v1/sumeragi/rbc/sample`, devolviendo pruebas de fragmentos
    y rutas de Merkle (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) con las que debe archivar
    el resto de su evidencia de adopción.
 4. `getSumeragiRbcDelivered(height, view)` captura los metadatos de entrega de la cohorte para que los auditores

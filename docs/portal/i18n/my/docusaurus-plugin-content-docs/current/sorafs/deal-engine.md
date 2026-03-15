@@ -56,12 +56,12 @@ node လုပ်ငန်းစဉ်တိုင်းအတွက် `DealEng
 Torii သည် သီးခြား အဆုံးမှတ်များကို ဖော်ထုတ်ပေးသောကြောင့် ဝန်ဆောင်မှုပေးသူများသည် အသုံးပြုမှုကို သတင်းပို့ပြီး မောင်းနှင်နိုင်သည်
 စိတ်ကြိုက်ဝိုင်ယာကြိုးမပါဘဲ lifecycle ကိုင်တွယ်ပါ-
 
-- `POST /v2/sorafs/deal/usage` `DealUsageReport` တယ်လီမီတာကို လက်ခံပြီး ပြန်ပို့သည်
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` တယ်လီမီတာကို လက်ခံပြီး ပြန်ပို့သည်
   အဆုံးအဖြတ်ပေးသော စာရင်းကိုင်ရလဒ်များ (`UsageOutcome`)။
-- `POST /v2/sorafs/deal/settle` သည် လက်ရှိဝင်းဒိုးကို အပြီးသတ်ပြီး တိုက်ရိုက်ထုတ်လွှင့်သည်။
+- `POST /v1/sorafs/deal/settle` သည် လက်ရှိဝင်းဒိုးကို အပြီးသတ်ပြီး တိုက်ရိုက်ထုတ်လွှင့်သည်။
   ရလဒ် `DealSettlementRecord` နှင့်အတူ base64-encoded `DealSettlementV1`
   အုပ်ချုပ်မှု DAG ထုတ်ဝေမှုအတွက် အဆင်သင့်။
-- Torii ၏ `/v2/events/sse` ဖိဒ်သည် ယခု `SorafsGatewayEvent::DealUsage` ကို ထုတ်လွှင့်နေသည်
+- Torii ၏ `/v1/events/sse` ဖိဒ်သည် ယခု `SorafsGatewayEvent::DealUsage` ကို ထုတ်လွှင့်နေသည်
   အသုံးပြုမှုတင်ပြချက်တစ်ခုစီကို အကျဉ်းချုံးထားသော မှတ်တမ်းများ (ခေတ်၊ တိုင်းတာထားသော GiB-နာရီ၊ လက်မှတ်
   ကောင်တာများ၊ အဆုံးအဖြတ်ကောက်ခံမှုများ) `SorafsGatewayEvent::DealSettlement`
   canonical settlement လယ်ဂျာလျှပ်တစ်ပြက် နှင့် မှတ်တမ်းများ ပါဝင်သည်။

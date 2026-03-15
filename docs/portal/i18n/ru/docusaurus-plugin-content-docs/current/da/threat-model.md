@@ -226,7 +226,7 @@ whitelist-ит malicious providers или подавляет alerts.
 
 - Replay cache и persistence cursors landed в DA-2. Реализация в
   `crates/iroha_core/src/da/replay_cache.rs` (cache logic) и интеграция Torii в
-  `crates/iroha_torii/src/da/ingest.rs`, где fingerprint checks проходят через `/v2/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs`, где fingerprint checks проходят через `/v1/da/ingest`.
 - PDP/PoTR streaming simulations упражняются через proof-stream harness в
   `crates/sorafs_car/tests/sorafs_cli.rs`, покрывая PoR/PDP/PoTR request flows и
   failure scenarios из модели угроз.

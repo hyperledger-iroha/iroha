@@ -6,22 +6,22 @@
 
 - `/metrics`: Prometheus 書式のテキスト。テレメトリ無効化時やプロファイルで制限されている場合は非公開。
 - `/status`: JSON ステータス。`sumeragi`（リーダー、Highest/Locked QC（`highest_qc`/`locked_qc`）、ビュー変更証明カウンタ（`view_change_proof_{accepted,stale,rejected}_total`）、ゴシップフォールバック、トランザクションキュー深さ、エポック情報 `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }`、RBC ストア統計〔`sessions`, `bytes`, `pressure_level`, `backpressure_deferrals_total`, `persist_drops_total`, `evictions_total`, `recent_evictions`〕、PRF シード／高さ／ビュー など）や `governance` のスナップショットを含む。
-- `/v2/sumeragi/new_view` / `/v2/sumeragi/new_view/sse`: NEW_VIEW 受信数を JSON / SSE で取得（固定サイズのメモリ内ウィンドウで保持し、古い `(height, view)` は破棄）。
-- `/v2/sumeragi/status` / `/v2/sumeragi/status/sse`: コンセンサス状態を JSON または Norito で取得。JSON 版には `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }` に加え、`da_reschedule_total`、`lane_governance_sealed_total` / `lane_governance_sealed_aliases`、`worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx } }` などの集約メトリクスが含まれる。
-- `/v2/sumeragi/rbc` / `/v2/sumeragi/rbc/sessions`: RBC セッションの統計と詳細（`lane_backlog` / `dataspace_backlog` を含む）。
-- `/v2/sumeragi/pacemaker`: ビュータイマー設定と現在値。
-- `/v2/sumeragi/collectors`: コレクタ計画（`mode`, `(height, view)`, `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, Collector 一覧, NPoS 時は `epoch_seed`）。
-- `/v2/sumeragi/params`: コミット済み Sumeragi パラメータのスナップショット。
-- `/v2/sumeragi/phases`: コンセンサス各フェーズの最新レイテンシ。
+- `/v1/sumeragi/new_view` / `/v1/sumeragi/new_view/sse`: NEW_VIEW 受信数を JSON / SSE で取得（固定サイズのメモリ内ウィンドウで保持し、古い `(height, view)` は破棄）。
+- `/v1/sumeragi/status` / `/v1/sumeragi/status/sse`: コンセンサス状態を JSON または Norito で取得。JSON 版には `epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }` に加え、`da_reschedule_total`、`lane_governance_sealed_total` / `lane_governance_sealed_aliases`、`worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx } }` などの集約メトリクスが含まれる。
+- `/v1/sumeragi/rbc` / `/v1/sumeragi/rbc/sessions`: RBC セッションの統計と詳細（`lane_backlog` / `dataspace_backlog` を含む）。
+- `/v1/sumeragi/pacemaker`: ビュータイマー設定と現在値。
+- `/v1/sumeragi/collectors`: コレクタ計画（`mode`, `(height, view)`, `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, Collector 一覧, NPoS 時は `epoch_seed`）。
+- `/v1/sumeragi/params`: コミット済み Sumeragi パラメータのスナップショット。
+- `/v1/sumeragi/phases`: コンセンサス各フェーズの最新レイテンシ。
 
-集約フィールド `lane_governance_sealed_total` と `lane_governance_sealed_aliases` は、ガバナンス・マニフェストが未適用のレーンを一目で把握するためのカウンタです。`/v2/sumeragi/status` に加えて `iroha_cli --output-format text ops sumeragi status` でも同じ値が表示され、CLI はエイリアス一覧をそのまま印字します。ローンチ手順や CI/CD では `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` を組み合わせ、シール解除が完了していない場合は早期に検知できるようにしてください。
+集約フィールド `lane_governance_sealed_total` と `lane_governance_sealed_aliases` は、ガバナンス・マニフェストが未適用のレーンを一目で把握するためのカウンタです。`/v1/sumeragi/status` に加えて `iroha_cli --output-format text ops sumeragi status` でも同じ値が表示され、CLI はエイリアス一覧をそのまま印字します。ローンチ手順や CI/CD では `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` を組み合わせ、シール解除が完了していない場合は早期に検知できるようにしてください。
 
 ## 設定項目
 
 - `telemetry_enabled`（既定値: true）: テレメトリ全体を有効／無効化。
 - `telemetry_profile`（既定値: `operator`）: 収集対象やルート公開範囲を決定するプリセット。`metrics` / `expensive_metrics` / `developer_outputs` の 3 フラグを束ねる。
 
-| プロファイル       | `/status` | `/metrics` | `/v2/sumeragi/*` / SSE | 想定利用シナリオ       |
+| プロファイル       | `/status` | `/metrics` | `/v1/sumeragi/*` / SSE | 想定利用シナリオ       |
 |--------------------|-----------|------------|------------------------|-------------------------|
 | `disabled`         | ×         | ×          | ×                      | 完全に収集しない        |
 | `operator`         | ○         | ×          | ×                      | 本番ノード／JSON モニタ |
@@ -94,7 +94,7 @@
   - `sumeragi_collectors_targeted_current`: 現在のブロックでターゲット済みのコレクタ数（ゲージ）。
   - `sumeragi_collectors_targeted_per_block_bucket`: ブロック単位のコレクタ数を記録するヒストグラム。
   - `sumeragi_redundant_sends_total`, `sumeragi_redundant_sends_by_peer`, `sumeragi_redundant_sends_by_collector`: 冗長送信の総量／peer 別／collector インデックス別カウンタ。
-- DA 可用性警告: `sumeragi_da_gate_block_total{reason="missing_local_data"}` で可用性証跡の不足を追跡します。`sumeragi_rbc_da_reschedule_total` と `/v2/sumeragi/status` の `da_reschedule_total` はレガシーで、通常 0 のままです。
+- DA 可用性警告: `sumeragi_da_gate_block_total{reason="missing_local_data"}` で可用性証跡の不足を追跡します。`sumeragi_rbc_da_reschedule_total` と `/v1/sumeragi/status` の `da_reschedule_total` はレガシーで、通常 0 のままです。
 - チャネル圧力: `sumeragi_dropped_block_messages_total`, `sumeragi_dropped_control_messages_total`, `dropped_messages`。
 - VRF 活動: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, `sumeragi_vrf_non_reveal_*`。
 - NEW_VIEW 可視化: `sumeragi_new_view_receipts_by_hv{height,view}`, `sumeragi_new_view_dropped_by_lock_total`。
@@ -116,7 +116,7 @@
 - IVM キャッシュヒット率 (%):  
   `100 * (ivm_cache_hits - ivm_cache_hits offset 5m) / clamp_min((ivm_cache_hits - ivm_cache_hits offset 5m) + (ivm_cache_misses - ivm_cache_misses offset 5m), 1)`
 
-## `/v2/sumeragi/phases` の利用
+## `/v1/sumeragi/phases` の利用
 
 - 返却値: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms, ema_ms{…} }`
 - `collect_aggregator_ms` は冗長コレクタへのファンアウト遅延を示す。`sumeragi_redundant_sends_*` と組み合わせてアラート設定を調整。
@@ -213,7 +213,7 @@ nexus_lane_configured_total != EXPECTED_LANE_COUNT
 - `increase(block_created_dropped_by_lock_total[5m]) > 0`: Locked commit certificate によるドロップ
 - `increase(pacemaker_backpressure_deferrals_total[5m]) > 0`: キュー飽和・リレー/RBC バックログ・保留ブロック滞留による Pacemaker 停止
 - `increase(sumeragi_redundant_sends_total[5m])` と `rate(sumeragi_dropped_*[5m])` の同時増加は collector/チャネル設定の見直しを示唆
-- ログ相関の自動化: `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>` を実行すると、`pacemaker_backpressure_deferrals_total` のスパイクと RBC の `retry` / `abort` ログをまとめて確認できます。`journalctl -f ... | python3 scripts/sumeragi_backpressure_log_scraper.py -` のように標準入力からも扱え、`--status path/to/status.json` で `/v2/sumeragi/status` スナップショットを併せて把握できます。詳細はスクリプトの `--help` と英語版ランブックを参照してください。
+- ログ相関の自動化: `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>` を実行すると、`pacemaker_backpressure_deferrals_total` のスパイクと RBC の `retry` / `abort` ログをまとめて確認できます。`journalctl -f ... | python3 scripts/sumeragi_backpressure_log_scraper.py -` のように標準入力からも扱え、`--status path/to/status.json` で `/v1/sumeragi/status` スナップショットを併せて把握できます。詳細はスクリプトの `--help` と英語版ランブックを参照してください。
 
 ## ガバナンス運用チェックリスト（抜粋）
 

@@ -103,7 +103,7 @@ Operational checklist:
    configuration snapshot for provenance:
 
    ```bash
-   curl -sS "${TORII_URL}/v2/configuration" \
+   curl -sS "${TORII_URL}/v1/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
@@ -114,7 +114,7 @@ Operational checklist:
    inspecting the embedded `RepoGovernance` values. Store the JSON responses
    under `artifacts/finance/repo/<agreement>/agreements_after.json`; those values
    are derived from `[settlement.repo]`, so they act as a secondary witness when
-   Torii’s `/v2/configuration` snapshot is insufficient.
+   Torii’s `/v1/configuration` snapshot is insufficient.
 4. Keep both artefacts—the TOML snippet and the Torii/CLI snapshots—in the
    evidence bundle before filing a governance request. Auditors must be able to
    replay the snippet, verify its hash, and correlate it with the runtime view.
@@ -152,10 +152,10 @@ auditors will replay.
 
 ### 2.4 Torii API surfaces
 
-- `GET /v2/repo/agreements` returns the active agreements with optional pagination, filtering
+- `GET /v1/repo/agreements` returns the active agreements with optional pagination, filtering
   (`filter={...}`), sorting, and address-formatting parameters. Use this for quick audits or
   dashboards when the raw JSON payloads are sufficient.
-- `POST /v2/repo/agreements/query` accepts the structured query envelope (pagination, sort,
+- `POST /v1/repo/agreements/query` accepts the structured query envelope (pagination, sort,
   `FilterExpr`, `fetch_size`) so downstream services can page through the ledger deterministically.
 - The JavaScript SDK now exposes `listRepoAgreements`, `queryRepoAgreements`, and the iterator
   helpers so browser/Node.js tooling receives the same typed DTOs as Rust/Python.
@@ -207,7 +207,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    `--notes` field on the governance CLI) and collect the required approvals
    for F1. Keep the signed approval packet with the snippet attached.
 3. Roll the change across the fleet: update `[settlement.repo]`, restart each
-   node, then capture a `GET /v2/configuration` snapshot (or
+   node, then capture a `GET /v1/configuration` snapshot (or
    `ToriiClient.getConfiguration`) proving the applied values per peer.
 4. Re-run `integration_tests/tests/repo.rs` plus
    `repo_deterministic_lifecycle_proof_matches_fixture` and store the logs next
@@ -226,11 +226,11 @@ The Norito/`iroha_config` plumbing now exposes the resolved repo policy under
 applied values per peer—not just the proposed TOML. Capture the resolved
 configuration and its digest after every rollout:
 
-1. Fetch the configuration from each peer (`GET /v2/configuration` or
+1. Fetch the configuration from each peer (`GET /v1/configuration` or
    `ToriiClient.getConfiguration`) and isolate the repo stanza:
 
    ```bash
-   curl -s http://<torii-host>/v2/configuration \
+   curl -s http://<torii-host>/v1/configuration \
      | jq -cS '.settlement.repo' \
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
@@ -298,7 +298,7 @@ matrix) must ship the same artefacts before a vote is scheduled.【docs/source/g
 **Post-approval rollouts**
 
 1. Apply the approved `[settlement.repo]` config and restart each node (or roll
-   it via your automation). Immediately call `GET /v2/configuration` and archive
+   it via your automation). Immediately call `GET /v1/configuration` and archive
    the response per node so the governance bundle shows which peers accepted the
    change.【crates/iroha_torii/src/lib.rs:3225】
 2. Re-run the deterministic repo tests and attach the fresh logs plus build
@@ -485,17 +485,17 @@ lets roadmap **F1** ship GA-ready documentation for the tri-party scenario.【in
 Once governance approves a change and the `[settlement.repo]` stanza lands on
 the cluster, capture an authenticated configuration snapshot from every peer so
 auditors can prove the approved values are live. Torii exposes the
-`/v2/configuration` route for this purpose and all SDKs surface helpers such as
+`/v1/configuration` route for this purpose and all SDKs surface helpers such as
 `ToriiClient.getConfiguration`, so the capture workflow works for desk scripts,
 CI, or manual operator runs.【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:4681】
 
-1. Call `GET /v2/configuration` (or the SDK helper) per peer immediately after
+1. Call `GET /v1/configuration` (or the SDK helper) per peer immediately after
    the roll-out. Persist the full JSON under
    `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` and record
    the block height/cluster timestamp in `config/config_snapshot_index.md`.
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
-   curl -fsSL https://peer01.example/v2/configuration \
+   curl -fsSL https://peer01.example/v1/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
@@ -579,7 +579,7 @@ artifacts/finance/repo/<agreement-id>/
   without re-running the harness.
 - `config/settlement_repo.toml` contains the `[settlement.repo]` snippet
   (haircuts, substitution matrix) that was active when the repo executed.
-- `config/peers/*.json` captures `/v2/configuration` snapshots for each peer,
+- `config/peers/*.json` captures `/v1/configuration` snapshots for each peer,
   closing the loop between the staged TOML and the runtime values peers report
   over Torii.
 
@@ -741,7 +741,7 @@ or policy change is heading to governance:
    settlement, dump the `[settlement.repo]` TOML block that will be applied, and
    mirror the relevant `AccountEvent::Repo(*)` SSE feed into
    `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. After the GAR
-   passes, capture `/v2/configuration` snapshots per peer (§2.9) and store them
+   passes, capture `/v1/configuration` snapshots per peer (§2.9) and store them
    under `config/peers/` so the governance packet proves the rollout succeeded.
 4. **Generate the evidence manifest.**
    ```bash

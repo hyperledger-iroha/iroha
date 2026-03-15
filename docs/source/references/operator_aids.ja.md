@@ -16,44 +16,44 @@ translator: manual
 
 ## コンセンサス（Sumeragi）
 
-- `GET /v2/sumeragi/new_view`
+- `GET /v1/sumeragi/new_view`
   - `(height, view)` ごとの NEW_VIEW 受信数スナップショット。
   - 形式: `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
-  - 例: `curl -s http://127.0.0.1:8080/v2/sumeragi/new_view | jq .`
-- `GET /v2/sumeragi/new_view/sse` (SSE)
+  - 例: `curl -s http://127.0.0.1:8080/v1/sumeragi/new_view | jq .`
+- `GET /v1/sumeragi/new_view/sse` (SSE)
   - 約 1 秒間隔で同じペイロードを配信する SSE ストリーム。ダッシュボード向け。
-  - 例: `curl -Ns http://127.0.0.1:8080/v2/sumeragi/new_view/sse`
+  - 例: `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new_view/sse`
 - メトリクス: `sumeragi_new_view_receipts_by_hv{height,view}` ゲージが同じカウントを公開。
-- `GET /v2/sumeragi/status`
+- `GET /v1/sumeragi/status`
   - リーダーインデックス、Highest/Locked QCs（`highest_qc`/`locked_qc` の高さ・ビュー・サブジェクトハッシュ）、コレクタ／VRF カウンター、ペースメーカーの猶予、トランザクションキュー深さ、RBC ストア状態（`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`）を取得。
-- `GET /v2/sumeragi/status/sse`
-  - `/v2/sumeragi/status` と同じペイロードの SSE（約 1 秒間隔）。
-- `GET /v2/sumeragi/qc`
+- `GET /v1/sumeragi/status/sse`
+  - `/v1/sumeragi/status` と同じペイロードの SSE（約 1 秒間隔）。
+- `GET /v1/sumeragi/qc`
   - highest/locked QCs のスナップショット。highest QC のブロックハッシュが判明していれば `subject_block_hash` を含む。
-- `GET /v2/sumeragi/pacemaker`
+- `GET /v1/sumeragi/pacemaker`
   - ペースメーカーのタイマー／設定値 `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`。
-- `GET /v2/sumeragi/leader`
+- `GET /v1/sumeragi/leader`
   - リーダーインデックスの現在値。NPoS モードでは PRF コンテキスト `{ height, view, epoch_seed }` を含む。
-- `GET /v2/sumeragi/collectors`
+- `GET /v1/sumeragi/collectors`
   - コレクタプランを決定論的にエクスポート。`mode`、計画 `(height, view)`（`height` は現在のチェーン高）、`collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, 並び順を維持したコレクタ一覧、および NPoS 有効時の `epoch_seed` (hex)。
-- `GET /v2/sumeragi/params`
+- `GET /v1/sumeragi/params`
   - オンチェーンの Sumeragi パラメータ `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`。
   - `da_enabled` が true の場合、コミットは `availability evidence` を待機します（ローカルの RBC `DELIVER` は条件ではありません）。後述のエンドポイントで RBC の輸送状況を確認できます。
-- `GET /v2/sumeragi/rbc`
+- `GET /v1/sumeragi/rbc`
   - Reliable Broadcast の集計カウンター `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`。
-- `GET /v2/sumeragi/rbc/sessions`
+- `GET /v1/sumeragi/rbc/sessions`
   - セッションごとの状態（ブロックハッシュ、height/view、チャンク総数／受信数、`ready_count`、`delivered`/`invalid` フラグ、ペイロードハッシュ、`recovered`）を確認し、停滞や再起動後の復旧を診断。
   - CLI ショートカット: `iroha --output-format text ops sumeragi rbc sessions` が `hash`、`height/view`、チャンク進捗、`ready` 数、`invalid`／`delivered` フラグを出力。
 
 ## エビデンス（監査・非コンセンサス）
 
-- `GET /v2/sumeragi/evidence/count` → `{ "count": <u64> }`
-- `GET /v2/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
+- `GET /v1/sumeragi/evidence/count` → `{ "count": <u64> }`
+- `GET /v1/sumeragi/evidence` → `{ "total": <u64>, "items": [...] }`
   - DoublePrepare/DoubleCommit、InvalidQc、InvalidProposal などの基本フィールドを含む。
   - 例:
-    - `curl -s http://127.0.0.1:8080/v2/sumeragi/evidence/count | jq .`
-    - `curl -s http://127.0.0.1:8080/v2/sumeragi/evidence | jq .`
-- `POST /v2/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence/count | jq .`
+    - `curl -s http://127.0.0.1:8080/v1/sumeragi/evidence | jq .`
+- `POST /v1/sumeragi/evidence` → `{ "status": "accepted", "kind": "<variant>" }`
   - CLI ヘルパー:
     - `iroha --output-format text ops sumeragi evidence list`
     - `iroha --output-format text ops sumeragi evidence count`
@@ -61,13 +61,13 @@ translator: manual
 
 ## オペレーター認証（WebAuthn/mTLS）
 
-- `POST /v2/operator/auth/registration/options`
+- `POST /v1/operator/auth/registration/options`
   - 初回の資格情報登録向けに WebAuthn 登録オプション（`publicKey`）を返す。
-- `POST /v2/operator/auth/registration/verify`
+- `POST /v1/operator/auth/registration/verify`
   - WebAuthn のアテステーションを検証してオペレーター資格情報を永続化。
-- `POST /v2/operator/auth/login/options`
+- `POST /v1/operator/auth/login/options`
   - オペレーターのログイン用 WebAuthn 認証オプション（`publicKey`）を返す。
-- `POST /v2/operator/auth/login/verify`
+- `POST /v1/operator/auth/login/verify`
   - WebAuthn のアサーションを検証し、オペレーターセッショントークンを返す。
 - ヘッダー:
   - `x-iroha-operator-session`: オペレーター用エンドポイントのセッショントークン（login verify が発行）。
@@ -97,7 +97,7 @@ TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
 while true; do
-  curl -s "${HDR[@]}" "$TORII/v2/sumeragi/new_view" \
+  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new_view" \
     | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
   sleep "$INTERVAL"
 done
@@ -112,7 +112,7 @@ TORII="${TORII:-http://127.0.0.1:8080}"
 TOKEN="${TOKEN:-}"
 HDR=()
 if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v2/sumeragi/new_view/sse" \
+curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new_view/sse" \
   | awk '/^data:/{sub(/^data: /,""); print}' \
   | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
 ```

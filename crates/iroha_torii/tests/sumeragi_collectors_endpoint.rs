@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![doc = "Router-level test for GET /v2/sumeragi/collectors"]
+#![doc = "Router-level test for GET /v1/sumeragi/collectors"]
 #![cfg(feature = "telemetry")]
 #![allow(unexpected_cfgs)]
 
@@ -52,7 +52,7 @@ async fn sumeragi_collectors_endpoint_shape() {
 
     let app =
         Router::new().route(
-            "/v2/sumeragi/collectors",
+            "/v1/sumeragi/collectors",
             get({
                 let state = state.clone();
                 move || async move {
@@ -64,7 +64,7 @@ async fn sumeragi_collectors_endpoint_shape() {
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v2/sumeragi/collectors")
+                .uri("/v1/sumeragi/collectors")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

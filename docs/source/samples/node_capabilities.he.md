@@ -13,7 +13,7 @@ translator: manual
 # יכולות הצומת — תמיכת ABI (Torii)
 
 נקודת קצה
-- `GET /v2/node/capabilities`
+- `GET /v1/node/capabilities`
 
 תגובה (מהדורה ראשונה; מדיניות ABI יחידה V1)
 ```json
@@ -50,6 +50,6 @@ translator: manual
 - `crypto.curves.allowed_curve_ids` משקף את מזהי העקומות המוגדרים ב־`iroha_config.crypto.curves.allowed_curve_ids` (ראו [`address_curve_registry`](../references/address_curve_registry.md)). אם מתוכנן שימוש ב‑ML‑DSA, GOST או SM בחרו צומת שמפרסם את המזהה המתאים.
 
 ראו גם
-- לשם סיכום קומפקטי של מדדי הריצה (מספר גרסאות ABI ומדדי מחזור שדרוג), בקשו את `GET /v2/runtime/metrics`.
+- לשם סיכום קומפקטי של מדדי הריצה (מספר גרסאות ABI ומדדי מחזור שדרוג), בקשו את `GET /v1/runtime/metrics`.
 
 </div>

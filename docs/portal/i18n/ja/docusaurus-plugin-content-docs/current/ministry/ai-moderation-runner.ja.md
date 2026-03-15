@@ -176,7 +176,7 @@ struct AdversarialPerceptualVariantV1 {
   - ハッシュ付き ONNX 重みを置く `models/` ディレクトリ
   - HTTP/gRPC API を公開する `run_moderation.py`（または Rust 版）
 - `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>` にアーティファクトを公開。
-- ランナーバイナリは `sorafs_ai_runner` crate の一部として出荷。ビルドパイプラインがマニフェストハッシュをバイナリへ埋め込み（`/v2/info` で公開）。
+- ランナーバイナリは `sorafs_ai_runner` crate の一部として出荷。ビルドパイプラインがマニフェストハッシュをバイナリへ埋め込み（`/v1/info` で公開）。
 
 ## 8. テレメトリと可観測性
 - Prometheus メトリクス:

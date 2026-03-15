@@ -81,8 +81,8 @@ summary: Weekly Swift parity/CI update for the week of 2026-01-12.
 
 | Item | Owner | Status | Notes |
 |------|-------|--------|-------|
-| `/v2/pipeline` adoption | Swift Lead | Green | Routing parity validated in staging; Torii backlog review scheduled for 2026-01-19 to approve the final interface lock. |
-| Governance vote / readiness review | Program PM | On deck | GOV-2026-01-22 vote brief circulated; council to confirm `/v2/pipeline` gating metrics before beta cut. |
+| `/v1/pipeline` adoption | Swift Lead | Green | Routing parity validated in staging; Torii backlog review scheduled for 2026-01-19 to approve the final interface lock. |
+| Governance vote / readiness review | Program PM | On deck | GOV-2026-01-22 vote brief circulated; council to confirm `/v1/pipeline` gating metrics before beta cut. |
 | Risk owner spotlight | SDK Parity WG | Tracking | Fixture drift table now auto-generated via `scripts/swift_status_export.py`; Buildkite lane links added per governance request. |
 
 ## Upcoming Actions

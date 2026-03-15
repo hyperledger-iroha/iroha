@@ -139,8 +139,8 @@ JS4/JS7.
 
 ## רשימות ניתנות לחזרה ועימוד
 
-עוזרי עימוד משקפים את ארגונומיה של Python SDK עבור `/v2/accounts`,
-`/v2/domains`, `/v2/assets/definitions`, NFTs, יתרות, מחזיקי נכסים, וה
+עוזרי עימוד משקפים את ארגונומיה של Python SDK עבור `/v1/accounts`,
+`/v1/domains`, `/v1/assets/definitions`, NFTs, יתרות, מחזיקי נכסים, וה
 היסטוריית עסקאות בחשבון.
 
 ```ts
@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) מדגישים את המועד האחרון שפג תוקף (רענן → מדיניות
 → אישור) כך שתגי ממשק משתמש יכולים להזהיר מפעילים בכל פעם שיש קצבה
 נותרו פחות מ-24 שעות. ה-SDK
-משקף את מסנני REST שנחשפו על ידי `/v2/offline/allowances`:
+משקף את מסנני REST שנחשפו על ידי `/v1/offline/allowances`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, וה-
 `requireVerdict` / `onlyMissingVerdict` בוליאני. שילובים לא חוקיים (עבור
@@ -271,8 +271,8 @@ abort.abort(); // closes the underlying WebSocket cleanly
 
 ## צילומי מצב של Explorer ומטעני QR
 
-טלמטריית Explorer מספקת עוזרים מוקלדים עבור `/v2/explorer/metrics` ו
-`/v2/explorer/accounts/{account_id}/qr` נקודות קצה כך שמרכזי המחוונים יכולים להפעיל מחדש את
+טלמטריית Explorer מספקת עוזרים מוקלדים עבור `/v1/explorer/metrics` ו
+`/v1/explorer/accounts/{account_id}/qr` נקודות קצה כך שמרכזי המחוונים יכולים להפעיל מחדש את
 אותן צילומי מצב שמניעים את הפורטל. `getExplorerMetrics()` מנרמל את
 עומס ומחזיר `null` כאשר המסלול מושבת. חבר אותו עם
 `getExplorerAccountQr()` בכל פעם שתזדקק ל-I105 (מועדף)/סורה (השני בטובו) ליטרלים בתוספת מובנה
@@ -379,7 +379,7 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 ### חיבור WebSocket חיוג
 
 `ToriiClient.openConnectWebSocket()` מרכיב את הקנוני
-`/v2/connect/ws` כתובת אתר (כולל `sid`, `role` ופרמטרים אסימון), שדרוגים
+`/v1/connect/ws` כתובת אתר (כולל `sid`, `role` ופרמטרים אסימון), שדרוגים
 `http→ws` / `https→wss`, ומעביר את כתובת האתר הסופית לכל WebSocket
 יישום שאתה מספק. דפדפנים משתמשים מחדש באופן אוטומטי בגלובלי
 `WebSocket`. מתקשרי Node.js צריכים לעבור בנאי כגון `ws`:
@@ -461,7 +461,7 @@ async function dialWithTelemetry(client: ToriiClient) {
 
 ## צופי סטרימינג וסמני אירועים
 
-`ToriiClient.streamEvents()` חושף את `/v2/events/sse` כאיטרטור אסינכרון עם אוטומטי
+`ToriiClient.streamEvents()` חושף את `/v1/events/sse` כאיטרטור אסינכרון עם אוטומטי
 ניסיונות חוזרים, כך ש-Node/Bun CLIs יכולים לעצור את פעילות הצינור באותו אופן שבו Rust CLI עושה.
 החזיקו את הסמן `Last-Event-ID` לצד חפצי ה-runbook שלכם כדי שהמפעילים יוכלו
 המשך זרם מבלי לדלג על אירועים כאשר תהליך מופעל מחדש.
@@ -500,7 +500,7 @@ for await (const event of torii.streamEvents({
   אות מתקבל; לעבור את `STREAM_MAX_EVENTS=25` כאשר אתה צריך רק כמה אירועים ראשונים
   לבדיקת עשן.
 - `ToriiClient.streamSumeragiStatus()` משקף את אותו ממשק עבור
-  `/v2/sumeragi/status/sse` כך שניתן להתאים טלמטריית קונצנזוס בנפרד, וה
+  `/v1/sumeragi/status/sse` כך שניתן להתאים טלמטריית קונצנזוס בנפרד, וה
   iterator מכבד את `Last-Event-ID` באותו אופן.
 - ראה `javascript/iroha_js/recipes/streaming.mjs` עבור CLI סוהר (התמדה של הסמן,
   עקיפות מסנן env-var, ורישום `extractPipelineStatusKind`) בשימוש ב-JS4
@@ -607,14 +607,14 @@ await torii.revokeSpaceDirectoryManifest(
 להוכיח שהגוש שהם הביאו דרך Sumeragi תואם את ההוכחות שהם מאמתים.
 השתמש בעוזרים המובנים במקום לבנות מטענים ביד:
 
-1. מראות `getSumeragiRbcSessions()` `/v2/sumeragi/rbc/sessions`, ו
+1. מראות `getSumeragiRbcSessions()` `/v1/sumeragi/rbc/sessions`, ו
    `findRbcSamplingCandidate()` בוחר אוטומטית את ההפעלה הראשונה שנמסרה עם hash בלוק
    (חבילת האינטגרציה חוזרת אליה בכל פעם
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` לא מוגדר).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` מנרמל את `{blockHash,height,view}`
    בתוספת `{count,seed,apiToken}` אופציונלי עוקף כך ש-hex או מספרים שלמים שליליים לעולם לא
    להגיע ל-Torii.
-3. `sampleRbcChunks()` מפרסם את הבקשה ל-`/v2/sumeragi/rbc/sample`, ומחזיר הוכחות נתחים
+3. `sampleRbcChunks()` מפרסם את הבקשה ל-`/v1/sumeragi/rbc/sample`, ומחזיר הוכחות נתחים
    ונתיבים של מרקל (`samples[].chunkHex`, `chunkRoot`, `payloadHash`) אתה צריך לאחסן עם
    שאר עדויות האימוץ שלך.
 4. `getSumeragiRbcDelivered(height, view)` לוכד את מטא-נתוני המסירה של הקבוצה כדי שהמבקרים

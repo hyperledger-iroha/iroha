@@ -319,7 +319,7 @@ Aşağıdakı xülasə mühəndisliyi buraxmaq üçün ortaya çıxan başlıq m
 |----------|----------------|-------------|-------|
 | SM2 | GB/T32918 (bütün hissələr) | GM/T0003 | ECC rəqəmsal imza + açar mübadiləsi; Iroha əsas qovşaqlarda yoxlamanı və SDK-lara deterministik imzalamağı ifşa edir. |
 | SM3 | GB/T32905 | GM/T0004 | 256-bit hash; skalyar və ARMv8 sürətləndirilmiş yollar üzrə deterministik hashing. |
-| SM4 | GB/T32907 | GM/T0002 | 128 bitlik blok şifrəsi; Iroha GCM/CCM köməkçiləri təqdim edir və tətbiqlər arasında böyük-endian paritetini təmin edir. |- **Bacarıq manifesti:** Torii `/v2/node/capabilities` son nöqtəsi aşağıdakı JSON formasını reklam edir, beləliklə operatorlar və alətlər SM manifestini proqramlı şəkildə istehlak edə bilsin:
+| SM4 | GB/T32907 | GM/T0002 | 128 bitlik blok şifrəsi; Iroha GCM/CCM köməkçiləri təqdim edir və tətbiqlər arasında böyük-endian paritetini təmin edir. |- **Bacarıq manifesti:** Torii `/v1/node/capabilities` son nöqtəsi aşağıdakı JSON formasını reklam edir, beləliklə operatorlar və alətlər SM manifestini proqramlı şəkildə istehlak edə bilsin:
 
 ```json
 {

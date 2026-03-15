@@ -79,7 +79,7 @@ Sidebar_label: المزايا وSLOs
 | `sorafs_node_por_failure_total` | عداد | `provider_id` | عداد أحادي لعينات PoR الفاشلة. |
 | `torii_sorafs_storage_bytes_*`، `torii_sorafs_storage_por_*` | مقياس | `provider` | معايير Prometheus الحالية للبايتات المستعملة وعمق الطابور وعدادات PoR الحالية. |
 | `torii_sorafs_capacity_*`، `torii_sorafs_uptime_bps`، `torii_sorafs_por_bps` | مقياس | `provider` | بيانات النجاح السعة/الجاهزية للمتحكمين في لوحة السعة. |
-| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | عمق التراكم بالإضافة إلى عدادات بالتالي التراكمية المصدّرة عند `/v2/sorafs/por/ingestion/{manifest}` لتغذية لوحة/تنبيه "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | عمق التراكم بالإضافة إلى عدادات بالتالي التراكمية المصدّرة عند `/v1/sorafs/por/ingestion/{manifest}` لتغذية لوحة/تنبيه "PoR Stalls". |
 
 ### إثبات الاسترجاع في الوقت المناسب (PoTR) وSLA الركاب| المقياس | النوع | التسميات | المنتِج | مذكرة |
 |--------|-------|--------|---------|-----------|

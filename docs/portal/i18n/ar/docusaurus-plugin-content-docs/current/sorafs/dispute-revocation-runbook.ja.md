@@ -30,7 +30,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## 1. تقييم الحادث
 
 - **شروط الإطلاق:** رصد خرق SLA (التوفر/فشل PoR)، نقص التكرار، أو خلاف في الفوترة.
-- **تأكيد التليمترية:** التقط لقطات `/v2/sorafs/capacity/state` و`/v2/sorafs/capacity/telemetry` للمزوّد.
+- **تأكيد التليمترية:** التقط لقطات `/v1/sorafs/capacity/state` و`/v1/sorafs/capacity/telemetry` للمزوّد.
 - **إخطار أصحاب المصلحة:** Storage Team (عمليات المزوّد)، Governance Council (جهة القرار)، Observability (تحديثات لوحات المتابعة).
 
 ## 2. إعداد حزمة الأدلة
@@ -78,7 +78,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    ```
 
 3. راجع `dispute_summary.json` (تأكد من النوع، digest الأدلة، والطوابع الزمنية).
-4. أرسل JSON الطلب إلى Torii `/v2/sorafs/capacity/dispute` عبر طابور معاملات الحوكمة. التقط قيمة الاستجابة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.
+4. أرسل JSON الطلب إلى Torii `/v1/sorafs/capacity/dispute` عبر طابور معاملات الحوكمة. التقط قيمة الاستجابة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.
 
 ## 4. الإخلاء والإلغاء
 

@@ -60,7 +60,7 @@ SF-3 поставляет первый исполняемый ארגז `sorafs-n
 - Использовать Axum стек Torii עם `norito::json` מטענים.
 - Добавить Norito схемы ответов (`PinResultV1`, `FetchErrorV1`, מבני טלמטריה).
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` теперь показывает глубину צבר זמן, самый старый epoch/deadline ו последние חותמות זמן של הצלחה/כישלון покаждос `sorafs_node::NodeHandle::por_ingestion_status`, а Torii фиксирует метрики `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` ל дашбордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:188 3】【ארגזים/iroha_torii/src/routing.rs:7244】【ארגזים/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` теперь показывает глубину צבר זמן, самый старый epoch/deadline ו последние חותמות זמן של הצלחה/כישלון покаждос `sorafs_node::NodeHandle::por_ingestion_status`, а Torii фиксирует метрики `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` ל дашбордов.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:188 3】【ארגזים/iroha_torii/src/routing.rs:7244】【ארגזים/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Scheduler и примение квот
 

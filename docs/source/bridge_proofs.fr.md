@@ -24,12 +24,12 @@ Les soumissions de preuves de bridge passent par le chemin d instruction standar
 
 ## Surface API Torii
 
-- `GET /v2/zk/proofs` et `GET /v2/zk/proofs/count` acceptent des filtres aware des bridges:
+- `GET /v1/zk/proofs` et `GET /v1/zk/proofs/count` acceptent des filtres aware des bridges:
   - `bridge_only=true` renvoie uniquement les preuves de bridge.
   - `bridge_pinned_only=true` limite aux preuves de bridge epinglees.
   - `bridge_start_from_height` / `bridge_end_until_height` bornent la fenetre de plage bridge.
-- `GET /v2/zk/proof/{backend}/{hash}` renvoie les metadonnees bridge (plage, hash de manifest, resume du payload) ainsi que l id/statut de preuve et les liaisons VK.
-- L enregistrement Norito complet (y compris les octets du payload) reste disponible via `GET /v2/proofs/{proof_id}` pour les verificateurs hors noeud.
+- `GET /v1/zk/proof/{backend}/{hash}` renvoie les metadonnees bridge (plage, hash de manifest, resume du payload) ainsi que l id/statut de preuve et les liaisons VK.
+- L enregistrement Norito complet (y compris les octets du payload) reste disponible via `GET /v1/proofs/{proof_id}` pour les verificateurs hors noeud.
 
 ## Evenements de recu de bridge
 

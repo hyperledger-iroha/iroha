@@ -54,15 +54,15 @@ required for the first release and breaks them into actionable tracks.
 - `ReplicationOrderV1` binds manifests to governance-issued assignments with redundancy targets, SLA thresholds, and per-assignment guarantees; validators enforce canonical chunker handles, unique providers, and deadline constraints before Torii or the registry ingest the order.【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` expresses epoch snapshots (declared vs utilised GiB, replication counters, uptime/PoR percentages) that feed fee distribution. Bounds checks keep utilisation within declarations and percentages within 0 – 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
 - Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` now surfaces the on-chain snapshot via `/v2/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` now surfaces the on-chain snapshot via `/v1/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
 
 ### 2. Control Plane Integration
 
 | Task | Owner(s) | Notes |
 |------|----------|-------|
-| Add `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, `/v2/sorafs/capacity/orders` Torii handlers with Norito JSON payloads. | Torii Team | Mirror validator logic; reuse Norito JSON helpers. |
+| Add `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` Torii handlers with Norito JSON payloads. | Torii Team | Mirror validator logic; reuse Norito JSON helpers. |
 | Propagate `CapacityDeclarationV1` snapshots into orchestrator scoreboard metadata and gateway fetch plans. | Tooling WG / Orchestrator team | Extend `provider_metadata` with capacity references so multi-source scoring respects lane limits. |
 | Feed replication orders into orchestrator/gateway clients to drive assignments and failover hints. | Networking TL / Gateway team | Scoreboard builder consumes governance-signed replication orders. |
 | CLI tooling: extend `sorafs_cli` with `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | Provide deterministic JSON + scoreboard outputs. |
@@ -85,7 +85,7 @@ required for the first release and breaks them into actionable tracks.
 | Settlement pipeline: convert telemetry + replication data into XOR-denominated payouts, produce governance-ready summaries, and record ledger state. | Treasury / Storage Team | Wire into Deal Engine / Treasury exports. |
 | Export dashboards/alerts for metering health (ingestion backlog, stale telemetry). | Observability | Extend Grafana pack referenced by SF-6/SF-7. |
 
-- Torii now exposes `/v2/sorafs/capacity/telemetry` and `/v2/sorafs/capacity/state` (JSON + Norito) so operators can submit epoch telemetry snapshots and inspectors can retrieve the canonical ledger for auditing or evidence packaging.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii now exposes `/v1/sorafs/capacity/telemetry` and `/v1/sorafs/capacity/state` (JSON + Norito) so operators can submit epoch telemetry snapshots and inspectors can retrieve the canonical ledger for auditing or evidence packaging.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - `PinProviderRegistry` integration ensures replication orders are accessible through the same endpoint; CLI helpers (`sorafs_cli capacity telemetry --from-file telemetry.json`) now validate/publish telemetry from automation runs with deterministic hashing and alias resolution.
 - Metering snapshots produce `CapacityTelemetrySnapshot` entries pinned to the `metering` snapshot, and Prometheus exports feed the ready-to-import Grafana board at `docs/source/grafana_sorafs_metering.json` so billing teams can monitor GiB·hour accrual, projected nano-SORA fees, and SLA compliance in real time.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - When metering smoothing is enabled, the snapshot includes `smoothed_gib_hours` and `smoothed_por_success_bps` so operators can compare EMA-trended values against the raw counters that governance uses for payouts.【crates/sorafs_node/src/metering.rs:401】
@@ -161,7 +161,7 @@ in sync with the implementation.
 ### Provider onboarding & exit smoke tests
 - Regenerate declaration/telemetry artefacts with `sorafs_manifest_stub capacity ...` and replay
   the CLI tests before submission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Submit via Torii (`/v2/sorafs/capacity/declare`) then capture `/v2/sorafs/capacity/state` plus
+- Submit via Torii (`/v1/sorafs/capacity/declare`) then capture `/v1/sorafs/capacity/state` plus
   Grafana screenshots. Follow the exit flow in `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - Archive signed artefacts and reconciliation outputs inside
   `docs/examples/sorafs_capacity_marketplace_validation/`.

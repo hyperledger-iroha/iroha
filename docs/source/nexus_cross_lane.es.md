@@ -118,7 +118,7 @@ aplico (`applied`) o faltaba/expirada/insuficiente/deshabilitado durante la vali
    `LaneRelayBroadcaster` ahora consume los `LaneRelayEnvelope`s emitidos durante el sellado del
    bloque y los difunde como frames `NetworkMessage::LaneRelay` de alta prioridad. Los sobres se
    verifican, se deduplican por `(lane_id,dataspace_id,height,settlement_hash)`, y se persisten
-   en el snapshot de estado de Sumeragi (`/v2/sumeragi/status`) para operadores y auditores. El
+   en el snapshot de estado de Sumeragi (`/v1/sumeragi/status`) para operadores y auditores. El
    broadcaster seguira evolucionando para adjuntar artefactos DA (pruebas de chunk RBC, headers
    Norito, manifests SoraFS/Object) y alimentar el merge ring sin bloqueo de head-of-line.
 
@@ -130,7 +130,7 @@ aplico (`applied`) o faltaba/expirada/insuficiente/deshabilitado durante la vali
 
 5. **Persistencia y exposicion.**  
    Kura escribe el lane block, la entrada de merge y el `LaneBlockCommitment` de forma atomica
-   para que el replay reconstruya la misma reduccion. `/v2/sumeragi/status` expone:
+   para que el replay reconstruya la misma reduccion. `/v1/sumeragi/status` expone:
    - `lane_commitments` (metadata de ejecucion).
    - `lane_settlement_commitments` (el payload descrito aqui).
    - `lane_relay_envelopes` (headers de relay, QCs, digests DA, settlement hash y conteos de bytes RBC).
@@ -171,8 +171,8 @@ El merge ring DEBE aplicar lo siguiente antes de aceptar un compromiso de lane:
   operadores deben alertar sobre picos de missing-availability (los contadores de reschedule son
   de simulacros adversarios.
 - **Superficies Torii:**  
-  `/v2/sumeragi/status` incluye `lane_commitments`, `lane_settlement_commitments` y snapshots de
-  dataspace. `/v2/nexus/lane-config` (planeado) publicara la geometria de `LaneConfig` para que
+  `/v1/sumeragi/status` incluye `lane_commitments`, `lane_settlement_commitments` y snapshots de
+  dataspace. `/v1/nexus/lane-config` (planeado) publicara la geometria de `LaneConfig` para que
   clientes puedan mapear `lane_id` <-> etiquetas de dataspace.
 - **Dashboards:**  
   `dashboards/grafana/nexus_lanes.json` grafica backlog de lane, senales de disponibilidad DA y

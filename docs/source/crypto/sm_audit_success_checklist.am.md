@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - [ ] የቅርብ ጊዜ የመወሰን ሙከራ ውጤቶች ተይዘዋል፡
       `scripts/sm_openssl_smoke.sh`፣ `cargo test -p iroha_crypto sm`፣ እና
       Norito የዙር ጉዞዎች።
-- [ ] Torii `/v2/node/capabilities` ማስታወቂያ (በ`iroha runtime capabilities` በኩል) ተመዝግቧል፣ የ`crypto.sm` አንጸባራቂ መስኮችን እና የፍጥነት ፖሊሲ ቅጽበተ ፎቶን ያረጋግጣል።
+- [ ] Torii `/v1/node/capabilities` ማስታወቂያ (በ`iroha runtime capabilities` በኩል) ተመዝግቧል፣ የ`crypto.sm` አንጸባራቂ መስኮችን እና የፍጥነት ፖሊሲ ቅጽበተ ፎቶን ያረጋግጣል።
 
 # የተሳትፎ አፈፃፀም
 

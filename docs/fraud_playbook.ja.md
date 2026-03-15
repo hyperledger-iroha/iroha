@@ -53,7 +53,7 @@ translator: manual
 
 ゲートウェイは `crates/iroha_data_model::fraud` で実装された Norito 型と 1 対 1 で対応する具体的な JSON エンベロープを公開しています。
 
-- **リスク照会** – `POST /v2/fraud/query` は `RiskQuery` スキーマを受け付けます:
+- **リスク照会** – `POST /v1/fraud/query` は `RiskQuery` スキーマを受け付けます:
   - `query_id`（`[u8; 32]`、hex エンコード）
   - `subject`（`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`）
   - `operation`（`RiskOperation` に対応するタグ付き enum。JSONの `type` は enum バリアントに一致）
@@ -61,11 +61,11 @@ translator: manual
   - `features`（`FeatureInput` に対応する `{ key: String, value_hash: hex32 }` の配列）
   - `issued_at_ms`（`u64`）
   - `context`（`RiskContext`。`tenant_id`、任意の `session_id`、任意の `reason` を保持）
-- **リスク判定** – `POST /v2/fraud/assessment` は `FraudAssessment` ペイロードを受け付けます（ガバナンスエクスポートでも利用）:
+- **リスク判定** – `POST /v1/fraud/assessment` は `FraudAssessment` ペイロードを受け付けます（ガバナンスエクスポートでも利用）:
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`, `decision`（`AssessmentDecision` enum）、`rule_outcomes`（`{ rule_id, score_delta_bps, rationale? }` の配列）
   - `generated_at_ms`
   - `signature`（任意。Norito エンコード済みアセスメントを Base64 包装）
-- **ガバナンスエクスポート** – `GET /v2/fraud/governance/export` は `governance` フィーチャーを有効にすると `GovernanceExport` 構造体を返し、アクティブなパラメータ、最新の施行、モデルバージョン、ポリシーダイジェスト、`DecisionAggregate` ヒストグラムを束ねます。
+- **ガバナンスエクスポート** – `GET /v1/fraud/governance/export` は `governance` フィーチャーを有効にすると `GovernanceExport` 構造体を返し、アクティブなパラメータ、最新の施行、モデルバージョン、ポリシーダイジェスト、`DecisionAggregate` ヒストグラムを束ねます。
 
 `crates/iroha_data_model/src/fraud/types.rs` のラウンドトリップテストにより、これらのスキーマが Norito コーデックとバイナリ互換であることが保証され、`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` では intake／decision パイプライン全体のエンドツーエンドが検証されています。
 

@@ -239,7 +239,7 @@ passando desafios PDP/PoTR דרך respostas forjadas או colusao.
 **Onde olhar a seguir:**- O replay cache e a persistencia de cursores aterrissaram em DA-2. Veja א
   implementacao em `crates/iroha_core/src/da/replay_cache.rs` (logica do cache)
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia checks de
-  טביעת אצבע דרך `/v2/da/ingest`.
+  טביעת אצבע דרך `/v1/da/ingest`.
 - כמו סימולציות של הזרמת PDP/PoTR או תרגול באמצעות זרם הוכחה או לרתום
   em `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo fluxos de requisicao
   PoR/PDP/PoTR e cenarios de falha animados no modelo de ameacas.

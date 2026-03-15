@@ -61,13 +61,13 @@ Regression coverage یہاں موجود ہے:
 ## אביזרי כלי עבודה
 
 - Provider advert payloads میں `range_capability`, `stream_budget`, اور `transport_hints` شامل ہونا لازم ہے۔
-  `/v2/sorafs/providers` responses اور admission fixtures کے ذریعے validate کریں؛ JSON summaries میں parsed capability، stream budget، اور hint arrays شامل ہونے چاہئیں تاکہ telemetry ingest ہو سکے۔
+  `/v1/sorafs/providers` responses اور admission fixtures کے ذریعے validate کریں؛ JSON summaries میں parsed capability، stream budget، اور hint arrays شامل ہونے چاہئیں تاکہ telemetry ingest ہو سکے۔
 - `cargo xtask sorafs-admission-fixtures` اپنے JSON artefacts میں stream budgets اور transport hints دکھاتا ہے تاکہ dashboards feature adoption track کر سکیں۔
 - `fixtures/sorafs_manifest/provider_admission/` کے تحت fixtures اب شامل کرتے ہیں:
   - פרסומות מרובות מקורות קנוניות,
   - `multi_fetch_plan.json` تاکہ SDK suites deterministic multi-peer fetch plan replay کر سکیں۔
 
-## Orchestrator اور Torii انضمام- Torii `/v2/sorafs/providers` מטא נתונים של יכולת טווח מנותח
+## Orchestrator اور Torii انضمام- Torii `/v1/sorafs/providers` מטא נתונים של יכולת טווח מנותח
   providers جب نئی metadata چھوڑ دیں تو downgrade warnings چلتے ہیں، اور gateway range endpoints براہ راست clients کے لیے یہی constraints نافذ ‏
 - מתזמר מרובה מקורות (`sorafs_car::multi_fetch`) מגבלות טווח, יישור יכולות, או תקציבי זרם והקצאת עבודה. Unit tests میں chunk-too-large، sparse-seek، اور throttling scenarios شامل ہیں۔
 - `sorafs_car::multi_fetch` אותות שדרוג לאחור (כשלי יישור, בקשות מצטמצמות) זרם מכשירי הפעלה מספקים کیوں skip ہوئے۔

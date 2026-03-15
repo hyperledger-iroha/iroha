@@ -43,7 +43,7 @@ Ushbu runbook operatorlarni Torii ichiga o'rnatilgan `sorafs-node` joylashtirish
   ```
 
 - Torii jarayonining `data_dir` ga o'qish/yozish ruxsati borligiga ishonch hosil qiling.
-- Deklaratsiya yozib olingandan so'ng, tugun kutilgan quvvatni `GET /v2/sorafs/capacity/state` orqali reklama qilishini tasdiqlang.
+- Deklaratsiya yozib olingandan so'ng, tugun kutilgan quvvatni `GET /v1/sorafs/capacity/state` orqali reklama qilishini tasdiqlang.
 - Yumshoqlash yoqilganda, asboblar panellari nuqta qiymatlari bilan bir qatorda jittersiz tendentsiyalarni ta'kidlash uchun ham xom, ham silliqlangan GiB·soat/PoR hisoblagichlarini ko'rsatadi.
 
 ### CLI quruq yugurish (ixtiyoriy)
@@ -82,8 +82,8 @@ Buyruq JSON xulosasini chiqaradi (manifest dayjesti, provayder identifikatori, d
 Torii jonli efirga chiqqach, HTTP orqali bir xil artefaktlarni olishingiz mumkin:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Ikkala so'nggi nuqta ham o'rnatilgan saqlash xodimi tomonidan xizmat qiladi, shuning uchun CLI tutun sinovlari va shlyuz problari sinxronlashtiriladi.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#1】L
@@ -94,7 +94,7 @@ Ikkala so'nggi nuqta ham o'rnatilgan saqlash xodimi tomonidan xizmat qiladi, shu
 2. Manifestni base64 kodlash bilan yuboring:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -103,7 +103,7 @@ Ikkala so'nggi nuqta ham o'rnatilgan saqlash xodimi tomonidan xizmat qiladi, shu
 3. Belgilangan ma'lumotlarni oling:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -119,7 +119,7 @@ Ikkala so'nggi nuqta ham o'rnatilgan saqlash xodimi tomonidan xizmat qiladi, shu
 1. Yuqoridagi kabi kamida bitta manifestni mahkamlang.
 2. Torii jarayonini (yoki butun tugunni) qayta ishga tushiring.
 3. Olib olish so‘rovini qayta yuboring. Foydali yuk hali ham olinishi mumkin va qaytarilgan dayjest qayta ishga tushirishdan oldingi qiymatga mos kelishi kerak.
-4. `bytes_used` qayta ishga tushirilgandan keyin davom etuvchi manifestlarni aks ettirishini tasdiqlash uchun `GET /v2/sorafs/storage/state` ni tekshiring.
+4. `bytes_used` qayta ishga tushirilgandan keyin davom etuvchi manifestlarni aks ettirishini tasdiqlash uchun `GET /v1/sorafs/storage/state` ni tekshiring.
 
 ## 4. Kvotani rad etish testi
 
@@ -152,7 +152,7 @@ GC CLI ataylab faqat o'qish uchun mo'ljallangan. Undan audit izlari uchun saqlas
 2. PoR namunasini talab qiling:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -175,7 +175,7 @@ GC CLI ataylab faqat o'qish uchun mo'ljallangan. Undan audit izlari uchun saqlas
 - Boshqaruv paneli quyidagilarni kuzatishi kerak:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` va `torii_sorafs_storage_fetch_inflight`
-  - PoR muvaffaqiyat/qobiliyatsiz hisoblagichlari `/v2/sorafs/capacity/state` orqali paydo bo'ldi
+  - PoR muvaffaqiyat/qobiliyatsiz hisoblagichlari `/v1/sorafs/capacity/state` orqali paydo bo'ldi
   - `sorafs_node_deal_publish_total{result=success|failure}` orqali hisob-kitoblarni nashr etish urinishlari
 
 Ushbu mashqlardan so'ng, o'rnatilgan xotira xodimi ma'lumotlarni qabul qilishini, qayta ishga tushirishda omon qolishini, sozlangan kvotani hurmat qilishini va tugun kengroq tarmoqqa sig'imini reklama qilishdan oldin aniqlangan PoR dalillarini yaratishini ta'minlaydi.

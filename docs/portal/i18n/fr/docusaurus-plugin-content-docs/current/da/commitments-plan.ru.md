@@ -28,7 +28,7 @@ donc, les validateurs doivent se renseigner sur les comités DA pour l'admission
   disponibilité de la garantie par rapport au stockage hors grand livre.
 - Дать детерминированные preuves d'adhésion, чтобы light clients могли проверить,
   ce hachage manifeste est finalisé dans le bloc concret.
-- Exportation des produits Torii (`/v2/da/commitments/*`) et preuves, livraison
+- Exportation des produits Torii (`/v1/da/commitments/*`) et preuves, livraison
   les relais, les SDK et la gouvernance d'automatisation vérifient la disponibilité sans remplacement
   blocs.
 - Enveloppe canonique `SignedBlockWire`, nouvelle structure
@@ -43,7 +43,7 @@ donc, les validateurs doivent se renseigner sur les comités DA pour l'admission
 3. **Persistance/index** que WSV est en mesure de répondre aux requêtes d'engagement
    (`iroha_core/src/wsv/mod.rs`).
 4. **Ajouts RPC Torii** pour la liste/requête/prouver les points de terminaison à la suite
-   `/v2/da/commitments`.
+   `/v1/da/commitments`.
 5. **Tests d'intégration + montages** pour vérifier la disposition des fils et le flux de preuve
    `integration_tests/tests/da/commitments.rs`.
 
@@ -128,9 +128,9 @@ poppytki; le constructeur записывает последний включен
 
 Torii présélectionne trois points de terminaison :| Itinéraire | Méthode | Charge utile | Remarques |
 |-------|--------|---------|-------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (plage-filtre pour voie/époque/séquence, pagination) | Cela correspond à `DaCommitmentPage` avec le nombre total, les engagements et le bloc de hachage. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste ou court `(epoch, sequence)`). | Afficher `DaCommitmentProof` (enregistrement + chemin Merkle + bloc de hachage). |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Aide apatride, пересчитывающий hash bloka и проверяющий inclusion; mis à jour pour les SDK avant de télécharger `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (plage-filtre pour voie/époque/séquence, pagination) | Cela correspond à `DaCommitmentPage` avec le nombre total, les engagements et le bloc de hachage. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste ou court `(epoch, sequence)`). | Afficher `DaCommitmentProof` (enregistrement + chemin Merkle + bloc de hachage). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Aide apatride, пересчитывающий hash bloka и проверяющий inclusion; mis à jour pour les SDK avant de télécharger `iroha_crypto`. |
 
 Toutes les charges utiles sont disponibles dans `iroha_data_model::da::commitment`. Routeurs Torii
 Monter les gestionnaires pour gérer les points de terminaison d'ingestion DA, afin de les utiliser

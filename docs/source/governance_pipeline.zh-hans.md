@@ -16,7 +16,7 @@ translator: machine-google-reviewed
 - 治理提案的运行顺序为：提案者→公投→计票→颁布。公投窗口和投票率/批准阈值按照 `gov.md` 中所述执行；锁只能延长并在到期时解锁。
 - 议会选举使用基于 VRF 的抽签，具有确定性排序和任期限制；当不存在持久名册时，Torii 使用 `gov.parliament_*` 配置派生回退。在 `gov_parliament_bodies` / `gov_pipeline_sla` 测试中执行理事会门控和仲裁检查。
 - 投票模式：ZK（默认，需要带内联字节的 `Active` VK）和 Plain（二次权重）。模式不匹配被拒绝；锁创建/扩展在两种模式下都是单调的，具有 ZK 和普通重新投票的回归测试。
-- 验证者的不当行为通过证据管道（`/v2/sumeragi/evidence*`，CLI 助手）进行处理，并由 `NextMode` + `ModeActivationHeight` 强制执行联合共识交接。
+- 验证者的不当行为通过证据管道（`/v1/sumeragi/evidence*`，CLI 助手）进行处理，并由 `NextMode` + `ModeActivationHeight` 强制执行联合共识交接。
 - 受保护的命名空间、运行时升级挂钩和治理清单准入记录在 `governance_api.md` 中，并由遥测覆盖（`governance_manifest_*`、`governance_protected_namespace_total`）。
 
 # 飞行中/积压订单

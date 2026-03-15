@@ -6,12 +6,12 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 slug: /sdks/recipes/javascript-connect-preview
 title: وصفة معاينة Connect في JavaScript
-description: حضّر جلسات معاينة Connect، وأصدر قياسًا عن بعد للطابور، واتصل بمقبس `/v2/connect/ws` باستخدام `@iroha/iroha-js`.
+description: حضّر جلسات معاينة Connect، وأصدر قياسًا عن بعد للطابور، واتصل بمقبس `/v1/connect/ws` باستخدام `@iroha/iroha-js`.
 ---
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-توضح هذه الوصفة كيفية الجمع بين `bootstrapConnectPreviewSession` ومُتصل WebSocket الذي يوفّره `ToriiClient.openConnectWebSocket()`. يعكس السكربت قسم Connect في خارطة طريق SDK الخاصة بـ JS: فهو يولّد روابط معاينة حتمية، ويسجّل قياس عمق الطابور، ويفتح نقطة النهاية القياسية `/v2/connect/ws` باستخدام حزمة `ws` حتى تتمكن تطبيقات Node.js من تنفيذ التدفق نفسه الذي تنفذه المتصفحات.
+توضح هذه الوصفة كيفية الجمع بين `bootstrapConnectPreviewSession` ومُتصل WebSocket الذي يوفّره `ToriiClient.openConnectWebSocket()`. يعكس السكربت قسم Connect في خارطة طريق SDK الخاصة بـ JS: فهو يولّد روابط معاينة حتمية، ويسجّل قياس عمق الطابور، ويفتح نقطة النهاية القياسية `/v1/connect/ws` باستخدام حزمة `ws` حتى تتمكن تطبيقات Node.js من تنفيذ التدفق نفسه الذي تنفذه المتصفحات.
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"

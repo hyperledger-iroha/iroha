@@ -75,8 +75,8 @@ Coletores duplos SNNet-8a تعینات کرتا ہے جو baldes Prio compartilh
 
 ## Pontos de extremidade de ingestão Torii
 
-Torii tem pontos de extremidade HTTP controlados por telemetria فراہم کرتا ہے تاکہ relés e coletores کسی transporte sob medida کے بغیر observações futuras کر سکیں:- `POST /v2/soranet/privacy/event` ایک `RecordSoranetPrivacyEventDto` carga útil قبول کرتا ہے۔ corpo میں `SoranetPrivacyEventV1` کے ساتھ ایک rótulo `source` opcional شامل ہوتا ہے۔ Solicitação Torii کو فعال perfil de telemetria کے مطابق validar کرتا ہے, evento ریکارڈ کرتا ہے, e HTTP `202 Accepted` کے ساتھ Envelope JSON Norito e janela de bucket computada (`bucket_start_unix`, `bucket_duration_secs`) e modo de retransmissão.
-- `POST /v2/soranet/privacy/share` ایک `RecordSoranetPrivacyShareDto` carga útil قبول کرتا ہے۔ corpo میں `SoranetPrivacyPrioShareV1` اور opcional `forwarded_by` dica ہوتا ہے تاکہ آپریٹرز fluxos de coletor کا auditoria کر سکیں۔ Submissões HTTP `202 Accepted` کے ساتھ Norito Envelope JSON واپس کرتی ہیں جو coletor, janela de balde, اور dica de supressão کو resumir کرتا ہے؛ falhas de validação telemetria `Conversion` resposta سے mapa ہوتے ہیں تاکہ coletores کے درمیان tratamento determinístico de erros برقرار رہے۔ orquestrador کا loop de eventos اب polling de retransmissão کے دوران یہ compartilhamentos emitem کرتا ہے، جس سے Torii کا Buckets on-relay do acumulador Prio کے ساتھ sincronização رہتا ہے۔
+Torii tem pontos de extremidade HTTP controlados por telemetria فراہم کرتا ہے تاکہ relés e coletores کسی transporte sob medida کے بغیر observações futuras کر سکیں:- `POST /v1/soranet/privacy/event` ایک `RecordSoranetPrivacyEventDto` carga útil قبول کرتا ہے۔ corpo میں `SoranetPrivacyEventV1` کے ساتھ ایک rótulo `source` opcional شامل ہوتا ہے۔ Solicitação Torii کو فعال perfil de telemetria کے مطابق validar کرتا ہے, evento ریکارڈ کرتا ہے, e HTTP `202 Accepted` کے ساتھ Envelope JSON Norito e janela de bucket computada (`bucket_start_unix`, `bucket_duration_secs`) e modo de retransmissão.
+- `POST /v1/soranet/privacy/share` ایک `RecordSoranetPrivacyShareDto` carga útil قبول کرتا ہے۔ corpo میں `SoranetPrivacyPrioShareV1` اور opcional `forwarded_by` dica ہوتا ہے تاکہ آپریٹرز fluxos de coletor کا auditoria کر سکیں۔ Submissões HTTP `202 Accepted` کے ساتھ Norito Envelope JSON واپس کرتی ہیں جو coletor, janela de balde, اور dica de supressão کو resumir کرتا ہے؛ falhas de validação telemetria `Conversion` resposta سے mapa ہوتے ہیں تاکہ coletores کے درمیان tratamento determinístico de erros برقرار رہے۔ orquestrador کا loop de eventos اب polling de retransmissão کے دوران یہ compartilhamentos emitem کرتا ہے، جس سے Torii کا Buckets on-relay do acumulador Prio کے ساتھ sincronização رہتا ہے۔
 
 دونوں perfil de telemetria de endpoints کی پابندی کرتے ہیں: métricas desativadas clientes Norito binário (`application/x.norito`) یا Norito JSON (`application/x.norito+json`) corpos بھیج سکتے ہیں؛ extratores Torii padrão do servidor کے ذریعے formato خود بخود negociar کرتا ہے۔
 
@@ -155,7 +155,7 @@ cargo xtask soranet-privacy-report \
 
 Governança اب بھی ثبوت چاہتا ہے کہ پہلی automação executar supressão orçamento میں رہی۔ helper اب `--max-suppression-ratio <0-1>` قبول کرتا ہے تاکہ CI یا آپریٹرز اس وقت fail fast کر سکیں جب buckets suprimidos permitidos janela سے بڑھ جائیں (padrão 10%) یا جب ابھی کوئی baldes موجود نہ ہوں۔ Fluxo de fluxo:
 
-1. endpoint(s) de administração de retransmissão por orquestrador کے fluxo `/v2/soranet/privacy/event|share` سے exportação NDJSON کر کے `artifacts/sorafs_privacy/<relay>.ndjson` میں محفوظ کریں۔
+1. endpoint(s) de administração de retransmissão por orquestrador کے fluxo `/v1/soranet/privacy/event|share` سے exportação NDJSON کر کے `artifacts/sorafs_privacy/<relay>.ndjson` میں محفوظ کریں۔
 2. política orçamentária کے ساتھ ajudante چلائیں:
 
    ```bash

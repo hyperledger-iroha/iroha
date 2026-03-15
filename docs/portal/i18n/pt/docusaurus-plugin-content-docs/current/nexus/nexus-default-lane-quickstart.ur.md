@@ -165,7 +165,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` اور Rust client crate `lane_id` campo کو omitir کرتے ہیں جب آپ `--lane-id` / `LaneSelector` pass نہیں کرتے۔ O roteador de fila `default_lane` é um substituto para o roteador de fila Sinalizadores `--lane-id`/`--dataspace-id` explícitos صرف pista não padrão کو alvo کرتے وقت استعمال کریں۔
 - **JS / Swift / Android. کرتے ہیں۔ Política de roteamento کو preparação اور produção میں sincronização رکھیں تاکہ aplicativos móveis کو reconfigurações de emergência نہ کرنی پڑیں۔
-- **Testes de pipeline/SSE.** filtros de eventos de transação Predicados `tx_lane_id == <u32>` قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`). `/v2/pipeline/events/transactions` کو اس filter کے ساتھ subscribe کریں تاکہ یہ ثابت ہو کہ pista explícita کے بغیر بھیجی گئی grava o ID da pista de fallback کے تحت پہنچتی ہیں۔
+- **Testes de pipeline/SSE.** filtros de eventos de transação Predicados `tx_lane_id == <u32>` قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`). `/v1/pipeline/events/transactions` کو اس filter کے ساتھ subscribe کریں تاکہ یہ ثابت ہو کہ pista explícita کے بغیر بھیجی گئی grava o ID da pista de fallback کے تحت پہنچتی ہیں۔
 
 ## 7. Observabilidade e ganchos de governança- `/status` `nexus_lane_governance_sealed_total` e `nexus_lane_governance_sealed_aliases` بھی publicar کرتا ہے تاکہ Alertmanager warning کر سکے جب کوئی lane اپنا manifest کھو sim ان alertas کو devnets میں بھی habilitado رکھیں۔
 - mapa de telemetria do agendador e painel de governança de pista (`dashboards/grafana/nexus_lanes.json`) catálogo کے campos de alias/slug esperados کرتے ہیں۔ اگر آپ alias renomear کریں تو متعلقہ Diretórios Kura کو relabel کریں تاکہ auditores caminhos determinísticos رکھ سکیں (NX-1 کے تحت faixa ہوتا ہے)۔

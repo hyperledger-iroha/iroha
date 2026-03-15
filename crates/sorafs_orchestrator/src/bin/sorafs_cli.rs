@@ -1143,7 +1143,7 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
 
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
-        .join("v2/sorafs/por/status")
+        .join("v1/sorafs/por/status")
         .map_err(|err| format!("failed to resolve PoR status endpoint: {err}"))?;
 
     let mut serializer = Serializer::new(String::new());
@@ -1332,7 +1332,7 @@ fn por_trigger(raw_args: Vec<String>) -> Result<(), String> {
 
     let endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
-        .join("v2/sorafs/por/trigger")
+        .join("v1/sorafs/por/trigger")
         .map_err(|err| format!("failed to resolve PoR trigger endpoint: {err}"))?;
 
     let client = HttpClient::builder()
@@ -1420,7 +1420,7 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
 
     let mut endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
-        .join("v2/sorafs/por/export")
+        .join("v1/sorafs/por/export")
         .map_err(|err| format!("failed to resolve PoR export endpoint: {err}"))?;
     let mut serializer = Serializer::new(String::new());
     if let Some(start) = start_epoch {
@@ -1506,7 +1506,7 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
 
     let endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value `{torii_url}`: {err}"))?
-        .join(&format!("v2/sorafs/por/report/{iso_week}"))
+        .join(&format!("v1/sorafs/por/report/{iso_week}"))
         .map_err(|err| format!("failed to resolve PoR report endpoint: {err}"))?;
 
     let client = HttpClient::builder()
@@ -4498,7 +4498,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
 
     let torii_endpoint = Url::parse(&torii_url)
         .map_err(|err| format!("invalid `--torii-url` value: {err}"))?
-        .join("v2/sorafs/pin/register")
+        .join("v1/sorafs/pin/register")
         .map_err(|err| format!("failed to build Torii endpoint URL: {err}"))?;
 
     let plan_specs = if let Some(source) = chunk_plan_source {
@@ -5033,7 +5033,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         })?;
         let endpoint = Url::parse(&torii)
             .map_err(|err| format!("invalid `--torii-url` value `{torii}`: {err}"))?
-            .join("v2/sorafs/proof/stream")
+            .join("v1/sorafs/proof/stream")
             .map_err(|err| format!("failed to resolve proof stream endpoint: {err}"))?;
         (torii, endpoint)
     };

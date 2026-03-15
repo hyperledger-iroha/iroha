@@ -149,7 +149,7 @@ When a scenario breaches its budget:
 1. Consult the relevant section in `docs/source/sumeragi.md` (collector &
    witness telemetry, VRF pipeline, DA retry cadence) for the metric-driven
    triage flow.
-2. Inspect `/v2/sumeragi/status` and `/v2/sumeragi/telemetry` using
+2. Inspect `/v1/sumeragi/status` and `/v1/sumeragi/telemetry` using
    `iroha_cli --output-format text ops sumeragi status` for hot-path validation.
 3. For DA-specific stalls, pair the logs with
    `docs/source/sumeragi_da.md` so operators can differentiate between RBC

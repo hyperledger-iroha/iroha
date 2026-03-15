@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 
 مغلفات المذكرات السرية `fixtures/confidential/encrypted_payload_v1.json` تحتوي على تركيبات أساسية. هناك مجموعة بيانات مظروف ثابت v1 وعينات مشوهة بالإضافة إلى تحليل حزم SDK الثابتة للتكافؤ. اختبارات نموذج بيانات الصدأ (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) وSwift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) التي تساعد على تنزيل الملفات وترميز Norito وأسطح الأخطاء وبرنامج ترميز تغطية الانحدار الذي يتم محاذاة الارتداد عليه. ہیں۔
 
-Swift SDKs عبارة عن غراء JSON مفصل وتعليمات درع تنبعث منها: التزام مذكرة بحجم 32 بايت وحمولة مشفرة وبيانات وصفية للخصم `ShieldRequest` ثم `/v2/pipeline/transactions` للتوقيع والترحيل لـ `IrohaSDK.submit(shield:keypair:)` (أو `submitAndWait`) للقراءة. أطوال التزام المساعد تتحقق من صحة الكرتا ہے، `ConfidentialEncryptedPayload` و Norito ترميز الخيط كرتا ہے، وتخطيط آخر `zk::Shield` كمرآة الكرتا ومحفظة الصدأ إنها خطوة قفل ثابتة.
+Swift SDKs عبارة عن غراء JSON مفصل وتعليمات درع تنبعث منها: التزام مذكرة بحجم 32 بايت وحمولة مشفرة وبيانات وصفية للخصم `ShieldRequest` ثم `/v1/pipeline/transactions` للتوقيع والترحيل لـ `IrohaSDK.submit(shield:keypair:)` (أو `submitAndWait`) للقراءة. أطوال التزام المساعد تتحقق من صحة الكرتا ہے، `ConfidentialEncryptedPayload` و Norito ترميز الخيط كرتا ہے، وتخطيط آخر `zk::Shield` كمرآة الكرتا ومحفظة الصدأ إنها خطوة قفل ثابتة.
 
 ## التزامات الإجماع وبوابة القدرة
 - تعرض رؤوس الكتلة `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` البطاقة؛ ملخص تجزئة الإجماع يحتوي على بيانات وقبول الكتلة لعرض التسجيل المحلي ومطابقة البيانات.
@@ -75,7 +75,7 @@ Swift SDKs عبارة عن غراء JSON مفصل وتعليمات درع تنب
 
 #### Torii مراقبة التحولات
 
-المحافظ والمدققون `GET /v2/confidential/assets/{definition_id}/transitions` هو الاستطلاع النشط `AssetConfidentialPolicy`. تحتوي حمولة JSON على معرف الأصل الأساسي، وآخر ارتفاع تمت ملاحظته للكتلة، `current_mode`، وهو ارتفاع في الوضع الفعال (نوافذ التحويل عارض تقرير `Convertible`)، ومعرفات `vk_set_hash`/Poseidon/Pedersen المتوقعة ہے۔ فيما يتعلق بانتقال الحكم المعلق، يجب أن يكون الرد متاحًا أيضًا:
+المحافظ والمدققون `GET /v1/confidential/assets/{definition_id}/transitions` هو الاستطلاع النشط `AssetConfidentialPolicy`. تحتوي حمولة JSON على معرف الأصل الأساسي، وآخر ارتفاع تمت ملاحظته للكتلة، `current_mode`، وهو ارتفاع في الوضع الفعال (نوافذ التحويل عارض تقرير `Convertible`)، ومعرفات `vk_set_hash`/Poseidon/Pedersen المتوقعة ہے۔ فيما يتعلق بانتقال الحكم المعلق، يجب أن يكون الرد متاحًا أيضًا:
 
 - `transition_id` - `ScheduleConfidentialPolicyTransition` سے واپس ملنے ومقبض التدقيق۔
 -`previous_mode`/`new_mode`.
@@ -120,7 +120,7 @@ Swift SDKs عبارة عن غراء JSON مفصل وتعليمات درع تنب
 ### تسلسل الهجرة
 
 2. **مرحلة الانتقال:** `policy_transition_delay_blocks` نحترم الأصل `effective_height` ونرسل `ScheduleConfidentialPolicyTransition`. `ShieldedOnly` تحدد نافذة التحويل وقت التحويل (`window ≥ policy_transition_window_blocks`).
-3. **نشر إرشادات المشغل:** سجل البيانات و`transition_id` وتداول دليل التشغيل/الإيقاف. المحافظ والمدققون `/v2/confidential/assets/{id}/transitions` الاشتراك في نافذة مفتوحة على ارتفاع مرتفع.
+3. **نشر إرشادات المشغل:** سجل البيانات و`transition_id` وتداول دليل التشغيل/الإيقاف. المحافظ والمدققون `/v1/confidential/assets/{id}/transitions` الاشتراك في نافذة مفتوحة على ارتفاع مرتفع.
 4. **فرض النافذة:** نافذة سياسة وقت التشغيل `Convertible` لتبديل المفتاح، `PolicyTransitionWindowOpened { transition_id }` تنبعث الكرتا، وترفض طلبات الإدارة المتعارضة بدء التشغيل.
 5. **إنهاء أو إحباط:** `effective_height` تحقق المتطلبات الأساسية لانتقال وقت التشغيل من الرقم الشفاف (الإمداد الشفاف صفر، انسحاب الطوارئ غير متوفر). سياسة النجاح کو الوضع المطلوب پر فليب کرتا ہے؛ فشل `PolicyTransitionPrerequisiteFailed` ينبعث منها انتقال معلق واضح وسياسة لم تتغير.
 6. **ترقيات المخطط:** انتقال الخلية بعد عثرة إصدار مخطط أصول الإدارة (مثلاً `asset_definition.v2`) وتسلسل بيان أدوات CLI عندما يتطلب `confidential_policy` نقرة. تقوم Genesis بترقية مشغلي المستندات وإعادة تشغيل أدوات التحقق من صحة إعدادات السياسة وإضافة بصمات التسجيل إلى سجل البيانات.
@@ -224,7 +224,7 @@ Swift SDKs عبارة عن غراء JSON مفصل وتعليمات درع تنب
 - التسلسل الهرمي لاشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - حمولات الملاحظات المشفرة يستخدم EAAD المفاتيح المشتركة المشتقة من ECDH؛ اختياري للمدقق عرض مفاتيح سياسة الأصول بما يتوافق مع المخرجات التي يتم إرفاقها بأي شيء.
-- إضافات واجهة سطر الأوامر: `confidential create-keys`، `confidential send`، `confidential export-view-key`، فك تشفير المذكرات کرنے کیلئے أدوات المدقق، ومساعد `iroha app zk envelope` جو Norito إنتاج/فحص کرتا دون اتصال ہے۔ Torii `POST /v2/confidential/derive-keyset` تدفق الاشتقاق وصيغة كرتا وhex/base64 نماذج دونو وابس ديتا وجلب المحافظ التسلسلات الهرمية الرئيسية برمجيًا.
+- إضافات واجهة سطر الأوامر: `confidential create-keys`، `confidential send`، `confidential export-view-key`، فك تشفير المذكرات کرنے کیلئے أدوات المدقق، ومساعد `iroha app zk envelope` جو Norito إنتاج/فحص کرتا دون اتصال ہے۔ Torii `POST /v1/confidential/derive-keyset` تدفق الاشتقاق وصيغة كرتا وhex/base64 نماذج دونو وابس ديتا وجلب المحافظ التسلسلات الهرمية الرئيسية برمجيًا.
 
 ## الغاز والحدود وضوابط DoS
 - جدول الغاز الحتمي:

@@ -34,7 +34,7 @@ SoraFS 打包工作流程强化了确定性，因此从 CI 转向
 
 ## 环境配置
 
-- 网关必须启用证明流端点 (`POST /v2/sorafs/proof/stream`)
+- 网关必须启用证明流端点 (`POST /v1/sorafs/proof/stream`)
   因此 CLI 可以发出遥测摘要。
 - 使用中的默认值配置 `sorafs_alias_cache` 策略
   `iroha_config` 或 CLI 帮助程序 (`sorafs_cli manifest submit --alias-*`)。

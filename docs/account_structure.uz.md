@@ -673,8 +673,8 @@ ularning almashtirish chiptalari.
 
 ### Torii javob formatlari
 
-- `GET /v2/accounts` ixtiyoriy `canonical I105 rendering` so'rov parametrini qabul qiladi va
-  `POST /v2/accounts/query` JSON konvertidagi bir xil maydonni qabul qiladi.
+- `GET /v1/accounts` ixtiyoriy `canonical I105 rendering` so'rov parametrini qabul qiladi va
+  `POST /v1/accounts/query` JSON konvertidagi bir xil maydonni qabul qiladi.
   Qo'llab-quvvatlanadigan qiymatlar:
   - `i105` (standart) — javoblar kanonik I105 Base58 foydali yuklarini chiqaradi (masalan,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
@@ -683,7 +683,7 @@ ularning almashtirish chiptalari.
 - Yaroqsiz qiymatlar `400` (`QueryExecutionFail::Conversion`) qaytaradi. Bu imkon beradi
   hamyonlar va tadqiqotchilar esa Sora-faqat UX uchun siqilgan satrlarni so'rashlari mumkin
   I105 ni o'zaro ishlaydigan standart sifatida saqlash.
-- Aktiv egalari ro'yxati (`GET /v2/assets/{definition_id}/holders`) va ularning JSON
+- Aktiv egalari ro'yxati (`GET /v1/assets/{definition_id}/holders`) va ularning JSON
   konvert hamkasbi (`POST …/holders/query`) ham `canonical I105 rendering` ni hurmat qiladi.
   `items[*].account_id` maydoni har doim siqilgan harflarni chiqaradi
   parametr/konvert maydoni hisoblarni aks ettiruvchi `i105_default` ga o'rnatildi

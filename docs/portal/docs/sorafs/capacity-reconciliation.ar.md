@@ -15,7 +15,7 @@ title: تسوية سعة SoraFS
 description: سير عمل ليلي لمطابقة دفاتر رسوم السعة مع صادرات تحويلات XOR.
 ---
 
-يفرض بند خارطة الطريق **SF-2c** أن يثبت فريق الخزينة أن دفتر رسوم السعة يطابق تحويلات XOR المنفذة كل ليلة. استخدم المساعد `scripts/telemetry/capacity_reconcile.py` لمقارنة لقطة `/v2/sorafs/capacity/state` مع دفعة التحويلات المنفذة وإصدار مقاييس نصية لـ Prometheus من أجل Alertmanager.
+يفرض بند خارطة الطريق **SF-2c** أن يثبت فريق الخزينة أن دفتر رسوم السعة يطابق تحويلات XOR المنفذة كل ليلة. استخدم المساعد `scripts/telemetry/capacity_reconcile.py` لمقارنة لقطة `/v1/sorafs/capacity/state` مع دفعة التحويلات المنفذة وإصدار مقاييس نصية لـ Prometheus من أجل Alertmanager.
 
 ## المتطلبات المسبقة
 - لقطة حالة السعة (مدخلات `fee_ledger`) مُصدّرة من Torii.

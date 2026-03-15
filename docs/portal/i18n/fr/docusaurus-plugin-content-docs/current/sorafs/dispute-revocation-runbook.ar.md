@@ -26,7 +26,7 @@ Il s'agit de la référence `docs/source/sorafs/dispute_revocation_runbook.md`. 
 ## 1. تقييم الحادث
 
 - **شروط الإطلاق :** رصد خرق SLA (التوفر/فشل PoR) et نقص التكرار، أو خلاف في الفوترة.
-- **أكيد التليمترية:** التقط لقطات `/v2/sorafs/capacity/state` et `/v2/sorafs/capacity/telemetry` للمزوّد.
+- **أكيد التليمترية:** التقط لقطات `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` للمزوّد.
 - **إخطار أصحاب المصلحة :** Équipe de stockage (عمليات المزوّد), Conseil de gouvernance (جهة القرار) et Observabilité (تحديثات لوحات المتابعة).
 
 ## 2. إعداد حزمة الأدلة
@@ -72,7 +72,7 @@ Il s'agit de la référence `docs/source/sorafs/dispute_revocation_runbook.md`. 
      --authority=i105... \
      --private-key=ed25519:<key>
    ```3. راجع `dispute_summary.json` (تأكد من النوع، digest الأدلة، والطوابع الزمنية).
-4. Utilisez JSON pour Torii `/v2/sorafs/capacity/dispute` pour créer des liens. التقط قيمة الاستجابة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.
+4. Utilisez JSON pour Torii `/v1/sorafs/capacity/dispute` pour créer des liens. التقط قيمة الاستجابة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.
 
 ## 4. الإخلاء والإلغاء
 

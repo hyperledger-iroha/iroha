@@ -78,7 +78,7 @@ Pruebas:
 
 | Componente | Tara | Responsáveis(es) |
 |-----------|-------|----------------|
-| Serviço Torii | Exponer `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (pesquisa), `/v2/sorafs/aliases` (listar/vincular), `/v2/sorafs/replication` (pedidos/recebimentos). Provar paginação + filtrado. | Rede TL / Core Infra |
+| Serviço Torii | Exponer `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (pesquisa), `/v1/sorafs/aliases` (listar/vincular), `/v1/sorafs/replication` (pedidos/recebimentos). Provar paginação + filtrado. | Rede TL / Core Infra |
 | Atestação | Incluir altura/hash do registro nas respostas; adicionar estrutura de atestado Norito consumida pelos SDKs. | Infra principal |
 | CLI | Extensor `sorafs_manifest_stub` ou um novo CLI `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Ferramentaria |
 | SDK | Gerar ligações de cliente (Rust/Go/TS) a partir do esquema Norito; agregar testes de integração. | Equipes SDK |
@@ -133,10 +133,10 @@ Painéis:
 Cada lista de verificação do SF-4 deve referenciar este plano à medida que progride.
 La fachada REST agora entrega endpoints de listado com atestado:
 
-- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` devemuelven manifesta-se con
+- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` devemuelven manifesta-se con
   ligações de alias, ordens de replicação e um objeto de atestação derivado de
   hash do último bloco.
-- `GET /v2/sorafs/aliases` e `GET /v2/sorafs/replication` expõem o catálogo de
+- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` expõem o catálogo de
   alias ativo e o backlog de ordens de replicação com paginação consistente e
   filtros de estado.O ambiente CLI é chamado (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) para que os operadores possam automatizar auditorias do

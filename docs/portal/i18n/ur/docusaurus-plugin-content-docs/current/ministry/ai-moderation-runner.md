@@ -165,7 +165,7 @@ Schema `crates/iroha_data_model/src/sorafs/moderation.rs` میں موجود ہے
   - `models/` directory جس میں hashed ONNX weights ہوں۔
   - Entry point `run_moderation.py` (یا Rust equivalent) جو HTTP/gRPC API expose کرے۔
 - Artifacts کو `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>` پر publish کریں۔
-- Runner binary `sorafs_ai_runner` crate کا حصہ ہے۔ build pipeline manifest hash کو binary میں embed کرتا ہے ( `/v2/info` سے expose ہوتا ہے )۔
+- Runner binary `sorafs_ai_runner` crate کا حصہ ہے۔ build pipeline manifest hash کو binary میں embed کرتا ہے ( `/v1/info` سے expose ہوتا ہے )۔
 
 ## 8. Telemetry اور observability
 - Prometheus metrics:

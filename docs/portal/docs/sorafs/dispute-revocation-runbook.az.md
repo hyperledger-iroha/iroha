@@ -24,7 +24,7 @@ Bu runbook SoraFS tutum mübahisələrini təqdim etmək, ləğvetmələri əlaq
 ## 1. Hadisəni qiymətləndirin
 
 - **Tikqer şərtləri:** SLA pozuntusunun aşkarlanması (iş vaxtı/PoR çatışmazlığı), replikasiya çatışmazlığı və ya faktura razılaşması.
-- **Telemetriyanı təsdiqləyin:** provayder üçün `/v2/sorafs/capacity/state` və `/v2/sorafs/capacity/telemetry` anlıq görüntülərini çəkin.
+- **Telemetriyanı təsdiqləyin:** provayder üçün `/v1/sorafs/capacity/state` və `/v1/sorafs/capacity/telemetry` anlıq görüntülərini çəkin.
 - **Maraqlı tərəfləri xəbərdar edin:** Saxlama Qrupu (provayder əməliyyatları), İdarəetmə Şurası (qərar verən orqan), Müşahidə oluna bilənlik (kontrol paneli yeniləmələri).
 
 ## 2. Sübut Paketini Hazırlayın
@@ -72,7 +72,7 @@ Bu runbook SoraFS tutum mübahisələrini təqdim etmək, ləğvetmələri əlaq
    ```
 
 3. `dispute_summary.json`-i nəzərdən keçirin (növü təsdiqləyin, sübutlar həzmini, vaxt ştamplarını).
-4. İdarəetmə əməliyyatı növbəsi vasitəsilə JSON sorğusunu Torii `/v2/sorafs/capacity/dispute` ünvanına göndərin. `dispute_id_hex` cavab dəyərini çəkin; o, sonrakı ləğvetmə hərəkətlərini və audit hesabatlarını birləşdirir.
+4. İdarəetmə əməliyyatı növbəsi vasitəsilə JSON sorğusunu Torii `/v1/sorafs/capacity/dispute` ünvanına göndərin. `dispute_id_hex` cavab dəyərini çəkin; o, sonrakı ləğvetmə hərəkətlərini və audit hesabatlarını birləşdirir.
 
 ## 4. Evakuasiya və Ləğvetmə
 

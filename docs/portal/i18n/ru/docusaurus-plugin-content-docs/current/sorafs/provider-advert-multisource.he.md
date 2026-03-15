@@ -79,7 +79,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## Инструменты и fixtures
 
 - Payloads объявлений провайдеров должны включать `range_capability`, `stream_budget`
-  и `transport_hints`. Проверяйте через ответы `/v2/sorafs/providers` и admission fixtures;
+  и `transport_hints`. Проверяйте через ответы `/v1/sorafs/providers` и admission fixtures;
   JSON-резюме должны включать разобранную capability, stream budget и массивы hints
   для телеметрического ingest.
 - `cargo xtask sorafs-admission-fixtures` выводит stream budgets и transport hints
@@ -91,7 +91,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## Интеграция с оркестратором и Torii
 
-- Torii `/v2/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
+- Torii `/v1/sorafs/providers` возвращает разобранные метаданные диапазонных возможностей
   вместе с `stream_budget` и `transport_hints`. Предупреждения downgrade срабатывают, когда
   провайдеры пропускают новые метаданные, а range endpoints шлюза применяют те же ограничения
   для прямых клиентов.

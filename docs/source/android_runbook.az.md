@@ -635,7 +635,7 @@ Sev1/2 təqibləri və sübutları `incident/<date>-android-*.md`-də arxivləş
 **Siqnallar**
 
 - `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`-də xəbərdarlıqlar,
-  `android_sdk_offline_replay_errors` və Torii `/v2/pipeline` xəta dərəcəsi.
+  `android_sdk_offline_replay_errors` və Torii `/v1/pipeline` xəta dərəcəsi.
 - `operator-console` vidjetləri (nümunələr/android) dayanmış növbənin boşaldılmasını və ya
   təkrar cəhdlər eksponensial geriləmədə qalıb.
 
@@ -685,7 +685,7 @@ Sev1/2 təqibləri və sübutları `incident/<date>-android-*.md`-də arxivləş
 **Bərpa**
 
 1. Əgər Torii deqradasiyaya uğrayıbsa, Torii-i çağırın və təkrar oxumağa davam edin.
-   `/v2/pipeline` trafiki qəbul etdikdən sonra növbə.
+   `/v1/pipeline` trafiki qəbul etdikdən sonra növbə.
 2. Təsirə məruz qalan müştəriləri yalnız imzalanmış `iroha_config` manifestləri vasitəsilə yenidən konfiqurasiya edin. The
    `ClientConfig` qaynar yenidən yüklənən müşahidəçi hadisədən əvvəl müvəffəqiyyət qeydi çıxarmalıdır
    bağlaya bilər.

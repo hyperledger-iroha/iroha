@@ -55,7 +55,7 @@ Sidebar_label: مخطط تنفيذ العقدة
 ملاحظات التنفيذ:
 
 - استخدم مكدس Axum de Torii لحمولات com `norito::json`.
-- إضافة مخططات Norito للإجابة (`PinResultV1`، `FetchErrorV1`، هياكل القياس عن بعد).- يعرض `/v2/sorafs/por/ingestion/{manifest_digest_hex}` قبل ذلك عمقًا في تراكم الأعمال المتراكمة في عصر/موعد نهائي أكثر حداثة وطوابع زمنية أحدث للنجاح/الفشل من خلال إثبات، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وTorii تسجيل أجهزة القياس `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للوحات المعلومات. [الصناديق/sorafs_node/src/lib.rs:510] [الصناديق/iroha_torii/src/sorafs/api.rs:1883] [الصناديق/iroha_torii/src/routing.rs:7244] [الصناديق/iroha_telemetry/src/metrics.rs:5390]
+- إضافة مخططات Norito للإجابة (`PinResultV1`، `FetchErrorV1`، هياكل القياس عن بعد).- يعرض `/v1/sorafs/por/ingestion/{manifest_digest_hex}` قبل ذلك عمقًا في تراكم الأعمال المتراكمة في عصر/موعد نهائي أكثر حداثة وطوابع زمنية أحدث للنجاح/الفشل من خلال إثبات، عبر `sorafs_node::NodeHandle::por_ingestion_status`، وTorii تسجيل أجهزة القياس `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` للوحات المعلومات. [الصناديق/sorafs_node/src/lib.rs:510] [الصناديق/iroha_torii/src/sorafs/api.rs:1883] [الصناديق/iroha_torii/src/routing.rs:7244] [الصناديق/iroha_telemetry/src/metrics.rs:5390]
 
 ### د. جدولة الحصص وتخصيصها
 

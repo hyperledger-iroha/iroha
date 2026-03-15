@@ -18,7 +18,7 @@ translation_last_reviewed: 2026-02-07
 
 - Узел 18.18+ с `npm` или `pnpm`.
 - `sorafs_cli` из `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL Torii, который предоставляет `/v2/sorafs/*`, а также учетную запись/приватный ключ, способные отправлять манифесты и псевдонимы.
+- URL Torii, который предоставляет `/v1/sorafs/*`, а также учетную запись/приватный ключ, способные отправлять манифесты и псевдонимы.
 - Эмитент OIDC (GitHub Actions, GitLab, идентификатор рабочей нагрузки и т. п.) для выпуска `SIGSTORE_ID_TOKEN`.
 - Опционально: `examples/sorafs_cli_quickstart.sh` для пробного запуска и `docs/source/sorafs_ci_templates.md` для шаблонов рабочих процессов GitHub/GitLab.
 - Настроить переменные OAuth Попробуйте (`DOCS_OAUTH_*`) и выполните
@@ -576,7 +576,7 @@ npm run monitor:publishing -- \
 
 | Имя | Назначение |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Хост Torii с `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Хост Torii с `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Идентификатор эпохи, указанный при подаче. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Подписывающая власть для подачи манифеста. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Кортеж-псевдоним, привязываемый при `perform_submit` = `true`. |

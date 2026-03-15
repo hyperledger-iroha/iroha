@@ -155,7 +155,7 @@ O CI.
 1. Instale o acessório como `fixtures/norito_rpc/transfer_asset.norito`. هذه الملفات هي
    Norito Norito **لا** é baseado em base64.
 2. No Swagger e no RapiDoc, você usa o endpoint NRPC (como
-   `POST /v2/pipeline/submit`) وغيّر محدد **Content-Type** الى
+   `POST /v1/pipeline/submit`) وغيّر محدد **Content-Type** الى
    `application/x-norito`.
 3. Use a opção **binary** (ou "Arquivo" no Swagger e "Binário/Arquivo" no RapiDoc)
    وارفع ملف `.norito`. Verifique se o produto está funcionando corretamente.
@@ -176,12 +176,12 @@ Gateway de acesso:
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
 O dispositivo elétrico não pode ser instalado em `transaction_fixtures.manifest.json` e a carga útil é baixada
 `cargo xtask norito-rpc-fixtures`. Eu tenho Torii em um canário ou `curl`
-proxy try-it (`https://docs.sora.example/proxy/v2/pipeline/submit`)
+proxy try-it (`https://docs.sora.example/proxy/v1/pipeline/submit`)
 Não use nenhum recurso.
 
 ## المراقبة والعمليات
@@ -196,7 +196,7 @@ O `X-TryIt-Auth` é usado para definir o stdout do arquivo de saída do computad
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
 مفاتيح البيئة:

@@ -26,7 +26,7 @@ tashqi chiptalarni ta'qib qilmasdan dalillar.
 | hamkor-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Tugallangan sana: 2025-04-26 | sorafs-op-01; orchestrator doc parite dalillariga e'tibor qaratildi. |
 | hamkor-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Tugallangan sana: 2025-04-26 | sorafs-op-02; tasdiqlangan Norito/temetrik o'zaro bog'lanishlar. |
 | hamkor-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Tugallangan sana: 2025-04-26 | sorafs-op-03; ko'p manbali o'chirish mashqlarini bajardi. |
-| hamkor-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Tugallangan sana: 2025-04-26 | torii-int-01; Torii `/v2/pipeline` + Ovqatlanish kitobini ko'rib chiqing. |
+| hamkor-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Tugallangan sana: 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Ovqatlanish kitobini ko'rib chiqing. |
 | hamkor-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Tugallangan sana: 2025-04-26 | torii-int-02; ulangan. Skrinshotni yangilash (docs-preview/w1 #2). |
 | hamkor-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Tugallangan sana: 2025-04-26 | sdk-partner-01; JS/Swift oshpazlik kitobi bo'yicha fikr-mulohazalar + ISO ko'prigi aql-idrok tekshiruvi. |
 | hamkor-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Tugallangan sana: 2025-04-26 | sdk-partner-02; muvofiqlik 2025-04-11 tozalandi, Ulanish/telemetriya qaydlariga qaratilgan. |

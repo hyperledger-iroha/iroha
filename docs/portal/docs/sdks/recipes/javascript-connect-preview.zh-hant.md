@@ -8,7 +8,7 @@ source_hash: 0df3d72cb822e0fef5201d5a5d25b8588378f51e3e3106c73def669d68b1c674
 source_last_modified: "2025-12-29T18:16:35.166929+00:00"
 translation_last_reviewed: 2026-02-07
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
 translator: machine-google-reviewed
 ---
@@ -19,7 +19,7 @@ translator: machine-google-reviewed
 `ToriiClient.openConnectWebSocket()` 公開的 WebSocket 撥號器。劇本
 反映了 JS SDK 路線圖的 Connect 部分：它具有確定性
 預覽 URI、記錄隊列深度遙測並打開規範
-使用 `ws` 包的 `/v2/connect/ws` 端點，以便 Node.js 應用程序可以執行
+使用 `ws` 包的 `/v1/connect/ws` 端點，以便 Node.js 應用程序可以執行
 與瀏覽器的流程相同。
 
 <樣本下載

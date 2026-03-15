@@ -53,7 +53,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Конфиденциальные memo-конверты теперь поставляются с каноническим фикстуром в `fixtures/confidential/encrypted_payload_v1.json`. Набор данных включает положительный v1-конверт и негативные поврежденные образцы, чтобы SDK могли проверять паритет парсинга. Rust data-model тесты (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) и Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) загружают фикстуру напрямую, гарантируя, что Norito-кодирование, поверхности ошибок и регрессионное покрытие остаются согласованными по мере эволюции кодека.
 
-Swift SDKs теперь могут выдавать shield-инструкции без bespoke JSON glue: соберите `ShieldRequest` с 32-байтным commitment ноты, зашифрованным payload и debit metadata, затем вызовите `IrohaSDK.submit(shield:keypair:)` (или `submitAndWait`), чтобы подписать и отправить транзакцию через `/v2/pipeline/transactions`. Хелпер валидирует длины commitments, пропускает `ConfidentialEncryptedPayload` через Norito encoder и зеркалит layout `zk::Shield`, описанный ниже, чтобы кошельки оставались синхронизированы с Rust.
+Swift SDKs теперь могут выдавать shield-инструкции без bespoke JSON glue: соберите `ShieldRequest` с 32-байтным commitment ноты, зашифрованным payload и debit metadata, затем вызовите `IrohaSDK.submit(shield:keypair:)` (или `submitAndWait`), чтобы подписать и отправить транзакцию через `/v1/pipeline/transactions`. Хелпер валидирует длины commitments, пропускает `ConfidentialEncryptedPayload` через Norito encoder и зеркалит layout `zk::Shield`, описанный ниже, чтобы кошельки оставались синхронизированы с Rust.
 
 ## Коммитменты консенсуса и gating возможностей
 - Заголовки блоков раскрывают `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; digest участвует в хэше консенсуса и должен совпадать с локальным представлением registry для принятия блока.
@@ -84,7 +84,7 @@ Swift SDKs теперь могут выдавать shield-инструкции 
 
 #### Мониторинг переходов через Torii
 
-Кошельки и аудиторы опрашивают `GET /v2/confidential/assets/{definition_id}/transitions`, чтобы проверить активную `AssetConfidentialPolicy`. JSON payload всегда включает канонический asset id, последнюю наблюдаемую высоту блока, `current_mode` политики, режим, эффективный на этой высоте (окна конверсии временно отдают `Convertible`), и ожидаемые идентификаторы параметров `vk_set_hash`/Poseidon/Pedersen. Когда переход governance ожидается, ответ также включает:
+Кошельки и аудиторы опрашивают `GET /v1/confidential/assets/{definition_id}/transitions`, чтобы проверить активную `AssetConfidentialPolicy`. JSON payload всегда включает канонический asset id, последнюю наблюдаемую высоту блока, `current_mode` политики, режим, эффективный на этой высоте (окна конверсии временно отдают `Convertible`), и ожидаемые идентификаторы параметров `vk_set_hash`/Poseidon/Pedersen. Когда переход governance ожидается, ответ также включает:
 
 - `transition_id` — audit handle, возвращенный `ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -132,7 +132,7 @@ Swift SDKs теперь могут выдавать shield-инструкции 
 
 1. **Подготовить реестры:** Активировать все записи verifier и параметров, которые требуются целевой политике. Узлы объявляют получившиеся `conf_features`, чтобы peers могли проверить совместимость.
 2. **Спланировать переход:** Отправить `ScheduleConfidentialPolicyTransition` с `effective_height`, учитывающей `policy_transition_delay_blocks`. При движении к `ShieldedOnly` указать окно конверсии (`window ≥ policy_transition_window_blocks`).
-3. **Опубликовать инструкции для операторов:** Зафиксировать полученный `transition_id` и распространить runbook on/off-ramp. Кошельки и аудиторы подписываются на `/v2/confidential/assets/{id}/transitions`, чтобы узнать высоту открытия окна.
+3. **Опубликовать инструкции для операторов:** Зафиксировать полученный `transition_id` и распространить runbook on/off-ramp. Кошельки и аудиторы подписываются на `/v1/confidential/assets/{id}/transitions`, чтобы узнать высоту открытия окна.
 4. **Применение окна:** Когда окно открывается, runtime переключает политику в `Convertible`, эмитирует `PolicyTransitionWindowOpened { transition_id }` и начинает отклонять конфликтующие governance-запросы.
 5. **Финализировать или отменить:** На `effective_height` runtime проверяет предпосылки перехода (нулевое прозрачное предложение, отсутствие emergency withdrawals и т.п.). Успех переключает политику в запрошенный режим; ошибка эмитирует `PolicyTransitionPrerequisiteFailed`, очищает pending transition и оставляет политику без изменений.
 6. **Обновления схемы:** После успешного перехода governance повышает версию схемы актива (например, `asset_definition.v2`), а CLI tooling требует `confidential_policy` при сериализации manifests. Документы по апгрейду genesis инструктируют операторов добавить настройки политик и отпечатки registry перед перезапуском валидаторов.
@@ -252,7 +252,7 @@ Observer узлы, намеренно пропускающие проверку 
 - Иерархия derivation ключей на аккаунт:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Зашифрованные payloads notes используют AEAD с ECDH-derived shared keys; опциональные auditor view keys могут быть прикреплены к outputs в соответствии с политикой актива.
-- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты для расшифровки memo и helper `iroha app zk envelope` для создания/инспекции Norito memo envelopes офлайн. Torii предоставляет тот же flow derivation через `POST /v2/confidential/derive-keyset`, возвращая hex и base64 формы, чтобы кошельки могли программно получать иерархии ключей.
+- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты для расшифровки memo и helper `iroha app zk envelope` для создания/инспекции Norito memo envelopes офлайн. Torii предоставляет тот же flow derivation через `POST /v1/confidential/derive-keyset`, возвращая hex и base64 формы, чтобы кошельки могли программно получать иерархии ключей.
 
 ## Газ, лимиты и DoS-контроли
 - Детерминированный gas schedule:

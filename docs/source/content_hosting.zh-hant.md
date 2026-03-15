@@ -28,7 +28,7 @@ translator: machine-google-reviewed
   `sponsor:<uaid>`)、保留策略佔位符和 MIME 覆蓋。
 - **重複數據刪除**：tar 有效負載被分塊（默認 64KiB）並每個存儲一次
   帶有引用計數的哈希值；退役一個包會減少並修剪塊。
-- **服務**：Torii 暴露 `GET /v2/content/{bundle}/{path}`。響應流
+- **服務**：Torii 暴露 `GET /v1/content/{bundle}/{path}`。響應流
   直接來自塊存儲，`ETag` = 文件哈希，`Accept-Ranges: bytes`，
   範圍支持和源自清單的緩存控制。閱讀榮譽
   清單身份驗證模式：角色門控和讚助商門控響應需要規範

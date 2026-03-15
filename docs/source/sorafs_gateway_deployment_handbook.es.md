@@ -84,7 +84,7 @@ cumplimiento que los operadores deben mantener.
 
 | Paso | Descripcion | Criterio de aceptacion |
 |------|-------------|------------------------|
-| 1 | Desplegar nuevas instancias de gateway (green) junto al pool blue existente. | healthz + `/v2/sorafs/storage/status` pasan. |
+| 1 | Desplegar nuevas instancias de gateway (green) junto al pool blue existente. | healthz + `/v1/sorafs/storage/status` pasan. |
 | 2 | Registrar hosts green via update de registro de admision; publicar sobre de governance. | `torii.sorafs_gateway.direct_mode.plan` dry-run muestra el mapping vanity esperado. |
 | 3 | Desviar una pequena porcion de trafico (5%) usando tokens de orquestacion apuntados a `stage-gw`. | Dashboard `grafana_sorafs_gateway_load_tests.json` muestra <=1% de rechazo. |
 | 4 | Expandir al 50% cuando la telemetria permanezca dentro de SLOs por 30 minutos. | La pendiente de `torii_sorafs_stream_token_denials_total` cerca de cero; `scripts/sorafs_direct_mode_smoke.sh` pasa contra endpoints de gateway staging. |

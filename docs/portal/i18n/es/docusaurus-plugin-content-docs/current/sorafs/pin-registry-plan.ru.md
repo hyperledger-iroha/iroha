@@ -72,7 +72,7 @@ El contrato, las formas Torii y CLI crean variantes idénticas.
 
 | Componente | Задача | Ответственные |
 |-----------|--------|---------------|
-| Servicios Torii | Экспонировать `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (búsqueda), `/v2/sorafs/aliases` (lista/enlace), `/v2/sorafs/replication` (pedidos/recibos). Обеспечить пагинацию + фильтрацию. | Redes TL / Core Infraestructura |
+| Servicios Torii | Экспонировать `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (lista/enlace), `/v1/sorafs/replication` (pedidos/recibos). Обеспечить пагинацию + фильтрацию. | Redes TL / Core Infraestructura |
 | Аттестация | Включать высоту/хэш registro в ответы; Agregue los certificados de estructura Norito, actualmente SDK. | Infraestructura básica |
 | CLI | Conecte `sorafs_manifest_stub` o la nueva CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
 | SDK | Сгенерировать клиентские enlaces (Rust/Go/TS) из схемы Norito; Realice pruebas de integración. | Equipos SDK |
@@ -123,10 +123,10 @@ Alertas:
 5. Actualizar documentos/runbooks y eliminar puntos de la hoja de ruta que se pueden guardar.
 
 El punto de control SF-4 debe estar conectado a este plan de progreso de la tecnología.
-La forma REST es una forma de configurar puntos finales certificados:- `GET /v2/sorafs/pin` y `GET /v2/sorafs/pin/{digest}` manifiestan manifiestos с
+La forma REST es una forma de configurar puntos finales certificados:- `GET /v1/sorafs/pin` y `GET /v1/sorafs/pin/{digest}` manifiestan manifiestos с
   enlaces de alias, pedidos de réplicas y certificados de objetos, производным от
   хэша последнего блока.
-- `GET /v2/sorafs/aliases` y `GET /v2/sorafs/replication` activos públicos
+- `GET /v1/sorafs/aliases` y `GET /v1/sorafs/replication` activos públicos
   alias de catálogo y trabajo pendiente заказов репликации с консистентной пагинацией и
   estado del filtro.
 

@@ -61,7 +61,7 @@ Sidebar_label: Добавить комментарий
 - استخدم مكدس Axum الخاص بـ Torii مع حمولات `norito::json`.
 - Установите Norito в исходное состояние (`PinResultV1` и `FetchErrorV1`).
 
-- ✅ أصبح المسار `/v2/sorafs/por/ingestion/{manifest_digest_hex}` يعرض عمق الـ отставание وأقدم эпоха/крайний срок وأحدث طوابع النجاح/الفشل Для `sorafs_node::NodeHandle::por_ingestion_status` и Torii для `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total`. للّوحات.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883 】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ أصبح المسار `/v1/sorafs/por/ingestion/{manifest_digest_hex}` يعرض عمق الـ отставание وأقدم эпоха/крайний срок وأحدث طوابع النجاح/الفشل Для `sorafs_node::NodeHandle::por_ingestion_status` и Torii для `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total`. للّوحات.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883 】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. المجدول وفرض الحصص
 

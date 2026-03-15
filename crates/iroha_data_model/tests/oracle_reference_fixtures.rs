@@ -475,7 +475,7 @@ fn follow_connector_request(
         connector_id: "twitter-follow".to_string(),
         connector_version: 1,
         method: ConnectorRequestMethod::Get,
-        endpoint: "/v2/twitter/follow".to_string(),
+        endpoint: "/v1/twitter/follow".to_string(),
         query,
         headers,
         body_hash: Hash::new(b""),

@@ -11,21 +11,21 @@ Contents
 ## Endpoints
 
 Attachments (store sanitized bytes with metadata):
-- `POST /v2/zk/attachments` — store a new attachment (body = bytes, sanitized on ingest)
-- `GET  /v2/zk/attachments` — list stored attachments (JSON array)
-- `GET  /v2/zk/attachments/{id}` — fetch stored attachment bytes by id
-- `DELETE /v2/zk/attachments/{id}` — delete an attachment
+- `POST /v1/zk/attachments` — store a new attachment (body = bytes, sanitized on ingest)
+- `GET  /v1/zk/attachments` — list stored attachments (JSON array)
+- `GET  /v1/zk/attachments/{id}` — fetch stored attachment bytes by id
+- `DELETE /v1/zk/attachments/{id}` — delete an attachment
 
 Background prover reports (non‑consensus verification):
-- `GET    /v2/zk/prover/reports` — list reports (JSON array)
-- `GET    /v2/zk/prover/reports/{id}` — fetch one report (JSON)
-- `DELETE /v2/zk/prover/reports/{id}` — delete a report
+- `GET    /v1/zk/prover/reports` — list reports (JSON array)
+- `GET    /v1/zk/prover/reports/{id}` — fetch one report (JSON)
+- `DELETE /v1/zk/prover/reports/{id}` — delete a report
 
 IVM prove helper (non-consensus proof generation):
-- `POST   /v2/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only)
-- `POST   /v2/zk/ivm/prove` — submit a prove job for execution-derived `IvmProved` payload (returns `{ job_id }`)
-- `GET    /v2/zk/ivm/prove/{job_id}` — poll job status (`pending|running|done|error`)
-- `DELETE /v2/zk/ivm/prove/{job_id}` — delete/cancel a job from the in-memory cache
+- `POST   /v1/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only)
+- `POST   /v1/zk/ivm/prove` — submit a prove job for execution-derived `IvmProved` payload (returns `{ job_id }`)
+- `GET    /v1/zk/ivm/prove/{job_id}` — poll job status (`pending|running|done|error`)
+- `DELETE /v1/zk/ivm/prove/{job_id}` — delete/cancel a job from the in-memory cache
 
 Notes
 - Attachment id is a deterministic Blake2b‑32 (hex, lowercase) of the sanitized body bytes.
@@ -36,8 +36,8 @@ Notes
 - Prover reports persist under `./storage/torii/zk_prover/reports/{id}.json`.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
-- `/v2/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri-v1` (including `stark/fri-v1/...` variants) (must be compatible with `ivm-execution-v1`).
-- `/v2/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
+- `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri-v1` (including `stark/fri-v1/...` variants) (must be compatible with `ivm-execution-v1`).
+- `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri-v1` (including `stark/fri-v1/...` variants) when the node is built with `zk-stark`.
 - STARK verification (`stark/fri-v1` family) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).
 - For `halo2/*` and `stark/fri-v1` backends, proof bytes are expected to be a Norito-encoded `OpenVerifyEnvelope`.
 - For STARK wrappers, `OpenVerifyEnvelope.public_inputs` carries schema-descriptor bytes; concrete public input values are carried in `StarkFriOpenProofV1.public_inputs`.
@@ -88,10 +88,10 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
 - `torii.zk_prover_allowed_backends` / `torii.zk_prover_allowed_circuits` (string list)
   - Allowlists for prover scope (prefix match, empty = allow all).
 - `torii.zk_ivm_prove_max_inflight` / `torii.zk_ivm_prove_max_queue`
-  - Concurrency controls for the IVM prove helper endpoint (`POST /v2/zk/ivm/prove`).
+  - Concurrency controls for the IVM prove helper endpoint (`POST /v1/zk/ivm/prove`).
   - When saturated, Torii rejects new jobs with `429` and a `Retry-After` hint.
 - `torii.zk_ivm_prove_job_ttl_secs` / `torii.zk_ivm_prove_job_max_entries`
-  - Retention controls for the in-memory prove job cache used by `/v2/zk/ivm/prove/{job_id}`.
+  - Retention controls for the in-memory prove job cache used by `/v1/zk/ivm/prove/{job_id}`.
   - Jobs older than `zk_ivm_prove_job_ttl_secs` are evicted (pending/running jobs are cancelled best-effort to free capacity).
 - `torii.max_content_len` (bytes)
   - Global HTTP request body limit; applies to attachments uploads as an upper bound.
@@ -102,7 +102,7 @@ Access control and rate limiting:
 - `torii.query_rate_per_authority_per_sec` (Option<u32>) and `torii.query_burst_per_authority` (Option<u32>)
   - Per-authority rate limiter for app API endpoints (attachments and prover routes).
 - `torii.tx_rate_per_authority_per_sec` (Option<u32>) and `torii.tx_burst_per_authority` (Option<u32>)
-  - Per-authority transaction submission rate limiter for `/v2/transaction` and other tx-producing endpoints.
+  - Per-authority transaction submission rate limiter for `/v1/transaction` and other tx-producing endpoints.
 - `torii.api_allow_cidrs` (list of CIDRs)
   - Requests from these networks bypass the rate limiter (still subject to body size limits and tokens, if enabled).
 
@@ -117,11 +117,11 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Storage hygiene: deleting an attachment removes both `.bin` and `.json`; deleting a report removes the corresponding `.json` under `zk_prover/reports`.
 - Payloads: the prover expects `ProofAttachment`/`ProofAttachmentList` payloads (Norito or JSON). ZK1/TLV envelopes are tagged but rejected as top‑level payloads.
 - Key bytes: when a registry entry omits inline VK bytes, the prover loads bytes from `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
-- Proving keys: for `halo2/ipa`, the IVM prove helper (`/v2/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
+- Proving keys: for `halo2/ipa`, the IVM prove helper (`/v1/zk/ivm/prove`) loads proving key bytes from the same directory using `<backend>__<name>.pk` naming.
   The `.pk` file must match the resolved verifying key and uses Halo2 `SerdeFormat::Processed` serialization.
   The STARK path (`stark/fri-v1`) does not require a separate `.pk` artifact.
-- Privacy: neither `/v2/zk/ivm/derive` nor `/v2/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
-- Execution semantics: `/v2/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and derives the authoritative `IvmProved` payload on-node before generating `ivm-execution-v1` proof attachments (`halo2/ipa` or `stark/fri-v1`).
+- Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
+- Execution semantics: `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and derives the authoritative `IvmProved` payload on-node before generating `ivm-execution-v1` proof attachments (`halo2/ipa` or `stark/fri-v1`).
 - Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }` where optional `proved` is treated as a strict consistency check against node-derived execution output.
 - Nodes can still deterministically replay bytecode during admission as an additional safety check. `pipeline.ivm_proved.skip_replay` controls whether that extra replay check is skipped for full-semantics execution circuits.
 - Metrics: `torii_zk_ivm_prove_inflight` (jobs currently proving) and `torii_zk_ivm_prove_queued` (jobs queued waiting for an inflight slot) expose IVM prove helper queue pressure.
@@ -135,26 +135,26 @@ Using curl:
 curl -sS -X POST \
   -H 'Content-Type: application/json' \
   --data-binary @proof.json \
-  http://localhost:8080/api/v2/zk/attachments | jq .
+  http://localhost:8080/api/v1/zk/attachments | jq .
 
 # List attachments
-curl -sS http://localhost:8080/api/v2/zk/attachments | jq .
+curl -sS http://localhost:8080/api/v1/zk/attachments | jq .
 
 # Download attachment bytes
-curl -sS http://localhost:8080/api/v2/zk/attachments/<id> -o downloaded.bin
+curl -sS http://localhost:8080/api/v1/zk/attachments/<id> -o downloaded.bin
 
 # List background prover reports (if enabled)
-curl -sS http://localhost:8080/api/v2/zk/prover/reports | jq .
+curl -sS http://localhost:8080/api/v1/zk/prover/reports | jq .
 
 # Fetch a single report
-curl -sS http://localhost:8080/api/v2/zk/prover/reports/<id> | jq .
+curl -sS http://localhost:8080/api/v1/zk/prover/reports/<id> | jq .
 ```
 
 With tokens/rate limits:
 
 ```bash
 # When require_api_token=true and tokens are configured
-curl -sS -H 'x-api-token: my-token' http://localhost:8080/api/v2/zk/attachments
+curl -sS -H 'x-api-token: my-token' http://localhost:8080/api/v1/zk/attachments
 ```
 
 CLI shortcuts (`iroha_cli`):
@@ -180,4 +180,4 @@ iroha app zk ivm delete --job-id <job_id>
 iroha app zk ivm derive-pk --vk ./halo2_ipa__ivm-exec-v1.vk --out ./halo2_ipa__ivm-exec-v1.pk
 ```
 
-See also: the ZK vote tally convenience endpoint (`POST /v2/zk/vote/tally`) and CLI helper `iroha app zk vote tally` for inspecting election tallies.
+See also: the ZK vote tally convenience endpoint (`POST /v1/zk/vote/tally`) and CLI helper `iroha app zk vote tally` for inspecting election tallies.

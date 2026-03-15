@@ -25,7 +25,7 @@ Torii PIN-REGISTIRY اجازت کے ساتھ اختتامی نقطہ ، اور O
 
 - `npm` یا `pnpm` کے ساتھ نوڈ 18.18+۔
 - `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli` سے۔
-- Torii URL جو `/v2/sorafs/*` کے علاوہ ایک اتھارٹی اکاؤنٹ/نجی کلید کو بے نقاب کرتا ہے جو ظاہر اور عرفی نام بھیج سکتا ہے۔
+- Torii URL جو `/v1/sorafs/*` کے علاوہ ایک اتھارٹی اکاؤنٹ/نجی کلید کو بے نقاب کرتا ہے جو ظاہر اور عرفی نام بھیج سکتا ہے۔
 - OIDC جاری کرنے والا (گٹ ہب ایکشنز ، گٹ لیب ، ورک بوجھ کی شناخت وغیرہ) `SIGSTORE_ID_TOKEN` جاری کرنے کے لئے۔
 - اختیاری: خشک رنز کے لئے `examples/sorafs_cli_quickstart.sh` اور Github/gitlab ورک فلو سہاروں کے لئے `docs/source/sorafs_ci_templates.md`۔
 - کوشش کریں کہ اس کی تشکیل کریں
@@ -837,7 +837,7 @@ SoraFS پر پوسٹ کرنے کے لئے اب ملٹی سورس بازیافت 
 
 نوکری کو متحرک کرنے سے پہلے مندرجہ ذیل ذخیرہ راز/متغیرات کی تشکیل کریں:| نام | مقصد |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | میزبان Torii کو بے نقاب `/v2/sorafs/pin/register`۔ |
+| `DOCS_SORAFS_TORII_URL` | میزبان Torii کو بے نقاب `/v1/sorafs/pin/register`۔ |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | گذارشات کے ساتھ رجسٹرڈ ایپچ شناخت کنندہ۔ |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | ظاہر جمع کرانے کے لئے اتھارٹی پر دستخط کرنا۔ |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` جب `true` ہے تو عرف ٹوپل ظاہر ہونے کا پابند ہے۔ |

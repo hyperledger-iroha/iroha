@@ -48,7 +48,7 @@ Torii. Каждый раздел напрямую соответствует del
 
 - Убедитесь, что процесс Torii имеет доступ на чтение/запись к `data_dir`.
 - Подтвердите, что узел объявляет ожидаемую ёмкость через
-  `GET /v2/sorafs/capacity/state` после записи декларации.
+  `GET /v1/sorafs/capacity/state` после записи декларации.
 - При включённом сглаживании дашборды показывают как сырые, так и сглаженные
   счётчики GiB·hour/PoR, чтобы подчёркивать тренды без джиттера рядом с
   мгновенными значениями.
@@ -98,8 +98,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 После запуска Torii можно получить те же артефакты через HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Оба эндпоинта обслуживаются встроенным storage worker, поэтому CLI smoke-тесты и
@@ -112,7 +112,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Отправьте manifest в кодировке base64:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -122,7 +122,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Получите закреплённые данные:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -139,7 +139,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Перезапустите процесс Torii (или весь узел).
 3. Повторно отправьте запрос fetch. Payload должен по-прежнему извлекаться, а digest в
    ответе должен совпасть с предшествующим перезапуску.
-4. Проверьте `GET /v2/sorafs/storage/state`, чтобы убедиться, что `bytes_used` отражает
+4. Проверьте `GET /v1/sorafs/storage/state`, чтобы убедиться, что `bytes_used` отражает
    сохранённые manifests после перезагрузки.
 
 ## 4. Тест отказа по квоте
@@ -157,7 +157,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Запросите PoR-выборку:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -182,7 +182,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - Дашборды должны отслеживать:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` и `torii_sorafs_storage_fetch_inflight`
-  - счётчики успехов/неудач PoR, публикуемые через `/v2/sorafs/capacity/state`
+  - счётчики успехов/неудач PoR, публикуемые через `/v1/sorafs/capacity/state`
   - попытки публикации settlement через `sorafs_node_deal_publish_total{result=success|failure}`
 
 Следование этим упражнениям гарантирует, что встроенный storage worker способен

@@ -48,17 +48,17 @@ const EMPTY_QUERY_ENVELOPE: &str = r#"{
     "fetch_size": null,
     "select": null
 }"#;
-const ACCOUNTS_TRANSACTIONS_CTX: &str = "/v2/accounts/{account_id}/transactions";
-const ACCOUNTS_TRANSACTIONS_QUERY_CTX: &str = "/v2/accounts/{account_id}/transactions/query";
-const ACCOUNTS_PERMISSIONS_CTX: &str = "/v2/accounts/{account_id}/permissions";
-const ACCOUNTS_ASSETS_CTX: &str = "/v2/accounts/{account_id}/assets";
-const ACCOUNTS_ASSETS_QUERY_CTX: &str = "/v2/accounts/{account_id}/assets/query";
-const KAIGI_RELAY_DETAIL_CTX: &str = "/v2/kaigi/relays/{relay_id}";
-const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v2/nexus/public_lanes/{lane_id}/stake";
-const REPO_AGREEMENTS_ENDPOINT: &str = "/v2/repo/agreements";
-const OFFLINE_ALLOWANCES_ENDPOINT: &str = "/v2/offline/allowances";
-const OFFLINE_REVOCATIONS_ENDPOINT: &str = "/v2/offline/revocations";
-const OFFLINE_REVOCATIONS_QUERY_ENDPOINT: &str = "/v2/offline/revocations/query";
+const ACCOUNTS_TRANSACTIONS_CTX: &str = "/v1/accounts/{account_id}/transactions";
+const ACCOUNTS_TRANSACTIONS_QUERY_CTX: &str = "/v1/accounts/{account_id}/transactions/query";
+const ACCOUNTS_PERMISSIONS_CTX: &str = "/v1/accounts/{account_id}/permissions";
+const ACCOUNTS_ASSETS_CTX: &str = "/v1/accounts/{account_id}/assets";
+const ACCOUNTS_ASSETS_QUERY_CTX: &str = "/v1/accounts/{account_id}/assets/query";
+const KAIGI_RELAY_DETAIL_CTX: &str = "/v1/kaigi/relays/{relay_id}";
+const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v1/nexus/public_lanes/{lane_id}/stake";
+const REPO_AGREEMENTS_ENDPOINT: &str = "/v1/repo/agreements";
+const OFFLINE_ALLOWANCES_ENDPOINT: &str = "/v1/offline/allowances";
+const OFFLINE_REVOCATIONS_ENDPOINT: &str = "/v1/offline/revocations";
+const OFFLINE_REVOCATIONS_QUERY_ENDPOINT: &str = "/v1/offline/revocations/query";
 
 fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     let filter = FilterExpr::Eq(FieldPath(field.to_string()), json::Value::from(literal));
@@ -99,7 +99,7 @@ async fn transactions_endpoint_accepts_encoded_account_segments() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/accounts/{segment}/transactions"))
+                    .uri(format!("/v1/accounts/{segment}/transactions"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -124,7 +124,7 @@ async fn transactions_endpoint_rejects_invalid_account_segment() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/transactions"))
+                .uri(format!("/v1/accounts/{literal}/transactions"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -141,7 +141,7 @@ async fn transactions_endpoint_accepts_default_domain_without_suffix() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/accounts/{segment}/transactions"))
+                    .uri(format!("/v1/accounts/{segment}/transactions"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -167,7 +167,7 @@ async fn transactions_query_accepts_default_domain_without_suffix() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v2/accounts/{segment}/transactions/query"))
+                    .uri(format!("/v1/accounts/{segment}/transactions/query"))
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(EMPTY_QUERY_ENVELOPE))
                     .unwrap(),
@@ -201,7 +201,7 @@ async fn transactions_endpoint_rejects_public_key_segments() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/transactions"))
+                .uri(format!("/v1/accounts/{literal}/transactions"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -231,7 +231,7 @@ async fn invalid_account_segments_increment_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/transactions"))
+                .uri(format!("/v1/accounts/{literal}/transactions"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -266,7 +266,7 @@ async fn local8_segments_increment_invalid_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/transactions"))
+                .uri(format!("/v1/accounts/{literal}/transactions"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -294,7 +294,7 @@ async fn transactions_query_endpoint_accepts_encoded_account_segments() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v2/accounts/{segment}/transactions/query"))
+                    .uri(format!("/v1/accounts/{segment}/transactions/query"))
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(EMPTY_QUERY_ENVELOPE))
                     .unwrap(),
@@ -321,7 +321,7 @@ async fn transactions_query_endpoint_rejects_invalid_account_segment() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{literal}/transactions/query"))
+                .uri(format!("/v1/accounts/{literal}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(EMPTY_QUERY_ENVELOPE))
                 .unwrap(),
@@ -348,7 +348,7 @@ async fn transactions_query_invalid_segments_increment_metric() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{literal}/transactions/query"))
+                .uri(format!("/v1/accounts/{literal}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(EMPTY_QUERY_ENVELOPE))
                 .unwrap(),
@@ -383,7 +383,7 @@ async fn transactions_query_rejects_checksum_mismatch() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{bad_literal}/transactions/query"))
+                .uri(format!("/v1/accounts/{bad_literal}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(EMPTY_QUERY_ENVELOPE))
                 .unwrap(),
@@ -415,7 +415,7 @@ async fn transactions_query_placeholder_literal_rejected_without_shim() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{literal}/transactions/query"))
+                .uri(format!("/v1/accounts/{literal}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(EMPTY_QUERY_ENVELOPE))
                 .unwrap(),
@@ -443,7 +443,7 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v2/accounts/{segment}/transactions/query"))
+                    .uri(format!("/v1/accounts/{segment}/transactions/query"))
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(envelope.clone()))
                     .unwrap(),
@@ -484,7 +484,7 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{literal}/transactions/query"))
+                .uri(format!("/v1/accounts/{literal}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(EMPTY_QUERY_ENVELOPE))
                 .unwrap(),
@@ -507,7 +507,7 @@ async fn assets_endpoint_accepts_encoded_account_segments() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/accounts/{segment}/assets?limit=1"))
+                    .uri(format!("/v1/accounts/{segment}/assets?limit=1"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -532,7 +532,7 @@ async fn assets_endpoint_accepts_default_domain_without_suffix() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/accounts/{segment}/assets?limit=1"))
+                    .uri(format!("/v1/accounts/{segment}/assets?limit=1"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -557,7 +557,7 @@ async fn assets_endpoint_rejects_invalid_segment() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/assets?limit=1"))
+                .uri(format!("/v1/accounts/{literal}/assets?limit=1"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -582,7 +582,7 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/assets?limit=1"))
+                .uri(format!("/v1/accounts/{literal}/assets?limit=1"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -617,7 +617,7 @@ async fn assets_endpoint_rejects_public_key_segments() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/assets?limit=1"))
+                .uri(format!("/v1/accounts/{literal}/assets?limit=1"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -640,7 +640,7 @@ async fn assets_query_endpoint_accepts_encoded_account_segments() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v2/accounts/{segment}/assets/query"))
+                    .uri(format!("/v1/accounts/{segment}/assets/query"))
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(EMPTY_QUERY_ENVELOPE))
                     .unwrap(),
@@ -675,7 +675,7 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{literal}/assets/query"))
+                .uri(format!("/v1/accounts/{literal}/assets/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(EMPTY_QUERY_ENVELOPE))
                 .unwrap(),
@@ -712,7 +712,7 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{literal}/assets/query"))
+                .uri(format!("/v1/accounts/{literal}/assets/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(EMPTY_QUERY_ENVELOPE))
                 .unwrap(),
@@ -735,7 +735,7 @@ async fn permissions_endpoint_accepts_encoded_account_segments() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/accounts/{segment}/permissions?limit=1"))
+                    .uri(format!("/v1/accounts/{segment}/permissions?limit=1"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -760,7 +760,7 @@ async fn permissions_endpoint_accepts_default_domain_without_suffix() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/accounts/{segment}/permissions?limit=1"))
+                    .uri(format!("/v1/accounts/{segment}/permissions?limit=1"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -793,7 +793,7 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{literal}/permissions?limit=1"))
+                .uri(format!("/v1/accounts/{literal}/permissions?limit=1"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -820,7 +820,7 @@ async fn explorer_domains_query_accepts_encoded_account_params() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/explorer/domains?limit=1&owned_by={literal}"))
+                    .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -844,7 +844,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
     let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
-    let context = "/v2/explorer/domains?owned_by";
+    let context = "/v1/explorer/domains?owned_by";
     let before = metrics
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
@@ -854,7 +854,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/explorer/domains?limit=1&owned_by={literal}"))
+                .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -881,7 +881,7 @@ async fn explorer_account_detail_accepts_encoded_account_segments() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/explorer/accounts/{literal}"))
+                    .uri(format!("/v1/explorer/accounts/{literal}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -905,7 +905,7 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
     let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
         .reason();
-    let context = "/v2/explorer/accounts/{account_id}";
+    let context = "/v1/explorer/accounts/{account_id}";
     let before = metrics
         .torii_address_invalid_total
         .with_label_values(&[context, reason])
@@ -915,7 +915,7 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/explorer/accounts/{literal}"))
+                .uri(format!("/v1/explorer/accounts/{literal}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -942,7 +942,7 @@ async fn explorer_account_qr_returns_svg_literal() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/explorer/accounts/{canonical}/qr"))
+                .uri(format!("/v1/explorer/accounts/{canonical}/qr"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -984,7 +984,7 @@ async fn repo_agreements_query_filter_accepts_encoded_literals() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v2/repo/agreements/query")
+                    .uri("/v1/repo/agreements/query")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(body.clone()))
                     .unwrap(),
@@ -1012,7 +1012,7 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v2/repo/agreements/query")
+                    .uri("/v1/repo/agreements/query")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(body.clone()))
                     .unwrap(),
@@ -1048,7 +1048,7 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/repo/agreements/query")
+                .uri("/v1/repo/agreements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .unwrap(),
@@ -1081,7 +1081,7 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/repo/agreements/query")
+                .uri("/v1/repo/agreements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .unwrap(),
@@ -1105,7 +1105,7 @@ async fn offline_allowances_endpoint_accepts_controller_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/offline/allowances?limit=1&controller_id={literal}"
+                        "/v1/offline/allowances?limit=1&controller_id={literal}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1132,7 +1132,7 @@ async fn offline_allowances_endpoint_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/offline/allowances?limit=1&controller_id={literal}"
+                        "/v1/offline/allowances?limit=1&controller_id={literal}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1167,7 +1167,7 @@ async fn offline_allowances_endpoint_rejects_public_key_controller() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v2/offline/allowances?limit=1&controller_id={literal}"
+                    "/v1/offline/allowances?limit=1&controller_id={literal}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1192,7 +1192,7 @@ async fn offline_allowances_query_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v2/offline/allowances/query")
+                    .uri("/v1/offline/allowances/query")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(body.clone()))
                     .unwrap(),
@@ -1219,7 +1219,7 @@ async fn offline_transfers_endpoint_accepts_controller_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/offline/transfers?limit=1&controller_id={literal}"
+                        "/v1/offline/transfers?limit=1&controller_id={literal}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1246,7 +1246,7 @@ async fn offline_transfers_endpoint_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/offline/transfers?limit=1&controller_id={literal}"
+                        "/v1/offline/transfers?limit=1&controller_id={literal}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1274,7 +1274,7 @@ async fn offline_transfers_query_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v2/offline/transfers/query")
+                    .uri("/v1/offline/transfers/query")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(body.clone()))
                     .unwrap(),
@@ -1301,7 +1301,7 @@ async fn offline_summaries_endpoint_accepts_controller_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/offline/summaries?limit=1&controller_id={literal}"
+                        "/v1/offline/summaries?limit=1&controller_id={literal}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1328,7 +1328,7 @@ async fn offline_summaries_endpoint_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/offline/summaries?limit=1&controller_id={literal}"
+                        "/v1/offline/summaries?limit=1&controller_id={literal}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1356,7 +1356,7 @@ async fn offline_summaries_query_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v2/offline/summaries/query")
+                    .uri("/v1/offline/summaries/query")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(body.clone()))
                     .unwrap(),
@@ -1383,7 +1383,7 @@ async fn offline_revocations_endpoint_accepts_filter_literals() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/offline/revocations?filter={filter}"))
+                    .uri(format!("/v1/offline/revocations?filter={filter}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1409,7 +1409,7 @@ async fn offline_revocations_endpoint_accepts_default_domain_filter_literals() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/offline/revocations?filter={filter}"))
+                    .uri(format!("/v1/offline/revocations?filter={filter}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1443,7 +1443,7 @@ async fn offline_revocations_endpoint_filter_rejects_invalid_literal() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/offline/revocations?filter={filter}"))
+                .uri(format!("/v1/offline/revocations?filter={filter}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1467,7 +1467,7 @@ async fn offline_revocations_query_filter_accepts_encoded_literals() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v2/offline/revocations/query")
+                    .uri("/v1/offline/revocations/query")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(body.clone()))
                     .unwrap(),
@@ -1495,7 +1495,7 @@ async fn offline_revocations_query_filter_accepts_default_domain_literals() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v2/offline/revocations/query")
+                    .uri("/v1/offline/revocations/query")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .body(Body::from(body.clone()))
                     .unwrap(),
@@ -1531,7 +1531,7 @@ async fn offline_revocations_query_filter_rejects_invalid_literal() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/offline/revocations/query")
+                .uri("/v1/offline/revocations/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .unwrap(),
@@ -1564,7 +1564,7 @@ async fn offline_revocations_query_filter_rejects_local8_literal() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/offline/revocations/query")
+                .uri("/v1/offline/revocations/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .unwrap(),
@@ -1587,7 +1587,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/v2/kaigi/relays/{literal}"))
+                    .uri(format!("/v1/kaigi/relays/{literal}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1612,7 +1612,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/kaigi/relays/{literal}"))
+                .uri(format!("/v1/kaigi/relays/{literal}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1637,7 +1637,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/kaigi/relays/{literal}"))
+                .uri(format!("/v1/kaigi/relays/{literal}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1663,7 +1663,7 @@ async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/kaigi/relays/{literal}"))
+                .uri(format!("/v1/kaigi/relays/{literal}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1684,7 +1684,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/nexus/public_lanes/42/stake?validator={encoded}"
+                        "/v1/nexus/public_lanes/42/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1711,7 +1711,7 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v2/nexus/public_lanes/42/stake?validator={literal}"
+                    "/v1/nexus/public_lanes/42/stake?validator={literal}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1732,7 +1732,7 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/nexus/public_lanes/42/stake?validator={encoded}"
+                        "/v1/nexus/public_lanes/42/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1769,7 +1769,7 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v2/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1803,7 +1803,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v2/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1833,7 +1833,7 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v2/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),

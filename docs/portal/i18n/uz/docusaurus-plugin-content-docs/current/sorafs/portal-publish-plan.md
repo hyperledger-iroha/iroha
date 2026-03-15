@@ -69,7 +69,7 @@ boshqaruv tekshiruvchilari qurilish artefaktlarini kuzatishi mumkin.
 
 Manifestlarni Torii ichiga surish va taxalluslarni ulash uchun `sorafs_cli manifest submit` dan foydalaning.
 `${SUBMITTED_EPOCH}` ni so'nggi konsensus davriga (dan
-`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` yoki asboblar paneli).
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` yoki asboblar paneli).
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -77,7 +77,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

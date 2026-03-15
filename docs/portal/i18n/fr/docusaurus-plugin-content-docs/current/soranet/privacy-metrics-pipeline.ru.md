@@ -75,8 +75,8 @@ SNNet-8a разворачивает двойные collectionneurs, которы
 
 ## Эндпоинты приема Torii
 
-Torii est publié pour les connexions HTTP télémétriques, les relais et les collecteurs peuvent effectuer une activation sans l'utilisation du service client. transport :- `POST /v2/soranet/privacy/event` utilise la charge utile `RecordSoranetPrivacyEventDto`. Il s'agit du `SoranetPrivacyEventV1` et du `source`. Torii vérifie les profils actifs de télémétrie, ouvre la connexion et active HTTP `202 Accepted` sur le site Le convertisseur JSON Norito vous permet d'utiliser le relais (`bucket_start_unix`, `bucket_duration_secs`) et le relais.
-- `POST /v2/soranet/privacy/share` contient la charge utile `RecordSoranetPrivacyShareDto`. Il n'y a pas de `SoranetPrivacyPrioShareV1` et je ne souhaite pas acheter `forwarded_by`, les opérateurs peuvent auditionner les collectionneurs de voitures. Les ouvertures HTTP `202 Accepted` avec le convertisseur JSON Norito, le collecteur de résumé, le bucket et le support sont disponibles ; Les appareils de validation sont compatibles avec l'appareil télémétrique `Conversion`, afin de déterminer le mode de fonctionnement du robot d'exploitation. collectionneurs. Un orchestrateur doit utiliser ces partages pour utiliser des relais, en synchronisant le prio-accumulateur Torii avec des compartiments de relais.
+Torii est publié pour les connexions HTTP télémétriques, les relais et les collecteurs peuvent effectuer une activation sans l'utilisation du service client. transport :- `POST /v1/soranet/privacy/event` utilise la charge utile `RecordSoranetPrivacyEventDto`. Il s'agit du `SoranetPrivacyEventV1` et du `source`. Torii vérifie les profils actifs de télémétrie, ouvre la connexion et active HTTP `202 Accepted` sur le site Le convertisseur JSON Norito vous permet d'utiliser le relais (`bucket_start_unix`, `bucket_duration_secs`) et le relais.
+- `POST /v1/soranet/privacy/share` contient la charge utile `RecordSoranetPrivacyShareDto`. Il n'y a pas de `SoranetPrivacyPrioShareV1` et je ne souhaite pas acheter `forwarded_by`, les opérateurs peuvent auditionner les collectionneurs de voitures. Les ouvertures HTTP `202 Accepted` avec le convertisseur JSON Norito, le collecteur de résumé, le bucket et le support sont disponibles ; Les appareils de validation sont compatibles avec l'appareil télémétrique `Conversion`, afin de déterminer le mode de fonctionnement du robot d'exploitation. collectionneurs. Un orchestrateur doit utiliser ces partages pour utiliser des relais, en synchronisant le prio-accumulateur Torii avec des compartiments de relais.
 
 Pour l'entreprise, vous avez un profil télémétrique : sur `503 Service Unavailable`, certaines mesures s'affichent. Les clients peuvent utiliser le binaire Norito (`application/x.norito`) ou Norito JSON (`application/x.norito+json`) ; Le serveur automatique s'occupe des extracteurs Torii standard.
 
@@ -155,7 +155,7 @@ L'aide permet de télécharger `SoranetSecureAggregator`, en supprimant la sorti
 
 Les gouvernements vont devoir préparer une session de suppression automatique. Pour vous aider à utiliser le `--max-suppression-ratio <0-1>`, les CI ou les opérateurs qui ont le plus d'exploitation pour votre entreprise, alors que les seaux supprimés ont été supprimés correctement (par exemple умолчанию 10%) ou когда seaux еще отсутствуют. Pot recommandé :
 
-1. Exportez NDJSON depuis le relais de points de terminaison d'administration et vers l'orchestrateur `/v2/soranet/privacy/event|share` vers `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. Exportez NDJSON depuis le relais de points de terminaison d'administration et vers l'orchestrateur `/v1/soranet/privacy/event|share` vers `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Trouver un assistant pour la politique politique :
 
    ```bash

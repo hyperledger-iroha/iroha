@@ -46,7 +46,7 @@ profile automatically, but the knobs can also be set explicitly via
 | Profile | Typical call sites | Max retries | Initial delay | Multiplier | Max backoff | Methods | Status codes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `default` | Metadata/read-only requests | 3 | 500 ms | ×2 | 5 s | `GET`, `HEAD`, `OPTIONS` | 429, 502, 503, 504 |
-| `pipeline` | `/v2/pipeline/transactions{,/status}` | 5 | 250 ms | ×1.8 | 8 s | `GET`, `POST`, `HEAD` | 408, 425, 429, 500, 502, 503, 504 |
+| `pipeline` | `/v1/pipeline/transactions{,/status}` | 5 | 250 ms | ×1.8 | 8 s | `GET`, `POST`, `HEAD` | 408, 425, 429, 500, 502, 503, 504 |
 | `streaming` | Event/SSE/WebSocket helpers | 6 | 500 ms | ×1.5 | 12 s | `GET` | 408, 425, 429, 500, 502, 503, 504 |
 
 Behavioural notes:
@@ -98,7 +98,7 @@ const client = new ToriiClient("https://torii.dev", {
 });
 
 // Force the streaming profile for a custom SSE call.
-await client._request("GET", "/v2/custom/events", {retryProfile: "streaming"});
+await client._request("GET", "/v1/custom/events", {retryProfile: "streaming"});
 ```
 
 ### Environment overrides

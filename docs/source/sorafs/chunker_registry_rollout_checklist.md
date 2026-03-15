@@ -55,7 +55,7 @@ detailed walkthrough of these steps.
    directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Verify provider adverts propagate via the discovery API:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. Exercise manifest/plan endpoints with governance headers:
    ```bash

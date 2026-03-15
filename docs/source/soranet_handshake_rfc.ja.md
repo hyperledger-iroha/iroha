@@ -164,7 +164,7 @@ MUST escalate to the governance channel.
 ## 9. Test Vectors and Fixtures
 
 To guarantee cross-implementation parity, the following fixture bundle MUST be
-maintained under `docs/assets/soranet/fixtures/v2/` and regenerated via
+maintained under `docs/assets/soranet/fixtures/v1/` and regenerated via
 `cargo xtask soranet-fixtures` whenever the protocol evolves.
 
 1. **Handshake transcripts**
@@ -195,7 +195,7 @@ maintained under `docs/assets/soranet/fixtures/v2/` and regenerated via
    - `telemetry/hourly/soranet_telemetry_baseline.norito.json` with cover ratio,
      lagging clients, and incident reference fields populated.
 5. **Harness parity**
-   - `docs/assets/soranet/fixtures/v2/manifest.json` enumerating fixture IDs,
+   - `docs/assets/soranet/fixtures/v1/manifest.json` enumerating fixture IDs,
      version labels, and hashes of each file (Blake2b-256). The `verify` mode of
      the harness MUST recompute these hashes during CI.
 

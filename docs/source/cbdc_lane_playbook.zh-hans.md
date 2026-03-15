@@ -233,7 +233,7 @@ iroha app space-directory manifest audit-bundle \
 
 1. **车道清单：** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`。
 2. **调度程序配额：** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`。
-3. **手动烟雾：** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`，清单目录指向 CBDC 文件，然后点击 `/v2/sumeragi/status` 并验证 CBDC 通道的 `lane_governance.manifest_ready=true`。
+3. **手动烟雾：** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`，清单目录指向 CBDC 文件，然后点击 `/v1/sumeragi/status` 并验证 CBDC 通道的 `lane_governance.manifest_ready=true`。
 4. **白名单一致性测试：** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` 练习 `integration_tests/tests/nexus/cbdc_whitelist.rs`，解析 `fixtures/space_directory/profile/cbdc_lane_profile.json` 和引用的能力清单，以确保每个白名单条目的 UAID、数据空间、激活纪元和许可列表与 `fixtures/space_directory/capability/` 下的 Norito 清单匹配。每当白名单或清单发生更改时，将测试日志附加到 NX-6 证据包。
 
 ### 2.2 CLI 片段
@@ -243,7 +243,7 @@ iroha app space-directory manifest audit-bundle \
 - 如果操作台正在运行远程自动化，则通过 HTTP 发布：
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ iroha app space-directory manifest audit-bundle \
 - 可以通过 POST 至 Torii 远程发出紧急撤销：
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

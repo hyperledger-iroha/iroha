@@ -51,7 +51,7 @@ qabul qilishda quyidagi talablar qo‘yiladi:
      - `profile_id=sorafs.sf1@1.0.0`
      - Belgilangan `max_span` bilan `capability=chunk_range_fetch`
      - GREASE TLV mavjud bo'lganda `allow_unknown_capabilities=<true|false>`
-   - `/v2/sorafs/providers` va `sorafs_fetch` orqali tasdiqlash; noma'lum haqida ogohlantirishlar
+   - `/v1/sorafs/providers` va `sorafs_fetch` orqali tasdiqlash; noma'lum haqida ogohlantirishlar
      qobiliyatlarni triyajlash kerak.
 3. **Ko‘p manbali tayyorlikni tasdiqlang.**
    - `sorafs_fetch` ni `--provider-advert=<path>` bilan bajaring; CLI endi ishlamayapti
@@ -187,9 +187,9 @@ sintaksisi `promtool check rules` o'tishini ta'minlash uchun o'zgarishlarni suri
 - **Haftalik status xabari.** DevRel qabul haqida qisqacha ma'lumotni tarqatadi
   ko'rsatkichlar, muhim ogohlantirishlar va yaqinlashib kelayotgan muddatlar.
 - **Hodisaga javob.** Agar `reject` yong'in haqida ogohlantirsa, chaqiruv bo'yicha muhandislar:
-  1. Torii kashfiyoti (`/v2/sorafs/providers`) orqali haqoratomuz reklamani oling.
+  1. Torii kashfiyoti (`/v1/sorafs/providers`) orqali haqoratomuz reklamani oling.
   2. Provayder kanalida reklama tekshiruvini qayta ishga tushiring va shu bilan solishtiring
-     Xatoni takrorlash uchun `/v2/sorafs/providers`.
+     Xatoni takrorlash uchun `/v1/sorafs/providers`.
   3. Keyingi yangilashdan oldin reklamani aylantirish uchun provayder bilan kelishib oling
      muddat.
 - **O'zgarish muzlaydi.** R1/R2 davomida hech qanday qobiliyat sxemasi erni o'zgartirmaydi

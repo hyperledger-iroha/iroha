@@ -31,7 +31,7 @@ Il suppose que la pile d'orchestration livrée sous SF-6 est déjà déployée (
 > **Voir aussi :** Le [Runbook d'exploitation de l'orchestrateur](./orchestrator-ops.md) approfondit les procédures par exécution (capture de scoreboard, bascules de déploiement par étapes, rollback). Utilisez les deux références ensemble lors des changements en production.
 
 ## 1. Validation pré-déploiement1. **Confirmer les entrées de gouvernance.**
-   - Tous les fournisseurs doivent publier des enveloppes `ProviderAdvertV1` avec des charges utiles de capacité de plage et des budgets de flux. Validez via `/v2/sorafs/providers` et comparez aux champs de capacité attendus.
+   - Tous les fournisseurs doivent publier des enveloppes `ProviderAdvertV1` avec des charges utiles de capacité de plage et des budgets de flux. Validez via `/v1/sorafs/providers` et comparez aux champs de capacité attendus.
    - Les instantanés de télémétrie fournissant les taux de latence/échec doivent dater de moins de 15 minutes avant chaque exécution canary.
 2. **Préparer la configuration.**
    - Persistez la configuration JSON de l'orchestrateur dans l'arborescence `iroha_config` en couches :

@@ -33,7 +33,7 @@ chaque noeud validateur/stockage retient le nombre requis d'epoques et de
 | _Default (показывает другие классы)_ | 6 часов | 30 дней | 3 | `warm` | `da.default` |
 
 Эти значения являются целостными в `torii.da_ingest.replication_policy` и аппликациях
-реклама материалов `/v2/da/ingest`. Torii перезаписывает файлы манифеста с файлом
+реклама материалов `/v1/da/ingest`. Torii перезаписывает файлы манифеста с файлом
 профиль удержания навязывает и предупреждает четырех звонящих
 des valeurs incoherentes, поскольку операторы обнаружения SDK устарели.
 
@@ -153,5 +153,5 @@ aussi prouver que les Manifests live et les ordres de replication restent
    et relancez l'audit просто конвергенция множества реплик. Для переопределений
    срочности, Ассоциация CLI с `iroha app da prove-availability` в ближайшее время
    Мощный референтный источник SRE, дайджест мемов и предварительный PDP.Регрессия регрессии в `integration_tests/tests/da/replication_policy.rs`;
-политика сохранения не соответствует `/v2/da/ingest` и проверена
+политика сохранения не соответствует `/v1/da/ingest` и проверена
 то, что манифест восстанавливает, раскрывает профиль, накладывает плутот, который указывает на намерение звонящего.

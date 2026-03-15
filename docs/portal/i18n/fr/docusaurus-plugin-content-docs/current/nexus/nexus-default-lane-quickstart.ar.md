@@ -162,7 +162,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` et crate pour Rust est également compatible avec `lane_id` pour `--lane-id` / `LaneSelector`. Utilisez le routeur de file d'attente `default_lane`. استخدم الأعلام الصريحة `--lane-id`/`--dataspace-id` فقط عند استهداف voie غير افتراضي.
 - **JS/Swift/Android.** Le SDK est disponible pour `laneId`/`lane_id` et est également disponible `/status`. Il s'agit d'une question de mise en scène et de production, ainsi que de questions liées à la mise en scène et à la production.
-- **Tests Pipeline/SSE.** Les tests effectués sont `tx_lane_id == <u32>` (`docs/source/pipeline.md`). اشترك في `/v2/pipeline/events/transactions` بهذا الشرط لإثبات أن الكتابات المرسلة بدون lane صريح تصل تحت معرف lane الاحتياطي.
+- **Tests Pipeline/SSE.** Les tests effectués sont `tx_lane_id == <u32>` (`docs/source/pipeline.md`). اشترك في `/v1/pipeline/events/transactions` بهذا الشرط لإثبات أن الكتابات المرسلة بدون lane صريح تصل تحت معرف lane الاحتياطي.
 
 ## 7. المراقبة وروابط الحوكمة- `/status` est associé à `nexus_lane_governance_sealed_total` et `nexus_lane_governance_sealed_aliases` dans Alertmanager pour le manifeste de voie. ابق هذه التنبيهات مفعلة حتى في devnets.
 - خريطة القياس للـ scheduler ولوحة حوكمة lanes (`dashboards/grafana/nexus_lanes.json`) تتوقع حقول alias/slug من الكتالوج. إذا اعدت تسمية alias، اعد تسمية دلائل Kura المقابلة كي يحافظ المدققون على مسارات حتمية (متابعة تحت NX-1).

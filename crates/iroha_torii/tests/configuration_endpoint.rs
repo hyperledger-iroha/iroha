@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level regression tests for `/v2/configuration`.
+//! Router-level regression tests for `/v1/configuration`.
 
 #[path = "fixtures.rs"]
 mod fixtures;

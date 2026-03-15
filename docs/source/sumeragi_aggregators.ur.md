@@ -70,7 +70,7 @@ translation_last_reviewed: 2026-01-01
   `block_created_dropped_by_lock_total`; failed header validation paths raise
   `block_created_hint_mismatch_total` and
   `block_created_proposal_mismatch_total`, helping operators correlate repeated
-  fallbacks with leader correctness issues. The `/v2/sumeragi/status` snapshot
+  fallbacks with leader correctness issues. The `/v1/sumeragi/status` snapshot
   also exports the latest Highest/Locked QC hashes so dashboards
   can correlate drop spikes with specific block hashes.
 ## Implementation summary

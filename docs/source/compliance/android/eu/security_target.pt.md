@@ -55,7 +55,7 @@ Suposições:
 | Manifestos de configuração adulterados | `ClientConfig` valida manifestos (hash + esquema) antes de aplicar e registra recargas negadas por meio de `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | Compromisso de assinatura de chaves | Políticas exigidas pelo StrongBox, equipamentos de atestado e auditorias de matriz de dispositivos identificam desvios; substituições documentadas por incidente. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | Vazamento de PII em telemetria | Autoridades com hash Blake2b, perfis de dispositivos agrupados, omissão de operadora, registro de substituição. | `docs/source/sdk/android/telemetry_redaction.md`; Manual de suporte §8. |
-| Repetir ou fazer downgrade em Torii RPC | O construtor de solicitações `/v2/pipeline` impõe fixação de TLS, política de canal de ruído e orçamentos de repetição com contexto de autoridade com hash. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (planejado). |
+| Repetir ou fazer downgrade em Torii RPC | O construtor de solicitações `/v1/pipeline` impõe fixação de TLS, política de canal de ruído e orçamentos de repetição com contexto de autoridade com hash. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (planejado). |
 | Lançamentos não assinados ou não reproduzíveis | Atestados CycloneDX SBOM + Sigstore controlados pela lista de verificação AND6; liberar RFCs exigem evidências em `docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Tratamento incompleto de incidentes | Runbook + playbook definem substituições, exercícios de caos e árvore de escalonamento; substituições de telemetria exigem solicitações Norito assinadas. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ Suposições:
 | 7.4 Controle de acesso | Políticas do StrongBox + fluxo de trabalho de substituição que exige artefatos Norito assinados. |
 | 7.5 Controles criptográficos | Requisitos de geração, armazenamento e atestado de chaves do AND2 (guia de gerenciamento de chaves). |
 | 7.6 Segurança das operações | Hashing de telemetria, ensaios de caos, resposta a incidentes e liberação de evidências. |
-| 7.7 Segurança das comunicações | Política TLS `/v2/pipeline` + autoridades com hash (documento de redação de telemetria). |
+| 7.7 Segurança das comunicações | Política TLS `/v1/pipeline` + autoridades com hash (documento de redação de telemetria). |
 | 7.8 Aquisição/desenvolvimento de sistema | Construções Gradle reproduzíveis, SBOMs e portas de proveniência em planos AND5/AND6. |
 | 7.9 Relacionamento com fornecedores | Atestados Buildkite + Sigstore registrados junto com SBOMs de dependência de terceiros. |
 | 7.10 Gestão de incidentes | Escalonamento de Runbook/Playbook, registro de substituição, contadores de falhas de telemetria. |

@@ -72,7 +72,7 @@ Norito ↔ ISO 20022 körpüsünün mesajları yaymazdan əvvəl yerinə yetirm
   - Müştəri ilə bağlı bəyanatlar (`camt.054`): mövcud olduqda **IBAN** daxil edin və təsdiq edin
     (uzunluq, ölkə qaydaları, mod-97 yoxlama cəmi).[^swift_iban]
 - **Valyuta** → **ISO 4217** 3 hərfli kod, kiçik vahidlərin yuvarlaqlaşdırılmasına riayət edin.[^iso_4217]
-- **Torii qəbulu** → `POST /v2/iso20022/pacs009` vasitəsilə PvP maliyyələşdirmə ayaqlarını təqdim edin; körpü
+- **Torii qəbulu** → `POST /v1/iso20022/pacs009` vasitəsilə PvP maliyyələşdirmə ayaqlarını təqdim edin; körpü
   `Purp=SECU` tələb edir və indi istinad məlumatları konfiqurasiya edildikdə BIC piyada keçidlərini tətbiq edir.
 
 #### Qiymətləndirmə qaydaları (emissiyadan əvvəl tətbiq olunur)

@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # Norito-RPC کا جائزہ
 
-Norito-RPC Torii API کے لئے بائنری ٹرانسپورٹ ہے۔ یہ `/v2/pipeline` y HTTP راستے استعمال کرتا ہے لیکن Norito فریم y الے payloads کا تبادلہ کرتا ہے جن میں esquema hashes اور checksums شامل ہوتے ہیں۔ اسے وہاں استعمال کریں جہاں آپ کو متعین اور تصدیق شدہ جوابات درکار ہوں، یا جب pipeline کے JSON جوابات بوتل نیک بن جائیں۔
+Norito-RPC Torii API کے لئے بائنری ٹرانسپورٹ ہے۔ یہ `/v1/pipeline` y HTTP راستے استعمال کرتا ہے لیکن Norito فریم y الے payloads کا تبادلہ کرتا ہے جن میں esquema hashes اور checksums شامل ہوتے ہیں۔ اسے وہاں استعمال کریں جہاں آپ کو متعین اور تصدیق شدہ جوابات درکار ہوں، یا جب pipeline کے JSON جوابات بوتل نیک بن جائیں۔
 
 ## کیوں تبدیل کریں؟
 - CRC64 اور hashes de esquema کے ساتھ متعین framing ڈیکوڈنگ غلطیوں کو کم کرتی ہے۔
@@ -20,7 +20,7 @@ Norito-RPC Torii API کے لئے بائنری ٹرانسپورٹ ہے۔ یہ `/v
 ## درخواست بھیجنا
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Carga útil del códec Norito (`iroha_client`, ayudantes del SDK, o `norito::to_bytes`) y del códec
@@ -37,7 +37,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 ڈویلپر پورٹل ایک Pruébelo پراکسی فراہم کرتا ہے تاکہ ریویورز بغیر کسی مخصوص اسکرپٹ کے Cargas útiles Norito کو دوبارہ چلا سکیں۔
 
 1. [پراکسی شروع کریں](./try-it.md#start-the-proxy-locally) اور `TRYIT_PROXY_PUBLIC_URL` سیٹ کریں تاکہ widgets جان سکیں کہ ٹریفک کہاں بھیجنی ہے۔
-2. Haga clic en **Pruébelo** کارڈ یا `/reference/torii-swagger` پینل کھولیں اور `POST /v2/pipeline/submit` جیسا منتخب کریں۔
+2. Haga clic en **Pruébelo** کارڈ یا `/reference/torii-swagger` پینل کھولیں اور `POST /v1/pipeline/submit` جیسا منتخب کریں۔
 3. **Tipo de contenido** کو `application/x-norito` پر سوئچ کریں، **Binario** ایڈیٹر منتخب کریں، اور `fixtures/norito_rpc/transfer_asset.norito` اپ لوڈ کریں (یا `fixtures/norito_rpc/transaction_fixtures.manifest.json` میں درج کوئی بھی carga útil)۔
 4. Widget de código de dispositivo OAuth یا دستی ٹوکن فیلڈ کے ذریعے token de portador فراہم کریں (جب `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` کنفیگر ہو تو پراکسی `X-TryIt-Auth` anula قبول کرتا ہے)۔
 5. درخواست بھیجیں اور تصدیق کریں کہ Torii `fixtures/norito_rpc/schema_hashes.json` میں درج `schema_hash` واپس دیتا ہے۔ مطابقت پذیر hashes تصدیق کرتے ہیں کہ Norito header براؤزر/پراکسی hop سے محفوظ رہا۔روڈ میپ ثبوت کے لئے Pruébelo کا اسکرین شاٹ `scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` کی رَن کے ساتھ جوڑیں۔ یہ اسکرپٹ `cargo xtask norito-rpc-verify` کو ریپ کرتا ہے، JSON خلاصہ `artifacts/norito_rpc/<timestamp>/` میں لکھتا ہے، اور وہی accesorios حاصل کرتا ہے جو پورٹل نے استعمال کئے تھے۔

@@ -29,7 +29,7 @@ summary: قائمة تحقق للقبول تغطي انضمام المزودين
 
 | الفحص | التحقق | الدليل |
 |-------|------------|----------|
-| يقبل registry إعلانات السعة القياسية | يقوم اختبار تكاملي بتشغيل `/v2/sorafs/capacity/declare` عبر app API، مع التحقق من معالجة التواقيع، التقاط metadata، وتسليمها إلى registry العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
+| يقبل registry إعلانات السعة القياسية | يقوم اختبار تكاملي بتشغيل `/v1/sorafs/capacity/declare` عبر app API، مع التحقق من معالجة التواقيع، التقاط metadata، وتسليمها إلى registry العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
 | يرفض smart contract الـ payloads غير المتطابقة | يضمن اختبار وحدات أن معرفات المزود وحقول GiB الملتزم بها تطابق الإعلان الموقع قبل الحفظ. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | يصدر CLI artefacts انضمام قياسية | يقوم CLI harness بكتابة مخرجات Norito/JSON/Base64 حتمية ويتحقق من round-trips حتى يتمكن المشغلون من إعداد الإعلانات offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | يلتقط دليل المشغلين سير قبول الانضمام وحواجز الحوكمة | توثيق يعدد مخطط الإعلان، policy defaults، وخطوات المراجعة للمجلس. | `../storage-capacity-marketplace.md` |

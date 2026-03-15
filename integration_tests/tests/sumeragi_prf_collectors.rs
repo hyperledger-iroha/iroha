@@ -12,7 +12,7 @@ use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
 use tokio::time::sleep;
 
-/// Ensure `/v2/sumeragi/collectors` aligns with deterministic PRF-based selection and
+/// Ensure `/v1/sumeragi/collectors` aligns with deterministic PRF-based selection and
 /// rotates collectors as block heights advance.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
@@ -51,7 +51,7 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
     let topology = topology_from_peers(network.peers());
     let collectors_url = client
         .torii_url
-        .join("v2/sumeragi/collectors")
+        .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;
     let http = reqwest::Client::new();
 

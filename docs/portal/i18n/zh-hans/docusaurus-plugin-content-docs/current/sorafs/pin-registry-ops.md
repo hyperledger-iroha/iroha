@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 概述
 
-此操作手册记录了如何监控和分类 SoraFS pin 注册表及其复制服务级别协议 (SLA)。这些指标源自 `iroha_torii`，并通过 `torii_sorafs_*` 命名空间下的 Prometheus 导出。 Torii 在后台以 30 秒的间隔对注册表状态进行采样，因此即使没有操作员轮询 `/v2/sorafs/pin/*` 端点，仪表板仍保持最新状态。导入精心策划的仪表板 (`docs/source/grafana_sorafs_pin_registry.json`)，以获得直接映射到以下部分的即用型 Grafana 布局。
+此操作手册记录了如何监控和分类 SoraFS pin 注册表及其复制服务级别协议 (SLA)。这些指标源自 `iroha_torii`，并通过 `torii_sorafs_*` 命名空间下的 Prometheus 导出。 Torii 在后台以 30 秒的间隔对注册表状态进行采样，因此即使没有操作员轮询 `/v1/sorafs/pin/*` 端点，仪表板仍保持最新状态。导入精心策划的仪表板 (`docs/source/grafana_sorafs_pin_registry.json`)，以获得直接映射到以下部分的即用型 Grafana 布局。
 
 ## 指标参考
 
@@ -118,7 +118,7 @@ groups:
 
 1. **查明原因**
    - 如果 SLA 错过了峰值，而积压仍然很低，则应关注提供商的性能（PoR 失败、延迟完成）。
-   - 如果积压随着稳定的错过而增加，请检查入场 (`/v2/sorafs/pin/*`) 以确认等待理事会批准的清单。
+   - 如果积压随着稳定的错过而增加，请检查入场 (`/v1/sorafs/pin/*`) 以确认等待理事会批准的清单。
 2. **验证提供商状态**
    - 运行 `iroha app sorafs providers list` 并验证公布的功能是否符合复制要求。
    - 检查 `torii_sorafs_capacity_*` 仪表以确认配置的 GiB 和 PoR 成功。
@@ -139,7 +139,7 @@ groups:
 2. **分期试运行**
    - 将配置更改部署到镜像生产拓扑的临时集群。
    - 运行 `cargo xtask sorafs-pin-fixtures` 以确认规范别名装置仍在解码和往返；任何不匹配都意味着必须首先解决上游明显的漂移。
-   - 使用涵盖新鲜、刷新窗口、过期和硬过期情况的综合证明来练习 `/v2/sorafs/pin/{digest}` 和 `/v2/sorafs/aliases` 端点。根据此 Runbook 验证 HTTP 状态代码、标头（`Sora-Proof-Status`、`Retry-After`、`Warning`）和 JSON 正文字段。
+   - 使用涵盖新鲜、刷新窗口、过期和硬过期情况的综合证明来练习 `/v1/sorafs/pin/{digest}` 和 `/v1/sorafs/aliases` 端点。根据此 Runbook 验证 HTTP 状态代码、标头（`Sora-Proof-Status`、`Retry-After`、`Warning`）和 JSON 正文字段。
 3. **在生产中启用**
    - 通过标准更改窗口推出新配置。首先将其应用到 Torii，然后在节点在日志中确认新策略后重新启动网关/SDK 服务。
    - 将 `docs/source/grafana_sorafs_pin_registry.json` 导入 Grafana（或更新现有仪表板）并将别名缓存刷新面板固定到 NOC 工作区。

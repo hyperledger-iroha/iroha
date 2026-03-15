@@ -21,7 +21,7 @@ translator: machine-google-reviewed
 ## نقطة النهاية
 
 ```
-POST /v2/sumeragi/rbc/sample
+POST /v1/sumeragi/rbc/sample
 ```
 
 تتطلب نقطة النهاية رأس `X-API-Token` المطابق لواحد من العناصر التي تم تكوينها

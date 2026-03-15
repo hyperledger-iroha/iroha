@@ -21,7 +21,7 @@ translator: machine-google-reviewed
 ## اختتامی نقطہ
 
 ```
-POST /v2/sumeragi/rbc/sample
+POST /v1/sumeragi/rbc/sample
 ```
 
 اختتامی نقطہ کے لئے ایک `X-API-Token` ہیڈر کی ضرورت ہوتی ہے جس میں سے ایک تشکیل شدہ ایک سے ملاپ ہوتا ہے

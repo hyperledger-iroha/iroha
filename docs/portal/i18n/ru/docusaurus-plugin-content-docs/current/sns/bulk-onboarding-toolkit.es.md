@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -131,10 +131,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Помощник выдает `POST /v2/sns/registrations` для ходатайства и прерывания беременности
+- Помощник выдает `POST /v1/sns/registrations` для ходатайства и прерывания беременности
   ошибка праймера HTTP. Ответы будут добавлены в порядок следования журналов регистрации
   НДЖСОН.
-- `--poll-status` обратитесь к консультанту `/v2/sns/registrations/{selector}` после
+- `--poll-status` обратитесь к консультанту `/v1/sns/registrations/{selector}` после
   cada envio (hasta `--poll-attempts`, по умолчанию 5) для подтверждения регистрации
   это видно. Proporcione `--suffix-map` (JSON de `suffix_id` — «суффикс значений»)
   для того, чтобы получить буквы `{label}.{suffix}` в результате опроса.

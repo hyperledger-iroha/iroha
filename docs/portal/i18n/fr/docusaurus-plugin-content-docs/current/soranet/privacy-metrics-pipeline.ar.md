@@ -77,8 +77,8 @@ Les collecteurs SNNet-8a sont dotés de seaux Prio. L'orchestrateur est basé su
 
 Utilisez Torii pour le protocole HTTP pour la télémétrie pour les relais et les collecteurs comme suit :
 
-- `POST /v2/soranet/privacy/event` correspond à `RecordSoranetPrivacyEventDto`. يلف الجسم `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. Torii pour la télémétrie et la télémétrie via HTTP `202 Accepted` pour Norito JSON يحتوي على نافذة الحساب (`bucket_start_unix`, `bucket_duration_secs`) et relais.
-- `POST /v2/soranet/privacy/share` correspond à `RecordSoranetPrivacyShareDto`. يحمل الجسم `SoranetPrivacyPrioShareV1` et `forwarded_by` sont des collectionneurs. Utilisez le protocole HTTP `202 Accepted` avec Norito JSON pour le collecteur et le bucket et la suppression. بينما يتم ربط اخفاقات التحقق باستجابة telemetry من نوع `Conversion` للحفاظ على معالجة اخطاء حتمية عبر collectionneurs. Il s'agit d'un orchestrateur pour les partages et d'un relais pour Torii. seaux على relais.
+- `POST /v1/soranet/privacy/event` correspond à `RecordSoranetPrivacyEventDto`. يلف الجسم `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. Torii pour la télémétrie et la télémétrie via HTTP `202 Accepted` pour Norito JSON يحتوي على نافذة الحساب (`bucket_start_unix`, `bucket_duration_secs`) et relais.
+- `POST /v1/soranet/privacy/share` correspond à `RecordSoranetPrivacyShareDto`. يحمل الجسم `SoranetPrivacyPrioShareV1` et `forwarded_by` sont des collectionneurs. Utilisez le protocole HTTP `202 Accepted` avec Norito JSON pour le collecteur et le bucket et la suppression. بينما يتم ربط اخفاقات التحقق باستجابة telemetry من نوع `Conversion` للحفاظ على معالجة اخطاء حتمية عبر collectionneurs. Il s'agit d'un orchestrateur pour les partages et d'un relais pour Torii. seaux على relais.
 
 Utilisez la télémétrie : utilisez `503 Service Unavailable` pour la télémétrie. JSON Norito (`application/x.norito`) et Norito JSON (`application/x.norito+json`) sont également disponibles. خادم تلقائيا على الصيغة عبر مستخلصات Torii القياسية.
 
@@ -157,7 +157,7 @@ La suppression de la sortie standard est effectuée avec `SoranetSecureAggregato
 
 لا تزال الحوكمة تتطلب اثبات ان اول تشغيل آلي لبى ميزانية suppression. Mise à jour `--max-suppression-ratio <0-1>` pour la suppression des compartiments CI et mise à jour de la suppression des seaux (افتراضي 10%) et او عندما لا توجد seaux بعد. التدفق الموصى به:
 
-1. Utilisez NDJSON comme administrateur pour le relais pour créer un `/v2/soranet/privacy/event|share` pour un orchestrateur `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. Utilisez NDJSON comme administrateur pour le relais pour créer un `/v1/soranet/privacy/event|share` pour un orchestrateur `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. شغل المساعد مع ميزانية السياسة:
 
    ```bash

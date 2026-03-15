@@ -33,7 +33,7 @@ Torii node اور mock ledger کے خلاف چلانے کے لیے درکار ہ
    ماحول کے مطابق values کو adjust کریں۔ ایپ launch کے وقت ان متغیرات کو پڑھتی ہے:
    - `TORII_NODE_URL` — base REST URL (WebSocket URLs اسی سے derive ہوتے ہیں)۔
    - `CONNECT_SESSION_ID` — 32‑byte سیشن آئی ڈی (base64/base64url)۔
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens جو `/v2/connect/session` سے
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens جو `/v1/connect/session` سے
      واپس آتے ہیں۔
    - `CONNECT_CHAIN_ID` — chain identifier جو control handshake کے دوران announce ہوتا ہے۔
    - `CONNECT_ROLE` — UI میں pre‑selected default role (`app` یا `wallet`)۔
@@ -84,7 +84,7 @@ Torii node اور mock ledger کے خلاف چلانے کے لیے درکار ہ
 2. `NoritoDemoXcode` project کو Xcode میں کھولیں۔
 3. `NoritoDemo` scheme منتخب کریں اور target کو iOS simulator یا device پر سیٹ کریں۔
 4. اس بات کی تصدیق کریں کہ `.env`، scheme environment variables کے ذریعے reference ہو
-   رہا ہے۔ `CONNECT_*` values کو `/v2/connect/session` سے حاصل شدہ tokens سے populate
+   رہا ہے۔ `CONNECT_*` values کو `/v1/connect/session` سے حاصل شدہ tokens سے populate
    کریں تاکہ app launch کے وقت UI پہلے سے filled ہو۔
 5. hardware acceleration defaults کی تصدیق کریں: `App.swift` میں
    `DemoAccelerationConfig.load().apply()` کال کی جاتی ہے جس کے نتیجے میں demo، environment

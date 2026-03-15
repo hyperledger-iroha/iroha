@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Көмекші сұрауға бір `POST /v2/sns/registrations` шығарады және оны тоқтатады
+- Көмекші сұрауға бір `POST /v1/sns/registrations` шығарады және оны тоқтатады
   бірінші HTTP қатесі. Жауаптар журнал жолына NDJSON ретінде қосылады
   жазбалар.
-- `--poll-status` әр сұраудан кейін `/v2/sns/registrations/{selector}` қайта сұрайды
+- `--poll-status` әр сұраудан кейін `/v1/sns/registrations/{selector}` қайта сұрайды
   жазба екенін растау үшін жіберу (`--poll-attempts` дейін, әдепкі 5)
   көрінетін. `--suffix-map` (`suffix_id` және `"suffix"` мәндерінің JSON) қамтамасыз етіңіз, осылайша
   құрал сұрауға арналған `{label}.{suffix}` литералдарын шығара алады.

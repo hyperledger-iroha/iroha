@@ -225,7 +225,7 @@ _آخری جائزہ: 2026-01-19 -- اگلا شیڈول شدہ جائزہ: 2026-
 
 - DA-2 リプレイ キャッシュ、カーソルの永続化、リプレイ キャッシュ、カーソルの永続化実装
   `crates/iroha_core/src/da/replay_cache.rs` (キャッシュ ロジック) Torii 統合
-  `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v2/da/ingest` کے ذریعے 指紋
+  `crates/iroha_torii/src/da/ingest.rs` میں، جو `/v1/da/ingest` کے ذریعے 指紋
   スレッドをチェックします
 - PDP/PoTR ストリーミング シミュレーションのプルーフ ストリーム ハーネスの説明:
   `crates/sorafs_car/tests/sorafs_cli.rs`۔ PoR/PDP/PoTR リクエスト フロー

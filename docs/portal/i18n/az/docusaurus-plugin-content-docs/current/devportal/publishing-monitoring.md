@@ -69,7 +69,7 @@ Tələb olunan düymələr və çoxlu bağlama ilə nümunə konfiqurasiya:
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v2/accounts/i105.../assets?limit=1",
+    "samplePath": "/proxy/v1/accounts/i105.../assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

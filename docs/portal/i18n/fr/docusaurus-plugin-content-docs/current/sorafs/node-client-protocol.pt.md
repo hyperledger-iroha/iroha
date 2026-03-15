@@ -67,13 +67,13 @@ Support d'outillage :
 Les passerelles ont besoin de HTTP deterministas que espelham os métadados do
 annonce.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`| Requis | Détails |
+### `GET /v1/sorafs/storage/car/{manifest_id}`| Requis | Détails |
 |-----------|----------|
 | **En-têtes** | `Range` (une seule combinaison de décalages de chunk), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` en option et `X-SoraFS-Stream-Token` base64 obligatoire. |
 | **Réponses** | `206` avec `Content-Type: application/vnd.ipld.car`, `Content-Range` décrivent le service principal, les métadonnées `X-Sora-Chunk-Range` et les en-têtes des chunker/token écoados. |
 | **Falhas** | `416` pour les gammes desalinhados, `401` pour les jetons ausentes/invalidos, `429` lorsque les budgets de flux/octets sont dépassés. |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Récupérez le chunk unique avec nos en-têtes mais le résumé détermine le chunk.
 Utilisé pour les tentatives ou les téléchargements lorsque des tranches de CAR sont nécessaires.
@@ -121,11 +121,11 @@ Erreurs courantes présentées par les opérateurs/SDK :
 - `iroha app sorafs pin list|show`, `alias list` et `replication list` impliquent le système d'exploitation
   les points de terminaison REST du registre pin et l'impression Norito JSON brut avec les blocs de
   attestation para evidencias de auditoria.
-- `iroha app sorafs storage pin` et `torii /v2/sorafs/pin/register` aceitam manifestes
+- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` aceitam manifestes
   Norito ou JSON avec alias preuves et successeurs optionnels ; preuves malformées
   Geram `400`, épreuves périmées renvoyées `503` avec `Warning: 110`, et épreuves expirées
   retour du nom `412`.
-- Points de terminaison REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
+- Points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   incluem estruturas de attestation para que clientses verifiquem dados contra os
   derniers en-têtes de bloc avant d'agir.
 

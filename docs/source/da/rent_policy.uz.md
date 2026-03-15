@@ -15,7 +15,7 @@ translator: machine-google-reviewed
 _Holat: Loyihalash — Egalari: Iqtisodiyot GG / G'aznachilik / Saqlash jamoasi_
 
 “Yo‘l xaritasi” bandi **DA-7** har bir blob uchun XOR bilan belgilangan ijara haqini taqdim etadi.
-`/v2/da/ingest` ga taqdim etilgan, shuningdek, PDP/PoTR bajarilishini mukofotlaydigan bonuslar va
+`/v1/da/ingest` ga taqdim etilgan, shuningdek, PDP/PoTR bajarilishini mukofotlaydigan bonuslar va
 chiqish mijozlarni olish uchun xizmat qildi. Ushbu hujjat dastlabki parametrlarni belgilaydi,
 ularning ma'lumotlar modeli tasviri va Torii tomonidan qo'llaniladigan hisoblash ish jarayoni,
 SDK va G'aznachilik boshqaruv paneli.
@@ -161,7 +161,7 @@ har qanday blok uchun qaysi parametrlar amal qilganligini isbotlash uchun auditl
 
 ## Operatsion oqim
 
-1. **Ingest:** `/v2/da/ingest` faol `DaRentPolicyV1` yuklaydi, kotirovkalarni ijaraga oladi
+1. **Ingest:** `/v1/da/ingest` faol `DaRentPolicyV1` yuklaydi, kotirovkalarni ijaraga oladi
    blob hajmi va saqlanishiga asoslanadi va kotirovkani Norito ichiga kiritadi
    namoyon. Yuboruvchi ijara xashiga ishora qiluvchi bayonotga imzo chekadi va
    saqlash chiptasi identifikatori.
@@ -179,7 +179,7 @@ har qanday blok uchun qaysi parametrlar amal qilganligini isbotlash uchun auditl
 ## TelemetriyaTorii tugunlari ijaradan foydalanishni quyidagi Prometheus koʻrsatkichlari (yorliqlar:
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` — GiB-oylar `/v2/da/ingest` tomonidan keltirilgan.
+- `torii_da_rent_gib_months_total` — GiB-oylar `/v1/da/ingest` tomonidan keltirilgan.
 - `torii_da_rent_base_micro_total` — qabul qilinganda hisoblangan asosiy ijara (mikro XOR).
 - `torii_da_protocol_reserve_micro_total` — protokol zahirasi badallari.
 - `torii_da_provider_reward_micro_total` - provayder tomonidan ijara to'lovlari.
@@ -196,7 +196,7 @@ hajmi va to'lovlari.
 
 ## Keyingi qadamlar
 
-- ✅ `/v2/da/ingest` kvitansiyalari endi `rent_quote` ni o'z ichiga oladi va CLI/SDK sirtlarida ko'rsatilgan ko'rsatilgan
+- ✅ `/v1/da/ingest` kvitansiyalari endi `rent_quote` ni o'z ichiga oladi va CLI/SDK sirtlarida ko'rsatilgan ko'rsatilgan
   asosiy ijara, zaxira ulush va PDP/PoTR bonuslari, shuning uchun topshiruvchilar XOR majburiyatlarini oldindan ko'rib chiqishlari mumkin.
   foydali yuklarni qabul qilish.
 - Ijara kitobini kelgusida DA obro'si/buyurtma kitobi tasmasi bilan integratsiyalash

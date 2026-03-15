@@ -69,7 +69,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Шлюз конечных точек диапазонаШлюзы принимают детерминированные HTTP-запросы, отражающие метаданные объявления.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`
+### `GET /v1/sorafs/storage/car/{manifest_id}`
 
 | Требование | Детали |
 |------------|--------|
@@ -77,7 +77,7 @@ translation_last_reviewed: 2026-02-07
 | **Ответы** | `206` с `Content-Type: application/vnd.ipld.car`, `Content-Range`, описывающим выданный интервал, метаданными `X-Sora-Chunk-Range` и эхо-заголовками chunker/token. |
 | **Режимы отказа** | `416` для неверно выровненных диапазонов, `401` для отсутствующих/невалидных токенов, `429` при превышении бюджета потока/байта. |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Извлекает один фрагмент с теми же заголовками плюс определенный фрагмент дайджеста.
 Полезно для ретраев или криминалистических загрузок, когда фрагменты CAR не нужны.
@@ -126,12 +126,12 @@ SDK через `sorafs_orchestrator`):
 ## CLI и REST-помощники- `iroha app sorafs pin list|show`, `alias list` и `replication list` оборачивают
   pin-регистрация конечных точек REST и печать сырой Norito JSON с аттестацией блоками
   для аудиторских доказательств.
-- `iroha app sorafs storage pin` и `torii /v2/sorafs/pin/register` принимают Norito
+- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` принимают Norito
   или JSON манифестирует дополнительные опциональные доказательства псевдонимов и преемников; искаженные доказательства
   возвращают `400`, устаревшие доказательства дают `503` с `Warning: 110`, доказательства с истекшим сроком действия
   возвращают `412`.
-- Конечные точки REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
-  `/v2/sorafs/replication`) включает аттестацию структуры, предоставляемую клиентам
+- Конечные точки REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
+  `/v1/sorafs/replication`) включает аттестацию структуры, предоставляемую клиентам
   проверить данные относительно заголовков последних блоков, перед которыми были рассмотрены.
 
 ## Ссылки

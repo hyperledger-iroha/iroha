@@ -62,15 +62,15 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - `ReplicationOrderV1` manifests کو governance-issued assignments سے باندھتا ہے، جن میں redundancy targets، SLA thresholds اور per-assignment guarantees شامل ہیں؛ validators canonical chunker handles، unique providers اور deadline constraints نافذ کرتے ہیں اس سے پہلے کہ Torii یا registry order ingest کریں۔【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` epoch snapshots (declared vs utilised GiB، replication counters، uptime/PoR percentages) ظاہر کرتا ہے جو fee distribution کو feed کرتے ہیں۔ bounds checks استعمال کو declarations کے اندر اور percentages کو 0-100% میں رکھتے ہیں۔【crates/sorafs_manifest/src/capacity.rs:476】
 - Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) deterministic key validation اور error reporting فراہم کرتے ہیں جنہیں CI اور downstream tooling reuse کر سکتے ہیں۔【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` اب on-chain snapshot کو `/v2/sorafs/capacity/state` کے ذریعے expose کرتا ہے، provider declarations اور fee ledger entries کو deterministic Norito JSON کے پیچھے جوڑ کر۔【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` اب on-chain snapshot کو `/v1/sorafs/capacity/state` کے ذریعے expose کرتا ہے، provider declarations اور fee ledger entries کو deterministic Norito JSON کے پیچھے جوڑ کر۔【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Validation coverage canonical handle enforcement، duplicate detection، per-lane bounds، replication assignment guards اور telemetry range checks کو exercise کرتی ہے تاکہ regressions فوراً CI میں ظاہر ہوں۔【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` human-readable specs کو canonical Norito payloads، base64 blobs اور JSON summaries میں تبدیل کرتا ہے تاکہ operators `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry` اور replication order fixtures کو local validation کے ساتھ stage کر سکیں۔【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) میں ہیں اور `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` سے generate ہوتی ہیں۔
+- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` human-readable specs کو canonical Norito payloads، base64 blobs اور JSON summaries میں تبدیل کرتا ہے تاکہ operators `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` اور replication order fixtures کو local validation کے ساتھ stage کر سکیں۔【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) میں ہیں اور `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` سے generate ہوتی ہیں۔
 
 ### 2. Control Plane Integration
 
 | Task | Owner(s) | Notes |
 |------|----------|-------|
-| `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, `/v2/sorafs/capacity/orders` Torii handlers کو Norito JSON payloads کے ساتھ شامل کریں۔ | Torii Team | validator logic کو mirror کریں؛ Norito JSON helpers reuse کریں۔ |
+| `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` Torii handlers کو Norito JSON payloads کے ساتھ شامل کریں۔ | Torii Team | validator logic کو mirror کریں؛ Norito JSON helpers reuse کریں۔ |
 | `CapacityDeclarationV1` snapshots کو orchestrator scoreboard metadata اور gateway fetch plans میں propagate کریں۔ | Tooling WG / Orchestrator team | `provider_metadata` میں capacity references شامل کریں تاکہ multi-source scoring lane limits کا خیال رکھے۔ |
 | replication orders کو orchestrator/gateway clients میں feed کریں تاکہ assignments اور failover hints ڈرائیو ہوں۔ | Networking TL / Gateway team | Scoreboard builder governance-signed replication orders استعمال کرتا ہے۔ |
 | CLI tooling: `sorafs_cli` میں `capacity declare`, `capacity telemetry`, `capacity orders import` شامل کریں۔ | Tooling WG | deterministic JSON + scoreboard outputs فراہم کریں۔ |
@@ -93,7 +93,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | Settlement pipeline: telemetry + replication data کو XOR-denominated payouts میں تبدیل کریں، governance-ready summaries بنائیں، اور ledger state ریکارڈ کریں۔ | Treasury / Storage Team | Deal Engine / Treasury exports میں wire کریں۔ |
 | metering health (ingestion backlog، stale telemetry) کے لیے dashboards/alerts export کریں۔ | Observability | SF-6/SF-7 میں ریفرنس کیے گئے Grafana pack کو extend کریں۔ |
 
-- Torii اب `/v2/sorafs/capacity/telemetry` اور `/v2/sorafs/capacity/state` (JSON + Norito) expose کرتا ہے تاکہ operators epoch telemetry snapshots جمع کر سکیں اور inspectors auditing یا evidence packaging کے لیے canonical ledger حاصل کر سکیں۔【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii اب `/v1/sorafs/capacity/telemetry` اور `/v1/sorafs/capacity/state` (JSON + Norito) expose کرتا ہے تاکہ operators epoch telemetry snapshots جمع کر سکیں اور inspectors auditing یا evidence packaging کے لیے canonical ledger حاصل کر سکیں۔【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - `PinProviderRegistry` integration یقینی بناتی ہے کہ replication orders اسی endpoint کے ذریعے قابلِ رسائی ہوں؛ CLI helpers (`sorafs_cli capacity telemetry --from-file telemetry.json`) اب deterministic hashing اور alias resolution کے ساتھ automation runs سے telemetry validate/publish کرتے ہیں۔
 - Metering snapshots `CapacityTelemetrySnapshot` entries پیدا کرتے ہیں جو `metering` snapshot سے pinned ہوتے ہیں، اور Prometheus exports `docs/source/grafana_sorafs_metering.json` کے ready-to-import Grafana board کو feed کرتے ہیں تاکہ billing teams GiB-hour accrual، projected nano-SORA fees اور SLA compliance کو real time میں مانیٹر کر سکیں۔【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - جب metering smoothing enabled ہو تو snapshot میں `smoothed_gib_hours` اور `smoothed_por_success_bps` شامل ہوتے ہیں تاکہ operators EMA-trended values کو raw counters کے مقابلے میں دیکھ سکیں جنہیں governance payouts کے لیے استعمال کرتی ہے۔【crates/sorafs_node/src/metering.rs:401】
@@ -162,7 +162,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ### Provider onboarding & exit smoke tests
 - declaration/telemetry artefacts کو `sorafs_manifest_stub capacity ...` سے regenerate کریں اور submission سے پہلے CLI tests replay کریں (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
-- Torii (`/v2/sorafs/capacity/declare`) کے ذریعے submit کریں پھر `/v2/sorafs/capacity/state` اور Grafana screenshots capture کریں۔ `docs/source/sorafs/capacity_onboarding_runbook.md` میں exit flow فالو کریں۔
+- Torii (`/v1/sorafs/capacity/declare`) کے ذریعے submit کریں پھر `/v1/sorafs/capacity/state` اور Grafana screenshots capture کریں۔ `docs/source/sorafs/capacity_onboarding_runbook.md` میں exit flow فالو کریں۔
 - signed artefacts اور reconciliation outputs کو `docs/examples/sorafs_capacity_marketplace_validation/` میں archive کریں۔
 
 ## Dependencies & Sequencing

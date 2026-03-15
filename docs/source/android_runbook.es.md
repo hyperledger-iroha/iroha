@@ -635,7 +635,7 @@ Sev1/2 hace seguimiento y archiva la evidencia en `incident/<date>-android-*.md`
 **Señales**
 
 - Alertas en `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors` y la tasa de error Torii `/v2/pipeline`.
+  `android_sdk_offline_replay_errors` y la tasa de error Torii `/v1/pipeline`.
 - Widgets `operator-console` (ejemplos/android) que muestran drenaje de cola estancado o
   Los reintentos se atascan en un retroceso exponencial.
 
@@ -685,7 +685,7 @@ Sev1/2 hace seguimiento y archiva la evidencia en `incident/<date>-android-*.md`
 **Recuperación**
 
 1. Si Torii está degradado, active el Torii de guardia y continúe reproduciendo el
-   cola una vez que `/v2/pipeline` acepta el tráfico.
+   cola una vez que `/v1/pipeline` acepta el tráfico.
 2. Reconfigure los clientes afectados únicamente mediante manifiestos `iroha_config` firmados. el
    El observador de recarga en caliente `ClientConfig` debe emitir un registro de éxito antes del incidente
    puede cerrar.

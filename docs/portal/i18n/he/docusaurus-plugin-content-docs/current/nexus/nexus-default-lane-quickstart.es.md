@@ -164,7 +164,7 @@ Esto confirma que la instantanea de TEU, los metadatos de alias y los flags de m
 
 - **Rust/CLI.** `iroha_cli` y el crate cliente de Rust omiten el campo `lane_id` cuando no pasas `--lane-id` / `LaneSelector`. El Router de Colas por lo tanto recurre a `default_lane`. ארה"ב דגלים מפורשים `--lane-id`/`--dataspace-id` סולו cuando apuntes a una lane no predeterminada.
 - **JS/Swift/Android.** גרסאות אולטימטיביות של לוס SDK tratan `laneId`/`lane_id` כמו אופציונליות y hacen fallback al valor anunciado por `/status`. Manten la politica de enrutamiento sincronizada entre staging y produccion para que las apps moviles no cecesiten reconfiguraciones de emergencia.
-- **בדיקות Pipeline/SSE.** Los filtros de eventos de transacciones aceptan predicados `tx_lane_id == <u32>` (ver `docs/source/pipeline.md`). הירשם ל-`/v2/pipeline/events/transactions` עם זה פילטר עבור הדגמה que las escrituras enviadas sin un lane explicito llegan bajo el id de lane de fallback.
+- **בדיקות Pipeline/SSE.** Los filtros de eventos de transacciones aceptan predicados `tx_lane_id == <u32>` (ver `docs/source/pipeline.md`). הירשם ל-`/v1/pipeline/events/transactions` עם זה פילטר עבור הדגמה que las escrituras enviadas sin un lane explicito llegan bajo el id de lane de fallback.
 
 ## 7. Observabilidad y ganchos de gobernanza
 

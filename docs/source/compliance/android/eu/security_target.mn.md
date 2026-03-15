@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | Хуучирсан тохиргооны илрэл | `ClientConfig` нь манифестуудыг (хэш + схем) хэрэглэхээс өмнө баталгаажуулж, `android.telemetry.config.reload`-ээр дамжуулан татгалзсан дахин ачааллыг бүртгэдэг. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | Гарын үсэг зурах түлхүүрүүдийн эвдрэл | StrongBox-д шаардлагатай бодлого, баталгаажуулалтын хэрэгсэл, төхөөрөмжийн матрицын аудит нь зөрөлтийг тодорхойлох; тохиолдол бүрт баримтжуулсан хүчингүй болгодог. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | Телеметрийн PII алдагдал | Blake2b-хашлагдсан эрх мэдэлтнүүд, хувинтай төхөөрөмжийн профайл, операторын орхигдуулсан, бүртгэлийг хүчингүй болгох. | `docs/source/sdk/android/telemetry_redaction.md`; Дэмжих Playbook §8. |
-| Torii RPC | дээр дахин тоглуулах эсвэл доошлуулах `/v2/pipeline` хүсэлт үүсгэгч нь TLS тогтоох, дуу чимээний сувгийн бодлого болон хэшлэгдсэн эрх мэдлийн контексттэй дахин оролдох төсвийг хэрэгжүүлдэг. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (төлөвлөсөн). |
+| Torii RPC | дээр дахин тоглуулах эсвэл доошлуулах `/v1/pipeline` хүсэлт үүсгэгч нь TLS тогтоох, дуу чимээний сувгийн бодлого болон хэшлэгдсэн эрх мэдлийн контексттэй дахин оролдох төсвийг хэрэгжүүлдэг. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (төлөвлөсөн). |
 | Гарын үсэг зураагүй эсвэл хуулбарлах боломжгүй хувилбарууд | AND6 хяналтын хуудсаар баталгаажсан CycloneDX SBOM + Sigstore гэрчилгээ; суллах RFC нь `docs/source/release/provenance/android/`-д нотлох баримт шаарддаг. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | Бүрэн бус үйл явдал | Runbook + playbook нь хүчингүй болгох, эмх замбараагүй байдлын дасгалууд болон өсөлтийн модыг тодорхойлдог; телеметрийг хүчингүй болгоход гарын үсэг зурсан Norito хүсэлт шаардлагатай. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 Хандалтын хяналт | StrongBox-ын бодлого + гарын үсэг зурсан Norito олдворуудыг шаарддаг ажлын урсгалыг хүчингүй болгох. |
 | 7.5 Криптографийн удирдлага | AND2-аас (гол удирдлагын гарын авлага) түлхүүр үүсгэх, хадгалах, баталгаажуулах шаардлага. |
 | 7.6 Үйл ажиллагааны аюулгүй байдал | Телеметрийн хэш, эмх замбараагүй байдлын бэлтгэл, ослын хариу арга хэмжээ, нотлох баримтыг задлах. |
-| 7.7 Харилцаа холбооны аюулгүй байдал | `/v2/pipeline` TLS бодлого + хэш хийсэн эрх мэдэлтнүүд (телеметрийн редакцийн баримт). |
+| 7.7 Харилцаа холбооны аюулгүй байдал | `/v1/pipeline` TLS бодлого + хэш хийсэн эрх мэдэлтнүүд (телеметрийн редакцийн баримт). |
 | 7.8 Системийг олж авах / хөгжүүлэх | AND5/AND6 төлөвлөгөөнд хуулбарлах боломжтой Gradle бүтээцүүд, SBOM-ууд болон гарал үүслийн хаалганууд. |
 | 7.9 Нийлүүлэгчийн харилцаа | Buildkite + Sigstore гэрчилгээг гуравдагч этгээдээс хамааралтай SBOM-уудтай хамт бүртгэсэн. |
 | 7.10 Ослын менежмент | Runbook/Playbook-ийн өсөлт, бүртгэлийг хүчингүй болгох, телеметрийн амжилтгүй тоолуур. |

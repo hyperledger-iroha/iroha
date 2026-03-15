@@ -7,27 +7,27 @@ Iroha exports Prometheus-format metrics and a JSON status summary. This page lis
 Endpoints
 - `/metrics`: Prometheus exposition text. Hidden when telemetry is disabled or the profile does not allow expensive metrics.
 - `/status`: JSON status (hidden when telemetry is disabled). Includes top-level gauges (peers, blocks, queue active count), a `crypto { sm_helpers_available, sm_openssl_preview_enabled, halo2: { enabled, curve, backend, max_k, verifier_budget_ms, verifier_max_batch } }` snapshot, the `sumeragi { leader_index, highest_qc_height, locked_qc_height, locked_qc_view, gossip_fallback_total, view_change_proof_accepted_total, view_change_proof_stale_total, view_change_proof_rejected_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, pacemaker_backpressure_deferrals_total, tx_queue_depth, tx_queue_capacity, tx_queue_saturated, epoch_length_blocks, epoch_commit_deadline_offset, epoch_reveal_deadline_offset, prf_epoch_seed (hex), prf_height, prf_view }` view (highest/locked QC heights), a `governance` snapshot, and (when available) `sorafs_micropayments` — the most recent SoraFS micropayment sample per provider including credit counters and ticket totals.
-- `/v2/sumeragi/new_view` (JSON): latest NEW_VIEW receipt counts per `(height, view)` (bounded in-memory window; oldest entries evicted).
-- `/v2/sumeragi/new_view/sse` (SSE): periodic stream of the same JSON payload for live dashboards.
-- `/v2/sumeragi/status` (Norito by default): consensus status snapshot. Set `Accept: application/json` to receive `{ leader_index, view_change_index, highest_qc { height, view, subject_block_hash }, locked_qc { height, view, subject_block_hash }, commit_qc { height, view, epoch, block_hash, validator_set_hash, validator_set_len, signatures_total }, commit_quorum { height, view, block_hash, signatures_present, signatures_counted, signatures_set_b, signatures_required, last_updated_ms }, tx_queue { depth, capacity, saturated }, epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }, gossip_fallback_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, consensus_message_handling { entries: [{ kind, outcome, reason, total }] }, pacemaker_backpressure_deferrals_total, da_reschedule_total, rbc_store { sessions, bytes, pressure_level, backpressure_deferrals_total, persist_drops_total, evictions_total, recent_evictions[...] }, lane_activity: [{ lane_id, tx_vertices, tx_edges, overlay_count, overlay_instr_total, overlay_bytes_total, rbc_chunks, rbc_bytes_total }], dataspace_activity: [{ lane_id, dataspace_id, tx_served }], rbc_lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], rbc_dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], lane_commitments: [{ block_height, lane_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], dataspace_commitments: [{ block_height, lane_id, dataspace_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], lane_governance: [{ lane_id, alias, dataspace_id, visibility, storage_profile, governance, manifest_required, manifest_ready, manifest_path, validator_ids, quorum, protected_namespaces, runtime_upgrade { allow, require_metadata, metadata_key, allowed_ids } }], lane_governance_sealed_total, lane_governance_sealed_aliases, prf { height, view, epoch_seed }, vrf_penalty_epoch, vrf_committed_no_reveal_total, vrf_no_participation_total, vrf_late_reveals_total, collectors_targeted_{current,last_per_block}, redundant_sends_total, worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, queue_diagnostics { blocked_total { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, blocked_ms_total { ... }, blocked_max_ms { ... }, dropped_total { ... } } }, commit_inflight { active, id, height, view, block_hash, started_ms, elapsed_ms, timeout_ms, timeout_total, last_timeout_timestamp_ms, last_timeout_elapsed_ms, last_timeout_height, last_timeout_view, last_timeout_block_hash, pause_total, resume_total, paused_since_ms, pause_queue_depths { ... }, resume_queue_depths { ... } }, settlement { dvp { success_total, failure_total, final_state_totals { none|delivery_only|payment_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { delivery_committed, payment_committed } } }, pvp { success_total, failure_total, final_state_totals { none|primary_only|counter_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { primary_committed, counter_committed }, fx_window_ms } } } }` (highest/locked QC snapshots in `highest_qc`/`locked_qc`).
-- `/v2/sumeragi/status/sse` (SSE): periodic stream (≈1s) emitting the same JSON payload as `/v2/sumeragi/status` for dashboards.
-- When `nexus.enabled = false` (Iroha 2 mode), lane/dataspace sections in `/status` and `/v2/sumeragi/status` are emptied and Prometheus output omits lane/dataspace labels so single-lane deployments stay lane-free.
-- `/v2/sumeragi/rbc` (JSON): RBC session/throughput metrics: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
-- `/v2/sumeragi/rbc/sessions` (JSON): RBC session snapshot: `{ sessions_active, items: [{ block_hash, height, view, total_chunks, received_chunks, ready_count, delivered, invalid, payload_hash, recovered, lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }] }] }`.
-- `/v2/sumeragi/pacemaker` (JSON): pacemaker timers and config: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
-- `/v2/sumeragi/qc` (Norito by default): highest/locked QC snapshot; includes `subject_block_hash` for the highest QC when known. Set `Accept: application/json` to receive the JSON view.
-- `/v2/sumeragi/commit_qc/{hash}` (Norito by default): full commit QC record for a block hash (if present). Set `Accept: application/json` to receive `{ subject_block_hash, commit_qc }` with `parent_state_root`, `post_state_root`, and aggregate signature data when available.
-- `/v2/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
-- `/v2/sumeragi/phases` (JSON): compact per-phase latencies (ms) for operator dashboards; returns the latest observed durations for consensus phases.
-- `/v2/soranet/privacy/{event,share}` (Norito): privacy telemetry ingest for relay/collector signals. Requires `torii.soranet_privacy_ingest.enabled = true`, a token header (`X-SoraNet-Privacy-Token` or `X-API-Token`) when `require_token` is set, and a CIDR allow-list entry (empty list denies). Rate limits come from the same config (`rate_per_sec`/`burst`), and rejects surface `401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}` counters for alerting.
-- `/v2/sumeragi/collectors` (JSON): deterministic collector plan snapshot derived from the committed topology and on-chain parameters; exposes `mode`, plan `(height, view)` (where `height` mirrors the current chain height), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, the ordered collector list, and `epoch_seed` (hex) when NPoS is active.
-- `/v2/sumeragi/params` (JSON): snapshot of the on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-- `/v2/sumeragi/new_view/json` (JSON): NEW_VIEW receipt snapshot `{ ts_ms, items: [{height, view, count}] }` (bounded in-memory window; oldest entries evicted).
+- `/v1/sumeragi/new_view` (JSON): latest NEW_VIEW receipt counts per `(height, view)` (bounded in-memory window; oldest entries evicted).
+- `/v1/sumeragi/new_view/sse` (SSE): periodic stream of the same JSON payload for live dashboards.
+- `/v1/sumeragi/status` (Norito by default): consensus status snapshot. Set `Accept: application/json` to receive `{ leader_index, view_change_index, highest_qc { height, view, subject_block_hash }, locked_qc { height, view, subject_block_hash }, commit_qc { height, view, epoch, block_hash, validator_set_hash, validator_set_len, signatures_total }, commit_quorum { height, view, block_hash, signatures_present, signatures_counted, signatures_set_b, signatures_required, last_updated_ms }, tx_queue { depth, capacity, saturated }, epoch { length_blocks, commit_deadline_offset, reveal_deadline_offset }, gossip_fallback_total, block_created_dropped_by_lock_total, block_created_hint_mismatch_total, block_created_proposal_mismatch_total, consensus_message_handling { entries: [{ kind, outcome, reason, total }] }, pacemaker_backpressure_deferrals_total, da_reschedule_total, rbc_store { sessions, bytes, pressure_level, backpressure_deferrals_total, persist_drops_total, evictions_total, recent_evictions[...] }, lane_activity: [{ lane_id, tx_vertices, tx_edges, overlay_count, overlay_instr_total, overlay_bytes_total, rbc_chunks, rbc_bytes_total }], dataspace_activity: [{ lane_id, dataspace_id, tx_served }], rbc_lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], rbc_dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], lane_commitments: [{ block_height, lane_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], dataspace_commitments: [{ block_height, lane_id, dataspace_id, tx_count, total_chunks, rbc_bytes_total, teu_total, block_hash }], lane_governance: [{ lane_id, alias, dataspace_id, visibility, storage_profile, governance, manifest_required, manifest_ready, manifest_path, validator_ids, quorum, protected_namespaces, runtime_upgrade { allow, require_metadata, metadata_key, allowed_ids } }], lane_governance_sealed_total, lane_governance_sealed_aliases, prf { height, view, epoch_seed }, vrf_penalty_epoch, vrf_committed_no_reveal_total, vrf_no_participation_total, vrf_late_reveals_total, collectors_targeted_{current,last_per_block}, redundant_sends_total, worker_loop { stage, stage_started_ms, last_iteration_ms, queue_depths { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, queue_diagnostics { blocked_total { vote_rx, block_payload_rx, rbc_chunk_rx, block_rx, consensus_rx, lane_relay_rx, background_rx }, blocked_ms_total { ... }, blocked_max_ms { ... }, dropped_total { ... } } }, commit_inflight { active, id, height, view, block_hash, started_ms, elapsed_ms, timeout_ms, timeout_total, last_timeout_timestamp_ms, last_timeout_elapsed_ms, last_timeout_height, last_timeout_view, last_timeout_block_hash, pause_total, resume_total, paused_since_ms, pause_queue_depths { ... }, resume_queue_depths { ... } }, settlement { dvp { success_total, failure_total, final_state_totals { none|delivery_only|payment_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { delivery_committed, payment_committed } } }, pvp { success_total, failure_total, final_state_totals { none|primary_only|counter_only|both }, failure_reasons, last_event { observed_at_ms, settlement_id, plan { order, atomicity }, outcome, failure_reason, final_state, legs { primary_committed, counter_committed }, fx_window_ms } } } }` (highest/locked QC snapshots in `highest_qc`/`locked_qc`).
+- `/v1/sumeragi/status/sse` (SSE): periodic stream (≈1s) emitting the same JSON payload as `/v1/sumeragi/status` for dashboards.
+- When `nexus.enabled = false` (Iroha 2 mode), lane/dataspace sections in `/status` and `/v1/sumeragi/status` are emptied and Prometheus output omits lane/dataspace labels so single-lane deployments stay lane-free.
+- `/v1/sumeragi/rbc` (JSON): RBC session/throughput metrics: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
+- `/v1/sumeragi/rbc/sessions` (JSON): RBC session snapshot: `{ sessions_active, items: [{ block_hash, height, view, total_chunks, received_chunks, ready_count, delivered, invalid, payload_hash, recovered, lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }] }] }`.
+- `/v1/sumeragi/pacemaker` (JSON): pacemaker timers and config: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
+- `/v1/sumeragi/qc` (Norito by default): highest/locked QC snapshot; includes `subject_block_hash` for the highest QC when known. Set `Accept: application/json` to receive the JSON view.
+- `/v1/sumeragi/commit_qc/{hash}` (Norito by default): full commit QC record for a block hash (if present). Set `Accept: application/json` to receive `{ subject_block_hash, commit_qc }` with `parent_state_root`, `post_state_root`, and aggregate signature data when available.
+- `/v1/sumeragi/leader` (JSON): leader index snapshot; includes PRF context `{ height, view, epoch_seed }` in NPoS mode when available.
+- `/v1/sumeragi/phases` (JSON): compact per-phase latencies (ms) for operator dashboards; returns the latest observed durations for consensus phases.
+- `/v1/soranet/privacy/{event,share}` (Norito): privacy telemetry ingest for relay/collector signals. Requires `torii.soranet_privacy_ingest.enabled = true`, a token header (`X-SoraNet-Privacy-Token` or `X-API-Token`) when `require_token` is set, and a CIDR allow-list entry (empty list denies). Rate limits come from the same config (`rate_per_sec`/`burst`), and rejects surface `401/403/429` plus `soranet_privacy_ingest_reject_total{endpoint,reason}` counters for alerting.
+- `/v1/sumeragi/collectors` (JSON): deterministic collector plan snapshot derived from the committed topology and on-chain parameters; exposes `mode`, plan `(height, view)` (where `height` mirrors the current chain height), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, the ordered collector list, and `epoch_seed` (hex) when NPoS is active.
+- `/v1/sumeragi/params` (JSON): snapshot of the on-chain Sumeragi parameters `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
+- `/v1/sumeragi/new_view/json` (JSON): NEW_VIEW receipt snapshot `{ ts_ms, items: [{height, view, count}] }` (bounded in-memory window; oldest entries evicted).
   - Updated: also returns `locked_qc { height, view }`.
 
 Aggregate governance-seal counters (`lane_governance_sealed_total`,
 `lane_governance_sealed_aliases`) ride alongside the lane records. They provide a
-quick “are any lanes still sealed?” view in both `/v2/sumeragi/status` and
+quick “are any lanes still sealed?” view in both `/v1/sumeragi/status` and
 `iroha_cli --output-format text ops sumeragi status`; the CLI prints the alias list inline so
 operators can reconcile outstanding manifests without diffing the full payload.
 Use `iroha_cli app nexus lane-report --only-missing --fail-on-sealed` during rollouts
@@ -59,7 +59,7 @@ Network time telemetry
 
 Runbook guidance
 - Alert when `max_over_time(nts_healthy[5m]) == 0` or `max_over_time(nts_fallback[5m]) > 0`; these indicate the time service is unsynchronized or missing samples.
-- Use `nts_min_samples_ok`, `nts_offset_ok`, and `nts_confidence_ok` to pinpoint root cause; check `/v2/time/status` for peer sample and RTT diagnostics.
+- Use `nts_min_samples_ok`, `nts_offset_ok`, and `nts_confidence_ok` to pinpoint root cause; check `/v1/time/status` for peer sample and RTT diagnostics.
 - If `enforcement_mode = "reject"`, admission blocks time-sensitive instructions while unhealthy. Switch to `warn` only for temporary operational relief.
 
 Configuration
@@ -131,7 +131,7 @@ Build-time instrumentation
 
 Profile capability matrix
 
-| Profile    | `/status` | `/metrics` | Developer routes (`/v2/sumeragi/*`, SSE) | Intended use |
+| Profile    | `/status` | `/metrics` | Developer routes (`/v1/sumeragi/*`, SSE) | Intended use |
 |------------|-----------|------------|------------------------------------------|--------------|
 | `disabled` | no        | no         | no                                       | Telemetry fully off |
 | `operator` | yes       | no         | no                                       | Production nodes that only need JSON status |
@@ -313,8 +313,8 @@ deploys flowed through the protected gate.
 When the alert triggers:
 1. Inspect `histogram_quantile(0.5/0.95/0.99, sum by (lane_id,endpoint,le)(rate(torii_lane_admission_latency_seconds_bucket[5m])))`
    to confirm whether the regression is confined to a single endpoint (e.g.
-   `/transaction` vs `/v2/contracts/instance/activate`).
-2. Pull `/v2/sumeragi/status` and review `lane_activity` for the affected lane.
+   `/transaction` vs `/v1/contracts/instance/activate`).
+2. Pull `/v1/sumeragi/status` and review `lane_activity` for the affected lane.
    A spike in `tx_vertices`, `overlay_bytes_total`, or `rbc_bytes_total` hints at
    admission pressure rather than infrastructure issues.
 3. Check `rbc_lane_backlog` and `rbc_dataspace_backlog` in the same status
@@ -463,7 +463,7 @@ Sumeragi metrics
 - VRF emission: `sumeragi_vrf_commits_emitted_total`, `sumeragi_vrf_reveals_emitted_total`, and `sumeragi_vrf_reveals_late_total` count how many commit/reveal messages this validator broadcast (including late reveals accepted after the window). Pair with `sumeragi_vrf_non_reveal_*` counters to monitor participation health at epoch boundaries.
 - Collector fan-out: `sumeragi_redundant_sends_total` (aggregate), `sumeragi_redundant_sends_by_peer{peer="…"}`, and `sumeragi_redundant_sends_by_collector{idx="…"}` highlight redundant collector sends; investigate sustained spikes to locate congested collectors or unhealthy peers.
 - Collector targeting: `sumeragi_collectors_targeted_current` (gauge) tracks the in-flight collector count for the current block; `sumeragi_collectors_targeted_per_block` histogram (`*_bucket`) records how many collectors were targeted per committed block.
-- DA availability warnings: `sumeragi_rbc_da_reschedule_total` (and `/v2/sumeragi/status → da_reschedule_total`) is legacy and no longer increments; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads.
+- DA availability warnings: `sumeragi_rbc_da_reschedule_total` (and `/v1/sumeragi/status → da_reschedule_total`) is legacy and no longer increments; use `sumeragi_da_gate_block_total{reason="missing_local_data"}` for missing local payloads.
 - Channel pressure: `sumeragi_dropped_block_messages_total` and `sumeragi_dropped_control_messages_total` partition channel drops; `dropped_messages` remains the aggregate counter for existing dashboards.
 
 Sumeragi additions (new series)
@@ -509,8 +509,8 @@ NEW_VIEW receipts
   - Latest counts across recent heights: `sum by (height,view) (sumeragi_new_view_receipts_by_hv)`
   - Filter for current height h: `sumeragi_new_view_receipts_by_hv{height="<h>"}`
  - Operator endpoints:
-   - JSON snapshot: `GET /v2/sumeragi/new_view` → `{ ts_ms, items: [{height,view,count}, ...] }`
-   - SSE stream: `GET /v2/sumeragi/new_view/sse` (1s interval) emits the same structure per event.
+   - JSON snapshot: `GET /v1/sumeragi/new_view` → `{ ts_ms, items: [{height,view,count}, ...] }`
+   - SSE stream: `GET /v1/sumeragi/new_view/sse` (1s interval) emits the same structure per event.
    - Note: counts are kept in a bounded in-memory window; oldest `(height, view)` entries are evicted.
 
 Example PromQL
@@ -545,7 +545,7 @@ Example PromQL
   - rate(dropped_messages[5m])
 
 Sumeragi phases latencies (operator dashboards)
-- Endpoint: `GET /v2/sumeragi/phases` (JSON)
+- Endpoint: `GET /v1/sumeragi/phases` (JSON)
 - Shape: `{ propose_ms, collect_da_ms, collect_prevote_ms, collect_precommit_ms, collect_aggregator_ms, commit_ms, pipeline_total_ms, ema_ms }` where `ema_ms` mirrors the phase keys (`propose_ms`, …, `collect_aggregator_ms`, `commit_ms`, `pipeline_total_ms`).
 - Purpose: quick, compact snapshot of the latest observed durations (milliseconds) for each consensus phase to power lightweight dashboards.
 - `collect_aggregator_ms` tracks redundant collector fan-out latency (validator →
@@ -592,7 +592,7 @@ Alert snippets
 - Pacemaker deferrals by reason: `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total[5m]) > 0`
 
 Sumeragi pacemaker (example)
-- Endpoint: `GET /v2/sumeragi/pacemaker`
+- Endpoint: `GET /v1/sumeragi/pacemaker`
 - Shape: `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille, round_elapsed_ms, view_timeout_target_ms, view_timeout_remaining_ms }`
 
 Example response
@@ -612,7 +612,7 @@ Example response
 ```
 
 Sumeragi QC snapshot (example)
-- Endpoint: `GET /v2/sumeragi/qc`
+- Endpoint: `GET /v1/sumeragi/qc`
 - Shape: `{ highest_qc: { height, view, subject_block_hash }, locked_qc: { height, view } }` (QC snapshot)
 
 Example response
@@ -652,7 +652,7 @@ PromQL starters:
 Telemetry expects the following transaction metadata to be present when fraud monitoring is enabled: `fraud_assessment_band`, `fraud_assessment_tenant`, `fraud_assessment_score_bps`, `fraud_assessment_latency_ms`, and, once PSPs complete post-incident triage, `fraud_assessment_disposition` (values documented in `docs/source/fraud_monitoring_system.md`).
 
 Sumeragi leader (example)
-- Endpoint: `GET /v2/sumeragi/leader`
+- Endpoint: `GET /v1/sumeragi/leader`
 - Shape: `{ leader_index, prf: { height, view, epoch_seed } }`
 
 Example response
@@ -668,7 +668,7 @@ Example response
 ```
 
 Sumeragi RBC (status example)
-- Endpoint: `GET /v2/sumeragi/rbc`
+- Endpoint: `GET /v1/sumeragi/rbc`
 - Shape: `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`
 
 Example response
@@ -685,7 +685,7 @@ Example response
 ```
 
 Sumeragi RBC sessions (example)
-- Endpoint: `GET /v2/sumeragi/rbc/sessions`
+- Endpoint: `GET /v1/sumeragi/rbc/sessions`
 - Shape: `{ sessions_active, items: [{ block_hash, height, view, total_chunks, received_chunks, ready_count, delivered, invalid, payload_hash, recovered, lane_backlog: [{ lane_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }], dataspace_backlog: [{ lane_id, dataspace_id, tx_count, total_chunks, pending_chunks, rbc_bytes_total }] }] }`
 
 Example response
@@ -729,7 +729,7 @@ Example response
 ```
 
 Sumeragi telemetry snapshot
-- Endpoint: `GET /v2/sumeragi/telemetry`
+- Endpoint: `GET /v1/sumeragi/telemetry`
 - Shape: `{ availability: { total_votes_ingested, collectors: [{ collector_idx, peer_id, votes_ingested }] }, qc_latency_ms: [{ kind, last_ms }], rbc_backlog: { pending_sessions, total_missing_chunks, max_missing_chunks } }`
 
 Example response
@@ -791,7 +791,7 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 
 ### Troubleshooting: RBC & pacemaker backpressure
 
-1. **Capture live snapshots.** Start with `iroha_cli --output-format text ops sumeragi telemetry` (or `GET /v2/sumeragi/telemetry`) to inspect `rbc_backlog` and vote ingestion, then fetch `/v2/sumeragi/rbc` and `/v2/sumeragi/rbc/sessions` to list active payloads, chunk counts, and recovery flags.
+1. **Capture live snapshots.** Start with `iroha_cli --output-format text ops sumeragi telemetry` (or `GET /v1/sumeragi/telemetry`) to inspect `rbc_backlog` and vote ingestion, then fetch `/v1/sumeragi/rbc` and `/v1/sumeragi/rbc/sessions` to list active payloads, chunk counts, and recovery flags.
 2. **Inspect backlog counters.** Watch `sumeragi_rbc_backlog_chunks_total`, `sumeragi_rbc_backlog_chunks_max`, and `sumeragi_rbc_backlog_sessions_pending`. Sustained non-zero values over five minutes (e.g., `max_over_time(sumeragi_rbc_backlog_chunks_max[5m]) > 0`) imply slow chunk delivery; correlate with `ready_count` vs `delivered` in the session snapshot.
 3. **Check DA availability warnings.** Alert on spikes in `sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy and should remain zero in current pipelines.
 4. **Evaluate pacemaker deferrals and proposal backpressure.** Use `increase(sumeragi_pacemaker_backpressure_deferrals_total[5m])`, `increase(sumeragi_pacemaker_backpressure_deferrals_by_reason_total{reason="..."}[5m])`, `max_over_time(sumeragi_pacemaker_backpressure_deferral_age_ms{reason="..."}[5m])`, `max_over_time(sumeragi_tx_queue_saturated[5m])`, `max_over_time(sumeragi_pending_blocks_blocking[5m])`, `max_over_time(sumeragi_commit_inflight_queue_depth[5m])`, `sumeragi_rbc_backlog_*`, and relay drop/backpressure counters to confirm whether the pacemaker halted due to queue saturation, relay/RBC backlog, or blocking pending blocks. Combine with `increase(gossip_fallback_total[5m])` and `increase(block_created_proposal_mismatch_total[5m])` to surface collectors retrying without progress.
@@ -799,7 +799,7 @@ Additional gauges track backlog pressure: `sumeragi_rbc_backlog_chunks_total`, `
 6. **Correlate logs automatically.** Run `python3 scripts/sumeragi_backpressure_log_scraper.py <logfile>`
    to list each pacemaker deferral together with nearby missing-availability entries. Adjust
    `--window-before` / `--window-after` to match your alert window and add `--status path/to/status.json`
-   when you have a `/v2/sumeragi/status` snapshot handy. The script prints a human-readable summary
+   when you have a `/v1/sumeragi/status` snapshot handy. The script prints a human-readable summary
    by default and supports `--json` for feeding structured reports into on-call automation.
 7. **Escalate persistent issues.** If backlog/deferral metrics stay high beyond two blocks:
    - Freeze new client submissions via admission rate limiting.
@@ -860,7 +860,7 @@ labels:
 annotations:
   summary: "Epoch commitments stalled while blocks continue"
   description: |
-    No VRF commitments observed during an active epoch. Verify validators are online and check `/v2/sumeragi/status.vrf_penalty_epoch`.
+    No VRF commitments observed during an active epoch. Verify validators are online and check `/v1/sumeragi/status.vrf_penalty_epoch`.
 ```
 
 Adjust the 140 minute window to match your deployment’s `sumeragi.npos.vrf.commit_deadline_offset_blocks + sumeragi.npos.vrf.reveal_deadline_offset_blocks` (defaults assume one-second blocks). Link alerts to the response checklist in `docs/source/sumeragi.md#vrf-alert-response-runbook`.
@@ -1011,7 +1011,7 @@ Use this checklist when the Norito transport fails SLOs or generates alerts:
 3. Re-run the Norito RPC smoke test (`python/iroha_python/scripts/run_norito_rpc_smoke.sh`) and alert tests (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`).
 4. Capture evidence (Grafana PNGs, config patches, CLI outputs) and attach it to the NRPC-2 runbook ticket plus `status.md` so the roadmap artifact remains auditable.
 
-A new Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and gauge `sumeragi_membership_mismatch_active{peer}` were introduced to detect validator roster divergence. `/v2/sumeragi/status` now surfaces a `membership_mismatch` block with the active peer list and last mismatch context to speed triage.
+A new Prometheus counter `sumeragi_membership_mismatch_total{peer,height,view}` and gauge `sumeragi_membership_mismatch_active{peer}` were introduced to detect validator roster divergence. `/v1/sumeragi/status` now surfaces a `membership_mismatch` block with the active peer list and last mismatch context to speed triage.
 
 The gauges `sumeragi_membership_view_hash`, `sumeragi_membership_height`, `sumeragi_membership_view`, and `sumeragi_membership_epoch` expose the deterministic membership hash together with the `(height, view, epoch)` context. Compare these values across peers to confirm roster alignment without waiting for mismatch alarms.
 
@@ -1031,7 +1031,7 @@ annotations:
 ```
 
 Operations checklist:
-- Verify the mismatch is expected (e.g., pending topology change) via `/v2/sumeragi/status`.
+- Verify the mismatch is expected (e.g., pending topology change) via `/v1/sumeragi/status`.
 - If unexpected, quarantine the offending peer and confirm configuration files match the on-chain roster.
 - After remediation, ensure `sumeragi_membership_mismatch_active{peer}` returns to `0`.
 

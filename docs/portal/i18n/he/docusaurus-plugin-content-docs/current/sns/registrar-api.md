@@ -26,7 +26,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | דרישה | פרט |
 |-------|------|
-| פרוטוקולים | REST תחת `/v2/sns/*` ושירות gRPC `sns.v1.Registrar`. שניהם מקבלים Norito-JSON (`application/json`) ו-Norito-RPC בינארי (`application/x-norito`). |
+| פרוטוקולים | REST תחת `/v1/sns/*` ושירות gRPC `sns.v1.Registrar`. שניהם מקבלים Norito-JSON (`application/json`) ו-Norito-RPC בינארי (`application/x-norito`). |
 | Auth | `Authorization: Bearer` tokens או תעודות mTLS שמונפקות לכל suffix steward. נקודות קצה רגישות לממשל (freeze/unfreeze, הקצאות שמורות) דורשות `scope=sns.admin`. |
 | מגבלות קצב | registrars חולקים את ה-buckets `torii.preauth_scheme_limits` עם קוראי JSON וכן מגבלות burst לכל suffix: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
 | טלמטריה | Torii חושף `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` עבור מטפלי registrar (סינון לפי `scheme="norito_rpc"`); ה-API גם מגדיל `sns_registrar_status_total{result, suffix_id}`. |
@@ -105,15 +105,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | נקודת קצה | שיטה | Payload | תיאור |
 |-----------|------|---------|--------|
-| `/v2/sns/registrations` | POST | `RegisterNameRequestV1` | רישום או פתיחה מחדש של שם. פותר את tier התמחור, מאמת הוכחות תשלום/ממשל, ומייצר אירועי רישום. |
-| `/v2/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | מאריך את התקופה. אוכף חלונות grace/redemption מהמדיניות. |
-| `/v2/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | מעביר בעלות לאחר הצמדת אישורי ממשל. |
-| `/v2/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | מחליף סט controllers; מאמת כתובות חשבון חתומות. |
-| `/v2/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Freeze של guardian/council. דורש כרטיס guardian והפניה לתיק ממשל. |
-| `/v2/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze לאחר תיקון; מוודא ש-override של council נרשם. |
-| `/v2/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | הקצאת שמות שמורים ע"י steward/council. |
-| `/v2/sns/policies/{suffix_id}` | GET | -- | מביא את `SuffixPolicyV1` הנוכחי (ניתן לקאש). |
-| `/v2/sns/registrations/{selector}` | GET | -- | מחזיר את `NameRecordV1` הנוכחי + מצב אפקטיבי (Active, Grace, וכו'). |
+| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | רישום או פתיחה מחדש של שם. פותר את tier התמחור, מאמת הוכחות תשלום/ממשל, ומייצר אירועי רישום. |
+| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | מאריך את התקופה. אוכף חלונות grace/redemption מהמדיניות. |
+| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | מעביר בעלות לאחר הצמדת אישורי ממשל. |
+| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | מחליף סט controllers; מאמת כתובות חשבון חתומות. |
+| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Freeze של guardian/council. דורש כרטיס guardian והפניה לתיק ממשל. |
+| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze לאחר תיקון; מוודא ש-override של council נרשם. |
+| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | הקצאת שמות שמורים ע"י steward/council. |
+| `/v1/sns/policies/{suffix_id}` | GET | -- | מביא את `SuffixPolicyV1` הנוכחי (ניתן לקאש). |
+| `/v1/sns/registrations/{selector}` | GET | -- | מחזיר את `NameRecordV1` הנוכחי + מצב אפקטיבי (Active, Grace, וכו'). |
 
 **קידוד selector:** מקטע הנתיב `{selector}` מקבל I105, דחוס, או hex קנוני לפי ADDR-5; Torii מנרמל אותו דרך `NameSelectorV1`.
 
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` חייב להכיל רשומת `GovernanceHookV1` תקפה (proposal id, vote hashes, חתימות steward/guardian). כל פקודה פשוט משקפת את נקודת הקצה `/v2/sns/registrations/{selector}/...` המתאימה כדי שמפעילי הבטא יוכלו לתרגל בדיוק את משטחי Torii ש-SDKs יקראו.
+`--governance-json` חייב להכיל רשומת `GovernanceHookV1` תקפה (proposal id, vote hashes, חתימות steward/guardian). כל פקודה פשוט משקפת את נקודת הקצה `/v1/sns/registrations/{selector}/...` המתאימה כדי שמפעילי הבטא יוכלו לתרגל בדיוק את משטחי Torii ש-SDKs יקראו.
 
 ## 4. שירות gRPC
 
@@ -211,7 +211,7 @@ Wire-format: hash סכמת Norito בזמן קומפילציה נרשם תחת
 
 Torii מאמת הוכחות על ידי בדיקה:
 
-1. proposal id קיים בלדג'ר הממשל (`/v2/governance/proposals/{id}`) והסטטוס `Approved`.
+1. proposal id קיים בלדג'ר הממשל (`/v1/governance/proposals/{id}`) והסטטוס `Approved`.
 2. ה-hashes תואמים לארטיפקטי ההצבעה הרשומים.
 3. חתימות steward/guardian מפנות למפתחות הציבוריים הצפויים מ-`SuffixPolicyV1`.
 
@@ -221,7 +221,7 @@ Torii מאמת הוכחות על ידי בדיקה:
 
 ### 6.1 רישום סטנדרטי
 
-1. הלקוח שואל `/v2/sns/policies/{suffix_id}` כדי לקבל מחירים, grace ו-tiers זמינים.
+1. הלקוח שואל `/v1/sns/policies/{suffix_id}` כדי לקבל מחירים, grace ו-tiers זמינים.
 2. הלקוח בונה `RegisterNameRequestV1`:
    - `selector` נגזר מתווית I105 (מועדף) או דחוסה (אפשרות שנייה).
    - `term_years` בתוך גבולות המדיניות.
@@ -248,7 +248,7 @@ Torii מאמת הוכחות על ידי בדיקה:
 
 1. guardian מגיש `FreezeNameRequestV1` עם כרטיס שמפנה ל-id תקרית.
 2. Torii מעביר את הרשומה ל-`NameStatus::Frozen`, ומפיק `NameFrozen`.
-3. לאחר תיקון, council מוציא override; המפעיל שולח DELETE `/v2/sns/registrations/{selector}/freeze` עם `GovernanceHookV1`.
+3. לאחר תיקון, council מוציא override; המפעיל שולח DELETE `/v1/sns/registrations/{selector}/freeze` עם `GovernanceHookV1`.
 4. Torii מאמת את ה-override, ומפיק `NameUnfrozen`.
 
 ## 7. אימות וקודי שגיאה
@@ -266,7 +266,7 @@ Torii מאמת הוכחות על ידי בדיקה:
 ## 8. הערות מימוש
 
 - Torii מאחסן מכרזים ממתינים תחת `NameRecordV1.auction` ודוחה נסיונות רישום ישיר בזמן `PendingAuction`.
-- הוכחות תשלום ממחזרות קבלות של Norito ledger; שירותי treasury מספקים helper APIs (`/v2/finance/sns/payments`).
+- הוכחות תשלום ממחזרות קבלות של Norito ledger; שירותי treasury מספקים helper APIs (`/v1/finance/sns/payments`).
 - SDKs צריכים לעטוף את נקודות הקצה הללו בעזרים חזקים מבחינת טיפוס כדי שארנקים יציגו סיבות שגיאה ברורות (`ERR_SNS_RESERVED`, וכו').
 
 ## 9. השלבים הבאים

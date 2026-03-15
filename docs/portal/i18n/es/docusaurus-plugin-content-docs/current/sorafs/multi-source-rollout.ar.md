@@ -33,7 +33,7 @@ Utilice el código `docs/source/sorafs/runbooks/multi_source_rollout.md`. احر
 ## 1. التحقق قبل التنفيذ
 
 1. **تأكيد مدخلات الحوكمة.**
-   - Haga clic en el botón de encendido `ProviderAdvertV1` para que el producto funcione correctamente. تحقّق عبر `/v2/sorafs/providers` y مع حقول القدرات المتوقعة.
+   - Haga clic en el botón de encendido `ProviderAdvertV1` para que el producto funcione correctamente. تحقّق عبر `/v1/sorafs/providers` y مع حقول القدرات المتوقعة.
    - يجب أن تكون لقطات التليمترية التي توفّر معدلات الكمون/الفشل أحدث من 15 دقيقة قبل كل تشغيل كناري.
 2. **تهيئة الإعدادات.**
    - Establezca un código JSON en el código `iroha_config`:

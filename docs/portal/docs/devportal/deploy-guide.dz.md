@@ -874,7 +874,7 @@ DOCS-7 ལུ་ དྲྭ་ཚིགས་བཟོ་བསྐྲུན་ད
 
 | མིང | དམིགས་ཡུལ། |
 |------|--------------------------------------------------------------------
-| `DOCS_SORAFS_TORII_URL` | Torii ཧོསཊི་ `/v2/sorafs/pin/register` གསལ་སྟོན་འབདཝ་ཨིན། |
+| `DOCS_SORAFS_TORII_URL` | Torii ཧོསཊི་ `/v1/sorafs/pin/register` གསལ་སྟོན་འབདཝ་ཨིན། |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | ཞུ་ཡིག་ཚུ་དང་བཅས་སྒྲ་བཟུང་འབད་ཡོད་པའི་ Epoch ངོས་འཛིན་པ། |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | གསལ་སྟོན་ཕུལ་ནིའི་དོན་ལུ་ དབང་ཚད་མིང་རྟགས་བཀོད་དོ། |
 | I18NI0000409X / `DOCS_SORAFS_ALIAS_NAME` | `perform_submit` འདི་ `true` ཡིན་པའི་སྐབས་ ཊུཔ་ལི་འདི་ གསལ་སྟོན་ལུ་མཐུད་ཡོདཔ་ཨིན། |

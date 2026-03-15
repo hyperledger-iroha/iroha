@@ -46,7 +46,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii предоставляет доступ к моментальным снимкам поставщиков кредитных услуг и реестрам комиссий на панелях мониторинга.
 Мощные ворота для убийств и пенальти:
 
-- ОСТАЛЬНОЕ: `GET /v2/sorafs/capacity/state` отправка входных билетов `credit_ledger[*]` qui
+- ОСТАЛЬНОЕ: `GET /v1/sorafs/capacity/state` отправка входных билетов `credit_ledger[*]` qui
   отражены проверенные поля champs du Ledger в тесте на замачивание. Вуар
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Импортировать файлы трассировки Grafana: `dashboards/grafana/sorafs_capacity_penalties.json`.

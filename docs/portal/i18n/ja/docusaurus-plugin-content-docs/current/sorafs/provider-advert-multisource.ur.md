@@ -61,7 +61,7 @@ SDK の開発と開発 SoraFS のランブックの開発୨୧୨୧୨୧
 ## ツーリング治具
 
 - プロバイダー広告ペイロード `range_capability`、`stream_budget`、`transport_hints` ペイロード
-  `/v2/sorafs/providers` 応答 入場設備を検証するJSON サマリー、解析機能、ストリーム予算、ヒント配列、テレメトリの取り込み、
+  `/v1/sorafs/providers` 応答 入場設備を検証するJSON サマリー、解析機能、ストリーム予算、ヒント配列、テレメトリの取り込み、
 - `cargo xtask sorafs-admission-fixtures` JSON アーティファクト ストリーム予算 輸送ヒント ダッシュボード機能 導入トラック
 - `fixtures/sorafs_manifest/provider_admission/` のフィクスチャの数:
   - 正規のマルチソース広告
@@ -69,7 +69,7 @@ SDK の開発と開発 SoraFS のランブックの開発୨୧୨୧୨୧
 
 ## オーケストレーター Torii 認証
 
-- Torii `/v2/sorafs/providers` 解析範囲機能メタデータ `stream_budget` 解析 `transport_hints` 解析済み範囲機能メタデータ
+- Torii `/v1/sorafs/providers` 解析範囲機能メタデータ `stream_budget` 解析 `transport_hints` 解析済み範囲機能メタデータ
   プロバイダー メタデータ ダウングレード警告 ゲートウェイ範囲エンドポイント クライアント 制約 制限やあ
 - マルチソース オーケストレーター (`sorafs_car::multi_fetch`) 範囲制限、機能調整、ストリーム予算、作業割り当て、強制適用単体テスト、チャンクが大きすぎる、スパース シーク、スロットル シナリオなど
 - `sorafs_car::multi_fetch` ダウングレード シグナル (アライメントの失敗、スロットルされたリクエスト) ストリーム オペレーター オペレーター スキップ プロバイダー スキップفوئے۔

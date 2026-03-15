@@ -65,7 +65,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## כלי עבודה ו-fixtures
 
 - payloads של מודעות ספקים חייבים לכלול `range_capability`, `stream_budget` ו-`transport_hints`.
-  אמתו דרך תגובות `/v2/sorafs/providers` ו-fixtures של admission; סיכומי JSON צריכים לכלול
+  אמתו דרך תגובות `/v1/sorafs/providers` ו-fixtures של admission; סיכומי JSON צריכים לכלול
   את היכולת המפורקת, תקציב הזרם ומערכי hints עבור קליטת טלמטריה.
 - `cargo xtask sorafs-admission-fixtures` חושף stream budgets ו-transport hints בתוך
   artefacts ה-JSON שלו כדי ש-dashboards יעקבו אחר אימוץ היכולת.
@@ -75,7 +75,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## אינטגרציה עם האורקסטרטור ו-Torii
 
-- Torii `/v2/sorafs/providers` מחזיר מטא-דאטה של יכולת טווח מפוענחת יחד עם
+- Torii `/v1/sorafs/providers` מחזיר מטא-דאטה של יכולת טווח מפוענחת יחד עם
   `stream_budget` ו-`transport_hints`. אזהרות downgrade מופעלות כאשר ספקים משמיטים
   את המטא-דאטה החדשה, ונקודות הטווח של ה-gateway אוכפות את אותם כללים עבור לקוחות ישירים.
 - האורקסטרטור רב-מקורות (`sorafs_car::multi_fetch`) אוכף כעת מגבלות טווח,

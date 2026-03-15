@@ -55,7 +55,7 @@ La plomberie runtime relie les interactions PoR via `sorafs_node::por` : le trac
 Notes d'implémentation :
 
 - Utiliser le stack Axum de Torii avec des payloads `norito::json`.
-- Ajouter des schémas Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` expose maintenant la profondeur du backlog ainsi que l'époque/échéance la plus ancienne et les timestamps de succès/échec les plus récents par fournisseur, via `sorafs_node::NodeHandle::por_ingestion_status`, et Torii enregistrer les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour les tableaux de bord.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- Ajouter des schémas Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` expose maintenant la profondeur du backlog ainsi que l'époque/échéance la plus ancienne et les timestamps de succès/échec les plus récents par fournisseur, via `sorafs_node::NodeHandle::por_ingestion_status`, et Torii enregistrer les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour les tableaux de bord.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Planificateur et application des quotas
 

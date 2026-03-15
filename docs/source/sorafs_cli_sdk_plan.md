@@ -17,7 +17,7 @@ summary: High-level requirements for SF-6 CLI/SDK bindings.
 Commands (initial):
 - `sorafs build-manifest` — compile Norito manifest from spec.
 - `sorafs pack-car` — produce CARv2 with chunk plan and proof metadata.
-- `sorafs submit-manifest` — POST to Torii `/v2/sorafs/pin/register`.
+- `sorafs submit-manifest` — POST to Torii `/v1/sorafs/pin/register`.
 - `sorafs verify-proof` — validate PoR proof against manifest.
 - `sorafs cert` — wrapper around self-cert kit for gateways (SF-5a).
 

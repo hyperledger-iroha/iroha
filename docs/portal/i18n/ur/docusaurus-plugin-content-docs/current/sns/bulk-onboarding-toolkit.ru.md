@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```## 3. خودکار ترسیل
 
@@ -131,9 +131,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- مددگار ایک `POST /v2/sns/registrations` فی درخواست کرتا ہے اور رک جاتا ہے جب
+- مددگار ایک `POST /v1/sns/registrations` فی درخواست کرتا ہے اور رک جاتا ہے جب
   پہلی HTTP غلطی۔ جوابات کو NDJSON ریکارڈ کے بطور لاگ میں شامل کیا جاتا ہے۔
-- `--poll-status` درخواست کرتا ہے `/v2/sns/registrations/{selector}` کے بعد ایک بار پھر
+- `--poll-status` درخواست کرتا ہے `/v1/sns/registrations/{selector}` کے بعد ایک بار پھر
   تصدیق کرنے کے لئے ہر ایک بھیجیں (`--poll-attempts` ، پہلے سے طے شدہ 5)
   ریکارڈ کی نمائش۔ `--suffix-map` (JSON میپنگ `suffix_id` کو اقدار پر بتائیں
   "لاحقہ") تاکہ ٹول پولنگ کے لئے `{label}.{suffix}` آؤٹ پٹ کر سکے۔

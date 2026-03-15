@@ -68,7 +68,7 @@ tillar va platformalar.
 Iroha tugunida bir nechta hamkorlik xizmatlari mavjud:
 
 - **Torii (`iroha_torii`)** tranzaktsiyalar, so'rovlar, oqim hodisalari va boshqalar uchun HTTP/WebSocket API'larini ochib beradi.
-  telemetriya (`/v2/...` oxirgi nuqtalari).
+  telemetriya (`/v1/...` oxirgi nuqtalari).
 - **Core (`iroha_core`)** tasdiqlash, konsensus, ijro, boshqaruv va davlat boshqaruvini muvofiqlashtiradi.
 - **Sumeragi (`iroha_core::sumeragi`)** NPoS-ga tayyor konsensus quvur liniyasini ko'rinishdagi o'zgarishlar bilan amalga oshiradi,
   ishonchli translyatsiya ma'lumotlari mavjudligi va sertifikatlar. ga qarang

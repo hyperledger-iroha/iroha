@@ -57,7 +57,7 @@ Cobertura de regresión یہاں موجود ہے:
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Herramientas y accesorios- Cargas útiles de anuncios del proveedor میں `range_capability`, `stream_budget`, اور `transport_hints` شامل ہونا لازم ہے۔
-  `/v2/sorafs/providers` respuestas اور accesorios de admisión کے ذریعے validar کریں؛ Resúmenes JSON, capacidad analizada, presupuesto de flujo, matrices de sugerencias, ingesta de telemetría y datos
+  `/v1/sorafs/providers` respuestas اور accesorios de admisión کے ذریعے validar کریں؛ Resúmenes JSON, capacidad analizada, presupuesto de flujo, matrices de sugerencias, ingesta de telemetría y datos
 - `cargo xtask sorafs-admission-fixtures` Artefactos JSON میں presupuestos de flujo اور sugerencias de transporte دکھاتا ہے تاکہ paneles de control seguimiento de adopción de funciones کر سکیں۔
 - `fixtures/sorafs_manifest/provider_admission/` کے تحت accesorios اب شامل کرتے ہیں:
   - anuncios canónicos de múltiples fuentes,
@@ -65,7 +65,7 @@ Cobertura de regresión یہاں موجود ہے:
 
 ## Orquestador اور Torii انضمام
 
-- Torii `/v2/sorafs/providers` metadatos de capacidad de rango analizados کے ساتھ `stream_budget` اور `transport_hints` واپس کرتا ہے۔
+- Torii `/v1/sorafs/providers` metadatos de capacidad de rango analizados کے ساتھ `stream_budget` اور `transport_hints` واپس کرتا ہے۔
   proveedores جب نئی metadatos چھوڑ دیں تو advertencias de degradación چلتے ہیں، اور puntos finales del rango de puerta de enlace براہ راست clientes کے لیے یہی restricciones
 - Orquestador de fuentes múltiples (`sorafs_car::multi_fetch`) اب límites de rango, alineación de capacidad, اور presupuestos de flujo کو asignación de trabajo کے دوران hacer cumplir کرتا ہے۔ Pruebas unitarias con fragmentos demasiado grandes, búsqueda dispersa y escenarios de limitación.
 - `sorafs_car::multi_fetch` señales de degradación (fallas de alineación, solicitudes limitadas) flujo کرتا ہے تاکہ operadores دیکھ سکیں کہ پلاننگ کے دوران مخصوص proveedores کیوں skip ہوئے۔

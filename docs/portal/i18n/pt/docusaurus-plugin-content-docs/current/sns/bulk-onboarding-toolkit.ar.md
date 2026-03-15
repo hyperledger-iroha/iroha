@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- Use `POST /v2/sns/registrations` para usar o HTTP.
+```- Use `POST /v1/sns/registrations` para usar o HTTP.
   تضاف الردود الى مسار السجل كسجلات NDJSON.
-- `--poll-status` é um código de erro para `/v2/sns/registrations/{selector}`.
+- `--poll-status` é um código de erro para `/v1/sns/registrations/{selector}`.
   A chave (`--poll-attempts`, número 5) não funciona. وفر
   `--suffix-map` (JSON é `suffix_id` como "suffix") no site da empresa
   Use o `{label}.{suffix}` para pesquisa.

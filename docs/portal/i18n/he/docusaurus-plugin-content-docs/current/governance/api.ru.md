@@ -23,7 +23,7 @@ translation_last_reviewed: 2026-02-07
 
 נקודות קצה
 
-- POST `/v2/gov/proposals/deploy-contract`
+- POST `/v1/gov/proposals/deploy-contract`
   - בקשה (JSON):
     {
       "namespace": "אפליקציות",
@@ -38,30 +38,30 @@ translation_last_reviewed: 2026-02-07
   - תגובה (JSON):
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - אימות: ноды канонизируют `abi_hash` ל-заданного `abi_version` ו- отвергают несовпадения. Для `abi_version = "v1"` ожидаемое значение - `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.Contracts API (פריסה)
-- POST `/v2/contracts/deploy`
+- POST `/v1/contracts/deploy`
   - בקשה: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - התנהגות: вычисляет `code_hash` по телу IVM программы ו `abi_hash` по заголовку Sumeragi по заголовку Sumeragi `RegisterSmartContractCode` (מניפסט) ו-`RegisterSmartContractBytes` (פולני `.to` байты) от имени `authority`.
   - תגובה: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - קשור:
-    - קבל `/v2/contracts/code/{code_hash}` -> מניפסט возвращает сохраненный
-    - קבל `/v2/contracts/code-bytes/{code_hash}` -> возвращает `{ code_b64 }`
-- POST `/v2/contracts/instance`
+    - קבל `/v1/contracts/code/{code_hash}` -> מניפסט возвращает сохраненный
+    - קבל `/v1/contracts/code-bytes/{code_hash}` -> возвращает `{ code_b64 }`
+- POST `/v1/contracts/instance`
   - בקשה: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - התנהגות: деплоит предоставленный bytecode и сразу активирует маппинг `(namespace, contract_id)` через `ActivateContractInstance`.
   - תגובה: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
 שירות כינוי
-- POST `/v2/aliases/voprf/evaluate`
+- POST `/v1/aliases/voprf/evaluate`
   - בקשה: { "blinded_element_hex": "..." }
   - תגובה: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - `backend` отражает реализацию оценщика. טכניקה: `blake2b512-mock`.
   - הערות: детерминированный mock оценщик, применяющий Blake2b512 с הפרדת תחום `iroha.alias.voprf.mock.v1`. Предназначен для тестового כלי עבודה, ייצור צינור VOPRF не подключен к Iroha.
   - שגיאות: HTTP `400` при некорректном hex вводе. Torii возвращает Norito מעטפת `ValidationFail::QueryFailed::Conversion` с сообщением декодера.
-- POST `/v2/aliases/resolve`
+- POST `/v1/aliases/resolve`
   - בקשה: { "alias": "GB82 WEST 1234 5698 7654 32" }
   - תגובה: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - הערות: צור זמן ריצה של גשר ISO (`[iso_bridge.account_aliases]` в `iroha_config`). Torii כינוי נורמאלי, удаляя пробелы и приводя к верхнему регистру. Возвращает 404 при отсутствии alias и 503, когда ISO bridge runtime отключен.
-- POST `/v2/aliases/resolve_index`
+- POST `/v1/aliases/resolve_index`
   - בקשה: { "אינדקס": 0 }
   - תגובה: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - הערות: индексы כינוי назначаются детерминированно по порядку конфигурации (מבוסס 0). Клиенты могут кэшировать ответы לא מקוון для построения מסלול ביקורת по событиям аттестации כינוי.
@@ -70,7 +70,7 @@ translation_last_reviewed: 2026-02-07
 - פרמטר מותאם אישית: `max_contract_code_bytes` (JSON u64)
   - Управляет максимальным допустимым размером (в байтах) хранения кода контрактов בשרשרת.
   - ברירת מחדל: 16 MiB. Ноды отклоняют `RegisterSmartContractBytes`, когда размер `.to` изображения превышает лимит, с ошибкой inviolant.
-  - Операторы могут изменять через `SetParameter(Custom)` с `id = "max_contract_code_bytes"` и числовым מטען.- POST `/v2/gov/ballots/zk`
+  - Операторы могут изменять через `SetParameter(Custom)` с `id = "max_contract_code_bytes"` и числовым מטען.- POST `/v1/gov/ballots/zk`
   - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות:
@@ -78,12 +78,12 @@ translation_last_reviewed: 2026-02-07
     - ZK הצבעות מחדש, пытающиеся уменьшить סכום или תפוגה, отклоняются сервером с диагностикой `BallotRejected`.
     - Исполнение контракта должно вызвать `ZK_VOTE_VERIFY_BALLOT` до постановки `SubmitBallot`; хосты לאכוף בריח одноразовый.
 
-- POST `/v2/gov/ballots/plain`
+- POST `/v1/gov/ballots/plain`
   - בקשה: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "directionay"}: "Aye|tainN
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
   - הערות: הצבעות חוזרות только на расширение - новый הקלפי не может уменьшить סכום или expiry существующего נעילת. `owner` должен совпадать с Authority транзакции. Минимальная длительность - `conviction_step_blocks`.
 
-- POST `/v2/gov/finalize`
+- POST `/v1/gov/finalize`
   - בקשה: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - אפקט על השרשרת (פיגום נוכחי): חקיקת הצעה לפרוס утвержденного вставляет минимальный `ContractManifest`, привязанный к `code_hash`, с оNIж10м с оNIж10X, с оNIж10X и помечает ההצעה как נחקק. Если manifest уже существует для `code_hash` с другим `abi_hash`, enactment отклоняется.
@@ -92,22 +92,22 @@ translation_last_reviewed: 2026-02-07
     - Автозакрытие на `h_end` эмитит אושר/נדחה только для Plain-референдумов; ZK-референдумы остаются סגור, לא ניתן לראות את המספר הפיננסי והמוכר של `FinalizeReferendum`.
     - שיעור ההצבעה Проверки используют только approve+reject; נמנע не учитывается בשיעור ההצבעה.
 
-- POST `/v2/gov/enact`
+- POST `/v1/gov/enact`
   - בקשה: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "...?" }
   - תגובה: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
-  - הערות: Torii отправляет подписанную транзакцию при наличии `authority`/`private_key`; иначе возвращает שלד для подписи и отправки клиентом. Preimage опционален и сейчас носит информационный характер.- קבל את `/v2/gov/proposals/{id}`
+  - הערות: Torii отправляет подписанную транзакцию при наличии `authority`/`private_key`; иначе возвращает שלד для подписи и отправки клиентом. Preimage опционален и сейчас носит информационный характер.- קבל את `/v1/gov/proposals/{id}`
   - נתיב `{id}`: hex זיהוי הצעה (64 תווים)
   - תגובה: { "נמצא": bool, "הצעה": { ... }? }
 
-- קבל את `/v2/gov/locks/{rid}`
+- קבל את `/v1/gov/locks/{rid}`
   - נתיב `{rid}`: מחרוזת מזהה משאל עם
   - תגובה: { "נמצא": bool, "referendum_id": "לשחרר", "מנעולים": { ... }? }
 
-- קבל `/v2/gov/council/current`
+- קבל `/v1/gov/council/current`
   - תגובה: { "epoch": N, "members": [{ "account_id": "..." }, ...] }
   - הערות: возвращает המועצה התמידית при наличии; иначе деривирует детерминированный fallback, используя настроенный נכס סיכון וספים сохранены על השרשרת).
 
-- POST `/v2/gov/council/derive-vrf` (תכונה: gov_vrf)
+- POST `/v1/gov/council/derive-vrf` (תכונה: gov_vrf)
   - בקשה: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "...", "variant": "רגיל|קטן", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - התנהגות: проверяет VRF proof каждого кандидата на каноническом קלט, полученном из `chain_id`, `epoch` ו-beacon hasпледе; сортирует по פלט בתים desc с שוברי שוויון; возвращает top `committee_size` участников. Не сохраняется.
   - תגובה: { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "verified": K }
@@ -180,14 +180,14 @@ RBAC
 - Транзакции, удовлетворяющие הוק, должны включать metadata `gov_upgrade_id=<value>` (או תקליט, אופציונלי אופציונלי, מניפסט תקף של אפליקציות, מניפסט תקף) מניין מניפסט требуемыми.
 
 נקודת קצה של נוחות
-- POST `/v2/gov/protected-namespaces` - מוצר `gov_protected_namespaces` פורסם כעת.
+- POST `/v1/gov/protected-namespaces` - מוצר `gov_protected_namespaces` פורסם כעת.
   - בקשה: { "מרחבי שמות": ["אפליקציות", "מערכת"] }
   - תגובה: { "בסדר": true, "applied": 1 }
   - הערות: предназначен для admin/testing; требует API token при конфигурации. В ייצור предпочтительнее подписанная транзакция с `SetParameter(Custom)`.CLI עוזרי
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - Получает контрактные инстансы למרחב שמות и проверяет, что:
     - Torii хранит bytecode для каждого `code_hash`, ו-Eго Blake2b-32 digest соответствует `code_hash`.
-    - Manifest под `/v2/contracts/code/{code_hash}` сообщает совпадающие `code_hash` ו-`abi_hash`.
+    - Manifest под `/v1/contracts/code/{code_hash}` сообщает совпадающие `code_hash` ו-`abi_hash`.
     - הצעת ממשל חוקקה על ידי Существует ל-`(namespace, contract_id, code_hash, abi_hash)`, деривированный тем же offer-id hashing, что использует нода.
   - Выводит JSON отчет с `results[]` по каждому контракту (בעיות, מניפסט/קוד/סיכומי הצעה) ותקציר אופנתי, еслианло по100X (100X).
   - ניתן להשתמש במרחבי שמות מוגנים או להגדיר זרימות עבודה מבוקרות של ממשל.
@@ -204,7 +204,7 @@ RBAC
   - סיכום вывод отражает `vote --mode zk`, включая טביעת אצבע закодированной инструкции и читаемые קלפי поля (Prometheus,Prometheus, `duration_blocks`, `direction`), давая быстрое подтверждение перед подписью שלד.
 
 רישום מופעים
-- קבל `/v2/gov/instances/{ns}` - список активных контрактных инстансов למרחב שמות.
+- קבל `/v1/gov/instances/{ns}` - список активных контрактных инстансов למרחב שמות.
   - פרמטרים של שאילתה:
     - `contains`: фильтр по תת-מחרוזת `contract_id` (תלוי רישיות)
     - `hash_prefix`: фильтр по קידומת hex `code_hash_hex` (אותיות קטנות)
@@ -212,10 +212,10 @@ RBAC
     - `order`: `cid_asc` (ברירת מחדל), `cid_desc`, `hash_asc`, `hash_desc`
   - תגובה: { "namespace": "ns", "instances": [{ "contract_id": "...", "code_hash_hex": "..." }, ...], "total": N, "offset": n, "limit": m }
   - עוזר SDK: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) או `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).ביטול נעילת סריקה (מפעיל/ביקורת)
-- קבל את `/v2/gov/unlocks/stats`
+- קבל את `/v1/gov/unlocks/stats`
   - תגובה: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
   - הערות: `last_sweep_height` отражает последний גובה בלוק, когда מנעולים שפג תוקפם были swep и נמשכים. `expired_locks_now` рассчитывается путем сканирования נעילת רשומות с `expiry_height <= height_current`.
-- POST `/v2/gov/ballots/zk-v1`
+- POST `/v1/gov/ballots/zk-v1`
   - בקשה (DTO בסגנון v1):
     {
       "authority": "i105...",
@@ -230,7 +230,7 @@ RBAC
     }
   - תגובה: { "OK": true, "accepted": true, "tx_instructions": [{...}] }
 
-- POST `/v2/gov/ballots/zk-v1/ballot-proof` (תכונה: `zk-ballot`)
+- POST `/v1/gov/ballots/zk-v1/ballot-proof` (תכונה: `zk-ballot`)
   - פרינט `BallotProof` JSON שלד ושלד `CastZkBallot`.
   - בקשה:
     {
@@ -298,13 +298,13 @@ for (expected, kind) in offences.iter().enumerate() {
 
 Операторы и инструменты могут просматривать и повторно рассылать מטענים через:
 
-- Torii: `GET /v2/sumeragi/evidence` ו-`GET /v2/sumeragi/evidence/count`.
+- Torii: `GET /v1/sumeragi/evidence` ו-`GET /v1/sumeragi/evidence/count`.
 - CLI: `iroha ops sumeragi evidence list`, `... count`, `... submit --evidence-hex <payload>`.
 
 ממשל должна рассматривать ראיות בתים как каноническое доказательство:1. **Собрать מטען** до истечения срока. Архивировать сырые Norito בתים вместе с גובה/תצוגה מטא נתונים.
 2. **Подготовить штраф** встроив מטען в משאל или הוראות סודו (например, `Unregister::peer`). Исполнение повторно валидирует מטען; פגום או ראיות מעופשות отклоняется детерминированно.
 3. **Запланировать מעקב топологию** чтобы нарушивший валидатор не смог сразу вернуться. Типовые потоки ставят `SetParameter(Sumeragi::NextMode)` ו-`SetParameter(Sumeragi::ModeActivationHeight)` с обновленным סגל.
-4. **Аудит результатов** через `/v2/sumeragi/evidence` ו-`/v2/sumeragi/status`, чтобы убедиться, что счетчик הוכחות вырос и ממשל.
+4. **Аудит результатов** через `/v1/sumeragi/evidence` ו-`/v1/sumeragi/status`, чтобы убедиться, что счетчик הוכחות вырос и ממשל.
 
 ### Последовательность קונצנזוס משותף
 
@@ -319,11 +319,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- זמן ריצה ו-CLI מציגים מופעים מבוימים של `/v2/sumeragi/params` ו-`iroha --output-format text ops sumeragi params`, ניתנים להורדה של גבהי הפעלה וסגל.
+- זמן ריצה ו-CLI מציגים מופעים מבוימים של `/v1/sumeragi/params` ו-`iroha --output-format text ops sumeragi params`, ניתנים להורדה של גבהי הפעלה וסגל.
 - Автоматизация ממשל всегда должна:
   1. Финализировать решение об исключении (или восстановлении), поддержанное ראיות.
   2. התקן מעקב אחר תצורה מחדש с `mode_activation_height = h_current + activation_lag_blocks`.
-  3. Мониторить `/v2/sumeragi/status` לשירות `effective_consensus_mode` ב-ожидаемой высоте.
+  3. Мониторить `/v1/sumeragi/status` לשירות `effective_consensus_mode` ב-ожидаемой высоте.
 
 Любой скрипт, который ротирует валидаторов или применяет slashing, **לא תקף** пытаться הפעלת יד אפס או אופטימיזציה; такие транзакции отклоняются и оставляют сеть в предыдущем режиме.
 

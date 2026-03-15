@@ -16,11 +16,11 @@ translation_last_reviewed: 2026-02-07
 - Il s'agit d'une autorité SignedTransaction et d'une autorité chain_id pour le POST `/transaction`.
 - Kit SDK :
 - Python (`iroha_python`) : `ToriiClient.get_governance_proposal_typed` ou `GovernanceProposalResult` (état/type) et `ToriiClient.get_governance_referendum_typed` ou `GovernanceReferendumResult`. و`ToriiClient.get_governance_tally_typed` à `GovernanceTally`, و`ToriiClient.get_governance_locks_typed` à `GovernanceLocksResult`, و`ToriiClient.get_governance_unlock_stats_typed` à `GovernanceUnlockStats`, و`ToriiClient.list_governance_instances_typed` يعيد `GovernanceInstancesPage`, فارضا وصولا بنمط tapé عبر سطح الحوكمة مع امثلة استخدام في README.
-- Fichier Python (`iroha_torii_client`) : `ToriiClient.finalize_referendum` et `ToriiClient.enact_proposal` et `GovernanceInstructionDraft` typé (voir `tx_instructions`). (Torii) ، لتجنب تحليل JSON اليدوي عند تركيب سكربتات Finalize/Enact.- JavaScript (`@iroha/iroha-js`) : `ToriiClient` pour les aides saisies pour le déverrouillage et les déverrouillages. `listGovernanceInstances(namespace, options)` est un conseil municipal (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) pour Node.js. Utilisez le VRF pour `/v2/gov/instances/{ns}` et le VRF pour les autres appareils.
+- Fichier Python (`iroha_torii_client`) : `ToriiClient.finalize_referendum` et `ToriiClient.enact_proposal` et `GovernanceInstructionDraft` typé (voir `tx_instructions`). (Torii) ، لتجنب تحليل JSON اليدوي عند تركيب سكربتات Finalize/Enact.- JavaScript (`@iroha/iroha-js`) : `ToriiClient` pour les aides saisies pour le déverrouillage et les déverrouillages. `listGovernanceInstances(namespace, options)` est un conseil municipal (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) pour Node.js. Utilisez le VRF pour `/v1/gov/instances/{ns}` et le VRF pour les autres appareils.
 
 نقاط النهاية
 
-- POSTE `/v2/gov/proposals/deploy-contract`
+- POSTE `/v1/gov/proposals/deploy-contract`
   - Texte (JSON) :
     {
       "espace de noms": "applications",
@@ -35,28 +35,28 @@ translation_last_reviewed: 2026-02-07
   - الرد (JSON) :
     { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
   - Fonction : Utiliser la fonction `abi_hash` et `abi_version` et la version `abi_hash`. Pour `abi_version = "v1"`, la version actuelle est `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.API العقود (déployer)
-- POSTE `/v2/contracts/deploy`
+- POSTE `/v1/contracts/deploy`
   - Contenu : { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Nom : `code_hash` pour IVM et `abi_hash` pour `abi_version`, pour `RegisterSmartContractCode` (manifeste) et `RegisterSmartContractBytes` (pour `.to`) ou `authority`.
   - الرد : { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - ذي صلة:
-    - GET `/v2/contracts/code/{code_hash}` -> يعيد manifeste المخزن
-    - OBTENIR `/v2/contracts/code-bytes/{code_hash}` -> ou `{ code_b64 }`
-- POSTE `/v2/contracts/instance`
+    - GET `/v1/contracts/code/{code_hash}` -> يعيد manifeste المخزن
+    - OBTENIR `/v1/contracts/code-bytes/{code_hash}` -> ou `{ code_b64 }`
+- POSTE `/v1/contracts/instance`
   - Contenu : { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Élément : ينشر البايتات المقدمة ويُفعل فورا ربط `(namespace, contract_id)` ou `ActivateContractInstance`.
   - Définition : { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }خدمة الاسماء المستعارة
-- POSTE `/v2/aliases/voprf/evaluate`
+- POSTE `/v1/aliases/voprf/evaluate`
   - Titre : { "blinded_element_hex": "..." }
   - Contenu : { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - `backend` يعكس تنفيذ المقيم. Nom de l'utilisateur : `blake2b512-mock`.
   - ملاحظات: مقيم mock حتمي يطبق Blake2b512 مع فصل مجال `iroha.alias.voprf.mock.v1`. Vous devez utiliser le VOPRF pour Iroha.
   - Type : HTTP `400` est utilisé en hexadécimal. Utilisez Torii pour Norito `ValidationFail::QueryFailed::Conversion` pour votre décodeur.
-- POSTE `/v2/aliases/resolve`
+- POSTE `/v1/aliases/resolve`
   - Nom : { "alias": "GB82 WEST 1234 5698 7654 32" }
   - Nom : { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
   - Types : vous pouvez utiliser le pont ISO (`[iso_bridge.account_aliases]` et `iroha_config`). يقوم Torii بتطبيع الاسماء عبر ازالة الفراغات وتحويلها الى احرف كبيرة قبل البحث. يعيد 404 عندما يكون الاسم غير موجود و503 عندما يكون runtime الخاص بـ ISO bridge معطلا.
-- POSTE `/v2/aliases/resolve_index`
+- POSTE `/v1/aliases/resolve_index`
   - Nom : { "index": 0 }
   - Contenu : { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
   - ملاحظات : مؤشرات الاسماء تعين بشكل حتمي حسب ترتيب التكوين (basé sur 0). يمكن للعملاء تخزين الردود hors ligne لبناء مسارات تدقيق لاحداث attestation الخاصة بالاسماء.حد حجم الكود
@@ -65,38 +65,38 @@ translation_last_reviewed: 2026-02-07
   - Capacité : 16 Mo. Le `RegisterSmartContractBytes` est un invariant.
   - يمكن للمشغلين التعديل عبر `SetParameter(Custom)` et `id = "max_contract_code_bytes"` وحمولة رقمية.
 
-- POSTE `/v2/gov/ballots/zk`
+- POSTE `/v1/gov/ballots/zk`
   - Nom : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
   - الرد : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
   - ملاحظات :
     - عندما تتضمن المدخلات العامة للدائرة `owner` و`amount` و`duration_blocks`, وتتتحقق البرهان من VK Utilisez le verrou et le verrou pour `election_id` avec `owner`. تبقى الاتجاهات مخفية (`unknown`)؛ ويتم تحديث montant/expiration فقط. Les éléments monotones : montant et expiration sont tous deux (effets max(amount, prev.amount) et max(expiry, prev.expiry)).
     - اعادات التصويت ZK التي تحاول تقليل montant et expiration يتم رفضها من جهة الخادم مع تشخيصات `BallotRejected`.
-    - يجب على تنفيذ العقد استدعاء `ZK_VOTE_VERIFY_BALLOT` pour `SubmitBallot` ; ويفرض المضيفون loquet لمرة واحدة.- POSTE `/v2/gov/ballots/plain`
+    - يجب على تنفيذ العقد استدعاء `ZK_VOTE_VERIFY_BALLOT` pour `SubmitBallot` ; ويفرض المضيفون loquet لمرة واحدة.- POSTE `/v1/gov/ballots/plain`
   - الطلب : { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Oui|Non|S'abstenir" }
   - الرد : { "ok": true, "accepted": true, "tx_instructions": [{...}] }
-  - ملاحظات: اعادات التصويت تمتد فقط - لا يمكن لvote جديد تقليل montant et او expiration لقفل موجود. يجب ان يساوي `owner` سلطة المعاملة. Il s'agit d'un `conviction_step_blocks`.- POSTE `/v2/gov/finalize`
+  - ملاحظات: اعادات التصويت تمتد فقط - لا يمكن لvote جديد تقليل montant et او expiration لقفل موجود. يجب ان يساوي `owner` سلطة المعاملة. Il s'agit d'un `conviction_step_blocks`.- POSTE `/v1/gov/finalize`
   - Nom : { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
   - Définition : { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
   - الاثر على السلسلة (الهيكل الحالي): تنفيذ اقتراح déployer معتمد يدرج `ContractManifest` ادنى بمفتاح `code_hash` مع `abi_hash` المتوقع ويضع الاقتراح بحالة Adoptée. Il s'agit du manifeste correspondant à `code_hash` et à `abi_hash`.
   - ملاحظات :
     - لانتخابات ZK, يجب على مسارات العقد استدعاء `ZK_VOTE_VERIFY_TALLY` قبل تنفيذ `FinalizeElection` ; ويفرض المضيفون loquet لمرة واحدة. يرفض `FinalizeReferendum` الاستفتاءات ZK حتى يتم انهاء tally للانتخابات.
     - الاغلاق التلقائي عند `h_end` يصدر Approuvé/Rejeté فقط للاستفتاءات Plain؛ تبقى استفتاءات ZK Closed حتى يتم ارسال tally منته ويجري تنفيذ `FinalizeReferendum`.
-    - فحوصات participation تستخدم approuver+rejeter فقط؛ s'abstenir en cas de participation.- POSTE `/v2/gov/enact`
+    - فحوصات participation تستخدم approuver+rejeter فقط؛ s'abstenir en cas de participation.- POSTE `/v1/gov/enact`
   - Nom : { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
   - Définition : { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - ملاحظات: يقدم Torii المعاملة الموقعة عندما توفر `authority`/`private_key` ; والا يعيد هيكلا لتوقيع العملاء وارساله. الـ preimage اختيارية وحاليا معلوماتية.
 
-- OBTENIR `/v2/gov/proposals/{id}`
+- OBTENIR `/v1/gov/proposals/{id}`
   - Nom `{id}` : Nom hexadécimal (64 caractères)
   - الرد : { "found": bool, "proposal": { ... } ? }
 
-- OBTENIR `/v2/gov/locks/{rid}`
+- OBTENIR `/v1/gov/locks/{rid}`
   - Nom `{rid}` : chaîne de caractères
   - Définition : { "found": bool, "referendum_id": "rid", "locks": { ... } ? }
 
-- OBTENIR `/v2/gov/council/current`
+- OBTENIR `/v1/gov/council/current`
   - الرد : { "epoch": N, "members": [{ "account_id": "..." }, ...] }
-  - ملاحظات: يعيد Council المحفوظ اذا كان موجودا؛ والا يشتق بديلا حتميا باستخدام اصل participation المضبوط والعتبات (يعكس مواصفات VRF حتى تثبت ادلة VRF الحية على السلسلة).- POST `/v2/gov/council/derive-vrf` (fonctionnalité : gov_vrf)
+  - ملاحظات: يعيد Council المحفوظ اذا كان موجودا؛ والا يشتق بديلا حتميا باستخدام اصل participation المضبوط والعتبات (يعكس مواصفات VRF حتى تثبت ادلة VRF الحية على السلسلة).- POST `/v1/gov/council/derive-vrf` (fonctionnalité : gov_vrf)
   - Nom : { "committee_size": 21, "epoch": 123 ? , "candidats": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
   - Fonction : Vous pouvez utiliser VRF pour créer un système de hachage `chain_id` et `epoch` et hash للبلوك؛ يرتب حسب bytes الخرج desc مع كاسرات تعادل؛ ويعيد اعلى `committee_size` من الاعضاء. لا يتم الحفظ.
   - الرد : { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "vérifié": K }
@@ -167,14 +167,14 @@ Espaces de noms محمية
 - Les métadonnées `gov_upgrade_id=<value>` (pour le manifeste) sont également associées au crochet. بواسطة quorum الخاص بالmanifest.
 
 Point de terminaison
-- POST `/v2/gov/protected-namespaces` - يطبق `gov_protected_namespaces` مباشرة على العقدة.
+- POST `/v1/gov/protected-namespaces` - يطبق `gov_protected_namespaces` مباشرة على العقدة.
   - الطلب : { "namespaces": ["apps", "system"] }
   - الرد : { "ok": vrai, "appliqué": 1 }
   - ملاحظات : مخصص للادارة/الاختبار؛ Le jeton API est ici. للانتاج، يفضل ارسال معاملة موقعة مع `SetParameter(Custom)`.مساعدات CLI
 -`iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - يجلب مثيلات العقود للnamespace ويتحقق من :
     - Torii est un bytecode pour `code_hash`, et digest Blake2b-32 est `code_hash`.
-    - Le manifeste est `/v2/contracts/code/{code_hash}` et `code_hash` et `abi_hash`.
+    - Le manifeste est `/v1/contracts/code/{code_hash}` et `code_hash` et `abi_hash`.
     - يوجد اقتراح حوكمة a été promulguée par `(namespace, contract_id, code_hash, abi_hash)` pour le hachage de l'ID de proposition dans le cadre de la procédure de hachage.
   - JSON utilise `results[]` pour les problèmes (problèmes, manifeste/code/proposition) pour votre projet. تعطيله (`--no-summary`).
   - Vous pouvez utiliser des espaces de noms pour déployer des espaces de noms.
@@ -188,7 +188,7 @@ Point de terminaison
 -`iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - Les alias `--lock-amount`/`--lock-duration-blocks` sont des indicateurs de sécurité pour ZK.
   - ناتج الملخص يعكس `vote --mode zk` pour les empreintes digitales et les bulletins de vote (`owner`, `amount`, `duration_blocks`, `direction`) ، لتاكيد سريع قبل توقيع الهيكل.قائمة المثيلات
-- GET `/v2/gov/instances/{ns}` - يسرد مثيلات العقود النشطة لnamespace.
+- GET `/v1/gov/instances/{ns}` - يسرد مثيلات العقود النشطة لnamespace.
   - Paramètres de requête :
     - `contains` : remplacer la sous-chaîne par `contract_id` (sensible à la casse)
     - `hash_prefix` : remplacer par hexadécimal par `code_hash_hex` (minuscule)
@@ -198,10 +198,10 @@ Point de terminaison
   - SDK d'assistance : `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) et `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
 
 مسح déverrouille (المشغل/التدقيق)
-- OBTENIR `/v2/gov/unlocks/stats`
+- OBTENIR `/v1/gov/unlocks/stats`
   - Couleur : { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
   - ملاحظات: `last_sweep_height` يعكس اخر ارتفاع بلوك تم فيه مسح verrous منتهية وتخزينها. `expired_locks_now` est utilisé pour verrouiller le verrou `expiry_height <= height_current`.
-- POSTE `/v2/gov/ballots/zk-v1`
+- POSTE `/v1/gov/ballots/zk-v1`
   - الطلب (DTO version v1) :
     {
       "autorité": "i105...",
@@ -214,7 +214,7 @@ Point de terminaison
       "propriétaire": "i105…?",
       "nullifier": "blake2b32:...64hex?"
     }
-  - الرد : { "ok": true, "accepted": true, "tx_instructions": [{...}] }- POST `/v2/gov/ballots/zk-v1/ballot-proof` (fonctionnalité : `zk-ballot`)
+  - الرد : { "ok": true, "accepted": true, "tx_instructions": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (fonctionnalité : `zk-ballot`)
   - JSON `BallotProof` est remplacé par `CastZkBallot`.
   - الطلب:
     {
@@ -280,13 +280,13 @@ for (expected, kind) in offences.iter().enumerate() {
 
 يمكن للمشغلين والادوات فحص واعادة بث الحمولات عبر:
 
-- Torii : `GET /v2/sumeragi/evidence` et `GET /v2/sumeragi/evidence/count`.
+- Torii : `GET /v1/sumeragi/evidence` et `GET /v1/sumeragi/evidence/count`.
 - CLI : `iroha ops sumeragi evidence list`, `... count`, و`... submit --evidence-hex <payload>`.
 
 يجب على الحوكمة اعتبار bytes الخاصة بالevidence دليلا قانونيا:1. **جمع الحمولة** قبل ان تتقادم. Les octets Norito contiennent des métadonnées pour la hauteur/la vue.
 2. **تجهيز العقوبة** عبر تضمين الحمولة في referendum او تعليمة sudo (مثل `Unregister::peer`). تعيد عملية التنفيذ التحقق من الحمولة؛ preuves المشوهة او القديمة ترفض حتميا.
 3. **جدولة طوبولوجيا المتابعة** حتى لا يتمكن المدقق المخالف من العودة فورا. Les utilisateurs `SetParameter(Sumeragi::NextMode)` et `SetParameter(Sumeragi::ModeActivationHeight)` sont inscrits sur la liste.
-4. **تدقيق النتائج** عبر `/v2/sumeragi/evidence` و`/v2/sumeragi/status` لضمان ان عداد تقدم وان الحوكمة طبقت الازالة.
+4. **تدقيق النتائج** عبر `/v1/sumeragi/evidence` و`/v1/sumeragi/status` لضمان ان عداد تقدم وان الحوكمة طبقت الازالة.
 
 ### تسلسل الاجماع المشترك
 
@@ -299,11 +299,11 @@ for (expected, kind) in offences.iter().enumerate() {
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
-```- Le runtime et les éléments CLI mis en scène sont `/v2/sumeragi/params` et `iroha --output-format text ops sumeragi params` pour mettre en place un processus de mise en scène. وقوائم المدققين.
+```- Le runtime et les éléments CLI mis en scène sont `/v1/sumeragi/params` et `iroha --output-format text ops sumeragi params` pour mettre en place un processus de mise en scène. وقوائم المدققين.
 - يجب ان تقوم اتمتة الحوكمة دائما بما يلي:
   1. انهاء قرار الازالة (او الاستعادة) المدعوم بـ preuve.
   2. Utilisez le bouton `mode_activation_height = h_current + activation_lag_blocks`.
-  3. مراقبة `/v2/sumeragi/status` حتى يتبدل `effective_consensus_mode` عند الارتفاع المتوقع.
+  3. مراقبة `/v1/sumeragi/status` حتى يتبدل `effective_consensus_mode` عند الارتفاع المتوقع.
 
 Il s'agit d'un problème de décalage et de réduction du décalage, ainsi que du transfert. يتم رفض تلك المعاملات وتترك الشبكة على الوضع السابق.
 

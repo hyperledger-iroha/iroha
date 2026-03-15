@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -130,10 +130,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- طلب مساعد `POST /v2/sns/registrations` و HTTP
+- طلب مساعد `POST /v1/sns/registrations` و HTTP
   حدث خطأ أثناء الإجهاض. يتم إلحاق مسار سجل الردود بسجلات NDJSON
   ہوتے ہيں.
-- `--poll-status` تم الإرسال بعد `/v2/sns/registrations/{selector}`
+- `--poll-status` تم الإرسال بعد `/v1/sns/registrations/{selector}`
   استعلام جديد مرة أخرى (أكثر من `--poll-attempts`، الافتراضي 5) سجل هذا
   مرئية ہونے کی تصدیق ہو۔ `--suffix-map` (JSON جو `suffix_id` قيم "اللاحقة"
   خريطة الخريطة) أداة أداة الرسم `{label}.{suffix}` تشتق الأحرف الحرفية من كر سك.

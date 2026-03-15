@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-02-07
 
 |チェケオ |検証 |証拠 |
 |------|-----------|----------|
-| El レジストリは、capacidad の正規宣言を受け入れます。アプリ API 経由で `/v2/sorafs/capacity/declare` を統合テストし、企業のマネージャを検証し、メタデータをキャプチャし、レジストリからハンドオフします。 | `crates/iroha_torii/src/routing.rs:7654` |
+| El レジストリは、capacidad の正規宣言を受け入れます。アプリ API 経由で `/v1/sorafs/capacity/declare` を統合テストし、企業のマネージャを検証し、メタデータをキャプチャし、レジストリからハンドオフします。 | `crates/iroha_torii/src/routing.rs:7654` |
 | El スマート コントラクトの rechaza ペイロードの塩基配列 |プロバイダーの ID をテストし、GIB のコンプロメティドが一致して宣言会社が継続的に保持されます。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | El CLI はオンボーディングの正規のアーティファクトを生成します。 CLI のハーネスは、Norito/JSON/Base64 の確定的な検証ラウンドトリップをオフラインでのオペランドの準備宣言として記述します。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 |オペラドールの入場とゴベルナンザのガードレールのキャプチャ |宣言の列挙と宣言の文書化、政策のデフォルトと議会の改訂の延期。 | `../storage-capacity-marketplace.md` |

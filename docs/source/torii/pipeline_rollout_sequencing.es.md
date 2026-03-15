@@ -14,14 +14,14 @@ translation_last_reviewed: 2026-01-30
 -->
 
 ---
-title: `/v2/pipeline` Rollout Sequencing (SDKs)
-summary: Locked sequencing and evidence requirements for aligning `/v2/pipeline` adoption across Swift, Android, JS, and Torii.
+title: `/v1/pipeline` Rollout Sequencing (SDKs)
+summary: Locked sequencing and evidence requirements for aligning `/v1/pipeline` adoption across Swift, Android, JS, and Torii.
 ---
 
-# `/v2/pipeline` Rollout Sequencing (SDKs)
+# `/v1/pipeline` Rollout Sequencing (SDKs)
 
-This plan locks the cross-SDK order of operations for `/v2/pipeline` adoption so
-roadmap coordination actions ("Align `/v2/pipeline` rollout sequencing") have a
+This plan locks the cross-SDK order of operations for `/v1/pipeline` adoption so
+roadmap coordination actions ("Align `/v1/pipeline` rollout sequencing") have a
 single, auditable source. The sequencing was ratified during the Feb 2026 Torii
 roadmap sync and is now considered **locked**.
 
@@ -30,12 +30,12 @@ roadmap sync and is now considered **locked**.
 | Stage | Scope | Owner(s) | Status | Evidence |
 |-------|-------|----------|--------|----------|
 | 0 - Torii staging validation | Run the staging validation checklist and record the rollout artefacts | Torii PM / SRE | Completed | `docs/source/torii/pipeline_staging_validation.md` |
-| 1 - Swift default path | Move Swift submissions/polling to `/v2/pipeline/transactions`, add retries + downgrade toggles, and document staging steps | Swift Lead / Torii delegate | Completed | `docs/source/sdk/swift/pipeline_adoption_guide.md`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`, `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` |
+| 1 - Swift default path | Move Swift submissions/polling to `/v1/pipeline/transactions`, add retries + downgrade toggles, and document staging steps | Swift Lead / Torii delegate | Completed | `docs/source/sdk/swift/pipeline_adoption_guide.md`, `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`, `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` |
 | 2 - Android + mock harness reuse | Align Android HTTP client + mock harness with the same retry/idempotency policy; share fixtures with Swift/JS | Android Networking TL / SDK Program Lead | In Progress (policy locked; fixtures shared) | `docs/source/torii/mock_harness_workshop.md`, `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/websocket/ToriiWebSocketSubscriptionTests.java` |
 | 3 - JS confirmation | Keep JS wrappers aligned with the shared retry/backoff profile and NRPC fixtures | JS Lead | Completed | `docs/source/sdk/js/torii_retry_policy.md`, `javascript/iroha_js/src/toriiClient.js` |
 
 Stages 2-3 reuse the Torii mock harness fixtures validated in Stage 1 so all SDK
-clients exercise the same `/v2/pipeline` behaviours.
+clients exercise the same `/v1/pipeline` behaviours.
 
 ## Gates & Reporting
 
@@ -50,7 +50,7 @@ clients exercise the same `/v2/pipeline` behaviours.
 ## Decision Log
 
 - **2026-02 Torii roadmap sync:** confirmed the stage ordering above, agreed
-  that Swift remains the reference client for `/v2/pipeline` retries/polling,
+  that Swift remains the reference client for `/v1/pipeline` retries/polling,
   and recorded the requirement that all SDKs cite the same fixtures when
   publishing evidence.
 - **Follow-ups:** Android keeps the sequencing but finishes queue persistence +

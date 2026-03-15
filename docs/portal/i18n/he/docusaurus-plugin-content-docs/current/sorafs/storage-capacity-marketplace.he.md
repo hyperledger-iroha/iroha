@@ -62,15 +62,15 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - `ReplicationOrderV1` קושר manifests להקצאות שהונפקו על ידי governance עם יעדי יתירות, ספי SLA והבטחות לכל assignment; הוולידטורים אוכפים handles קנוניים של chunker, providers ייחודיים ומגבלות deadline לפני ש-Torii או הרישום בולעים את ה-order.【crates/sorafs_manifest/src/capacity.rs:301】
 - `CapacityTelemetryV1` מבטא snapshots של epochs (GiB מוצהרים מול מנוצלים, מוני replication, אחוזי uptime/PoR) שמזינים חלוקת fees. בדיקות גבול שומרות את הניצול בתוך ההצהרות ואת האחוזים בטווח 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - helpers משותפים (`CapacityMetadataEntry`, `PricingScheduleV1`, ולידטורי lane/assignment/SLA) מספקים ולידציה דטרמיניסטית למפתחות ודיווחי שגיאות שניתנים לשימוש חוזר ב-CI וב-downstream tooling.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` מציג כעת snapshot on-chain דרך `/v2/sorafs/capacity/state`, תוך שילוב הצהרות providers ורשומות fee ledger מאחורי Norito JSON דטרמיניסטי.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- `PinProviderRegistry` מציג כעת snapshot on-chain דרך `/v1/sorafs/capacity/state`, תוך שילוב הצהרות providers ורשומות fee ledger מאחורי Norito JSON דטרמיניסטי.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - כיסוי הולידציה בודק אכיפת handles קנוניים, זיהוי כפילויות, גבולות לכל lane, guards של הקצאות replication ובדיקות טווח לטלמטריה כדי שרגרסיות יבלטו מיד ב-CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- tooling למפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ממיר specs קריאים לאדם ל-Norito payloads קנוניים, base64 blobs וסיכומי JSON כך שמפעילים יוכלו להכין fixtures עבור `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry` ו-replication order fixtures עם ולידציה מקומית.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures נמצאים ב-`fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ונוצרים באמצעות `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- tooling למפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ממיר specs קריאים לאדם ל-Norito payloads קנוניים, base64 blobs וסיכומי JSON כך שמפעילים יוכלו להכין fixtures עבור `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` ו-replication order fixtures עם ולידציה מקומית.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures נמצאים ב-`fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ונוצרים באמצעות `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
 
 ### 2. אינטגרציית control plane
 
 | משימה | Owner(s) | הערות |
 |------|----------|-------|
-| להוסיף handlers של Torii עבור `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry`, `/v2/sorafs/capacity/orders` עם Norito JSON payloads. | Torii Team | לשקף את לוגיקת הוולידציה; להחזיר שימוש ב-Norito JSON helpers. |
+| להוסיף handlers של Torii עבור `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, `/v1/sorafs/capacity/orders` עם Norito JSON payloads. | Torii Team | לשקף את לוגיקת הוולידציה; להחזיר שימוש ב-Norito JSON helpers. |
 | להעביר snapshots של `CapacityDeclarationV1` אל metadata של orchestrator scoreboard ולתוכניות fetch של gateway. | Tooling WG / Orchestrator team | להרחיב `provider_metadata` בהפניות קיבולת כדי ש-scoring רב-מקורי יכבד מגבלות lane. |
 | להזין replication orders אל clients של orchestrator/gateway כדי להנחות assignments ו-failover hints. | Networking TL / Gateway team | Scoreboard builder צורך replication orders חתומים על ידי governance. |
 | tooling של CLI: להרחיב את `sorafs_cli` עם `capacity declare`, `capacity telemetry`, `capacity orders import`. | Tooling WG | לספק JSON דטרמיניסטי + outputs של scoreboard. |
@@ -93,7 +93,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | pipeline של settlement: להמיר טלמטריה + נתוני replication ל-payouts נקובי XOR, להפיק סיכומים מוכנים לממשל, ולרשום מצב ledger. | Treasury / Storage Team | לחבר ל-Deal Engine / Treasury exports. |
 | לייצא dashboards/alerts לבריאות metering (ingestion backlog, טלמטריה ישנה). | Observability | להרחיב את חבילת Grafana שמוזכרת ב-SF-6/SF-7. |
 
-- Torii חושף כעת `/v2/sorafs/capacity/telemetry` ו-`/v2/sorafs/capacity/state` (JSON + Norito) כדי שמפעילים יוכלו להגיש telemetry snapshots של epochs ומבקרים יוכלו למשוך ledger קנוני לצורך ביקורת או אריזת ראיות.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Torii חושף כעת `/v1/sorafs/capacity/telemetry` ו-`/v1/sorafs/capacity/state` (JSON + Norito) כדי שמפעילים יוכלו להגיש telemetry snapshots של epochs ומבקרים יוכלו למשוך ledger קנוני לצורך ביקורת או אריזת ראיות.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - אינטגרציית `PinProviderRegistry` מבטיחה ש-replication orders נגישים דרך אותו endpoint; helpers של CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) מאמתים ומפרסמים טלמטריה מהרצות אוטומציה עם hashing דטרמיניסטי ופתרון aliases.
 - metering snapshots מייצרים רשומות `CapacityTelemetrySnapshot` הצמודות ל-snapshot `metering`, ו-Prometheus exports מזינים את לוח Grafana המוכן לייבוא ב-`docs/source/grafana_sorafs_metering.json` כדי שצוותי בילינג יעקבו אחר צבירת GiB-hour, fees nano-SORA צפויים ועמידה ב-SLA בזמן אמת.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - כאשר metering smoothing פעיל, ה-snapshot כולל `smoothed_gib_hours` ו-`smoothed_por_success_bps` כדי לאפשר השוואת ערכי EMA מול הספירות הגולמיות שהממשל משתמש בהן ל-payouts.【crates/sorafs_node/src/metering.rs:401】
@@ -164,7 +164,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ### Provider onboarding & exit smoke tests
 - צרו מחדש artefacts של declaration/telemetry עם `sorafs_manifest_stub capacity ...` והריצו CLI tests לפני ההגשה (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- הגישו דרך Torii (`/v2/sorafs/capacity/declare`) ואז תעדו `/v2/sorafs/capacity/state` לצד צילומי Grafana. עקבו אחרי ה-exit flow ב-`docs/source/sorafs/capacity_onboarding_runbook.md`.
+- הגישו דרך Torii (`/v1/sorafs/capacity/declare`) ואז תעדו `/v1/sorafs/capacity/state` לצד צילומי Grafana. עקבו אחרי ה-exit flow ב-`docs/source/sorafs/capacity_onboarding_runbook.md`.
 - ארכבו artefacts חתומים ו-reconciliation outputs בתוך `docs/examples/sorafs_capacity_marketplace_validation/`.
 
 ## תלותים ותזמון

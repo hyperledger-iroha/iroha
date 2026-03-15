@@ -200,7 +200,7 @@ IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁ
 - མིང་གཞན་གྱིས་ མིན་ཊི་ + རྩིས་ཐོའི་ཆ་ཤས་ཚུ།
   - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - ཁྲིམས་མཐུན་གྱི་རོགས་རམ་ལུ་ མིང་གཞན་སེལ་འཐུ་འབད།
-  - `POST /v2/assets/aliases/resolve` དང་གཅིག་ཁར་ JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` དང་གཅིག་ཁར་ JSON `{ "alias": "pkr#ubl@sbp" }`
 
 གནས་སྤོ་དྲན་ཐོ།
 - `name#domain` ཚིག་ཡིག་རྒྱུ་དངོས་-ངེས་ཚིག་ཨའི་ཌི་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ བསམ་བཞིན་དུ་རྒྱབ་སྐྱོར་མ་འབད་བས།
