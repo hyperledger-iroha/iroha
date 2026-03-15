@@ -24,7 +24,7 @@ signing (`offline_signing.md`), and telemetry policy (`telemetry_redaction.md`)
 guides when preparing operator playbooks.
 
 > **Sample walkthroughs:**  
-> - [Operator console walkthrough](samples/operator_console.md#9-step-by-step-walkthrough) – Step 3 covers `/v1/pipeline` submissions, queue drain, and telemetry reconciliation using the `ClientConfig` + retry stack documented below.  
+> - [Operator console walkthrough](samples/operator_console.md#9-step-by-step-walkthrough) – Step 3 covers `/v2/pipeline` submissions, queue drain, and telemetry reconciliation using the `ClientConfig` + retry stack documented below.  
 > - [Retail wallet design notes](samples/retail_wallet.md#5-telemetry--observability) – the offline sync + telemetry sections show how consumer apps reuse the Norito RPC helpers, queue diagnostics, and OTEL hooks described in this guide.
 
 ## 1. `ClientConfig` and manifest ingestion
@@ -39,7 +39,7 @@ SRE can audit manifest drift.
 
 | `ClientConfig` field | Purpose | `iroha_config` source |
 |----------------------|---------|-----------------------|
-| `baseUri()` | Torii `/v1/pipeline` root used by the HTTP client and Norito RPC helper. | `[torii]` public API URL written into the Android manifest. |
+| `baseUri()` | Torii `/v2/pipeline` root used by the HTTP client and Norito RPC helper. | `[torii]` public API URL written into the Android manifest. |
 | `sorafsGatewayUri()` | Gateway host for SoraFS fetches. | `[torii.sorafs]` (mirrors `[sorafs.discovery]`); defaults to `baseUri` when omitted. |
 | `requestTimeout()` | Deterministic per-request timeout. | `[torii.client.timeout_ms]` (or the platform default when absent). |
 | `defaultHeaders()` | Authorization, correlation IDs, SDK version. | `[telemetry.headers]` and operator-provided overrides. |
@@ -148,7 +148,7 @@ WAL-format queue shared with Rust/Swift.
 
 `HttpClientTransport`
 (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java`)
-implements `/transaction` (alias `/v1/pipeline/transactions`), `/v1/pipeline/transactions/status`, and
+implements `/transaction` (alias `/v2/pipeline/transactions`), `/v2/pipeline/transactions/status`, and
 SoraFS gateway helpers on top of `java.net.http.HttpClient`. Core entry points:
 
 ```java
@@ -169,7 +169,7 @@ GatewayFetchSummary summary =
         .join();
 ```
 
-- `waitForTransactionStatus` polls `/v1/pipeline/transactions/status` using the
+- `waitForTransactionStatus` polls `/v2/pipeline/transactions/status` using the
   `PipelineStatusExtractor` so callers receive the structured Torii payload. A
   `404` response means Torii has no cached status yet (for example after a
   restart), so the client keeps polling until a terminal state arrives.
@@ -190,7 +190,7 @@ observers when emitting `application/x-norito` frames:
 NoritoRpcClient rpcClient = config.toNoritoRpcClient();
 
 byte[] response = rpcClient.call(
-    "/norito/v1/contracts/invoke",
+    "/norito/v2/contracts/invoke",
     myNoritoPayload,
     NoritoRpcRequestOptions.builder()
         .putHeader("X-Iroha-Trace", traceId)
@@ -248,7 +248,7 @@ TransactionPayload payload = TransactionPayload.builder()
 
 TransactionPayload decoded =
     rpcClient.callTransaction(
-        "/norito/v1/transactions/submit",
+        "/norito/v2/transactions/submit",
         payload,
         new NoritoJavaCodecAdapter(),
         NoritoRpcRequestOptions.defaultOptions());

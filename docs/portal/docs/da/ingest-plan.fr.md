@@ -40,7 +40,7 @@ fallback serde/JSON n'est permis.
 ## Surface API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -232,7 +232,7 @@ le hashing, le chunking et la verification des manifests optionnels.
   deja `iroha app sorafs fetch`. Les operateurs peuvent le pointer vers des artefacts
   manifest + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **ou** fournir
   un storage ticket Torii via `--storage-ticket`. Quand le chemin ticket est
-  utilise, la CLI recupere le manifest depuis `/v1/da/manifests/<ticket>`,
+  utilise, la CLI recupere le manifest depuis `/v2/da/manifests/<ticket>`,
   persiste le bundle sous `artifacts/da/fetch_<timestamp>/` (override avec
   `--manifest-cache-dir`), derive le hash du blob pour `--manifest-id`, puis
   execute l'orchestrateur avec la liste `--gateway-provider` fournie. Tous les
@@ -243,7 +243,7 @@ le hashing, le chunking et la verification des manifests optionnels.
   end-to-end d'availability vivent entierement sous le namespace `da` sans
   dupliquer la logique d'orchestrateur.
 - `iroha app da get-blob` recupere les manifests canoniques directement depuis Torii
-  via `GET /v1/da/manifests/{storage_ticket}`. La commande ecrit
+  via `GET /v2/da/manifests/{storage_ticket}`. La commande ecrit
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` et
   `chunk_plan_{ticket}.json` sous `artifacts/da/fetch_<timestamp>/` (ou un
   `--output-dir` fourni par l'utilisateur) tout en affichant la commande exacte

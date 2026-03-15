@@ -28,7 +28,7 @@ Para esto, los validadores deben cumplir con los compromisos de DA antes de la a
   состояние disponibilidad без обращения к almacenamiento fuera del libro mayor.
 - Дать детерминированные pruebas de membresía, чтобы clientes ligeros могли проверить,
   что manifest hash finalizó el bloque consolidado.
-- Exportar Torii запросы (`/v1/da/commitments/*`) y pruebas, позволяющие
+- Exportar Torii запросы (`/v2/da/commitments/*`) y pruebas, позволяющие
   Relés, SDK y control de automatización para comprobar la disponibilidad según cada respuesta.
   bloques.
 - Сохранить канонический `SignedBlockWire` sobre, пропуская новые структуры
@@ -43,7 +43,7 @@ Para esto, los validadores deben cumplir con los compromisos de DA antes de la a
 3. **Persistencia/índices** чтобы WSV быстро отвечал на consultas de compromiso
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii Adiciones de RPC** para listar/consultar/probar puntos finales
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **Pruebas de integración + accesorios** para probar el diseño de los cables y el flujo de prueba
    `integration_tests/tests/da/commitments.rs`.
 
@@ -128,9 +128,9 @@ Asegúrese de que el `None` y el Torii no estén disponibles en paquetes reales.
 
 Torii anterior al punto final:| Ruta | Método | Carga útil | Notas |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (rango-filtro por carril/época/secuencia, paginación) | Incluye `DaCommitmentPage` con recuento total, compromisos y bloque de hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto o corte `(epoch, sequence)`). | Отвечает `DaCommitmentProof` (registro + ruta Merkle + bloque hash). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ayudante sin estado, bloque de hash personalizado e inclusión comprobada; Los SDK se instalan desde el archivo `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (rango-filtro por carril/época/secuencia, paginación) | Incluye `DaCommitmentPage` con recuento total, compromisos y bloque de hash. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto o corte `(epoch, sequence)`). | Отвечает `DaCommitmentProof` (registro + ruta Merkle + bloque hash). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Ayudante sin estado, bloque de hash personalizado e inclusión comprobada; Los SDK se instalan desde el archivo `iroha_crypto`. |
 
 Estas cargas útiles están incluidas en `iroha_data_model::da::commitment`. Torii enrutadores
 controladores de montaje junto con puntos finales de ingesta de DA, que se pueden utilizar

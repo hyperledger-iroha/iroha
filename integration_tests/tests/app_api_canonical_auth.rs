@@ -34,9 +34,9 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     let http = reqwest::Client::new();
     let account_literal = ALICE_ID.to_string();
 
-    // GET /v1/accounts/{account}/assets with canonical headers
+    // GET /v2/accounts/{account}/assets with canonical headers
     let assets_endpoint = format!(
-        "{}/v1/accounts/{}/assets?limit=1",
+        "{}/v2/accounts/{}/assets?limit=1",
         peer.torii_url(),
         account_literal
     );
@@ -72,7 +72,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         "assets endpoint should accept canonical auth"
     );
 
-    // POST /v1/accounts/{account}/transactions/query with canonical headers + body hash
+    // POST /v2/accounts/{account}/transactions/query with canonical headers + body hash
     let envelope = QueryEnvelope {
         pagination: Pagination {
             limit: Some(4),
@@ -83,7 +83,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     let body = norito::json::to_vec(&envelope)?;
 
     let tx_url = format!(
-        "{}/v1/accounts/{}/transactions/query",
+        "{}/v2/accounts/{}/transactions/query",
         peer.torii_url(),
         account_literal
     );

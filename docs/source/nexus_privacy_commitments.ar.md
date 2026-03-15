@@ -189,7 +189,7 @@ LanePrivacyCommitment::snark(id, circuit)
 
 ### رؤية المشغلين
 
-يكشف endpoint `/v1/sumeragi/status` في Torii الان مصفوفة `lane_governance[].privacy_commitments`
+يكشف endpoint `/v2/sumeragi/status` في Torii الان مصفوفة `lane_governance[].privacy_commitments`
 حتى يتمكن المشغلون وSDKs من مقارنة registry الحي مع manifests المنشورة دون اعادة قراءة bundle. يتم
 بناء snapshot داخل `crates/iroha_core/src/sumeragi/status.rs`، ويتم تصديره عبر REST/JSON handlers
 في Torii (`crates/iroha_torii/src/routing.rs`)، ويفك كل عميل ترميزه

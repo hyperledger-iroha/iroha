@@ -30,7 +30,7 @@ nombre d'époques et de répliques sans compter sur l'intention de l'émetteur.
 | _Par défaut (toutes les autres classes)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |
 
 Ces valeurs sont intégrées dans `torii.da_ingest.replication_policy` et appliquées à
-toutes les soumissions `/v1/da/ingest`. Torii réécrit les manifestes avec l'application
+toutes les soumissions `/v2/da/ingest`. Torii réécrit les manifestes avec l'application
 profil de rétention et émet un avertissement lorsque les appelants fournissent des valeurs incompatibles afin
 les opérateurs peuvent détecter les SDK obsolètes.
 
@@ -150,7 +150,7 @@ que SoraFS peut automatiquement répliquer à nouveau les blobs non conformes.
    et les preuves PDP.
 
 La couverture de régression réside dans `integration_tests/tests/da/replication_policy.rs` ;
-la suite soumet une politique de rétention qui ne correspond pas à `/v1/da/ingest` et vérifie
+la suite soumet une politique de rétention qui ne correspond pas à `/v2/da/ingest` et vérifie
 que le manifeste récupéré expose le profil appliqué au lieu de l'appelant
 intention.
 

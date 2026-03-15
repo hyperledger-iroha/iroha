@@ -87,7 +87,10 @@ fn prepare_state(
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let (alice_id, alice_kp) = seeded_account(1);
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
     let alice_asset_id = AssetId::new(asset_def_id.clone(), alice_id.clone());
     let alice_asset = Asset::new(alice_asset_id.clone(), alice_balance);

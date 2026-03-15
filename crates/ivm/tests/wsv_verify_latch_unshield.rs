@@ -79,7 +79,10 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     // Prepare caller and asset
     let caller = sample_account();
     let caller_id = ivm::mock_wsv::AccountId::from(&caller);
-    let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     // Seed WSV with caller account and permissions; register asset and enable ZK policy
     let mut wsv = MockWorldStateView::new();
@@ -232,7 +235,10 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
 fn unshield_rejects_mismatched_verifying_key() {
     let caller = sample_account();
     let caller_id = ivm::mock_wsv::AccountId::from(&caller);
-    let asset: AssetDefinitionId = "iris#wonderland".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "iris".parse().unwrap(),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     let domain: DomainId = "wonderland".parse().unwrap();
@@ -309,7 +315,10 @@ fn unshield_rejects_mismatched_verifying_key() {
 fn unshield_accepts_and_checks_inline_verifying_key() {
     let caller = sample_account();
     let caller_id = ivm::mock_wsv::AccountId::from(&caller);
-    let asset: AssetDefinitionId = "daisy#wonderland".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "daisy".parse().unwrap(),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     let domain: DomainId = "wonderland".parse().unwrap();

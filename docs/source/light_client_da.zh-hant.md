@@ -21,7 +21,7 @@ translator: machine-google-reviewed
 ## 端點
 
 ```
-POST /v1/sumeragi/rbc/sample
+POST /v2/sumeragi/rbc/sample
 ```
 
 端點需要與配置的其中之一匹配的 `X-API-Token` 標頭

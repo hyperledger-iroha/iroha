@@ -32,7 +32,7 @@ governance اسپریڈشیٹس کے بغیر مالی بہاؤ replay کر سک
 
 | Component | Purpose | Evidence |
 |-----------|---------|----------|
-| `sns_settlementd` | Policy apply کرتا ہے، bundles sign کرتا ہے، `/v1/sns/settlements` expose کرتا ہے۔ | JSON bundle + hash. |
+| `sns_settlementd` | Policy apply کرتا ہے، bundles sign کرتا ہے، `/v2/sns/settlements` expose کرتا ہے۔ | JSON bundle + hash. |
 | Settlement queue & writer | Idempotent queue + ledger submitter جو `iroha_cli app sns settlement ledger` سے چلتا ہے۔ | bundle hash <-> tx hash manifest. |
 | Reconciliation job | Daily diff + monthly statement `docs/source/sns/reports/` کے تحت۔ | Markdown + JSON digest. |
 | Refund desk | Governance-approved refunds via `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |

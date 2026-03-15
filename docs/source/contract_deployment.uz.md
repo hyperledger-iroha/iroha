@@ -55,7 +55,7 @@ Holati: Torii, CLI va asosiy kirish testlari (2025-yil noyabr) tomonidan amalga 
   qabul qilingan `DeployContract` takliflariga qarshi; mos keladigan taklif mavjud bo'lmasa
   tranzaksiya `NotPermitted` bilan rad etilgan.
 
-## Torii oxirgi nuqtalari (`app_api` xususiyati)- `POST /v1/contracts/deploy`
+## Torii oxirgi nuqtalari (`app_api` xususiyati)- `POST /v2/contracts/deploy`
   - So'rovning asosiy qismi: `DeployContractDto` (maydon tafsilotlari uchun `docs/source/torii_contracts_api.md` ga qarang).
   - Torii base64 foydali yukini dekodlaydi, ikkala xeshni hisoblaydi, manifest tuzadi,
     va `RegisterSmartContractCode` plus taqdim etadi
@@ -64,19 +64,19 @@ Holati: Torii, CLI va asosiy kirish testlari (2025-yil noyabr) tomonidan amalga 
   - Javob: `{ ok, code_hash_hex, abi_hash_hex }`.
   - Xatolar: noto'g'ri base64, qo'llab-quvvatlanmaydigan ABI versiyasi, ruxsat yo'q
     (`CanRegisterSmartContractCode`), o'lcham chegarasi oshib ketdi, boshqaruv chegarasi.
-- `POST /v1/contracts/code`
+- `POST /v2/contracts/code`
   - `RegisterContractCodeDto` (vakolat, shaxsiy kalit, manifest) qabul qiladi va faqat taqdim etadi
     `RegisterSmartContractCode`. Manifestlar alohida sahnalashtirilganda foydalaning
     bayt-kod.
-- `POST /v1/contracts/instance`
+- `POST /v2/contracts/instance`
   - `DeployAndActivateInstanceDto` (vakolat, shaxsiy kalit, nom maydoni/contract_id, `code_b64`, ixtiyoriy manifest bekor qilish) ni qabul qiladi va tarqatadi + atomik faollashtiradi.
-- `POST /v1/contracts/instance/activate`
+- `POST /v2/contracts/instance/activate`
   - `ActivateInstanceDto` (vakolat, shaxsiy kalit, nomlar maydoni, contract_id, `code_hash`) qabul qiladi va faqat faollashtirish yo'riqnomasini taqdim etadi.
-- `GET /v1/contracts/code/{code_hash}`
+- `GET /v2/contracts/code/{code_hash}`
   - `{ manifest: { code_hash, abi_hash } }` ni qaytaradi.
     Qo'shimcha manifest maydonlari ichkarida saqlanadi, lekin bu erda a uchun kiritilmagan
     barqaror API.
-- `GET /v1/contracts/code-bytes/{code_hash}`
+- `GET /v2/contracts/code-bytes/{code_hash}`
   - `{ code_b64 }` ni baza64 sifatida kodlangan saqlangan `.to` tasviri bilan qaytaradi.
 
 Shartnomaning barcha muddati yakuniy nuqtalari orqali sozlangan maxsus joylashtirish cheklovchisi mavjud
@@ -91,10 +91,10 @@ Ogohlantirish uchun `torii_contract_errors_total{endpoint=…}`.
 
 ## Boshqaruv integratsiyasi va himoyalangan nomlar maydoni- `gov_protected_namespaces` (JSON nomlar maydoni massivi) maxsus parametrini o'rnating
   strings) kirish eshigini yoqish uchun. Torii ostida yordamchilarni ochib beradi
-  `/v1/gov/protected-namespaces` va CLI ularni aks ettiradi
+  `/v2/gov/protected-namespaces` va CLI ularni aks ettiradi
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - `ProposeDeployContract` (yoki Torii) bilan yaratilgan takliflar
-  `/v1/gov/proposals/deploy-contract` oxirgi nuqtasi) qo'lga olish
+  `/v2/gov/proposals/deploy-contract` oxirgi nuqtasi) qo'lga olish
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - Referendum o'tgandan so'ng, `EnactReferendum` taklif kuchga kirdi va
   qabul qilish mos metadata va kodni o'z ichiga olgan joylashtirishlarni qabul qiladi.

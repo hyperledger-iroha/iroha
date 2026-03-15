@@ -21688,7 +21688,7 @@ impl Actor {
         entry.mismatch_count = entry.mismatch_count.saturating_add(1);
         entry.last_seen = now;
         entry.quarantined = true;
-        entry.canonical_rebuild_inflight = true;
+        entry.canonical_rebuild_inflight = !entry.final_dropped;
 
         let should_final_drop = entry.mismatch_count >= self.recovery_sidecar_mismatch_retry_cap()
             || self.sidecar_entry_expired(entry, now);

@@ -26,7 +26,10 @@ fn test_mock_wsv_basic_ops() {
         .unwrap();
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::with_balances(&[
         ((acc1.clone(), asset.clone()), num(100)),
@@ -56,7 +59,10 @@ fn test_mock_wsv_rejects_scaled_numeric() {
         .unwrap();
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::with_balances(&[
         ((acc1.clone(), asset.clone()), Numeric::from(1_000_u64)),
@@ -83,7 +89,10 @@ fn test_register_and_mint_once() {
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(acc.clone());
     wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
@@ -105,7 +114,10 @@ fn test_register_and_mint_limited() {
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
-    let asset: AssetDefinitionId = "ticket#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "ticket".parse().unwrap(),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(acc.clone());
     wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
@@ -128,7 +140,10 @@ fn test_limited_asset_budget_exhaustion() {
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
-    let asset: AssetDefinitionId = "badge#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "badge".parse().unwrap(),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(acc.clone());
     wsv.grant_permission(&acc, PermissionToken::RegisterDomain);
@@ -154,7 +169,10 @@ fn test_balance_permission() {
         .unwrap();
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::with_balances(&[((acc1.clone(), asset.clone()), num(100))]);
     wsv.add_account_unchecked(acc2.clone());
@@ -180,7 +198,10 @@ fn unregister_asset_after_burning_out() {
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::with_balances(&[((acc.clone(), asset.clone()), num(10))]);
     assert!(wsv.burn(&acc, acc.clone(), asset.clone(), num(10)));
@@ -199,7 +220,10 @@ fn unregister_account_after_transferring_everything_out() {
         .unwrap();
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
-    let asset: AssetDefinitionId = "asset#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "asset".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::with_balances(&[
         ((acc1.clone(), asset.clone()), num(25)),
@@ -225,7 +249,10 @@ fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
     let account = test_account(&first_domain, account_pk.clone());
     let account_relinked = test_account(&second_domain, account_pk);
     let admin = test_account(&first_domain, admin_pk);
-    let asset: AssetDefinitionId = "rose#domain".parse().unwrap();
+    let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(admin.clone());

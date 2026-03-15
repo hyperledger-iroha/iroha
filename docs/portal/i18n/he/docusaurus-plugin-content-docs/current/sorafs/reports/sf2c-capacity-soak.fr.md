@@ -46,7 +46,7 @@ nécessitent aucun מתקן חיצוני.
 Torii חשוף לתחזוקה של צילומי מצב של ספקי אשראי aux côtés des פנקסי אגרות אפינ que les לוחות מחוונים
 שער puissent sur les faibles soldes ועונשין:
 
-- מנוחה: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
+- מנוחה: `GET /v2/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
   Reflètent les champs du Ledger vérifiés dans le test de soak. Voir
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - ייבוא Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` עקבות

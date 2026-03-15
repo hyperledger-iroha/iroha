@@ -19,7 +19,6 @@ const INVARIANT_DOMAIN_UNIQUE: &str = "domain.unique_id";
 const INVARIANT_DOMAIN_OWNER_EXISTS: &str = "domain.owner_exists";
 const INVARIANT_ACCOUNT_UNIQUE: &str = "account.unique_id";
 const INVARIANT_ASSET_DEF_UNIQUE: &str = "asset_definition.unique_id";
-const INVARIANT_ASSET_DEF_DOMAIN: &str = "asset_definition.domain_exists";
 const INVARIANT_ASSET_DEF_OWNER_EXISTS: &str = "asset_definition.owner_exists";
 const INVARIANT_ASSET_DEF_TOTAL_MATCH: &str = "asset_definition.total_quantity_matches_assets";
 const INVARIANT_ASSET_UNIQUE: &str = "asset.unique_id";
@@ -113,8 +112,7 @@ impl WorldSnapshot<'_> {
 
         let domains = index_domains(self.domains, &mut report);
         let accounts = index_accounts(self.accounts, &domains, &mut report);
-        let definitions =
-            index_asset_definitions(self.asset_definitions, &domains, &accounts, &mut report);
+        let definitions = index_asset_definitions(self.asset_definitions, &accounts, &mut report);
         let totals = index_assets(self.assets, &accounts, &definitions, &mut report);
 
         verify_domain_owners(&domains, &accounts, &mut report);
@@ -174,7 +172,6 @@ fn index_accounts<'a>(
 
 fn index_asset_definitions<'a>(
     definitions: &'a [AssetDefinition],
-    domains: &DomainIndex<'a>,
     accounts: &AccountIndex<'a>,
     report: &mut VerificationReport,
 ) -> AssetDefinitionIndex<'a> {
@@ -193,18 +190,6 @@ fn index_asset_definitions<'a>(
                     format!("duplicate asset definition identifier `{id}`"),
                 );
             }
-        }
-
-        if domains.contains_key(id.domain()) {
-            report.ok(INVARIANT_ASSET_DEF_DOMAIN);
-        } else {
-            report.violation(
-                INVARIANT_ASSET_DEF_DOMAIN,
-                format!(
-                    "asset definition `{id}` references unknown domain `{domain}`",
-                    domain = id.domain()
-                ),
-            );
         }
 
         if accounts.contains_key(definition.owned_by()) {
@@ -378,13 +363,16 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
-        let definition_id: AssetDefinitionId = "rose#wonderland"
-            .parse()
-            .expect("valid asset definition id");
+        let definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("valid asset name"));
         let asset_definition = AssetDefinition {
             id: definition_id.clone(),
+            name: "Rose".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::integer(),
             mintable: Mintable::Infinitely,
             logo: None,
@@ -439,13 +427,16 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
-        let definition_id: AssetDefinitionId = "rose#wonderland"
-            .parse()
-            .expect("valid asset definition id");
+        let definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("valid asset name"));
         let asset_definition = AssetDefinition {
             id: definition_id.clone(),
+            name: "Rose".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::integer(),
             mintable: Mintable::Once,
             logo: None,
@@ -516,6 +507,7 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
         let business_account = Account {
             id: business_account_id.clone(),
@@ -523,11 +515,16 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         };
 
-        let definition_id: AssetDefinitionId = "equity#business".parse().expect("asset definition");
+        let definition_id =
+            AssetDefinitionId::new(business_domain.clone(), "equity".parse().expect("name"));
         let definition = AssetDefinition {
             id: definition_id,
+            name: "Equity".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::integer(),
             mintable: Mintable::Infinitely,
             logo: None,

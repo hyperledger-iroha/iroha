@@ -27,7 +27,7 @@ translation_last_reviewed: 2026-02-07
 
 | المتطلب | تفاصيل |
 |---------|----------|
-| بروتوكولات | REST включает `/v1/sns/*` и gRPC `sns.v1.Registrar`. Используйте Norito-JSON (`application/json`) и Norito-RPC (`application/x-norito`). |
+| بروتوكولات | REST включает `/v2/sns/*` и gRPC `sns.v1.Registrar`. Используйте Norito-JSON (`application/json`) и Norito-RPC (`application/x-norito`). |
 | Авторизация | Добавьте `Authorization: Bearer` в mTLS с суффиксом стюарда. Чтобы выполнить функцию блокировки (заморозить/разморозить, отключить заморозку), установите `scope=sns.admin`. |
 | حدود المعدل | Вызовите ведра `torii.preauth_scheme_limits` с JSON-файлом, чтобы получить взрывной сигнал: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
 | القياس | Torii يعرض `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` Внутренний блок (رشح `scheme="norito_rpc"`); Был установлен `sns_registrar_status_total{result, suffix_id}`. |
@@ -106,15 +106,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | نقطة النهاية | طريقة | حمولة | الوصف |
 |-------------|---------|---------|-------|
-| `/v1/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Он был создан в 2017 году в рамках программы "Старый/Старый мир" в 1990 году. |
-| `/v1/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ благодать/искупление в السياسة. |
-| `/v1/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Он был убит в 2007 году. |
-| `/v1/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Контроллеры управления Это произошло в Сан-Франциско. |
-| `/v1/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | تجميد опекун/совет. Его отец - опекун. |
-| `/v1/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | В действительности, это не так. , ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,. |
-| `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | تعيين اسماء محجوزة بواسطة стюард / совет. |
-| `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش). |
-| `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Активный, Грейс, الخ). |
+| `/v2/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Он был создан в 2017 году в рамках программы "Старый/Старый мир" в 1990 году. |
+| `/v2/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ благодать/искупление в السياسة. |
+| `/v2/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Он был убит в 2007 году. |
+| `/v2/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Контроллеры управления Это произошло в Сан-Франциско. |
+| `/v2/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | تجميد опекун/совет. Его отец - опекун. |
+| `/v2/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | В действительности, это не так. , ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,. |
+| `/v2/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | تعيين اسماء محجوزة بواسطة стюард / совет. |
+| `/v2/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش). |
+| `/v2/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Активный, Грейс, الخ). |
 
 **Селектор выбора:** `{selector}` для I105 или шестнадцатеричного формата ADDR-5; Torii — это `NameSelectorV1`.
 
@@ -175,7 +175,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` указывается в списке `GovernanceHookV1` (идентификатор предложения, хэши голосования, управляющий/опекун). Для получения дополнительной информации обратитесь к `/v1/sns/registrations/{selector}/...`. В версии Torii используются SDK.
+`--governance-json` указывается в списке `GovernanceHookV1` (идентификатор предложения, хэши голосования, управляющий/опекун). Для получения дополнительной информации обратитесь к `/v2/sns/registrations/{selector}/...`. В версии Torii используются SDK.
 
 ## 4. Запуск gRPC
 
@@ -210,7 +210,7 @@ service Registrar {
 
 Torii добавлен в раздел:
 
-1. Идентификатор предложения указывается в دفتر الحوكمة (`/v1/governance/proposals/{id}`) и `Approved`.
+1. Идентификатор предложения указывается в دفتر الحوكمة (`/v2/governance/proposals/{id}`) и `Approved`.
 2. Использование хэшей может быть выполнено в режиме реального времени.
 3. Управляющий/опекун تشير الى المفاتيح العامة المتوقعة من `SuffixPolicyV1`.
 
@@ -220,7 +220,7 @@ Torii добавлен в раздел:
 
 ### 6.1.
 
-1. Установите флажок `/v1/sns/policies/{suffix_id}` для получения дополнительной информации о Грейс.
+1. Установите флажок `/v2/sns/policies/{suffix_id}` для получения дополнительной информации о Грейс.
 2. Для `RegisterNameRequestV1`:
    - `selector` находится на этикетке I105 (открыто) и (отсутствует).
    - `term_years` добавлен в программу.
@@ -245,7 +245,7 @@ Torii добавлен в раздел:
 
 ### 6.3 Добавление опекуна и переопределение режима1. опекун يرسل `FreezeNameRequestV1` مع تذكرة تشير الى id حادث.
 2. Torii вместо `NameStatus::Frozen`, вместо `NameFrozen`.
-3. Переопределение режима блокировки; Нажмите кнопку DELETE `/v1/sns/registrations/{selector}/freeze` вместо `GovernanceHookV1`.
+3. Переопределение режима блокировки; Нажмите кнопку DELETE `/v2/sns/registrations/{selector}/freeze` вместо `GovernanceHookV1`.
 4. Torii используется для переопределения, а также `NameUnfrozen`.
 
 ## 7. التحقق واكواد الخطا
@@ -263,7 +263,7 @@ Torii добавлен в раздел:
 ## 8. Устранение неполадок
 
 - Torii для проверки работоспособности `NameRecordV1.auction` для проверки работоспособности Был установлен `PendingAuction`.
-- اثباتات الدفع تعيد استخدام ايصالات دفتر Norito; Проверьте API-интерфейсы (`/v1/finance/sns/payments`).
+- اثباتات الدفع تعيد استخدام ايصالات دفتر Norito; Проверьте API-интерфейсы (`/v2/finance/sns/payments`).
 - Используйте SDK для получения дополнительной информации о возможностях использования. Установите флажок (`ERR_SNS_RESERVED`, الخ).
 
 ## 9. Дополнительная информация

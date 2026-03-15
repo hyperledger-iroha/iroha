@@ -225,7 +225,7 @@ _آخری جائزہ: 2026-01-19 -- اگلا شیڈول شدہ جائزہ: 2026-
 
 - DA-2 обеспечивает кэш повторов и постоянство курсора. Реализация
   `crates/iroha_core/src/da/replay_cache.rs` (логика кэша) и интеграция Torii
-  `crates/iroha_torii/src/da/ingest.rs` отпечаток пальца `/v1/da/ingest`
+  `crates/iroha_torii/src/da/ingest.rs` отпечаток пальца `/v2/da/ingest`
   проверяет тему کرتا ہے۔
 - Возможности потокового моделирования PDP/PoTR для проверки потока:
   `crates/sorafs_car/tests/sorafs_cli.rs`۔ یہ Потоки запросов PoR/PDP/PoTR

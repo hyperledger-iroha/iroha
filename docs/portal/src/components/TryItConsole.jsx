@@ -44,7 +44,7 @@ export default function TryItConsole() {
     [tryItConfig.proxyUrl]
   );
 
-  const initialPath = tryItConfig.sampleRequest?.path ?? '/v1/status';
+  const initialPath = tryItConfig.sampleRequest?.path ?? '/v2/status';
   const initialMethod = tryItConfig.sampleRequest?.method ?? 'GET';
   const initialBody = tryItConfig.sampleRequest?.body ?? '';
   const methods = tryItConfig.allowedMethods ?? DEFAULT_METHODS;
@@ -168,7 +168,7 @@ export default function TryItConsole() {
                 type="text"
                 value={path}
                 onChange={(event) => setPath(event.target.value)}
-                placeholder="/v1/status"
+                placeholder="/v2/status"
                 required
               />
             </div>

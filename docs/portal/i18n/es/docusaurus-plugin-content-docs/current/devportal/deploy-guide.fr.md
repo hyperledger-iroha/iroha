@@ -23,7 +23,7 @@ su cofre CI; Las ejecuciones locales pueden cargarse a través de las exportacio
 
 ## Requisitos previos- Nodo 18.18+ con `npm` o `pnpm`.
 - `sorafs_cli` vía `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL Torii que expone `/v1/sorafs/*` plus una cuenta/cle privee d'autorite qui peut soumettre
+- URL Torii que expone `/v2/sorafs/*` plus una cuenta/cle privee d'autorite qui peut soumettre
   des manifestes et des alias.
 - Emmeteur OIDC (GitHub Actions, GitLab, identidad de carga de trabajo, etc.) para emmettre un `SIGSTORE_ID_TOKEN`.
 - Opcional: `examples/sorafs_cli_quickstart.sh` para ensayos en seco y
@@ -813,7 +813,7 @@ Configure los secretos/variables siguientes antes de soltar el trabajo:
 
 | Nombre | Pero |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Host Torii que expone `/v1/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | Host Torii que expone `/v2/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificador de época registrado con los envíos. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autorité de firma para la misión manifiesta. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | El alias de tupla se encuentra en el manifiesto cuando `perform_submit` es `true`. |

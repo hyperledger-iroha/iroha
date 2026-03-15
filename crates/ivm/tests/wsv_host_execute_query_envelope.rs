@@ -87,7 +87,10 @@ fn query_get_balance_returns_json_tlv() {
     let caller_literal = caller_value.as_str().expect("caller id string");
     let alice =
         ScopedAccountId::parse_encoded(caller_literal).expect("canonical account id must parse");
-    let rose: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), rose.clone()),
         Numeric::from(42_u64),

@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for /v1/proofs/query (signed core query wrapper).
+//! Integration test for /v2/proofs/query (signed core query wrapper).
 #![cfg(feature = "app_api")]
 
 use std::sync::Arc;
@@ -44,15 +44,7 @@ async fn proofs_query_find_by_id_returns_norito() {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
     let live_for_route = live.clone();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        world,
-        kura,
-        live,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(world, kura, live);
+    let state = State::new_for_testing(world, kura, live);
     let mut state = state;
 
     // Seed one proof record
@@ -85,7 +77,7 @@ async fn proofs_query_find_by_id_returns_norito() {
     let tel = iroha_torii::MaybeTelemetry::for_tests();
 
     let app = Router::new().route(
-        "/v1/proofs/query",
+        "/v2/proofs/query",
         post({
             let state = state.clone();
             move |iroha_torii::NoritoJson(dto): iroha_torii::NoritoJson<
@@ -115,7 +107,7 @@ async fn proofs_query_find_by_id_returns_norito() {
     let body = json::to_vec(&dto).unwrap();
     let request = http::Request::builder()
         .method("POST")
-        .uri("/v1/proofs/query")
+        .uri("/v2/proofs/query")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();

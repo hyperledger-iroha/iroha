@@ -81,13 +81,13 @@ default_margin_percent = "0.025"
 ### 3.1 Post-Approval Configuration Snapshots
 
 After the referendum or governance vote completes and the `[settlement.repo]`
-change is rolled out, capture `/v1/configuration` snapshots from every peer so
+change is rolled out, capture `/v2/configuration` snapshots from every peer so
 auditors can prove the approved policy is live across the cluster (see
 `docs/source/finance/repo_ops.md` §2.9 for the evidence workflow).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration \
+curl -fsSL https://peer01.example/v2/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

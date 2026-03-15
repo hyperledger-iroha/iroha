@@ -46,7 +46,7 @@ Sidebar_label: Открыть
   ```
 
 - Зарегистрирован для Torii и установлен на `data_dir`.
-- تحقّق من أن العقدة تعلن السعة المتوقعة عبر `GET /v1/sorafs/capacity/state` بعد
+- تحقّق من أن العقدة تعلن السعة المتوقعة عبر `GET /v2/sorafs/capacity/state` بعد
   تسجيل تصريح.
 - عند تمكين التنعيم, تعرض لوحات المتابعة عدادات GiB·hour/PoR الخام والمُنعّمة
   Он был убит в 2007 году в Нью-Йорке в Нью-Йорке.
@@ -95,8 +95,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 Добавьте Torii для подключения к HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Его персонаж - Дэвид Пэнсон, вице-премьер-министр, Лизетт Спенсер. اختبارات
@@ -109,7 +109,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Создать базу данных base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -119,7 +119,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Варианты действий:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -136,7 +136,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Установите флажок Torii (в случае необходимости).
 3. أعد إرسال طلب الجلب. Новости и новости журнала "Дайджест"
    المُعاد مع القيمة السابقة لإعادة التشغيل.
-4. Установите `GET /v1/sorafs/storage/state` рядом с `bytes_used`.
+4. Установите `GET /v2/sorafs/storage/state` рядом с `bytes_used`.
    Сделайте это в ближайшее время.
 
 ## 4. اختبار رفض الحصة1. Установите `torii.sorafs.storage.max_capacity_bytes` для получения дополнительной информации (например,
@@ -152,7 +152,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Обратите внимание на PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -177,7 +177,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - Сообщение в разделе «Линия»:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
-  - عدادات نجاح/فشل PoR المعروضة عبر `/v1/sorafs/capacity/state`
+  - عدادات نجاح/فشل PoR المعروضة عبر `/v2/sorafs/capacity/state`
   - Добавлено в программу `sorafs_node_deal_publish_total{result=success|failure}`.
 
 Он был убит в 2007 году в 1980-х годах.

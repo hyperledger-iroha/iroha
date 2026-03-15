@@ -132,8 +132,8 @@ fn update_rotates_circuit_version_index() {
     let exec = Executor::default();
 
     let id = VerifyingKeyId::new("halo2/ipa", "vk_upgrade");
-    let rec_v1 = base_record("circuit_beta", 1);
-    register_vk(&exec, &mut block, &id, &rec_v1);
+    let rec_current = base_record("circuit_beta", 1);
+    register_vk(&exec, &mut block, &id, &rec_current);
 
     // Upgrade to version 2
     let mut stx = block.transaction();

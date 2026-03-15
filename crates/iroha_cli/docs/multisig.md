@@ -6,7 +6,8 @@ This guide explains how to create and operate a multi-signature account shared b
 
 __Prerequisites:__
 
-- The registrant must have sufficient permissions to create accounts in the multisig domain.
+- Any account may submit the multisig registration transaction; the runtime materializes the
+  controller and related roles under the multisig home domain automatically.
 - Signatory accounts do not need to exist in advance. Missing signatories are materialized during
   registration and tagged with metadata `iroha:created_via = "multisig"`.
 - The CLI expects canonical I105 account literals for `--account` and `--signatories`. The

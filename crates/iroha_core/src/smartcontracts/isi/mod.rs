@@ -117,6 +117,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::LinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,
     dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>,
@@ -398,14 +399,15 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
-        tx::{AcceptTransactionFail, AcceptedTransaction},
+        tx::AcceptedTransaction,
     };
 
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
-        let asset_definition_id = "rose#wonderland".parse()?;
+        let asset_definition_id =
+            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
@@ -422,8 +424,11 @@ mod tests {
         .into();
         Grant::account_permission(trigger_perm, ALICE_ID.clone())
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         state_transaction.apply();
         state_block.commit().unwrap();
         Ok(state)
@@ -816,7 +821,7 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let definition_id = "rose#wonderland".parse::<AssetDefinitionId>()?;
+        let definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::asset_definition(
@@ -848,7 +853,7 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = "rose#wonderland".parse::<AssetDefinitionId>()?;
+        let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
         Mint::asset_numeric(numeric!(1), asset_id.clone())
             .execute(&account_id, &mut state_transaction)?;
@@ -1014,7 +1019,8 @@ mod tests {
     }
 
     #[test]
-    async fn not_allowed_to_register_genesis_domain_or_account() -> Result<()> {
+    async fn not_allowed_to_register_genesis_domain_but_genesis_account_can_be_linked() -> Result<()>
+    {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
@@ -1030,15 +1036,19 @@ mod tests {
             Error::InvariantViolation(_)
         ));
         let wonderland: DomainId = "wonderland".parse()?;
-        let register_account = Register::account(Account::new(
-            SAMPLE_GENESIS_ACCOUNT_ID.clone().to_account_id(wonderland),
-        ));
-        assert!(matches!(
-            register_account
-                .execute(&account_id, &mut state_transaction)
-                .expect_err("Error expected"),
-            Error::InvariantViolation(_)
-        ));
+        Register::account(Account::new(
+            SAMPLE_GENESIS_ACCOUNT_ID
+                .clone()
+                .to_account_id(wonderland.clone()),
+        ))
+        .execute(&account_id, &mut state_transaction)?;
+        let genesis_account = state_transaction
+            .world
+            .account(&SAMPLE_GENESIS_ACCOUNT_ID)?;
+        assert!(
+            genesis_account.linked_domains().contains(&wonderland),
+            "genesis account should be materialized in the requested domain scope"
+        );
         state_transaction.apply();
         state_block.commit().unwrap();
 
@@ -1046,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    async fn transaction_signed_by_genesis_account_should_be_rejected() -> Result<()> {
+    async fn transaction_signed_by_genesis_account_is_statelessly_accepted() -> Result<()> {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -1057,19 +1067,23 @@ mod tests {
         };
 
         let tx = TransactionBuilder::new(chain_id.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone())
-            .with_instructions::<InstructionBox>([])
+            .with_instructions([Log::new(
+                Level::INFO,
+                "genesis stateless admission".to_owned(),
+            )])
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let crypto_cfg = state.crypto();
-        assert!(matches!(
+        assert!(
             AcceptedTransaction::accept(
                 tx,
                 &chain_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref()
-            ),
-            Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature)
-        ));
+            )
+            .is_ok(),
+            "stateless admission should not special-case genesis authority"
+        );
         Ok(())
     }
 }

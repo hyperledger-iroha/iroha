@@ -68,7 +68,7 @@ async fn read_json_body(response: axum::response::Response) -> Value {
 async fn post_mcp(app: &axum::Router, payload: Value) -> (StatusCode, Value) {
     let request = Request::builder()
         .method("POST")
-        .uri("/v1/mcp")
+        .uri("/v2/mcp")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             norito::json::to_vec(&payload).expect("serialize payload"),
@@ -88,7 +88,7 @@ async fn post_mcp_with_headers(
 ) -> (StatusCode, Value) {
     let mut builder = Request::builder()
         .method("POST")
-        .uri("/v1/mcp")
+        .uri("/v2/mcp")
         .header(header::CONTENT_TYPE, "application/json");
     for (name, value) in headers {
         builder = builder.header(*name, *value);
@@ -178,7 +178,7 @@ async fn mcp_capabilities_endpoint_exposes_server_metadata() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .body(Body::empty())
                 .expect("valid request"),
         )
@@ -314,7 +314,7 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
         .expect("structured content");
     assert_eq!(
         structured.get("ws_url").and_then(Value::as_str),
-        Some("wss://node.example/v1/connect/ws?sid=sid-1&role=app")
+        Some("wss://node.example/v2/connect/ws?sid=sid-1&role=app")
     );
     assert_eq!(
         structured
@@ -342,7 +342,7 @@ async fn mcp_jsonrpc_rejects_invalid_json_payload() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from("{\"jsonrpc\": \"2.0\", bad"))
                 .expect("valid request"),
@@ -372,7 +372,7 @@ async fn mcp_jsonrpc_rejects_non_object_request() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from("1"))
                 .expect("valid request"),
@@ -457,7 +457,7 @@ async fn mcp_jsonrpc_rejects_oversized_payload() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}",
@@ -496,7 +496,7 @@ async fn mcp_jsonrpc_rejects_empty_batch() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from("[]"))
                 .expect("valid request"),
@@ -526,7 +526,7 @@ async fn mcp_jsonrpc_batch_returns_per_call_results() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     r#"[{"jsonrpc":"2.0","id":1,"method":"initialize"},{"jsonrpc":"2.0","id":2,"method":"missing.method"}]"#,
@@ -643,7 +643,7 @@ async fn mcp_jsonrpc_tools_call_openapi_healthcheck_requires_token_when_enabled(
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     norito::json::to_vec(&norito::json!({
@@ -6012,7 +6012,7 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_dispatches_routes() {
             .expect("ticket payload");
         assert_eq!(
             ticket.get("ws_url").and_then(Value::as_str),
-            Some(format!("wss://node.example/v1/connect/ws?sid={sid}&role={role}").as_str())
+            Some(format!("wss://node.example/v2/connect/ws?sid={sid}&role={role}").as_str())
         );
         assert_eq!(
             ticket.get("authorization_header").and_then(Value::as_str),
@@ -6116,7 +6116,7 @@ async fn mcp_jsonrpc_connect_session_create_and_ticket_generates_sid_when_omitte
             .expect("ticket payload");
         assert_eq!(
             ticket.get("ws_url").and_then(Value::as_str),
-            Some(format!("wss://node.example/v1/connect/ws?sid={sid}&role={role}").as_str())
+            Some(format!("wss://node.example/v2/connect/ws?sid={sid}&role={role}").as_str())
         );
     }
 }
@@ -6266,7 +6266,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     assert_eq!(
         ws_ticket_app.get("ws_url").and_then(Value::as_str),
         Some(
-            "wss://node.example/v1/connect/ws?sid=VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU&role=app"
+            "wss://node.example/v2/connect/ws?sid=VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU&role=app"
         )
     );
     assert_eq!(
@@ -6471,7 +6471,7 @@ async fn mcp_jsonrpc_connect_alias_lifecycle_dispatches_routes() {
     assert_eq!(
         ticket_structured.get("ws_url").and_then(Value::as_str),
         Some(
-            "wss://node.example/v1/connect/ws?sid=ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY&role=app"
+            "wss://node.example/v2/connect/ws?sid=ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY&role=app"
         )
     );
 
@@ -6537,7 +6537,7 @@ async fn mcp_routes_are_not_registered_when_disabled() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/mcp")
+                .uri("/v2/mcp")
                 .body(Body::empty())
                 .expect("valid request"),
         )

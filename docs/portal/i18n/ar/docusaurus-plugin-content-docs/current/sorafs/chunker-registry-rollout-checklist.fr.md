@@ -74,7 +74,7 @@ Sidebar_label: مُقطع طرح قائمة التحقق
    سجل التدريج المرجعي لـ `torii.sorafs.discovery.admission.envelopes_dir`.
 3. التحقق من نشر إعلانات الموفر عبر اكتشاف واجهة برمجة التطبيقات:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. ممارسة نقاط النهاية/التخطيط مع رؤوس الإدارة:
    ```bash

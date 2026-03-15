@@ -76,7 +76,7 @@ Référez-vous au [промежуточный манифест playbook] (./stag
    ссылка на промежуточную регистрацию по `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Проверьте, что рекламные объявления провайдера распространяются через обнаружение API:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. Выполните манифест/план конечных точек с заголовками управления:
    ```bash

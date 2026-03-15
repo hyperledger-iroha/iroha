@@ -154,7 +154,7 @@ consistency or zone publication.
 3. `cargo xtask taikai-rpt-verify --envelope <path>` verifies signatures and
    prints the digests. CI wires this into the rollout gate alongside the GAR
    and CEK checks.
-4. Torii stores the latest valid RPT digest under `/v1/config/taikai.rpt.digest`
+4. Torii stores the latest valid RPT digest under `/v2/config/taikai.rpt.digest`
    so relays and gateways can assert that the operational surface matches the
    attested policy.
 

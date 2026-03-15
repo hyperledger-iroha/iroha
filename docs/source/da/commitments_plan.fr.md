@@ -27,7 +27,7 @@ contrôles de gouvernance. Toutes les charges utiles sont codées en Norito ; p
   état sans consulter le stockage hors grand livre.
 - Fournir des preuves d'adhésion déterministes afin que les clients légers puissent vérifier qu'un
   le hachage manifeste a été finalisé dans un bloc donné.
-- Exposer les requêtes Torii (`/v1/da/commitments/*`) et les preuves qui laissent les relais,
+- Exposer les requêtes Torii (`/v2/da/commitments/*`) et les preuves qui laissent les relais,
   Les SDK et l'automatisation de la gouvernance auditent la disponibilité sans rejouer chaque
   bloquer.
 - Gardez l'enveloppe `SignedBlockWire` existante canonique en enfilant le nouveau
@@ -42,7 +42,7 @@ contrôles de gouvernance. Toutes les charges utiles sont codées en Norito ; p
 3. **Persistance/index** pour que le WSV puisse répondre rapidement aux requêtes d'engagement
    (`iroha_core/src/wsv/mod.rs`).
 4. **Ajouts RPC Torii** pour les points de terminaison de liste/requête/prouver sous
-   `/v1/da/commitments`.
+   `/v2/da/commitments`.
 5. **Tests d'intégration + montages** validant la disposition des fils et le flux de preuve dans
    `integration_tests/tests/da/commitments.rs`.
 
@@ -129,7 +129,7 @@ jusqu'à ce que Torii fasse passer de vrais paquets.
 L'assemblage de blocs et l'ingestion `BlockCreated` revalident chaque engagement par rapport à
 le catalogue des voies : les voies Merkle rejettent les engagements KZG parasites, les voies KZG nécessitent un
 engagement KZG non nul et `chunk_root` non nul, et les voies inconnues sont
-laissé tomber. Le point de terminaison `/v1/da/commitments/verify` de Torii reflète la même garde,
+laissé tomber. Le point de terminaison `/v2/da/commitments/verify` de Torii reflète la même garde,
 et l'ingestion intègre désormais l'engagement déterministe KZG dans chaque
 Enregistrement `kzg_bls12_381` afin que les ensembles conformes aux règles atteignent l'assemblage de blocs.
 
@@ -148,9 +148,9 @@ voie pour éviter les attaques par rejeu.
 
 Torii expose trois points de terminaison :| Itinéraire | Méthode | Charge utile | Remarques |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtre de plage par voie/époque/séquence, pagination) | Renvoie `DaCommitmentPage` avec le nombre total, les engagements et le hachage de bloc. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste ou tuple `(epoch, sequence)`). | Répond avec `DaCommitmentProof` (enregistrement + chemin Merkle + hachage de bloc). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Assistant apatride qui rejoue le calcul du hachage de bloc et valide l'inclusion ; utilisé par les SDK qui ne peuvent pas se lier directement à `iroha_crypto`. |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (filtre de plage par voie/époque/séquence, pagination) | Renvoie `DaCommitmentPage` avec le nombre total, les engagements et le hachage de bloc. |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (voie + hachage manifeste ou tuple `(epoch, sequence)`). | Répond avec `DaCommitmentProof` (enregistrement + chemin Merkle + hachage de bloc). |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Assistant apatride qui rejoue le calcul du hachage de bloc et valide l'inclusion ; utilisé par les SDK qui ne peuvent pas se lier directement à `iroha_crypto`. |
 
 Toutes les charges utiles résident sous `iroha_data_model::da::commitment`. Support de routeurs Torii
 les gestionnaires à côté des points de terminaison d'ingestion DA existants pour réutiliser le jeton/mTLS

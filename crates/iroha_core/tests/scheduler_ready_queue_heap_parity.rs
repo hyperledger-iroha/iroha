@@ -21,9 +21,14 @@ fn run_with_ready_heap(
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let ad: AssetDefinition =
-        AssetDefinition::new("coin#wonderland".parse().unwrap(), NumericSpec::default())
-            .build(&alice_id);
+    let ad: AssetDefinition = AssetDefinition::new(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        ),
+        NumericSpec::default(),
+    )
+    .build(&alice_id);
     let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
     let acc_b = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
     // Seed asset balances
@@ -82,7 +87,10 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
     let chain_id = ChainId::from("chain");
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let rose: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
 

@@ -226,9 +226,8 @@ fn role_permissions_are_deduplicated() {
     };
     let test_client = network.client();
     let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
-    let rose_definition: AssetDefinitionId = format!("rose#{wonderland}")
-        .parse()
-        .expect("valid rose definition");
+    let rose_definition =
+        AssetDefinitionId::new(wonderland.clone(), "rose".parse().expect("valid rose name"));
     let rose_asset = AssetId::new(rose_definition, ALICE_ID.clone());
     let rose_asset_lower = rose_asset.canonical_encoded();
     let rose_asset_upper = rose_asset_lower.to_ascii_uppercase();

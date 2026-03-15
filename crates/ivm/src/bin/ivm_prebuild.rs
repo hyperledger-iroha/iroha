@@ -157,7 +157,10 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
         syscalls as ivm_sys,
     };
 
-    let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
     let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
 

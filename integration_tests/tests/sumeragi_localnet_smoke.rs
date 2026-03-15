@@ -550,7 +550,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         );
 
         let url = format!(
-            "{}/v1/sumeragi/status",
+            "{}/v2/sumeragi/status",
             peer.torii_url().trim_end_matches('/')
         );
         let response = HttpClient::new()

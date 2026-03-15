@@ -65,7 +65,7 @@ This specification completes **SFM-4c — Transparency dashboards & enforcement 
 - Metrics pipeline architecture:
   - `metrics_ingest` → `dp_aggregator` (Rust) → `dp_sanitizer` (applies noise + policy).
   - Output `DPMetricsBlockV1` stored alongside ledger block.
-- API `/v1/transparency/metrics?cycle=` returns sanitized metrics with metadata (`epsilon`, `delta`, `timestamp`).
+- API `/v2/transparency/metrics?cycle=` returns sanitized metrics with metadata (`epsilon`, `delta`, `timestamp`).
 - Observability: `sorafs_transparency_dp_epsilon`, `..._lag_seconds`; alerts when sanitization fails.
 
 ## Receipt Explorer (SFM-4c2)
@@ -75,10 +75,10 @@ This specification completes **SFM-4c — Transparency dashboards & enforcement 
   - Proof verification widget: paste token or entry data to verify inclusion.
   - Download ledger block (Norito JSON) + proof files.
 - Backend routes:
-  - `GET /v1/transparency/ledger/{cycle_id}` → block metadata + signatures.
-  - `GET /v1/transparency/entry/{cycle_id}/{entry_hash}` → entry payload + proof.
-  - `POST /v1/transparency/token/verify` → validate moderation token against ledger.
-  - `GET /v1/transparency/cycles` → list available cycles, status.
+  - `GET /v2/transparency/ledger/{cycle_id}` → block metadata + signatures.
+  - `GET /v2/transparency/entry/{cycle_id}/{entry_hash}` → entry payload + proof.
+  - `POST /v2/transparency/token/verify` → validate moderation token against ledger.
+  - `GET /v2/transparency/cycles` → list available cycles, status.
 - Authentication: read-only public endpoints; optional API key for high-rate usage.
 - Rate limits to prevent scraping: default 60 req/min per IP.
 

@@ -75,7 +75,7 @@ obrigações que a ponte Norito ↔ ISO 20022 deve cumprir antes de emitir mens
   - Declarações voltadas para o cliente (`camt.054`): inclua **IBAN** quando presente e valide-o
     (comprimento, regras do país, soma de verificação mod-97).[^swift_iban]
 - **Moeda** → **ISO 4217** Código de três letras, respeitando arredondamentos de unidades menores.[^iso_4217]
-- **Ingestão de Torii** → Enviar trechos de financiamento PvP via `POST /v1/iso20022/pacs009`; a ponte
+- **Ingestão de Torii** → Enviar trechos de financiamento PvP via `POST /v2/iso20022/pacs009`; a ponte
   requer `Purp=SECU` e agora impõe faixas de pedestres BIC quando os dados de referência são configurados.
 
 #### Regras de validação (aplicadas antes da emissão)| Identificador | Regra de validação | Notas |

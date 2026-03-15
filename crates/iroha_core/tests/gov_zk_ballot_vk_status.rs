@@ -39,8 +39,8 @@ fn zk_ballot_rejects_when_vk_not_active() {
     gov_cfg.min_enactment_delay = 0;
     gov_cfg.window_span = 100;
     gov_cfg.vk_ballot = Some(iroha_config::parameters::actual::VerifyingKeyRef {
-        backend: "halo2/pasta/tiny-add-v1".to_string(),
-        name: "ballot_v1".to_string(),
+        backend: "halo2/pasta/tiny-add".to_string(),
+        name: "ballot_current".to_string(),
     });
     state.set_gov(gov_cfg);
 
@@ -65,13 +65,13 @@ fn zk_ballot_rejects_when_vk_not_active() {
         .expect("grant parliament manage");
 
     // Register Active VK (with inline bytes to pass bytes-available gate)
-    let backend = "halo2/pasta/tiny-add-v1";
-    let vk_id = VerifyingKeyId::new(backend, "ballot_v1");
+    let backend = "halo2/pasta/tiny-add";
+    let vk_id = VerifyingKeyId::new(backend, "ballot_current");
     let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
     let commitment = iroha_core::zk::hash_vk(&vk_box);
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "ballot_v1",
+        "ballot_current",
         BackendTag::Halo2IpaPasta,
         "pallas",
         [0x44; 32],
@@ -105,7 +105,7 @@ fn zk_ballot_rejects_when_vk_not_active() {
     create.execute(&ALICE_ID, &mut stx).expect("create ok");
     let mut vk_record2 = VerifyingKeyRecord::new(
         2,
-        "ballot_v1",
+        "ballot_current",
         BackendTag::Halo2IpaPasta,
         "pallas",
         [0x44; 32],

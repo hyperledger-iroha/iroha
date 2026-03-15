@@ -7,7 +7,7 @@ description: Nightly workflow for matching capacity fee ledgers to XOR transfer 
 Roadmap item **SF-2c** mandates that treasury proves the capacity fee ledger
 matches the XOR transfers executed each night. Use the
 `scripts/telemetry/capacity_reconcile.py` helper to compare the
-`/v1/sorafs/capacity/state` snapshot against the executed transfer batch and
+`/v2/sorafs/capacity/state` snapshot against the executed transfer batch and
 emit Prometheus textfile metrics for Alertmanager.
 
 ## Prerequisites

@@ -441,6 +441,62 @@ pub trait SetReadOnly {
         self.ids().iter().map(|(trigger_id, _)| trigger_id)
     }
 
+    /// Iterate active trigger ids directly from the typed trigger stores.
+    fn active_trigger_ids_iter(&self) -> impl Iterator<Item = &TriggerId> {
+        self.data_triggers()
+            .iter()
+            .filter(|(_, action)| !action.repeats().is_depleted())
+            .map(|(id, _)| id)
+            .chain(
+                self.pipeline_triggers()
+                    .iter()
+                    .filter(|(_, action)| !action.repeats().is_depleted())
+                    .map(|(id, _)| id),
+            )
+            .chain(
+                self.time_triggers()
+                    .iter()
+                    .filter(|(_, action)| !action.repeats().is_depleted())
+                    .map(|(id, _)| id),
+            )
+            .chain(
+                self.by_call_triggers()
+                    .iter()
+                    .filter(|(_, action)| !action.repeats().is_depleted())
+                    .map(|(id, _)| id),
+            )
+    }
+
+    /// Iterate triggers directly from the typed trigger stores.
+    fn triggers_iter(&self) -> impl Iterator<Item = Trigger> + '_ {
+        self.data_triggers()
+            .iter()
+            .filter_map(move |(id, action)| {
+                self.get_original_action(action.clone())
+                    .map(|action| Trigger::new(id.clone(), action.into()))
+            })
+            .chain(
+                self.pipeline_triggers()
+                    .iter()
+                    .filter_map(move |(id, action)| {
+                        self.get_original_action(action.clone())
+                            .map(|action| Trigger::new(id.clone(), action.into()))
+                    }),
+            )
+            .chain(self.time_triggers().iter().filter_map(move |(id, action)| {
+                self.get_original_action(action.clone())
+                    .map(|action| Trigger::new(id.clone(), action.into()))
+            }))
+            .chain(
+                self.by_call_triggers()
+                    .iter()
+                    .filter_map(move |(id, action)| {
+                        self.get_original_action(action.clone())
+                            .map(|action| Trigger::new(id.clone(), action.into()))
+                    }),
+            )
+    }
+
     /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a given time event.
     fn match_time_event(
         &self,

@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level regression tests for `/v1/nexus/lifecycle`.
+//! Router-level regression tests for `/v2/nexus/lifecycle`.
 #![cfg(feature = "app_api")]
 
 use std::sync::Arc;

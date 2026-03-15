@@ -251,7 +251,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
         return Ok(());
     };
 
-    // Compute the expected ProofId string for GET /v1/proofs/:id
+    // Compute the expected ProofId string for GET /v2/proofs/:id
     let proof_hash = compute_proof_hash(backend, &proof_bytes);
     let pid = iroha_data_model::proof::ProofId {
         backend: backend.into(),

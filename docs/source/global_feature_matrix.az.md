@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | Etibarlı Yayım (DA faydalı yük daşımaları) | ◉ | RBC mesaj axını (Init/Chunk/Ready/Deliver) nəqliyyat/bərpa yolu kimi `da_enabled=true` olduqda aktivləşdirilir; Mövcudluq sübutu izlənilir (məsləhətdir) və öhdəliklər müstəqil şəkildə həyata keçirilir. | status.md:son |
 | QC dövlət-kök bağlamasını həyata keçirin | ◉ | QC-lər `parent_state_root`/`post_state_root` daşıyacaq; ayrıca icra-QC qapısı yoxdur. | status.md:son |
 | Sübutların yayılması və auditin son nöqtələri | ◉ | ControlFlow::Dəlil, Torii sübut son nöqtələri və mənfi testlər çıxdı. | status.md:176; status.md:760-761 |
-| RBC telemetriyası, hazırlıq/çatdırılmış ölçülər | ◉ | `/v1/sumeragi/rbc*` son nöqtələri və telemetriya sayğacları/histoqramı operatorlar üçün əlçatandır. | status.md:283-284; status.md:772 |
+| RBC telemetriyası, hazırlıq/çatdırılmış ölçülər | ◉ | `/v2/sumeragi/rbc*` son nöqtələri və telemetriya sayğacları/histoqramı operatorlar üçün əlçatandır. | status.md:283-284; status.md:772 |
 | Konsensus parametr reklamı və topologiya yoxlanışı | ◉ | Qovşaqlar `(collectors_k, redundant_send_r)` yayımlayır və həmyaşıdları arasında bərabərliyi təsdiqləyir. | status.md:255 |
 | İcazəli PRF əsaslı fırlanma | ◉ | İcazə verilən lider/kollektor seçimi kanonik siyahı üzərində PRF toxum + hündürlük/görünüşdən istifadə edir; əvvəlki hash fırlanması köhnə köməkçi olaraq qalır. | status.md:son |
 
@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 |---------|--------|-------|----------|
 | Runtime təkmilləşdirmə qəbulu (ABI gating) | ◉ | Aktiv ABI dəsti strukturlaşdırılmış səhvlər və testlərlə qəbul zamanı tətbiq edilir. | status.md:196 |
 | Qorunan ad məkanının yerləşdirilməsi qapısı | ▲ | Metadata tələblərini yerləşdirin və simli keçid; siyasət/UX hələ də inkişaf edir. | status.md:171 |
-| Torii idarəetmə son nöqtələrini oxuyun | ◉ | `/v1/gov/*` marşrutlaşdırıcı testləri ilə yönləndirilmiş API-ləri oxuyur. | status.md:212 |
+| Torii idarəetmə son nöqtələrini oxuyun | ◉ | `/v2/gov/*` marşrutlaşdırıcı testləri ilə yönləndirilmiş API-ləri oxuyur. | status.md:212 |
 | Doğrulama açarı reyestrinin həyat dövrü və hadisələri | ◉ | VK qeydiyyatı/yeniləmə/köhnəlmə, hadisələr, CLI filtrləri və saxlama semantikası həyata keçirilir. | status.md:236-239; status.md:595; status.md:603 |
 
 ## Sıfır Bilik İnfrastruktur
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 | Ekranlı kök tarixçəsi | ◉ | Kök snapşotları məhdud tarixçə və boş kök konfiqurasiyası ilə CoreHost-a ötürülür. | status.md:303 |
 | ZK səsvermə icrası və idarəetmə kilidləri | ○ | Nullifier törəmə, kilid yeniləmələri, yoxlama keçidləri həyata keçirilir; tam sübut həyat dövrü hələ yetişməkdədir. | status.md:126-128; status.md:194-195 |
 | Sübut əlavəsi əvvəlcədən doğrulayın və silin | ◉ | Backend-teg ağlı başında olma, təkmilləşdirmə və sübut qeydləri icradan əvvəl davam etdi. | status.md:348; status.md:602 |
-| ZK Torii sübut gətirmə son nöqtəsi | ◉ | `/v1/zk/proof/{backend}/{hash}` sübut qeydlərini ifşa edir (status, boy, vk_ref/commitment). | status.md:94 |
+| ZK Torii sübut gətirmə son nöqtəsi | ◉ | `/v2/zk/proof/{backend}/{hash}` sübut qeydlərini ifşa edir (status, boy, vk_ref/commitment). | status.md:94 |
 
 ## IVM & Kotodama İnteqrasiya| Xüsusiyyət | Status | Qeydlər | Sübut |
 |---------|--------|-------|----------|
@@ -77,7 +77,7 @@ translator: machine-google-reviewed
 | Pointer-ABI ciddi yoxlama və sənəd sinxronizasiyası | ◉ | TLV siyasəti qızıl testlər və yaradılan sənədlərlə host/IVM üzərində tətbiq edilir. | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | CoreHost | vasitəsilə ZK syscall qapısı ◉ | Hər əməliyyat növbəsi təsdiqlənmiş zərfləri bağlayır və ISI icrasından əvvəl hash uyğunluğunu təmin edir. | crates/iroha_core/src/smartcontracts/ivm/host.rs:213; crates/iroha_core/src/smartcontracts/ivm/host.rs:279 |
 | Kotodama göstərici-ABI sənədləri və qrammatikası | ◉ | Qrammatika/sənədlər canlı konstruktorlar və SCALL xəritələri ilə sinxronlaşdırılır. | status.md:299-301 |
-| ISO 20022 sxemlə idarə olunan mühərrik və Torii körpüsü | ◉ | Kanonik ISO 20022 sxemləri daxil edilmiş, deterministik XML təhlili və `/v1/iso20022/status/{MsgId}` API ifşa edilmişdir. | status.md:65-70 |
+| ISO 20022 sxemlə idarə olunan mühərrik və Torii körpüsü | ◉ | Kanonik ISO 20022 sxemləri daxil edilmiş, deterministik XML təhlili və `/v2/iso20022/status/{MsgId}` API ifşa edilmişdir. | status.md:65-70 |
 
 ## Avadanlıq Sürətləndirilməsi
 

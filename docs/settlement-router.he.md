@@ -102,6 +102,6 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## ראיות והפניות
 - הערות קבלה של NX-3: `status.md` (סעיף NX-3).
 - משטחי אופרטור: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- סכמת קבלות ומשטחי API: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.
+- סכמת קבלות ומשטחי API: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.
 
 </div>

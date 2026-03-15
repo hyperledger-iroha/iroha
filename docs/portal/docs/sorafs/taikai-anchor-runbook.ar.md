@@ -52,7 +52,7 @@ SoraFS/SoraNet من ربط آرتيفاكتات spool وتليمترية Prometh
 | `taikai_ingest_segment_latency_ms` | مخطط latency لعمليات ingest بنمط CMAF لكل cluster/stream (الهدف: p95 < 750 ms، p99 < 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | Drift للـ live-edge بين encoder وعمال المرساة (تنبيه عند p99 > 1.5 s لمدة 10 دقائق). |
 | `taikai_ingest_segment_errors_total{reason}` | عدّادات الأخطاء حسب السبب (`decode`, `manifest_mismatch`, `lineage_replay`, ...). أي زيادة تُطلق `TaikaiIngestFailure`. |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | يزداد عند قبول `/v1/da/ingest` لـ TRM جديد لاسم مستعار؛ استخدم `rate()` للتحقق من وتيرة الدوران. |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | يزداد عند قبول `/v2/da/ingest` لـ TRM جديد لاسم مستعار؛ استخدم `rate()` للتحقق من وتيرة الدوران. |
 | `/status → telemetry.taikai_alias_rotations[]` | لقطة JSON تتضمن `window_start_sequence` و`window_end_sequence` و`manifest_digest_hex` و`rotations_total` والطوابع الزمنية لحزم الأدلة. |
 | `taikai_viewer_*` (rebuffer, عمر دوران CEK, صحة PQ, التنبيهات) | مؤشرات KPI للعارض لضمان بقاء دوران CEK ودوائر PQ سليمة أثناء المراسي. |
 

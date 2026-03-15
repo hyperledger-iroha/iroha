@@ -153,7 +153,7 @@ OAUTH تشکیل کے بغیر تعمیراتی کام اب تیزی سے روڈ
 1. حقیقت کو منتخب کریں جیسے `fixtures/norito_rpc/transfer_asset.norito`۔ یہ فائلیں ہیں
    Norito خام کاسنگز ؛ ** نہ کریں ** اسے بیس 64 میں تبدیل کریں۔
 2. سویگر یا ریپڈوک میں ، اختتامی نقطہ NRPC کو منتخب کریں (جیسے
-   `POST /v1/pipeline/submit`) اور ** مواد کی قسم ** سلیکٹر کو تبدیل کریں
+   `POST /v2/pipeline/submit`) اور ** مواد کی قسم ** سلیکٹر کو تبدیل کریں
    `application/x-norito`۔
 3. درخواست باڈی ایڈیٹر کو ** بائنری ** میں سوئچ کریں (ریپڈوک میں سویگر یا "بائنری/فائل" سلیکٹر میں "فائل" ترتیب دینا)
    اور فائل `.norito` اپ لوڈ کریں۔ ٹول بائٹس کو بغیر کسی ترمیم کے پراکسی کے ذریعے منتقل کرتا ہے۔
@@ -174,7 +174,7 @@ OAUTH تشکیل کے بغیر تعمیراتی کام اب تیزی سے روڈ
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
 `transaction_fixtures.manifest.json` میں درج کسی بھی اندراج کے ساتھ حقیقت کو تبدیل کریں یا اپنے پے لوڈ کو انکوڈ کریں
@@ -194,7 +194,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 ماحولیات کی چابیاں:

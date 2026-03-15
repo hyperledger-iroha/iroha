@@ -55,7 +55,7 @@ Status: Torii, CLI və əsas qəbul testləri (noyabr 2025) tərəfindən həyat
   qüvvəyə minmiş `DeployContract` təkliflərinə qarşı; uyğun təklif yoxdursa
   əməliyyat `NotPermitted` ilə rədd edilir.
 
-## Torii son nöqtələri (Xüsusiyyət `app_api`)- `POST /v1/contracts/deploy`
+## Torii son nöqtələri (Xüsusiyyət `app_api`)- `POST /v2/contracts/deploy`
   - Sorğunun əsas hissəsi: `DeployContractDto` (sahə təfərrüatları üçün bax `docs/source/torii_contracts_api.md`).
   - Torii base64 faydalı yükünü deşifrə edir, hər iki hashı hesablayır, manifest qurur,
     və `RegisterSmartContractCode` plus təqdim edir
@@ -64,19 +64,19 @@ Status: Torii, CLI və əsas qəbul testləri (noyabr 2025) tərəfindən həyat
   - Cavab: `{ ok, code_hash_hex, abi_hash_hex }`.
   - Səhvlər: etibarsız base64, dəstəklənməyən ABI versiyası, itkin icazə
     (`CanRegisterSmartContractCode`), ölçü həddi aşıldı, idarəetmə qapısı.
-- `POST /v1/contracts/code`
+- `POST /v2/contracts/code`
   - `RegisterContractCodeDto` (səlahiyyət, şəxsi açar, manifest) qəbul edir və yalnız təqdim edir
     `RegisterSmartContractCode`. Manifestlər ayrı səhnələşdirildikdə istifadə edin
     bayt kodu.
-- `POST /v1/contracts/instance`
+- `POST /v2/contracts/instance`
   - `DeployAndActivateInstanceDto` qəbul edir (səlahiyyət, şəxsi açar, ad sahəsi/contract_id, `code_b64`, isteğe bağlı manifest ləğvetmələri) və yerləşdirir + atomik olaraq aktivləşdirir.
-- `POST /v1/contracts/instance/activate`
+- `POST /v2/contracts/instance/activate`
   - `ActivateInstanceDto` (səlahiyyət, şəxsi açar, ad sahəsi, contract_id, `code_hash`) qəbul edir və yalnız aktivləşdirmə təlimatını təqdim edir.
-- `GET /v1/contracts/code/{code_hash}`
+- `GET /v2/contracts/code/{code_hash}`
   - `{ manifest: { code_hash, abi_hash } }` qaytarır.
     Əlavə manifest sahələri daxili olaraq qorunur, lakin a üçün burada buraxılmır
     sabit API.
-- `GET /v1/contracts/code-bytes/{code_hash}`
+- `GET /v2/contracts/code-bytes/{code_hash}`
   - `{ code_b64 }`-i baza64 kimi kodlanmış saxlanan `.to` təsviri ilə qaytarır.
 
 Bütün müqavilə həyat dövrünün son nöqtələri vasitəsilə konfiqurasiya edilmiş xüsusi yerləşdirmə məhdudlaşdırıcısını paylaşır
@@ -91,10 +91,10 @@ Xəbərdarlıq üçün `torii_contract_errors_total{endpoint=…}`.
 
 ## İdarəetmə inteqrasiyası və qorunan ad məkanları- `gov_protected_namespaces` (JSON ad sahəsi massivi) fərdi parametrini təyin edin
   strings) qəbul qapısını aktivləşdirmək üçün. Torii altındakı köməkçiləri ifşa edir
-  `/v1/gov/protected-namespaces` və CLI onları vasitəsilə əks etdirir
+  `/v2/gov/protected-namespaces` və CLI onları vasitəsilə əks etdirir
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - `ProposeDeployContract` (və ya Torii) ilə yaradılmış təkliflər
-  `/v1/gov/proposals/deploy-contract` son nöqtəsi) ələ keçirin
+  `/v2/gov/proposals/deploy-contract` son nöqtəsi) ələ keçirin
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - Referendum keçdikdən sonra `EnactReferendum` təklifin Qəbul edildiyini qeyd edir və
   qəbul uyğun metadata və kodu daşıyan yerləşdirmələri qəbul edəcək.

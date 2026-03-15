@@ -21,10 +21,15 @@ fn find_accounts_with_asset() -> Result<()> {
 
     let result: Result<()> = (|| {
         // Registering new asset definition
-        let definition_id = "test_coin#wonderland"
-            .parse::<AssetDefinitionId>()
-            .expect("Valid");
-        let asset_definition = AssetDefinition::numeric(definition_id.clone());
+        let definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("Valid"),
+            "test_coin".parse().expect("Valid"),
+        );
+        let asset_definition = {
+            let __asset_definition_id = definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        };
         test_client.submit_blocking(Register::asset_definition(asset_definition.clone()))?;
 
         // Checking results before all

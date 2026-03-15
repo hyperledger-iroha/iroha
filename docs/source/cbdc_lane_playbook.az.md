@@ -233,7 +233,7 @@ auditorlar və tənzimləyicilər daha sonra dəqiq baytları təkrarlaya bilsin
 
 1. **Line manifestləri:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **Cədvəlləndirici kvotaları:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Manuel tüstü:** CBDC fayllarına işarə edən manifest kataloqu ilə `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`, sonra `/v1/sumeragi/status` düyməsini basın və CBDC zolağı üçün `lane_governance.manifest_ready=true`-i yoxlayın.
+3. **Manuel tüstü:** CBDC fayllarına işarə edən manifest kataloqu ilə `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`, sonra `/v2/sumeragi/status` düyməsini basın və CBDC zolağı üçün `lane_governance.manifest_ready=true`-i yoxlayın.
 4. **Ağ siyahıya uyğunluq testi:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` `integration_tests/tests/nexus/cbdc_whitelist.rs` məşqləri, `fixtures/space_directory/profile/cbdc_lane_profile.json` təhlili və istinad edilən imkanlar hər bir ağ siyahı girişinin UAID, data məkanı, aktivləşdirmə dövrünün və man10X0NT500 siyahısına uyğun olmasını təmin etmək üçün təzahür edir. `fixtures/space_directory/capability/` altında. Ağ siyahı və ya manifestlər dəyişdikdə test jurnalını NX-6 sübut paketinə əlavə edin.
 
 ### 2.2 CLI fraqmentləri
@@ -243,7 +243,7 @@ auditorlar və tənzimləyicilər daha sonra dəqiq baytları təkrarlaya bilsin
 - Əməliyyat masası uzaqdan avtomatlaşdırma ilə işləyirsə, HTTP vasitəsilə dərc edin:
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ auditorlar və tənzimləyicilər daha sonra dəqiq baytları təkrarlaya bilsin
 - Fövqəladə ləğvetmə Torii nömrəsinə POST göndərməklə uzaqdan verilə bilər:
 
   ```bash
-  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

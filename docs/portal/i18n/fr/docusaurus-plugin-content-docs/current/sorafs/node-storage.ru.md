@@ -156,9 +156,9 @@ et les charges utiles pour l'API Torii.【crates/sorafs_node/tests/cli.rs:1】> 
 > La passerelle Torii propose des assistants en lecture seule pour vous aider
 > `NodeHandle` :
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — возвращает сохраненный
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — возвращает сохраненный
 > Le manifeste Norito (base64) contient digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — Déterminateur
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — Déterminateur
 > Pièces de plan JSON (`chunk_fetch_specs`) pour l'outillage en aval.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Cette entreprise est en ligne CLI et vous permet de vous connecter à une page locale.
@@ -198,18 +198,18 @@ et les charges utiles pour l'API Torii.【crates/sorafs_node/tests/cli.rs:1】> 
      согласования модели gouvernance; пока дизайн предполагает строгие квоты и
      désépingler les opérations, les opérateurs d'ouverture.
 
-### Intégration des déclarations d'hébergement et de planification- Torii doit être remplacé par `CapacityDeclarationRecord` depuis `/v1/sorafs/capacity/declare`
+### Intégration des déclarations d'hébergement et de planification- Torii doit être remplacé par `CapacityDeclarationRecord` depuis `/v2/sorafs/capacity/declare`
   Pour le `CapacityManager`, c'est pourquoi vous pouvez utiliser la fonction de prévisualisation en mémoire
   зафиксированных chunker/voie аллокаций. Le fournisseur publie des instantanés en lecture seule pour la télémétrie
-  (`GET /v1/sorafs/capacity/state`) et des réserves par profil/par voie pour les nouvelles entreprises
+  (`GET /v2/sorafs/capacity/state`) et des réserves par profil/par voie pour les nouvelles entreprises
   заказов.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Эндпоинт `/v1/sorafs/capacity/schedule` принимает gouvernance-émis `ReplicationOrderV1`
+- Эндпоинт `/v2/sorafs/capacity/schedule` принимает gouvernance-émis `ReplicationOrderV1`
   charges utiles. Lorsque vous commandez un fournisseur local, vous pouvez assurer la duplication
   Régler, valider l'emplacement du chunker/lane, réserver l'emplacement et utiliser `ReplicationPlan`
   Selon l'article sur les aliments, l'organisation peut permettre l'ingestion. Commandes pour
   Les fournisseurs proposent la solution `ignored`, permettant des flux de travail multi-opérateurs.【crates/iroha_torii/src/routing.rs:4845】
 - Les crochets de complétion (par exemple, après l'ingestion) sont activés
-  `POST /v1/sorafs/capacity/complete` pour le réservoir d'eau disponible ici
+  `POST /v2/sorafs/capacity/complete` pour le réservoir d'eau disponible ici
   `CapacityManager::complete_order`. Ответ включает instantané `ReplicationRelease`
   (totaux d'état, chunker/voie), ce que les outils d'orchestration sont plus
   ставить следующий заказ без sondage. Un autre projet comprend ce pipeline

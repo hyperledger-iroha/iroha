@@ -38,7 +38,7 @@ Codecs Norito استعمال کرنا لازمی ہے؛ substituto serde/JSON
 ## Superfície de API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -205,14 +205,14 @@ manifestos opcionais verificam کرنے سے پہلے bytes کو descompactar ک
   Desbloquear trabalho de paridade SDK ہوتا ہے۔
 - `iroha app da get` Alias focado em DA فراہم کرتا ہے جو orquestrador multi-fonte کو usar کرتا ہے جو پہلے ہی
   `iroha app sorafs fetch` کو چلاتا ہے۔ Manifesto de operadores + artefatos de plano de bloco (`--manifest`, `--plan`, `--manifest-id`)
-  **یا** Bilhete de armazenamento Torii via `--storage-ticket` دے سکتے ہیں۔ Caminho do ticket پر CLI `/v1/da/manifests/<ticket>` سے
+  **یا** Bilhete de armazenamento Torii via `--storage-ticket` دے سکتے ہیں۔ Caminho do ticket پر CLI `/v2/da/manifests/<ticket>` سے
   download do manifesto کرتی ہے، pacote کو `artifacts/da/fetch_<timestamp>/` میں محفوظ کرتی ہے (substituir via
   `--manifest-cache-dir`), `--manifest-id` کیلئے blob hash deriva کرتی ہے, اور فراہم کردہ Lista `--gateway-provider`
   کے ساتھ execução do orquestrador کرتی ہے۔ SoraFS buscador کے botões avançados برقرار رہتے ہیں (envelopes manifestos,
   rótulos de cliente, caches de proteção, substituições de transporte de anonimato, exportação de placar, caminhos `--output`) ou
   `--manifest-endpoint` کے ذریعے substituição de endpoint de manifesto کیا جا سکتا ہے, لہذا verificações de disponibilidade ponta a ponta
   مکمل طور پر `da` namespace میں رہتے ہیں بغیر duplicata da lógica do orquestrador کئے۔
-- `iroha app da get-blob` Torii سے `GET /v1/da/manifests/{storage_ticket}` کے ذریعے manifestos canônicos کھینچتا ہے۔
+- `iroha app da get-blob` Torii سے `GET /v2/da/manifests/{storage_ticket}` کے ذریعے manifestos canônicos کھینچتا ہے۔
   Escolha `manifest_{ticket}.norito`, `manifest_{ticket}.json`, ou `chunk_plan_{ticket}.json`
   `artifacts/da/fetch_<timestamp>/` میں لکھتی ہے (یا `--output-dir` fornecido pelo usuário) ou `iroha app da get`
   invocação (بشمول `--manifest-id`) echo کرتی ہے جو orquestrador de acompanhamento buscar کیلئے درکار ہے۔ Operadores de اس سے

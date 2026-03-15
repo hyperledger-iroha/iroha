@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## Нотлох баримт ба лавлагаа
 - NX-3 тооцооны чиглүүлэгчийн хүлээн авах тэмдэглэл: `status.md` (NX-3 хэсэг).
 - Операторын гадаргуу: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- Хүлээн авах схем ба API гадаргуу: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.
+- Хүлээн авах схем ба API гадаргуу: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.

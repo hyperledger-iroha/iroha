@@ -25,12 +25,12 @@ translator: machine-google-reviewed
 
 ## Torii API မျက်နှာပြင်
 
-- `GET /v1/zk/proofs` နှင့် `GET /v1/zk/proofs/count` တံတားသတိပြုမိသော စစ်ထုတ်မှုများကို လက်ခံသည်-
+- `GET /v2/zk/proofs` နှင့် `GET /v2/zk/proofs/count` တံတားသတိပြုမိသော စစ်ထုတ်မှုများကို လက်ခံသည်-
   - `bridge_only=true` သည် တံတားအထောက်အထားများကိုသာ ပြန်ပေးသည်။
   - `bridge_pinned_only=true` သည် ချိတ်တွဲထားသော တံတားအထောက်အထားများကို ကျဉ်းစေသည်။
   - `bridge_start_from_height` / `bridge_end_until_height` တံတားဘောင်ပြတင်းပေါက်ကို ကုပ်ပါ။
-- `GET /v1/zk/proof/{backend}/{hash}` သည် အထောက်အထား id/status/VK bindings များနှင့်အတူ တံတား metadata (အပိုင်းအခြား၊ manifest hash၊ payload summary) ကို ပြန်ပေးသည်။
-- Norito အထောက်အထားမှတ်တမ်း အပြည့်အစုံ (payload bytes အပါအဝင်) ကို off-node verifiers အတွက် `GET /v1/proofs/{proof_id}` မှတစ်ဆင့် ရရှိနိုင်ပါသည်။
+- `GET /v2/zk/proof/{backend}/{hash}` သည် အထောက်အထား id/status/VK bindings များနှင့်အတူ တံတား metadata (အပိုင်းအခြား၊ manifest hash၊ payload summary) ကို ပြန်ပေးသည်။
+- Norito အထောက်အထားမှတ်တမ်း အပြည့်အစုံ (payload bytes အပါအဝင်) ကို off-node verifiers အတွက် `GET /v2/proofs/{proof_id}` မှတစ်ဆင့် ရရှိနိုင်ပါသည်။
 
 ## တံတားဖြတ်ပိုင်းပွဲများ
 

@@ -48,7 +48,7 @@ CLI `sns governance ...` ومانيفستات Norito
 | और देखेंスチュワード。 | `docs/source/sns/governance_addenda/`、`artifacts/sns/governance/*`、`sns governance charter submit`。 | رئيس المجلس + متعقب جدول اعمال الحوكمة。 |
 |ガーディアン |ソフト/ハードの互換性 72 時間。 |保護者は `sns governance freeze`، ومانيفستات التجاوز المسجلة تحت `artifacts/sns/guardian/*`。 |保護者がオンコール中 (<=15 分の ACK)。 |
 |スチュワードログイン して翻訳を追加するありがとうございます。 |スチュワード、`SuffixPolicyV1`、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード、スチュワード。 |スチュワード + PagerDuty の管理者です。 |
-| और देखें `/v1/sns/*`、国際標準、国際標準、CLI を使用してください。 | API は ([`registrar-api.md`](./registrar-api.md))、 مقاييس `sns_registrar_status_total`、 الثباتات الدفع المؤرشفة تحت `artifacts/sns/payments/*`。 | دير مناوبة المسجل ورابط الخزينة。 |
+| और देखें `/v2/sns/*`、国際標準、国際標準、CLI を使用してください。 | API は ([`registrar-api.md`](./registrar-api.md))、 مقاييس `sns_registrar_status_total`、 الثباتات الدفع المؤرشفة تحت `artifacts/sns/payments/*`。 | دير مناوبة المسجل ورابط الخزينة。 |
 |リゾルバ | 解決策يحافظون على SoraDNS وGAR وحالة البوابة متوافقة مع احداث المسجل؛ قاييس الشفافية。 | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)、`dashboards/alerts/soradns_transparency_rules.yml`。 | SRE リゾルバー オンコール + セキュリティ ソリューション。 |
 | और देखें評価は 70/30 回、紹介数は SLA です。 |ストライプ/カラー、KPI、`docs/source/sns/regulatory/`。 | مراقب المالية + مسؤول الامتثال。 |
 | और देखें EU DSA (EU DSA) と KPI (KPI) を確認してください。 | `docs/source/sns/regulatory/`、`ops/drill-log.md`、`docs/source/sns/regulatory/` を確認してください。 |ありがとうございます。 |
@@ -155,7 +155,7 @@ CLI `sns governance ...` ومانيفستات Norito
 |認証済み |翻訳 | और देखें
 |-------|-------|------|
 | `sns_registrar_status_total{result,suffix}` | Torii | ログインしてください。 عداد نجاح/خطا للتسجيلات، التجديدات، التحويلات؛ ينبه عندما يرتفع `result="error"` لكل لاحقة。 |
-| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii | SLO は API をサポートします`torii_norito_rpc_observability.json` です。 |
+| `torii_request_duration_seconds{route="/v2/sns/*"}` | Torii | SLO は API をサポートします`torii_norito_rpc_observability.json` です。 |
 | `soradns_bundle_proof_age_seconds` と `soradns_bundle_cid_drift_total` |テーラー شفافية リゾルバー | كشف ادلة قديمة او انحراف GAR؛ `dashboards/alerts/soradns_transparency_rules.yml` です。 |
 | `sns_governance_activation_total` | CLI を使用する | عداد يزداد عند تفعيل ميثاق/ملحق؛あなたのことを忘れないでください。 |
 | `guardian_freeze_active` ゲージ | CLI ガーディアン |ソフト/ハードの区別 محدد؛ SRE 番号、`1` 番号、SLA 番号。 |

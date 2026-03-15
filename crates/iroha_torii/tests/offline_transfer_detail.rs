@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v1/offline/transfers/{bundle_id_hex}` endpoint.
+//! Integration tests for the `/v2/offline/transfers/{bundle_id_hex}` endpoint.
 #![cfg(feature = "app_api")]
 
 mod offline_balance_proof_utils;
@@ -69,7 +69,7 @@ struct Fixtures {
 #[tokio::test]
 async fn offline_transfer_detail_returns_bundle() {
     let harness = build_harness();
-    let uri = format!("/v1/offline/transfers/{}", harness.fixtures.bundle_hex);
+    let uri = format!("/v2/offline/transfers/{}", harness.fixtures.bundle_hex);
 
     let resp = harness
         .app
@@ -108,7 +108,7 @@ async fn offline_transfer_detail_returns_bundle() {
 #[tokio::test]
 async fn offline_settlement_detail_alias_returns_bundle() {
     let harness = build_harness();
-    let uri = format!("/v1/offline/settlements/{}", harness.fixtures.bundle_hex);
+    let uri = format!("/v2/offline/settlements/{}", harness.fixtures.bundle_hex);
 
     let resp = harness
         .app
@@ -135,7 +135,7 @@ async fn offline_settlement_detail_alias_returns_bundle() {
 async fn offline_transfer_detail_returns_404_for_missing_bundle() {
     let harness = build_harness();
     let missing_hex = hex::encode(Hash::new(b"missing").as_ref());
-    let uri = format!("/v1/offline/transfers/{missing_hex}");
+    let uri = format!("/v2/offline/transfers/{missing_hex}");
 
     let resp = harness
         .app
@@ -170,7 +170,7 @@ async fn offline_settlement_detail_alias_includes_rejected_reason() {
     tx.apply();
     block.commit().expect("commit rejected settlement");
 
-    let uri = format!("/v1/offline/settlements/{rejected_bundle_hex}");
+    let uri = format!("/v2/offline/settlements/{rejected_bundle_hex}");
     let resp = harness
         .app
         .clone()
@@ -204,16 +204,7 @@ fn build_harness() -> Harness {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let chain_id = cfg.common.chain.clone();
-    #[cfg(feature = "telemetry")]
-    let state = Arc::new(State::new_with_chain(
-        World::default(),
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    ));
-    #[cfg(not(feature = "telemetry"))]
-    let state = Arc::new(State::new_with_chain(
+    let state = Arc::new(State::new_with_chain_for_testing(
         World::default(),
         Arc::clone(&kura),
         query,
@@ -465,6 +456,9 @@ fn seed_transfer(state: &Arc<State>, fixtures: &Fixtures) {
         }
         Register::asset_definition(NewAssetDefinition {
             id: asset_definition_id.clone(),
+            name: "OfflineAsset".to_owned(),
+            description: None,
+            alias: None,
             spec: NumericSpec::default(),
             mintable: Mintable::Infinitely,
             logo: None,

@@ -220,7 +220,7 @@ Nexus لین بلبس اور گورننس آرٹ فیکٹز کے ساتھ باز
 
 - ری پلے کیشے اور استقامت کے کرسر ڈی اے 2 میں اترے۔ میں عمل درآمد
   `crates/iroha_core/src/da/replay_cache.rs` (کیشے کی منطق) اور Torii کا انضمام
-  `crates/iroha_torii/src/da/ingest.rs` ، جہاں فنگر پرنٹ چیک `/v1/da/ingest` کے ذریعے جاتے ہیں۔
+  `crates/iroha_torii/src/da/ingest.rs` ، جہاں فنگر پرنٹ چیک `/v2/da/ingest` کے ذریعے جاتے ہیں۔
 - PDP/POTR اسٹریمنگ تخروپن میں پروف اسٹریم کنٹرول کے ذریعے استعمال کیا جاتا ہے
   `crates/sorafs_car/tests/sorafs_cli.rs` ، پور/PDP/POTR کی درخواست کے بہاؤ اور احاطہ کرتا ہے
   خطرہ ماڈل سے ناکامی کے منظرنامے۔

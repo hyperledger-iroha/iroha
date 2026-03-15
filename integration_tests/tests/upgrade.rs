@@ -53,9 +53,12 @@ fn executor_upgrade_should_work() -> Result<()> {
     client.submit_blocking(register_admin_account)?;
 
     // Check that admin isn't allowed to transfer alice's rose by default
-    let rose_def: AssetDefinitionId = "rose#wonderland"
-        .parse()
-        .expect("asset definition should be valid");
+    let rose_def: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland"
+            .parse()
+            .expect("asset definition should be valid"),
+        "rose".parse().expect("asset definition should be valid"),
+    );
     let alice_rose = AssetId::new(rose_def, ALICE_ID.clone());
     let transfer_alice_rose = Transfer::asset_numeric(alice_rose, 1u32, admin_id.clone());
     let transfer_rose_tx = TransactionBuilder::new(chain_id.clone(), admin_id.clone())
@@ -260,7 +263,8 @@ fn executor_custom_instructions_simple() -> Result<()> {
 
     upgrade_executor(&client, "executor_custom_instructions_simple")?;
 
-    let asset_definition_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let asset_definition_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
 
     // Give 1 rose to bob
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
@@ -313,7 +317,8 @@ fn executor_custom_instructions_complex() -> Result<()> {
     upgrade_executor(&client, "executor_custom_instructions_complex")?;
 
     // Give 6 roses to bob
-    let asset_definition_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let asset_definition_id: AssetDefinitionId =
+        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     client.submit_blocking(Mint::asset_numeric(Numeric::from(6u32), bob_rose.clone()))?;
 
@@ -430,7 +435,10 @@ fn executor_with_fuel() -> Result<()> {
         additional_fuel(0),
     )?;
 
-    let bob_rose = AssetId::new("rose#wonderland".parse().unwrap(), BOB_ID.clone());
+    let bob_rose = AssetId::new(
+        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+        BOB_ID.clone(),
+    );
     let mint_a_rose = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
 
     client.submit_all_blocking_with_metadata(
@@ -500,7 +508,10 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
         additional_fuel(0),
     )?;
 
-    let bob_rose = AssetId::new("rose#wonderland".parse().unwrap(), BOB_ID.clone());
+    let bob_rose = AssetId::new(
+        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+        BOB_ID.clone(),
+    );
     let mint_a_rose = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
 
     let trigger_id = "mint_three_roses".parse::<TriggerId>()?;

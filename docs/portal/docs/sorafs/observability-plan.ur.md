@@ -88,7 +88,7 @@ enforcement بڑھنے پر فوری context ملے۔
 | `sorafs_node_por_failure_total` | Counter | `provider_id` | failed PoR samples کا monotonic counter۔ |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | bytes used، queue depth اور PoR inflight counts کے لیے موجودہ Prometheus gauges۔ |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | provider capacity/uptime success data جو capacity dashboard میں دکھایا جاتا ہے۔ |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | backlog depth اور cumulative failure counters جو ہر `/v1/sorafs/por/ingestion/{manifest}` poll پر export ہوتے ہیں، "PoR Stalls" panel/alert کو feed کرتے ہیں۔ |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | backlog depth اور cumulative failure counters جو ہر `/v2/sorafs/por/ingestion/{manifest}` poll پر export ہوتے ہیں، "PoR Stalls" panel/alert کو feed کرتے ہیں۔ |
 
 ### Proof of Timely Retrieval (PoTR) اور chunk SLA
 

@@ -58,12 +58,12 @@ A melhor maneira de fazer isso é com a ajuda de uma pessoa.
 A solução Torii é uma ferramenta que pode ser usada para evitar problemas de segurança.
 A melhor maneira de conectar a fiação é:
 
-- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
+- `POST /v2/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
   Verifique se há algum problema (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle`
+- `POST /v2/sorafs/deal/settle`
   `DealSettlementRecord` é um dispositivo `DealSettlementV1` baseado em base64
   وجاهزًا للنشر no DAG الحوكمة.
-- O `/v1/events/sse` é o Torii do modelo `SorafsGatewayEvent::DealUsage`
+- O `/v2/events/sse` é o Torii do modelo `SorafsGatewayEvent::DealUsage`
   التي تلخص كل إرسال استخدام (época, ساعات GiB المقاسة, عدّادات التذاكر,
   Nome do usuário), e `SorafsGatewayEvent::DealSettlement`
   Como criar o ledger para o digest/الحجم/base64 com BLAKE3

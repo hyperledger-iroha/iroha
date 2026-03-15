@@ -175,7 +175,7 @@ async fn register_name(app: &Router, payload: RegisterNameRequestV1) -> Register
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations")
+                .uri("/v2/sns/registrations")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(body))
@@ -206,7 +206,7 @@ async fn sns_register_and_fetch_round_trip() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/makoto.sora")
+                .uri("/v2/sns/registrations/makoto.sora")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -217,7 +217,7 @@ async fn sns_register_and_fetch_round_trip() {
     let policy_resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/policies/1")
+                .uri("/v2/sns/policies/1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -262,7 +262,7 @@ async fn sns_renew_transfer_and_freeze_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/flow.sora/renew")
+                .uri("/v2/sns/registrations/flow.sora/renew")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -296,7 +296,7 @@ async fn sns_renew_transfer_and_freeze_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/flow.sora/transfer")
+                .uri("/v2/sns/registrations/flow.sora/transfer")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -327,7 +327,7 @@ async fn sns_renew_transfer_and_freeze_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/flow.sora/freeze")
+                .uri("/v2/sns/registrations/flow.sora/freeze")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -354,7 +354,7 @@ async fn sns_renew_transfer_and_freeze_flow() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/flow.sora/freeze")
+                .uri("/v2/sns/registrations/flow.sora/freeze")
                 .method("DELETE")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -399,7 +399,7 @@ async fn sns_transfer_rejected_while_frozen() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/frozenxfer.sora/freeze")
+                .uri("/v2/sns/registrations/frozenxfer.sora/freeze")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -425,7 +425,7 @@ async fn sns_transfer_rejected_while_frozen() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/frozenxfer.sora/transfer")
+                .uri("/v2/sns/registrations/frozenxfer.sora/transfer")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -440,7 +440,7 @@ async fn sns_transfer_rejected_while_frozen() {
     let record_resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/frozenxfer.sora")
+                .uri("/v2/sns/registrations/frozenxfer.sora")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -466,7 +466,7 @@ async fn sns_reserved_label_requires_steward() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations")
+                .uri("/v2/sns/registrations")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(body))
@@ -492,7 +492,7 @@ async fn sns_governance_cases_round_trip() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/governance/cases")
+                .uri("/v2/sns/governance/cases")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -514,7 +514,7 @@ async fn sns_governance_cases_round_trip() {
     let export_resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/governance/cases?status=open&limit=1")
+                .uri("/v2/sns/governance/cases?status=open&limit=1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -548,7 +548,7 @@ async fn sns_update_controllers_round_trip() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations/controllers.sora/controllers")
+                .uri("/v2/sns/registrations/controllers.sora/controllers")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -575,7 +575,7 @@ async fn sns_registration_rejects_insufficient_payment() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v1/sns/registrations")
+                .uri("/v2/sns/registrations")
                 .method("POST")
                 .header("content-type", "application/json")
                 .body(Body::from(body))

@@ -112,14 +112,14 @@ visible without leaving stale accumulators in memory.
 Torii now exposes two telemetry-gated HTTP endpoints so relays and collectors
 can forward observations without embedding a bespoke transport:
 
-- `POST /v1/soranet/privacy/event` accepts a
+- `POST /v2/soranet/privacy/event` accepts a
   `RecordSoranetPrivacyEventDto` payload. The body wraps a
   `SoranetPrivacyEventV1` plus an optional `source` label. Torii validates the
   request against the active telemetry profile, records the event, and responds
   with HTTP `202 Accepted` alongside a Norito JSON envelope containing the
   computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) and the
   relay mode.
-- `POST /v1/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
+- `POST /v2/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
   payload. The body carries a `SoranetPrivacyPrioShareV1` and an optional
   `forwarded_by` hint so operators can audit collector flows. Successful
   submissions return HTTP `202 Accepted` with a Norito JSON envelope summarising
@@ -233,7 +233,7 @@ clamp_min(
 ### Offline bucket report CLI
 
 When governance requests evidence for a specific NDJSON capture (relay admin
-dump, Torii `/v1/soranet/privacy/event` export, or Prio share bundle), run the
+dump, Torii `/v2/soranet/privacy/event` export, or Prio share bundle), run the
 new helper:
 
 ```bash
@@ -264,7 +264,7 @@ suppression budgets. The `cargo xtask soranet-privacy-report` helper now accepts
 exceed the allowed window (10% by default). Recommended process:
 
 1. Capture at least two relays’ `/privacy/events` exports plus the orchestrator’s
-   `/v1/soranet/privacy/event|share` dumps into
+   `/v2/soranet/privacy/event|share` dumps into
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Run the helper with a suppression budget:
 

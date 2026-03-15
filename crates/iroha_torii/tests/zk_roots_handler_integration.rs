@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for /v1/zk/roots using a minimal in-memory state.
+//! Integration test for /v2/zk/roots using a minimal in-memory state.
 #![allow(clippy::too_many_lines)]
 
 use std::{collections::HashSet, sync::Arc};
@@ -25,15 +25,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     // Build state and cap recent roots to 3
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
     state.set_zk(iroha_config::parameters::actual::Zk {
         halo2: iroha_config::parameters::actual::Halo2 {
             enabled: false,
@@ -125,17 +117,24 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 
     // Seed shielded roots via ISIs
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "rose#zkd".parse().unwrap();
+    let asset_def_id = AssetDefinitionId::new(
+        "zkd".parse().expect("domain id"),
+        "rose".parse().expect("asset definition name"),
+    );
+    let asset_alias = "rose#sbp";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
+        let mut definition =
+            AssetDefinition::numeric(asset_def_id.clone()).with_name("rose".to_owned());
+        definition.alias = Some(asset_alias.parse().expect("asset alias literal"));
         let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+            Register::asset_definition(definition).into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def_id.clone(),
@@ -185,7 +184,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     let state = Arc::new(state);
     // Prepare router with handler
     let app = Router::new().route(
-        "/v1/zk/roots",
+        "/v2/zk/roots",
         post({
             let state = state.clone();
             move |NoritoJson(req): NoritoJson<iroha_torii::ZkRootsGetRequestDto>| async move {
@@ -196,13 +195,13 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 
     // Query with max=0 (bounded by cap=3)
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_id", asset_def_id.to_string()),
+        iroha_torii::json_entry("asset_id", asset_alias),
         iroha_torii::json_entry("max", 0u64),
     ]))
     .expect("json serialization");
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/roots")
+        .uri("/v2/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
@@ -236,13 +235,13 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 
     // Query with max=2 (bounded by requested)
     let req_second_body = norito::json::to_json(&iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_id", asset_def_id.to_string()),
+        iroha_torii::json_entry("asset_id", asset_alias),
         iroha_torii::json_entry("max", 2u64),
     ]))
     .expect("json serialization");
     let req_second = http::Request::builder()
         .method("POST")
-        .uri("/v1/zk/roots")
+        .uri("/v2/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(req_second_body))
         .unwrap();

@@ -657,7 +657,7 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
 **Signals**
 
 - Alerts on `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors`, and the Torii `/v1/pipeline` error rate.
+  `android_sdk_offline_replay_errors`, and the Torii `/v2/pipeline` error rate.
 - `operator-console` widgets (examples/android) showing stalled queue drain or
   retries stuck in exponential backoff.
 
@@ -707,7 +707,7 @@ Sev 1/2 follow-ups and archive the evidence in `incident/<date>-android-*.md`.
 **Recovery**
 
 1. If Torii is degraded, engage the Torii on-call and continue replaying the
-   queue once `/v1/pipeline` accepts traffic.
+   queue once `/v2/pipeline` accepts traffic.
 2. Reconfigure affected clients only via signed `iroha_config` manifests. The
    `ClientConfig` hot-reload watcher must emit a success log before the incident
    can close.

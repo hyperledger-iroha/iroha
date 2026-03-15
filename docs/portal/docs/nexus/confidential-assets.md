@@ -38,7 +38,7 @@ Confidential memo envelopes now ship with a canonical fixture at `fixtures/confi
 Swift SDKs can now emit shield instructions without bespoke JSON glue: construct a
 `ShieldRequest` with the 32-byte note commitment, encrypted payload, and debit metadata,
 then call `IrohaSDK.submit(shield:keypair:)` (or `submitAndWait`) to sign and relay the
-transaction over `/v1/pipeline/transactions`. The helper validates commitment lengths,
+transaction over `/v2/pipeline/transactions`. The helper validates commitment lengths,
 threads `ConfidentialEncryptedPayload` into the Norito encoder, and mirrors the `zk::Shield`
 layout described below so wallets stay in lock-step with Rust.
 
@@ -70,7 +70,7 @@ layout described below so wallets stay in lock-step with Rust.
 
 #### Monitoring transitions via Torii
 
-Wallets and auditors poll `GET /v1/confidential/assets/{definition_id}/transitions` to inspect
+Wallets and auditors poll `GET /v2/confidential/assets/{definition_id}/transitions` to inspect
 the active `AssetConfidentialPolicy`. The JSON payload always includes the canonical
 asset id, the latest observed block height, the policy’s `current_mode`, the mode that is
 effective at that height (conversion windows temporarily report `Convertible`), and the
@@ -124,7 +124,7 @@ Transitions not listed above are rejected during governance submission. Runtime 
 ### Migration sequencing
 
 2. **Stage the transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
-3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v1/confidential/assets/{id}/transitions` to learn the window open height.
+3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v2/confidential/assets/{id}/transitions` to learn the window open height.
 4. **Window enforcement:** When the window opens, the runtime switches the policy to `Convertible`, emits `PolicyTransitionWindowOpened { transition_id }`, and begins rejecting conflicting governance requests.
 5. **Finalize or abort:** At `effective_height`, the runtime verifies the transition prerequisites (zero transparent supply, no emergency withdrawals, etc.). Success flips the policy to the requested mode; failure emits `PolicyTransitionPrerequisiteFailed`, clears the pending transition, and leaves the policy unchanged.
 6. **Schema upgrades:** After a successful transition, governance bumps the asset schema version (e.g., `asset_definition.v2`) and CLI tooling requires `confidential_policy` when serialising manifests. Genesis upgrade docs instruct operators to add policy settings and registry fingerprints before restarting validators.
@@ -252,7 +252,7 @@ lockstep.
 - Per-account key derivation hierarchy:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Encrypted note payloads use AEAD with ECDH-derived shared keys; optional auditor view keys may be attached to outputs per asset policy.
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii exposes the same derivation flow via `POST /v1/confidential/derive-keyset`, returning both hex and base64 forms so wallets can fetch key hierarchies programmatically.
+- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii exposes the same derivation flow via `POST /v2/confidential/derive-keyset`, returning both hex and base64 forms so wallets can fetch key hierarchies programmatically.
 
 ## Gas, Limits & DoS Controls
 - Deterministic gas schedule:

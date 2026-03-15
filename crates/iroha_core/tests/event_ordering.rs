@@ -15,9 +15,14 @@ fn data_events_follow_instruction_order_in_tx() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let acc = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
-    let ad: AssetDefinition =
-        AssetDefinition::new("rose#wonderland".parse().unwrap(), NumericSpec::default())
-            .build(&authority_id);
+    let ad: AssetDefinition = AssetDefinition::new(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ),
+        NumericSpec::default(),
+    )
+    .build(&authority_id);
     let world = iroha_core::state::World::with([domain], [acc], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -38,7 +43,13 @@ fn data_events_follow_instruction_order_in_tx() {
     };
 
     // Single transaction: three instructions in a fixed order
-    let asset = AssetId::of("rose#wonderland".parse().unwrap(), authority_id.clone());
+    let asset = AssetId::of(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ),
+        authority_id.clone(),
+    );
     let instrs: Vec<InstructionBox> = vec![
         // 1) Account metadata insert
         SetKeyValue::account(authority_id.clone(), "a_key".parse().unwrap(), "a_val").into(),

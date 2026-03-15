@@ -51,12 +51,12 @@ Torii ダッシュボードと SLO の適用に利用されます。後続項目
 Torii は専用エンドポイントを公開し、プロバイダが使用量を報告して
 合意のライフサイクルを特別な配線なしで進められるようにします:
 
-- `POST /v1/sorafs/deal/usage` は `DealUsageReport` のテレメトリを受け取り、
+- `POST /v2/sorafs/deal/usage` は `DealUsageReport` のテレメトリを受け取り、
   決定的な会計結果 (`UsageOutcome`) を返します。
-- `POST /v1/sorafs/deal/settle` は現在のウィンドウを確定し、結果の
+- `POST /v2/sorafs/deal/settle` は現在のウィンドウを確定し、結果の
   `DealSettlementRecord` と、ガバナンス DAG 公開用に base64 エンコードされた
   `DealSettlementV1` をストリームします。
-- Torii の `/v1/events/sse` フィードは、各使用量提出を要約する
+- Torii の `/v2/events/sse` フィードは、各使用量提出を要約する
   `SorafsGatewayEvent::DealUsage`（epoch、計測 GiB時間、チケットカウンタ、決定的課金）、
   正規の精算台帳スナップショットとオンディスクのガバナンス成果物に対する
   BLAKE3 digest/size/base64 を含む `SorafsGatewayEvent::DealSettlement`、および

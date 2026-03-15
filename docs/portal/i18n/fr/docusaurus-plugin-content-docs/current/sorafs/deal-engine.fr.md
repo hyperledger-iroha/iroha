@@ -55,12 +55,12 @@ le report de crédit avec les résultats de règlement.
 ##Intégration Torii
 
 Torii expose des endpoints dédiés pour que les fournisseurs signalent l'utilisation et pilotent
-le cycle de vie des accords sans câblage spécifique :- `POST /v1/sorafs/deal/usage` accepter la télémétrie `DealUsageReport` et renvoyer
+le cycle de vie des accords sans câblage spécifique :- `POST /v2/sorafs/deal/usage` accepter la télémétrie `DealUsageReport` et renvoyer
   des résultats de comptabilité déterministes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalise la fenêtre courante, en streamant le
+- `POST /v2/sorafs/deal/settle` finalise la fenêtre courante, en streamant le
   `DealSettlementRecord` résultant avec un `DealSettlementV1` encodé en base64
   prêt pour publication dans le DAG de gouvernance.
-- Le flux `/v1/events/sse` de Torii diffuse désormais des enregistrements
+- Le flux `/v2/events/sse` de Torii diffuse désormais des enregistrements
   `SorafsGatewayEvent::DealUsage` résumant chaque soumission d'usage (époque, GiB-heures mesurées,
   compteurs de tickets, charges déterministes), des enregistrements
   `SorafsGatewayEvent::DealSettlement` qui inclut le snapshot canonique du grand livre de règlement

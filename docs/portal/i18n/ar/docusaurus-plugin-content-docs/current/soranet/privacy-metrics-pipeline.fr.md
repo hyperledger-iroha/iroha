@@ -69,8 +69,8 @@ Sidebar_label: خط أنابيب مقاييس السرية
 
 ## نقاط النهاية للابتلاع Torii
 
-يكشف Torii عن خلل في نقطتي نهاية HTTP المحميتين من خلال وحدة القياس عن بعد حتى تتمكن المرحلات والمجمعات من إرسال الملاحظات دون منع النقل بالقياس:- `POST /v1/soranet/privacy/event` يقبل الحمولة `RecordSoranetPrivacyEventDto`. يغلف الجسم `SoranetPrivacyEventV1` بالإضافة إلى علامة `source` الاختيارية. Torii التحقق من صحة الطلب ضد ملف تعريف الاتصال عن بعد النشط، وتسجيل الحدث والرد باستخدام HTTP `202 Accepted` المصاحب لمغلف Norito JSON المحتوي على النافذة الحسابية (`bucket_start_unix`, `bucket_duration_secs`) ووضع التتابع.
-- `POST /v1/soranet/privacy/share` يقبل الحمولة `RecordSoranetPrivacyShareDto`. يقوم فريق النقل بخيار `SoranetPrivacyPrioShareV1` ومؤشر `forwarded_by` حتى يتمكن المشغلون من مراقبة تدفق المجمعين. تتطلب عمليات الإرسال HTTP `202 Accepted` مع مغلف Norito JSON إعادة تشغيل المجمع ونافذة الجرافة ومؤشر القمع؛ تتوافق نتائج التحقق من الصحة مع استجابة القياس عن بعد `Conversion` لتتمكن من الحفاظ على خطأ محدد بين المجمعين. يتم اختلال سلسلة أحداث المُنسق من خلال هذه المشاركات عند استجواب المرحلات، مما يضمن مزامنة المجمع Prio de Torii مع دلاء التتابع.النقطتان الطرفيتان تتعلقان بملف القياس عن بعد: `503 Service Unavailable` عندما تكون المقاييس معطلة. يمكن للعملاء إرسال مجموعة Norito ثنائية (`application/x.norito`) أو Norito JSON (`application/x.norito+json`) ؛ يقوم الخادم بالتنسيق تلقائيًا عبر مستخرجات Torii القياسية.
+يكشف Torii عن خلل في نقطتي نهاية HTTP المحميتين من خلال وحدة القياس عن بعد حتى تتمكن المرحلات والمجمعات من إرسال الملاحظات دون منع النقل بالقياس:- `POST /v2/soranet/privacy/event` يقبل الحمولة `RecordSoranetPrivacyEventDto`. يغلف الجسم `SoranetPrivacyEventV1` بالإضافة إلى علامة `source` الاختيارية. Torii التحقق من صحة الطلب ضد ملف تعريف الاتصال عن بعد النشط، وتسجيل الحدث والرد باستخدام HTTP `202 Accepted` المصاحب لمغلف Norito JSON المحتوي على النافذة الحسابية (`bucket_start_unix`, `bucket_duration_secs`) ووضع التتابع.
+- `POST /v2/soranet/privacy/share` يقبل الحمولة `RecordSoranetPrivacyShareDto`. يقوم فريق النقل بخيار `SoranetPrivacyPrioShareV1` ومؤشر `forwarded_by` حتى يتمكن المشغلون من مراقبة تدفق المجمعين. تتطلب عمليات الإرسال HTTP `202 Accepted` مع مغلف Norito JSON إعادة تشغيل المجمع ونافذة الجرافة ومؤشر القمع؛ تتوافق نتائج التحقق من الصحة مع استجابة القياس عن بعد `Conversion` لتتمكن من الحفاظ على خطأ محدد بين المجمعين. يتم اختلال سلسلة أحداث المُنسق من خلال هذه المشاركات عند استجواب المرحلات، مما يضمن مزامنة المجمع Prio de Torii مع دلاء التتابع.النقطتان الطرفيتان تتعلقان بملف القياس عن بعد: `503 Service Unavailable` عندما تكون المقاييس معطلة. يمكن للعملاء إرسال مجموعة Norito ثنائية (`application/x.norito`) أو Norito JSON (`application/x.norito+json`) ؛ يقوم الخادم بالتنسيق تلقائيًا عبر مستخرجات Torii القياسية.
 
 ## المقاييس Prometheus
 
@@ -143,7 +143,7 @@ cargo xtask soranet-privacy-report \
 
 تتطلب الحوكمة دائمًا التأكد من أن التنفيذ الأول يتم تلقائيًا مع احترام ميزانية القمع. يقبل الجهاز الخلل `--max-suppression-ratio <0-1>` حتى يتمكن CI أو المشغلون من الاستجابة بسرعة عند إزالة الحاويات من النافذة المصرح بها (10% افتراضيًا) أو عند عدم ظهور الحاوية مرة أخرى. يوصى بالتدفق:
 
-1. مُصدِّر NDJSON من إدارة نقاط النهاية للتتابع بالإضافة إلى التدفق `/v1/soranet/privacy/event|share` من المُنسق مقابل `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. مُصدِّر NDJSON من إدارة نقاط النهاية للتتابع بالإضافة إلى التدفق `/v2/soranet/privacy/event|share` من المُنسق مقابل `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. تنفيذ الأداة بالميزانية السياسية :
 
    ```bash

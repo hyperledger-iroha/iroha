@@ -91,7 +91,7 @@ description: Схема телеметрии, дашборды и политик
 | `sorafs_node_por_failure_total` | Counter | `provider_id` | Монотонный счетчик неуспешных PoR-выборок. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Существующие Prometheus gauge для использованных байтов, глубины очереди, PoR in-flight счетчиков. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Данные об успехе capacity/uptime провайдера, отображаемые в дашборде емкости. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Глубина backlog плюс накопленные счетчики ошибок, экспортируемые при каждом опросе `/v1/sorafs/por/ingestion/{manifest}`, питают панель/алерт "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Глубина backlog плюс накопленные счетчики ошибок, экспортируемые при каждом опросе `/v2/sorafs/por/ingestion/{manifest}`, питают панель/алерт "PoR Stalls". |
 
 ### Proof of Timely Retrieval (PoTR) и SLA по chunks
 

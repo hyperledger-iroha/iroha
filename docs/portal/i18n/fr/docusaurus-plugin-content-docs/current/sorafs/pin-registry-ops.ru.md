@@ -21,7 +21,7 @@ Consultez `docs/source/sorafs/runbooks/pin_registry_ops.md`. Vous pouvez consult
 
 ## Обзор
 
-Ce runbook est conçu pour surveiller et activer le triage du registre des broches SoraFS et également la gestion de votre service (SLA) pour la réplication. Les mesures postérieures à `iroha_torii` et exportées à partir de Prometheus vers l'espace de noms `torii_sorafs_*`. Torii gère le registre pendant 30 secondes sur le téléphone, à l'emplacement des tableaux de bord qui sont actuellement disponibles pour les opérateurs non-autorisés запрашивает les points de terminaison `/v1/sorafs/pin/*`. Importez le tableau de bord intégré (`docs/source/grafana_sorafs_pin_registry.json`) vers la disposition de votre ordinateur Grafana, qui correspond à votre situation actuelle.
+Ce runbook est conçu pour surveiller et activer le triage du registre des broches SoraFS et également la gestion de votre service (SLA) pour la réplication. Les mesures postérieures à `iroha_torii` et exportées à partir de Prometheus vers l'espace de noms `torii_sorafs_*`. Torii gère le registre pendant 30 secondes sur le téléphone, à l'emplacement des tableaux de bord qui sont actuellement disponibles pour les opérateurs non-autorisés запрашивает les points de terminaison `/v2/sorafs/pin/*`. Importez le tableau de bord intégré (`docs/source/grafana_sorafs_pin_registry.json`) vers la disposition de votre ordinateur Grafana, qui correspond à votre situation actuelle.
 
 ## Mesure de la mesure
 
@@ -120,7 +120,7 @@ groups:
 
 1. **Prendre la décision**
    - Si un SLA est lancé, un backlog est en cours, il s'agit de fournisseurs de services (avec PoR, поздние завершения).
-   - Si l'arriéré est rattrapé par des demandes stables, vérifiez l'admission (`/v1/sorafs/pin/*`), afin de modifier les manifestes et d'annuler le règlement.
+   - Si l'arriéré est rattrapé par des demandes stables, vérifiez l'admission (`/v2/sorafs/pin/*`), afin de modifier les manifestes et d'annuler le règlement.
 2. **Provérifier le statut des fournisseurs**
    - Appuyez sur `iroha app sorafs providers list` et vérifiez que les opérations de réplication sont effectuées.
    - Vérifiez les jauges `torii_sorafs_capacity_*`, pour mettre à jour le GiB provisionné et votre PoR.
@@ -139,7 +139,7 @@ Suivez ce processus de création ou d'utilisation du cache d'alias politique dan
 2. **Exécution à sec et mise en scène**
    - Configurez la configuration de la classe de mise en scène pour modifier la topologie du produit.
    - Sélectionnez `cargo xtask sorafs-pin-fixtures` pour déterminer les appareils alias canoniques afin de les décoder et de procéder à un aller-retour ; Il est nécessaire d'éviter la dérive en amont, ce qui doit permettre d'exploiter le cours d'eau.
-   - Programmez les points de terminaison `/v1/sorafs/pin/{digest}` et `/v1/sorafs/aliases` avec une preuve synthétique, envoyant des fichiers frais, une fenêtre d'actualisation, expirés et ayant expiré durement. Vérifiez les codes HTTP, les en-têtes (`Sora-Proof-Status`, `Retry-After`, `Warning`) et votre JSON comme ce runbook.
+   - Programmez les points de terminaison `/v2/sorafs/pin/{digest}` et `/v2/sorafs/aliases` avec une preuve synthétique, envoyant des fichiers frais, une fenêtre d'actualisation, expirés et ayant expiré durement. Vérifiez les codes HTTP, les en-têtes (`Sora-Proof-Status`, `Retry-After`, `Warning`) et votre JSON comme ce runbook.
 3. **Включить в продакшене**
    - Vérifiez la nouvelle configuration selon les spécifications standard. En utilisant Torii, vous pouvez installer les services gateways/SDK après avoir modifié les nouvelles politiques de votre journal.
    - Importez `docs/source/grafana_sorafs_pin_registry.json` dans Grafana (ou installez les tableaux de bord de suivi) et installez les panneaux d'actualisation du cache d'alias dans le cadre du NOC.

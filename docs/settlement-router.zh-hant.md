@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## 證據和參考文獻
 - NX-3結算路由器驗收備註：`status.md`（NX-3部分）。
 - 操作員表面：`dashboards/grafana/settlement_router_overview.json`、`ops/runbooks/settlement-buffers.md`。
-- 收據架構和 API 表面：`docs/source/nexus_fee_model.md`、`/v1/sumeragi/status` -> `lane_settlement_commitments`。
+- 收據架構和 API 表面：`docs/source/nexus_fee_model.md`、`/v2/sumeragi/status` -> `lane_settlement_commitments`。

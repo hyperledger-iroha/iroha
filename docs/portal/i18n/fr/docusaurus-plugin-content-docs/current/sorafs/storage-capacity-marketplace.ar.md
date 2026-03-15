@@ -56,15 +56,15 @@ Il s'agit de `docs/source/sorafs/storage_capacity_marketplace.md`. حافظوا 
 - Le fichier `ReplicationOrderV1` manifeste des manifestes pour les SLA et les affectations. Les validators handles chunker sont disponibles pour la date limite et la date limite pour le Torii et la date limite. الأمر.【crates/sorafs_manifest/src/capacity.rs:301】
 - يعبر `CapacityTelemetryV1` pour les instantanés (GiB المعلنة مقابل المستخدمة، عدادات النسخ، نسب uptime/PoR) الرسوم. La valeur de la valeur de référence est de 0 à 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
 - Les assistants de la voie (`CapacityMetadataEntry` et `PricingScheduleV1` pour la voie/l'affectation/SLA) sont également utilisés pour les aider. Pour CI et les outils en aval, consultez la page.【crates/sorafs_manifest/src/capacity.rs:230】
-- يعرض `PinProviderRegistry` instantané de l'instantané, puis `/v1/sorafs/capacity/state`, pour le grand livre des frais. Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- يعرض `PinProviderRegistry` instantané de l'instantané, puis `/v2/sorafs/capacity/state`, pour le grand livre des frais. Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Les poignées des poignées sont celles de la voie et des voies. نطاق التليمترية حتى تظهر الانحدارات فوراً في CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Spécifications techniques : `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` spécifications techniques pour les charges utiles Norito pour les blobs base64 et JSON. يتمكن المشغلون من تجهيز luminaires لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 توجد Appareils de référence pour `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) et توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Spécifications techniques : `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` spécifications techniques pour les charges utiles Norito pour les blobs base64 et JSON. يتمكن المشغلون من تجهيز luminaires لـ `/v2/sorafs/capacity/declare` و`/v2/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 توجد Appareils de référence pour `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) et توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
 
 ### 2. تكامل طبقة التحكم
 
 | المهمة | Propriétaire(s) | ملاحظات |
 |------|----------|-------|
-| Utilisez Torii pour `/v1/sorafs/capacity/declare` et `/v1/sorafs/capacity/telemetry` et `/v1/sorafs/capacity/orders` pour Norito JSON. | Équipe Torii | محاكاة منطق التحقق؛ J'utilise Norito Helpers JSON. |
+| Utilisez Torii pour `/v2/sorafs/capacity/declare` et `/v2/sorafs/capacity/telemetry` et `/v2/sorafs/capacity/orders` pour Norito JSON. | Équipe Torii | محاكاة منطق التحقق؛ J'utilise Norito Helpers JSON. |
 | Les instantanés sont utilisés pour `CapacityDeclarationV1`, les métadonnées et l'orchestrateur et la passerelle. | GT Outillage / Equipe Orchestrateur | Le `provider_metadata` est utilisé pour marquer la voie de la voie. |
 | Il s'agit d'un orchestrateur/passerelle pour les affectations et le basculement. | Équipe Réseautage TL / Gateway | يستهلك Constructeur de tableau de bord أوامر النسخ الموقعة من الحوكمة. |
 | Dans CLI : remplacez `sorafs_cli` par `capacity declare` et `capacity telemetry` et `capacity orders import`. | GT Outillage | توفير JSON حتمي + مخرجات tableau de bord. |
@@ -85,7 +85,7 @@ Il s'agit de `docs/source/sorafs/storage_capacity_marketplace.md`. حافظوا 
 | خط أنابيب التسوية: تحويل التليمترية + بيانات النسخ إلى paiements مقومة byـ XOR, وإنتاج ملخصات جاهزة للحوكمة، وتسجيل حالة grand livre. | Équipe Trésorerie / Stockage | التوصيل إلى Deal Engine / Exportations du Trésor. |
 | Utiliser des tableaux de bord/alertes pour l'ingestion du backlog (ingestion du backlog). | Observabilité | Utilisez le Grafana pour le SF-6/SF-7. |
 
-- Utilisez Torii pour `/v1/sorafs/capacity/telemetry` et `/v1/sorafs/capacity/state` (JSON + Norito) pour créer des instantanés. لكل حقبة ويمكن للمراجعين استرجاع ledger الحتمي للتدقيق أو تغليف الأدلة.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
+- Utilisez Torii pour `/v2/sorafs/capacity/telemetry` et `/v2/sorafs/capacity/state` (JSON + Norito) pour créer des instantanés. لكل حقبة ويمكن للمراجعين استرجاع ledger الحتمي للتدقيق أو تغليف الأدلة.【crates/iroha_torii/src/sorafs/api.rs:268】【crates/iroha_torii/src/sorafs/api.rs:816】
 - يضمن تكامل `PinProviderRegistry` إمكانية الوصول إلى أوامر النسخ المتماثل عبر نفس endpoint؛ Utilisez la CLI (`sorafs_cli capacity telemetry --from-file telemetry.json`) pour le hachage et l'alias.
 - Captures d'écran instantanées `CapacityTelemetrySnapshot` et capture instantanée `metering` et exportations Prometheus et Grafana L'analyseur de données `docs/source/grafana_sorafs_metering.json` est responsable de la gestion des données GiB-heure et nano-SORA Les informations relatives au SLA sont prises en charge par les utilisateurs.【crates/iroha_torii/src/routing.rs:5143】【docs/source/grafana_sorafs_metering.json:1】
 - Permet de lisser les mesures et de créer un instantané `smoothed_gib_hours` et `smoothed_por_success_bps` pour créer un instantané avec l'EMA. Vous pouvez utiliser les paiements pour les paiements.【crates/sorafs_node/src/metering.rs:401】
@@ -153,7 +153,7 @@ Il s'agit de `docs/source/sorafs/storage_capacity_marketplace.md`. حافظوا 
 
 ### Tests de fumée d'intégration et de sortie des fournisseurs
 - Vous pouvez utiliser les artefacts pour l'analyse/analyse des artefacts `sorafs_manifest_stub capacity ...` et l'interface CLI pour l'interface utilisateur (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
-- Remplacez Torii (`/v1/sorafs/capacity/declare`) par `/v1/sorafs/capacity/state` pour Grafana. اتبع مسار الخروج في `docs/source/sorafs/capacity_onboarding_runbook.md`.
+- Remplacez Torii (`/v2/sorafs/capacity/declare`) par `/v2/sorafs/capacity/state` pour Grafana. اتبع مسار الخروج في `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشِف artefacts الموقعة ومخرجات réconciliation داخل `docs/examples/sorafs_capacity_marketplace_validation/`.
 
 ## الاعتماديات والتسلسل1. إكمال SF-2b (politique d'admission) - يعتمد market على مزودين مدققين.

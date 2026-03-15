@@ -93,12 +93,12 @@ mod tests {
         assert!(
             locator
                 .canonical_url
-                .starts_with("https://cdcdcdcd.nexus.sorafs/direct/v1/car/feedface")
+                .starts_with("https://cdcdcdcd.nexus.sorafs/direct/v2/car/feedface")
         );
         assert!(
             locator
                 .vanity_url
-                .starts_with("https://cdcd.nexus.direct.sorafs/direct/v1/car/feedface")
+                .starts_with("https://cdcd.nexus.direct.sorafs/direct/v2/car/feedface")
         );
     }
 }

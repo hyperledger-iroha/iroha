@@ -33,7 +33,7 @@ translation_last_reviewed: 2025-11-14
    - `TORII_NODE_URL` — базовый REST‑URL (WebSocket‑URL вычисляются из него).
    - `CONNECT_SESSION_ID` — 32‑байтовый идентификатор сессии (base64/base64url).
    - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — токены, возвращаемые
-     `/v1/connect/session`.
+     `/v2/connect/session`.
    - `CONNECT_CHAIN_ID` — идентификатор цепочки, объявляемый во время control‑handshake’а.
    - `CONNECT_ROLE` — роль по умолчанию, предвыбранная в UI (`app` или `wallet`).
    - Дополнительные helper’ы для ручных тестов: `CONNECT_PEER_PUB_B64`,
@@ -83,7 +83,7 @@ translation_last_reviewed: 2025-11-14
 2. Откройте проект `NoritoDemoXcode` в Xcode.
 3. Выберите схему `NoritoDemo` и целевой iOS‑симулятор или устройство.
 4. Убедитесь, что файл `.env` подключён через переменные окружения схемы. Заполните
-   `CONNECT_*` значениями, возвращёнными `/v1/connect/session`, чтобы UI была
+   `CONNECT_*` значениями, возвращёнными `/v2/connect/session`, чтобы UI была
    предзаполнена при запуске.
 5. Проверьте настройки аппаратного ускорения: `App.swift` вызывает
    `DemoAccelerationConfig.load().apply()`, чтобы демо подхватывало либо override

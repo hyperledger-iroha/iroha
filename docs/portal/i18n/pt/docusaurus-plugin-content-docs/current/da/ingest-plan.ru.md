@@ -38,7 +38,7 @@ código Norito; fallback para serde/JSON não foi implementado.
 ## Superfície de API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -218,7 +218,7 @@ chunking e comprovados manifestos opcionais.
   O arquivo é `iroha app sorafs fetch`. Os operadores podem usar artefatos
   manifesto + chunk-plan (`--manifest`, `--plan`, `--manifest-id`) **или** передать
   Torii ticket de armazenamento é `--storage-ticket`. Para usar o ticket CLI
-  Abra o manifesto de `/v1/da/manifests/<ticket>`, instale o pacote em
+  Abra o manifesto de `/v2/da/manifests/<ticket>`, instale o pacote em
   `artifacts/da/fetch_<timestamp>/` (substituir por `--manifest-cache-dir`), necessário
   hash de blob para `--manifest-id` e orquestrador de inicialização com controle remoto
   `--gateway-provider` списком. Quais botões são produzidos no buscador SoraFS
@@ -228,7 +228,7 @@ chunking e comprovados manifestos opcionais.
   Aqui está a disponibilidade ponta a ponta fornecida no namespace `da` não
   дублирования orquestrador логики.
 - `iroha app da get-blob` забирает канонические manifestos напрямую из Torii через
-  `GET /v1/da/manifests/{storage_ticket}`. Команда пишет
+  `GET /v2/da/manifests/{storage_ticket}`. Команда пишет
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` e `chunk_plan_{ticket}.json`
   em `artifacts/da/fetch_<timestamp>/` (ou usado `--output-dir`), por
   Este é o comando `iroha app da get` (que `--manifest-id`), novo

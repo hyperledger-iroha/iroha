@@ -316,10 +316,11 @@ fn spam_invalid_transactions<P: FaultPeer>(
 ) -> Result<()> {
     let client = peer.client();
     for _ in 0..3 {
+        let bogus_name: Name = format!("ghost_{}", rng.random_range(0..9999))
+            .parse()
+            .map_err(|_| eyre!("failed to parse bogus asset name"))?;
         let bogus_definition: AssetDefinitionId =
-            format!("ghost_{}#{base_domain}", rng.random_range(0..9999))
-                .parse()
-                .map_err(|_| eyre!("failed to parse bogus asset id"))?;
+            AssetDefinitionId::new(base_domain.clone(), bogus_name);
         let asset = AssetId::new(bogus_definition, ALICE_ID.clone());
         let instruction = Mint::asset_numeric(1_u32, asset);
         let res = client.submit_instruction(instruction);

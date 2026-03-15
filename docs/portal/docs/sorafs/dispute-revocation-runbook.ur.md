@@ -27,7 +27,7 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخی
 ## 1. واقعے کا جائزہ
 
 - **ٹرگر شرائط:** SLA کی خلاف ورزی (uptime/PoR failure)، replication shortfall، یا billing disagreement کی نشاندہی۔
-- **ٹیلیمیٹری کی تصدیق:** پرووائیڈر کے لیے `/v1/sorafs/capacity/state` اور `/v1/sorafs/capacity/telemetry` snapshots حاصل کریں۔
+- **ٹیلیمیٹری کی تصدیق:** پرووائیڈر کے لیے `/v2/sorafs/capacity/state` اور `/v2/sorafs/capacity/telemetry` snapshots حاصل کریں۔
 - **اسٹیک ہولڈرز کو مطلع کریں:** Storage Team (provider operations)، Governance Council (decision body)، Observability (dashboard updates)۔
 
 ## 2. شواہد کا پیکج تیار کریں
@@ -75,7 +75,7 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخی
    ```
 
 3. `dispute_summary.json` ریویو کریں (kind، evidence digest، timestamps)۔
-4. گورننس ٹرانزیکشن کیو کے ذریعے Torii `/v1/sorafs/capacity/dispute` کو ریکوئسٹ JSON بھیجیں۔ جواب کی قدر `dispute_id_hex` محفوظ کریں؛ یہی بعد کی منسوخی کارروائیوں اور آڈٹ رپورٹس کا اینکر ہے۔
+4. گورننس ٹرانزیکشن کیو کے ذریعے Torii `/v2/sorafs/capacity/dispute` کو ریکوئسٹ JSON بھیجیں۔ جواب کی قدر `dispute_id_hex` محفوظ کریں؛ یہی بعد کی منسوخی کارروائیوں اور آڈٹ رپورٹس کا اینکر ہے۔
 
 ## 4. انخلا اور منسوخی
 

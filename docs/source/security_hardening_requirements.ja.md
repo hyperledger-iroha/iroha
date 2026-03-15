@@ -25,9 +25,9 @@ translator: manual
 **可観測性**
 - カウンタ: `sumeragi_membership_mismatch_total{peer,height,view}`。
 - オプションゲージ: `sumeragi_membership_mismatch_active`。
-- `/v1/sumeragi/status` の JSON にミスマッチ状態、ドロップカウンタ、Highest/Locked QC ハッシュ、`pacemaker_backpressure_deferrals_total` 等を含めること。
+- `/v2/sumeragi/status` の JSON にミスマッチ状態、ドロップカウンタ、Highest/Locked QC ハッシュ、`pacemaker_backpressure_deferrals_total` 等を含めること。
 
-**実装状況:** `sumeragi_membership_view_hash`／`sumeragi_membership_height`／`sumeragi_membership_view`／`sumeragi_membership_epoch` ゲージと `/v1/sumeragi/status.membership` オブジェクトによって (height/view/epoch) 単位の決定論的ロスターハッシュを公開済みです。ミスマッチカウンタと併用することで、各ピアのロスター整合性を直接比較できます。
+**実装状況:** `sumeragi_membership_view_hash`／`sumeragi_membership_height`／`sumeragi_membership_view`／`sumeragi_membership_epoch` ゲージと `/v2/sumeragi/status.membership` オブジェクトによって (height/view/epoch) 単位の決定論的ロスターハッシュを公開済みです。ミスマッチカウンタと併用することで、各ピアのロスター整合性を直接比較できます。
 
 **デプロイ考慮**
 - 既存のテレメトリエクスポータを壊さないように登録すること。

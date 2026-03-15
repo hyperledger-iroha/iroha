@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for GET /v1/zk/vk (list with filters).
+//! Integration tests for GET /v2/zk/vk (list with filters).
 #![cfg(feature = "app_api")]
 
 use std::sync::Arc;
@@ -23,15 +23,7 @@ async fn vk_list_filters_by_backend_and_status() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
 
     // Insert 3 records: 2 active + 1 proposed
@@ -66,7 +58,7 @@ async fn vk_list_filters_by_backend_and_status() {
 
     let state = Arc::new(state);
     let app = Router::new().route(
-        "/v1/zk/vk",
+        "/v2/zk/vk",
         get({
             let state = state.clone();
             move |q: iroha_torii::NoritoQuery<iroha_torii::VkListQuery>| async move {
@@ -78,7 +70,7 @@ async fn vk_list_filters_by_backend_and_status() {
     // List all
     let req_all = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/vk")
+        .uri("/v2/zk/vk")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_all = app.clone().oneshot(req_all).await.unwrap();
@@ -92,7 +84,7 @@ async fn vk_list_filters_by_backend_and_status() {
     // Filter Proposed
     let req_prop = http::Request::builder()
         .method("GET")
-        .uri("/v1/zk/vk?status=Proposed")
+        .uri("/v2/zk/vk?status=Proposed")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_prop = app.clone().oneshot(req_prop).await.unwrap();

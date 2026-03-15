@@ -59,7 +59,7 @@ pub struct Args {
 
 const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus";
 const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm";
-const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_ID: &str = "xor#nexus";
+const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED: &[u8] = b"npos-escrow-account";
 
@@ -136,6 +136,17 @@ fn collect_topology_peers(manifest: &RawGenesisTransaction) -> Vec<PeerId> {
     peers
 }
 
+fn default_npos_bootstrap_stake_asset_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        DEFAULT_NPOS_BOOTSTRAP_DOMAIN
+            .parse()
+            .expect("static stake asset domain must remain valid"),
+        DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME
+            .parse()
+            .expect("static stake asset name must remain valid"),
+    )
+}
+
 fn append_npos_bootstrap(
     builder: GenesisBuilder,
     registrations: &mut BootstrapRegistrations,
@@ -148,7 +159,7 @@ fn append_npos_bootstrap(
     }
 
     let nexus_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_DOMAIN.parse()?;
-    let stake_asset_id: AssetDefinitionId = DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_ID.parse()?;
+    let stake_asset_id = default_npos_bootstrap_stake_asset_id();
 
     let mut builder = builder.next_transaction();
     if !registrations.domains.contains(&nexus_domain) {
@@ -168,6 +179,7 @@ fn append_npos_bootstrap(
     }
     if !registrations.asset_defs.contains(&stake_asset_id) {
         let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+            .with_name("NPOS Stake".to_owned())
             .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(stake_asset_id.clone());

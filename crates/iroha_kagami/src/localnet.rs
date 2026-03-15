@@ -86,7 +86,7 @@ pub struct LocalnetOptions {
 /// Asset definition plus optional minting target for sample generation.
 #[derive(Debug, Clone)]
 pub struct AssetSpec {
-    /// Fully qualified asset definition ID (e.g., `tea#wonderland`).
+    /// Canonical asset definition ID (`aid:<32-lower-hex>`).
     pub id: String,
     /// Account that should receive the minted supply.
     pub mint_to: ScopedAccountId,
@@ -404,7 +404,9 @@ const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus";
 const LOCALNET_IVM_DOMAIN: &str = "ivm";
-const LOCALNET_STAKE_ASSET_ID: &str = "xor#nexus";
+const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
+const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland";
+const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
@@ -429,6 +431,32 @@ fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
     let peers = u32::from(peers.get());
     let fault_tolerance = peers.saturating_sub(1) / 3;
     fault_tolerance.max(1)
+}
+
+fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        domain
+            .parse()
+            .expect("static asset definition domain must remain valid"),
+        name.parse()
+            .expect("static asset definition name must remain valid"),
+    )
+}
+
+pub(crate) fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
+    canonical_asset_definition_id(domain, name).canonical_literal()
+}
+
+fn localnet_stake_asset_definition_id() -> AssetDefinitionId {
+    canonical_asset_definition_id(LOCALNET_NEXUS_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
+}
+
+fn localnet_stake_asset_literal() -> String {
+    canonical_asset_definition_literal(LOCALNET_NEXUS_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
+}
+
+fn localnet_sample_asset_literal() -> String {
+    canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
 
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
@@ -532,7 +560,7 @@ impl<T: Write> RunArgs<T> for Args {
             extra_accounts: self.extra_accounts,
             assets: if self.sample_asset {
                 vec![AssetSpec {
-                    id: "sample#wonderland".into(),
+                    id: localnet_sample_asset_literal(),
                     mint_to: ALICE_ID
                         .clone()
                         .to_account_id("wonderland".parse().expect("valid domain")),
@@ -1277,10 +1305,11 @@ fn render_peer_config(
     nexus.insert("fusion".into(), Value::Table(fusion));
     if npos_bootstrap {
         let gas_account_id = gas_account_id.expect("localnet gas account id required");
+        let stake_asset_id = localnet_stake_asset_literal();
         let mut staking = Table::new();
         staking.insert(
             "stake_asset_id".into(),
-            Value::String(LOCALNET_STAKE_ASSET_ID.to_owned()),
+            Value::String(stake_asset_id.clone()),
         );
         staking.insert(
             "stake_escrow_account_id".into(),
@@ -1293,10 +1322,7 @@ fn render_peer_config(
         nexus.insert("staking".into(), Value::Table(staking));
 
         let mut fees = Table::new();
-        fees.insert(
-            "fee_asset_id".into(),
-            Value::String(LOCALNET_STAKE_ASSET_ID.to_owned()),
-        );
+        fees.insert("fee_asset_id".into(), Value::String(stake_asset_id));
         fees.insert(
             "fee_sink_account_id".into(),
             Value::String(gas_account_id.to_owned()),
@@ -1631,6 +1657,7 @@ fn extend_genesis(
     for asset in assets {
         let asset_def: AssetDefinitionId = asset.id.parse().wrap_err("invalid asset id")?;
         let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
+            .with_name(asset_def.to_string())
             .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         if asset.quantity > 0 {
@@ -1849,7 +1876,7 @@ fn append_localnet_npos_bootstrap(
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse()?;
     let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
-    let stake_asset_id: AssetDefinitionId = LOCALNET_STAKE_ASSET_ID.parse()?;
+    let stake_asset_id = localnet_stake_asset_definition_id();
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
 
     let mut builder = genesis.into_builder().next_transaction();
@@ -1870,6 +1897,7 @@ fn append_localnet_npos_bootstrap(
 
     if !registrations.asset_defs.contains(&stake_asset_id) {
         let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+            .with_name("Localnet Stake".to_owned())
             .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(stake_asset_id.clone());
@@ -2354,7 +2382,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: vec![AssetSpec {
-                id: "sample#wonderland".into(),
+                id: localnet_sample_asset_literal(),
                 mint_to: ALICE_ID
                     .clone()
                     .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),
@@ -3095,7 +3123,7 @@ mod tests {
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: vec![AssetSpec {
-                id: "sample#wonderland".into(),
+                id: localnet_sample_asset_literal(),
                 mint_to: ALICE_ID
                     .clone()
                     .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),
@@ -4298,9 +4326,10 @@ mod tests {
             .get("staking")
             .and_then(toml::Value::as_table)
             .expect("nexus staking table");
+        let expected_stake_asset_id = localnet_stake_asset_literal();
         assert_eq!(
             staking.get("stake_asset_id").and_then(toml::Value::as_str),
-            Some(LOCALNET_STAKE_ASSET_ID)
+            Some(expected_stake_asset_id.as_str())
         );
         assert_eq!(
             staking
@@ -4320,7 +4349,7 @@ mod tests {
             .expect("nexus fees table");
         assert_eq!(
             fees.get("fee_asset_id").and_then(toml::Value::as_str),
-            Some(LOCALNET_STAKE_ASSET_ID)
+            Some(expected_stake_asset_id.as_str())
         );
         assert_eq!(
             fees.get("fee_sink_account_id")

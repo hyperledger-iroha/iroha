@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for /v1/zk/proof-tags/{backend}/{hash} (feature `zk-proof-tags`).
+//! Integration test for /v2/zk/proof-tags/{backend}/{hash} (feature `zk-proof-tags`).
 #![cfg(all(feature = "app_api", feature = "zk-proof-tags"))]
 
 use std::sync::Arc;
@@ -19,15 +19,7 @@ use tower::ServiceExt as _;
 async fn proof_tags_returns_ascii_tags() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::new(), kura, query);
+    let state = State::new_for_testing(World::new(), kura, query);
     let mut state = state;
 
     // Insert tag index directly (prototype path)
@@ -53,7 +45,7 @@ async fn proof_tags_returns_ascii_tags() {
 
     let state = Arc::new(state);
     let app = Router::new().route(
-        "/v1/zk/proof-tags/{backend}/{hash}",
+        "/v2/zk/proof-tags/{backend}/{hash}",
         get({
             let state = state.clone();
             move |path: axum::extract::Path<(String, String)>| async move {
@@ -64,7 +56,7 @@ async fn proof_tags_returns_ascii_tags() {
 
     let backend_enc = urlencoding::encode(backend);
     let hash_hex = hex::encode(proof_hash);
-    let uri = format!("/v1/zk/proof-tags/{}/{}", backend_enc, hash_hex);
+    let uri = format!("/v2/zk/proof-tags/{}/{}", backend_enc, hash_hex);
     let req = http::Request::builder()
         .method("GET")
         .uri(uri)

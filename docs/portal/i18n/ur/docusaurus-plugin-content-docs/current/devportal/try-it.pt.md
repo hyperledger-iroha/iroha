@@ -160,7 +160,7 @@ Norito-RPC درخواستیں ایک ہی پراکسی اور OAUTH پلمبنگ
 1. `fixtures/norito_rpc/transfer_asset.norito` کی طرح ایک حقیقت کا انتخاب کریں۔ یہ
    فائلیں کچی Norito لفافے ہیں۔ ** نہیں ** بیس 64 کریں۔
 2. سویگر یا ریپڈوک میں ، NRPC اختتامی نقطہ تلاش کریں (جیسے۔
-   `POST /v1/pipeline/submit`) اور ** مواد کی قسم ** سلیکٹر کو تبدیل کریں
+   `POST /v2/pipeline/submit`) اور ** مواد کی قسم ** سلیکٹر کو تبدیل کریں
    `application/x-norito`۔
 3. باڈی ایڈیٹر کو ** بائنری ** ("فائل" موڈ میں تبدیل کریں یا میں تبدیل کریں
    ریپڈوک کی "بائنری/فائل" سلیکٹر) اور فائل `.norito` بھیجیں۔ ویجیٹ
@@ -184,7 +184,7 @@ Norito-RPC درخواستیں ایک ہی پراکسی اور OAUTH پلمبنگ
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ````transaction_fixtures.manifest.json` میں درج کسی بھی ان پٹ کے ساتھ حقیقت کو تبدیل کریں
 یا `cargo xtask norito-rpc-fixtures` کے ساتھ اپنے پے لوڈ کو انکوڈ کریں۔ جب Torii ہے
 کینری وضع میں آپ `curl` کو TRY-IT پراکسی کی طرف اشارہ کرسکتے ہیں
@@ -204,7 +204,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 ماحولیات نوبس:

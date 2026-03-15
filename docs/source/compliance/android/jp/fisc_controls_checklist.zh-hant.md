@@ -27,7 +27,7 @@ translator: machine-google-reviewed
 | FISC控制|實施細節|證據/參考文獻|狀態 |
 |--------------|------------------------|------------------------|--------|
 | **系統配置完整性** | `ClientConfig` 強制執行清單哈希、模式驗證和只讀運行時訪問。配置重新加載失敗會發出 Runbook 中記錄的 `android.telemetry.config.reload` 事件。 | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`； `docs/source/android_runbook.md` §1–2。 | ✅ 已實施 |
-| **訪問控制和身份驗證** | SDK 遵循 Torii TLS 策略和 `/v1/pipeline` 簽名請求；操作員工作流程參考支持手冊 §4–5，通過簽名的 Norito 工件進行升級和覆蓋門控。 | `docs/source/android_support_playbook.md`； `docs/source/sdk/android/telemetry_redaction.md`（覆蓋工作流程）。 | ✅ 已實施 |
+| **訪問控制和身份驗證** | SDK 遵循 Torii TLS 策略和 `/v2/pipeline` 簽名請求；操作員工作流程參考支持手冊 §4–5，通過簽名的 Norito 工件進行升級和覆蓋門控。 | `docs/source/android_support_playbook.md`； `docs/source/sdk/android/telemetry_redaction.md`（覆蓋工作流程）。 | ✅ 已實施 |
 | **加密密鑰管理** | StrongBox 首選的提供商、證明驗證和設備矩陣覆蓋可確保 KMS 合規性。證明工具輸出在 `artifacts/android/attestation/` 下存檔並在準備矩陣中進行跟踪。 | `docs/source/sdk/android/key_management.md`； `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`； `scripts/android_strongbox_attestation_ci.sh`。 | ✅ 已實施 |
 | **記錄、監控和保留** |遙測編輯策略對敏感數據進行哈希處理、對設備屬性進行存儲桶並強制保留（7/30/90/365 天窗口）。支持手冊 §8 描述了儀表板閾值；覆蓋 `telemetry_override_log.md` 中記錄的內容。 | `docs/source/sdk/android/telemetry_redaction.md`； `docs/source/android_support_playbook.md`； `docs/source/sdk/android/telemetry_override_log.md`。 | ✅ 已實施 |
 | **運營和變革管理** | GA 切換程序（支持 Playbook §7.2）加上 `status.md` 更新跟踪發布準備情況。通過 `docs/source/compliance/android/eu/sbom_attestation.md` 鏈接的發布證據（SBOM、Sigstore 捆綁包）。 | `docs/source/android_support_playbook.md`； `status.md`； `docs/source/compliance/android/eu/sbom_attestation.md`。 | ✅ 已實施 |

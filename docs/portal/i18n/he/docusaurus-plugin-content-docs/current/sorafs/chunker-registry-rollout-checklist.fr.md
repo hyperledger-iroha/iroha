@@ -76,7 +76,7 @@ Référez-vous au [בימוי מניפסט של ספר הפעלה](./staging-man
    de registre staging référencé par `torii.sorafs.discovery.admission.envelopes_dir`.
 3. Verifiez que les פרסומות של ספקיות הן פרואגנט דרך l'API Discovery:
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. תרגיל נקודות קצה מניפסט/תוכנית עם כותרות ניהול:
    ```bash

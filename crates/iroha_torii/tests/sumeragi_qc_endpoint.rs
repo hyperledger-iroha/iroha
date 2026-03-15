@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v1/sumeragi/qc
+//! Router-level test for GET /v2/sumeragi/qc
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "telemetry")]
 
@@ -23,14 +23,14 @@ async fn sumeragi_qc_endpoint_shape() {
     status::set_highest_qc_hash(typed);
 
     let app = Router::new().route(
-        "/v1/sumeragi/qc",
+        "/v2/sumeragi/qc",
         get(|| async move { iroha_torii::handle_v1_sumeragi_qc(None).await }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v1/sumeragi/qc")
+                .uri("/v2/sumeragi/qc")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -68,14 +68,14 @@ async fn sumeragi_qc_endpoint_supports_norito_payload() {
     status::set_locked_qc(5, 1, None);
 
     let app = Router::new().route(
-        "/v1/sumeragi/qc",
+        "/v2/sumeragi/qc",
         get(|| async move { iroha_torii::handle_v1_sumeragi_qc(None).await }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v1/sumeragi/qc")
+                .uri("/v2/sumeragi/qc")
                 .header("Accept", "application/x-norito")
                 .body(axum::body::Body::empty())
                 .unwrap(),

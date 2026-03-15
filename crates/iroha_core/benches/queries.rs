@@ -21,7 +21,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     prelude::*,
     query::{
-        account::prelude::FindAccounts,
+        account::prelude::{FindAccounts, FindAccountsWithAsset},
         asset::prelude::{FindAssets, FindAssetsDefinitions},
         domain::prelude::FindDomains,
         dsl::CompoundPredicate,
@@ -49,6 +49,13 @@ fn bench_domain_id() -> DomainId {
 
 fn bench_account(label: &str) -> AccountId {
     fixture_account_in_domain(label, &bench_domain_id())
+}
+
+fn bench_asset_def_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        "bench".parse().expect("bench domain"),
+        "coin".parse().expect("bench asset definition name"),
+    )
 }
 
 fn build_state_with_accounts(n: usize) -> State {
@@ -98,6 +105,21 @@ fn bench_find_accounts_large(c: &mut Criterion) {
             let state_view = state.view();
             let iter = ValidQuery::execute(FindAccounts, CompoundPredicate::PASS, &state_view)
                 .expect("query execute");
+            let count = iter.count();
+            std::hint::black_box(count);
+        })
+    });
+}
+
+fn bench_find_accounts_filter_id_literal(c: &mut Criterion) {
+    let state = build_state_with_accounts(10_000);
+    let needle = bench_account("user4242");
+    let filter = CompoundPredicate::<Account>::build(|p| p.equals("id", needle.to_string()));
+    c.bench_function("find_accounts_filter_id_literal_10k", |b| {
+        b.iter(|| {
+            let view = state.view();
+            let iter =
+                ValidQuery::execute(FindAccounts, filter.clone(), &view).expect("query execute");
             let count = iter.count();
             std::hint::black_box(count);
         })
@@ -208,7 +230,10 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
                 _ => unreachable!(),
@@ -235,7 +260,10 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
                 _ => unreachable!(),
@@ -252,7 +280,10 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
     let domain_id: DomainId = "bench".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "coin#bench".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "bench".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let mut accounts = Vec::with_capacity(1_000);
     let mut assets: Vec<iroha_data_model::asset::Asset> = Vec::with_capacity(1_000);
     for i in 0..1_000 {
@@ -316,7 +347,10 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Asset(v) => v,
                 _ => unreachable!(),
@@ -341,7 +375,10 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::Asset(v) => v,
                 _ => unreachable!(),
@@ -361,7 +398,8 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     let domain = Domain::new("bench".parse().unwrap()).build(&auth);
     let mut defs = Vec::with_capacity(10_000);
     for i in 0..10_000 {
-        let id: AssetDefinitionId = format!("ad{}#bench", i).parse().unwrap();
+        let id =
+            AssetDefinitionId::new("bench".parse().unwrap(), format!("ad{i}").parse().unwrap());
         let mut ad = AssetDefinition::numeric(id).build(&auth);
         let _ = ad.metadata_mut().insert(
             "rank".parse().unwrap(),
@@ -414,7 +452,10 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
                 _ => unreachable!(),
@@ -439,7 +480,54 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
             let iroha_data_model::query::QueryResponse::Iterable(first) = resp else {
                 panic!("expected iterable")
             };
-            let (batch, _rem, _cur) = first.into_parts();
+            let (batch, _rem, cur) = first.into_parts();
+            if let Some(cur) = cur {
+                query_handle.drop_query(&cur.query);
+            }
+            let v = match batch.into_iter().next().expect("slice") {
+                iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
+                _ => unreachable!(),
+            };
+            std::hint::black_box(v.len());
+        })
+    });
+
+    c.bench_function("snapshot_stored_sorted_asset_defs_first_continue", |b| {
+        b.iter(|| {
+            let request = iroha_data_model::query::QueryRequest::Start(
+                iroha_data_model::query::QueryWithParams::new(&qbox, params.clone()),
+            );
+            let first = run_on_snapshot_with_mode(
+                &state,
+                &query_handle,
+                &auth,
+                request,
+                LaneCursorMode::Stored,
+                QueryLimits::default(),
+            )
+            .expect("lane ok");
+            let iroha_data_model::query::QueryResponse::Iterable(first) = first else {
+                panic!("expected iterable")
+            };
+            let (_first_batch, _first_remaining, cursor) = first.into_parts();
+            let cursor = cursor.expect("stored continuation");
+
+            let continued = run_on_snapshot_with_mode(
+                &state,
+                &query_handle,
+                &auth,
+                iroha_data_model::query::QueryRequest::Continue(cursor),
+                LaneCursorMode::Stored,
+                QueryLimits::default(),
+            )
+            .expect("continue ok");
+            let iroha_data_model::query::QueryResponse::Iterable(continued) = continued else {
+                panic!("expected iterable")
+            };
+            let (batch, _remaining, next_cursor) = continued.into_parts();
+            if let Some(next_cursor) = next_cursor {
+                query_handle.drop_query(&next_cursor.query);
+            }
             let v = match batch.into_iter().next().expect("slice") {
                 iroha_data_model::query::QueryOutputBatchBox::AssetDefinition(v) => v,
                 _ => unreachable!(),
@@ -457,24 +545,28 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     let authority_id = bench_account("authority");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
 
-    let asset_def_id: AssetDefinitionId = "coin#bench".parse().expect("asset def id");
-    let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority_id);
+    let base_def_id = bench_asset_def_id();
+    let mut definition_ids = Vec::with_capacity(assets_per_account.max(1));
+    definition_ids.push(base_def_id.clone());
+    for j in 1..assets_per_account {
+        definition_ids.push(AssetDefinitionId::new(
+            "bench".parse().unwrap(),
+            format!("coin{j}").parse().unwrap(),
+        ));
+    }
+    let definitions: Vec<_> = definition_ids
+        .iter()
+        .cloned()
+        .map(|id| AssetDefinition::numeric(id).build(&authority_id))
+        .collect();
 
     let mut accounts = Vec::with_capacity(n_accounts);
-    let mut assets = Vec::with_capacity(n_accounts * assets_per_account);
+    let mut assets = Vec::with_capacity(n_accounts * definition_ids.len());
     for i in 0..n_accounts {
         let acc_id = bench_account(&format!("user{i}"));
         let account = Account::new(acc_id.to_account_id(domain_id.clone())).build(&acc_id);
-        for j in 0..assets_per_account {
-            let ad = if j == 0 {
-                asset_def_id.clone()
-            } else {
-                // create a handful of distinct definitions to vary lookups
-                format!("coin{}_#bench", j)
-                    .parse()
-                    .unwrap_or_else(|_| asset_def_id.clone())
-            };
-            let asset_id = AssetId::new(ad, acc_id.clone());
+        for (j, definition_id) in definition_ids.iter().enumerate() {
+            let asset_id = AssetId::new(definition_id.clone(), acc_id.clone());
             let value = Numeric::new(u128::from(j as u64 + 1), 0);
             assets.push(Asset::new(asset_id, value));
         }
@@ -482,7 +574,7 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     }
 
     State::new(
-        World::with_assets([domain], accounts, [asset_def], assets, []),
+        World::with_assets([domain], accounts, definitions, assets, []),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
@@ -506,12 +598,12 @@ fn bench_find_assets_iter(c: &mut Criterion) {
 fn bench_find_assets_filter_account(c: &mut Criterion) {
     let state = build_state_with_assets(10_000, 1);
     let target = bench_account("user9999");
-    c.bench_function("find_assets_filter_by_account", |b| {
+    let filter = CompoundPredicate::<Asset>::build(|p| p.equals("account", target.to_string()));
+    c.bench_function("find_assets_filter_account_literal", |b| {
         b.iter(|| {
             let v = state.view();
-            let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &v)
-                .expect("query execute");
-            let count = iter.filter(|a| a.id().account() == &target).count();
+            let iter = ValidQuery::execute(FindAssets, filter.clone(), &v).expect("query execute");
+            let count = iter.count();
             std::hint::black_box(count);
         })
     });
@@ -525,6 +617,54 @@ fn bench_find_assets_filter_quantity(c: &mut Criterion) {
             let iter = ValidQuery::execute(FindAssets, CompoundPredicate::PASS, &v)
                 .expect("query execute");
             let count = iter.filter(|a| *a.value() >= Numeric::new(2, 0)).count();
+            std::hint::black_box(count);
+        })
+    });
+}
+
+fn bench_find_assets_filter_definition_literal(c: &mut Criterion) {
+    let state = build_state_with_assets(10_000, 2);
+    let definition = bench_asset_def_id();
+    let filter =
+        CompoundPredicate::<Asset>::build(|p| p.equals("definition", definition.to_string()));
+    c.bench_function("find_assets_filter_definition_literal", |b| {
+        b.iter(|| {
+            let v = state.view();
+            let iter = ValidQuery::execute(FindAssets, filter.clone(), &v).expect("query execute");
+            let count = iter.count();
+            std::hint::black_box(count);
+        })
+    });
+}
+
+fn bench_find_assets_filter_domain_literal(c: &mut Criterion) {
+    let state = build_state_with_assets(10_000, 2);
+    let filter = CompoundPredicate::<Asset>::build(|p| p.equals("domain", "bench"));
+    c.bench_function("find_assets_filter_domain_literal", |b| {
+        b.iter(|| {
+            let v = state.view();
+            let iter = ValidQuery::execute(FindAssets, filter.clone(), &v).expect("query execute");
+            let count = iter.count();
+            std::hint::black_box(count);
+        })
+    });
+}
+
+fn bench_find_accounts_with_asset_literal(c: &mut Criterion) {
+    let state = build_state_with_assets(10_000, 1);
+    let definition = bench_asset_def_id();
+    let target = bench_account("user4242");
+    let filter = CompoundPredicate::<Account>::build(|p| p.equals("id", target.to_string()));
+    c.bench_function("find_accounts_with_asset_id_literal_10k", |b| {
+        b.iter(|| {
+            let v = state.view();
+            let iter = ValidQuery::execute(
+                FindAccountsWithAsset::new(definition.clone()),
+                filter.clone(),
+                &v,
+            )
+            .expect("query execute");
+            let count = iter.count();
             std::hint::black_box(count);
         })
     });
@@ -590,7 +730,10 @@ fn build_state_with_asset_definitions(n: usize) -> State {
 
     let mut defs = Vec::with_capacity(n);
     for i in 0..n {
-        let def_id: AssetDefinitionId = format!("coin{}#bench", i).parse().expect("ad id");
+        let def_id = AssetDefinitionId::new(
+            "bench".parse().expect("domain"),
+            format!("coin{i}").parse().expect("ad id"),
+        );
         defs.push(AssetDefinition::numeric(def_id).build(&authority_id));
     }
 
@@ -748,9 +891,13 @@ fn main() {
     let mut c = Criterion::default().configure_from_args();
     bench_find_accounts_small(&mut c);
     bench_find_accounts_large(&mut c);
+    bench_find_accounts_filter_id_literal(&mut c);
     bench_find_assets_iter(&mut c);
     bench_find_assets_filter_account(&mut c);
     bench_find_assets_filter_quantity(&mut c);
+    bench_find_assets_filter_definition_literal(&mut c);
+    bench_find_assets_filter_domain_literal(&mut c);
+    bench_find_accounts_with_asset_literal(&mut c);
     bench_find_domains_iter(&mut c);
     bench_find_domains_sort(&mut c);
     bench_find_asset_defs_iter(&mut c);

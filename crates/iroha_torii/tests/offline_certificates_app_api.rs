@@ -78,7 +78,7 @@ async fn offline_certificates_revoke_returns_verdict_id() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/certificates/revoke")
+                .uri("/v2/offline/certificates/revoke")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -117,7 +117,7 @@ async fn offline_allowances_renew_returns_new_certificate_id() {
     let body = json::to_vec(&Value::Object(map)).expect("serialize renew request");
 
     let uri = format!(
-        "/v1/offline/allowances/{}/renew",
+        "/v2/offline/allowances/{}/renew",
         harness.fixtures.certificate_hex
     );
     let resp = harness
@@ -159,7 +159,7 @@ async fn offline_certificates_issue_returns_signed_certificate() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/certificates/issue")
+                .uri("/v2/offline/certificates/issue")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -215,7 +215,7 @@ async fn offline_certificates_issue_ignores_client_supplied_operator() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/certificates/issue")
+                .uri("/v2/offline/certificates/issue")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -252,7 +252,7 @@ async fn offline_certificates_renew_issue_ignores_client_supplied_operator() {
     let body = json::to_vec(&Value::Object(map)).expect("serialize renew issue request");
 
     let uri = format!(
-        "/v1/offline/certificates/{}/renew/issue",
+        "/v2/offline/certificates/{}/renew/issue",
         harness.fixtures.certificate_hex
     );
     let resp = harness
@@ -288,7 +288,7 @@ async fn offline_certificates_renew_issue_returns_signed_certificate() {
     let body = json::to_vec(&Value::Object(map)).expect("serialize renew issue request");
 
     let uri = format!(
-        "/v1/offline/certificates/{}/renew/issue",
+        "/v2/offline/certificates/{}/renew/issue",
         harness.fixtures.certificate_hex
     );
     let resp = harness
@@ -345,7 +345,7 @@ async fn offline_certificates_query_lists_allowances() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/certificates/query")
+                .uri("/v2/offline/certificates/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -547,6 +547,7 @@ fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: std::collections::BTreeSet::new(),
     };
     let mut asset_definition_metadata = Metadata::default();
     asset_definition_metadata.insert(
@@ -555,6 +556,9 @@ fn world_from_cert_fixtures(fixtures: &CertFixtures) -> World {
     );
     let asset_definition = AssetDefinition {
         id: fixtures.certificate.allowance.asset.definition().clone(),
+        name: "OfflineAsset".to_owned(),
+        description: None,
+        alias: None,
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,

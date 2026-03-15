@@ -116,7 +116,7 @@ Apres le redemarrage de Torii, lancez le nouveau helper de smoke pour verifier q
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v1/sumeragi/status \
+  --status-url https://torii.example.com/v2/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \

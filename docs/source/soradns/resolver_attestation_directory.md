@@ -82,7 +82,7 @@ struct ResolverDirectoryRecordV1 {
 ```
 
 The record is stored under the governance lane and exposed via Torii
-(`GET /v1/soradns/directory/latest`). The endpoint returns a Norito JSON
+(`GET /v2/soradns/directory/latest`). The endpoint returns a Norito JSON
 object with a convenience `directory_id_hex` plus the embedded
 `ResolverDirectoryRecordV1` (under `record`), allowing clients to verify the
 Merkle root against the RAD they intend to trust and reject any RAD that is
@@ -106,10 +106,10 @@ the CAR manifest feed into the on-chain record for tamper detection.
 
 ### 2.4 Torii endpoints
 
-- `GET /v1/soradns/directory/latest` — returns a Norito JSON document with
+- `GET /v2/soradns/directory/latest` — returns a Norito JSON document with
   `directory_id_hex` and the canonical `ResolverDirectoryRecordV1`, enabling
   gateways and tooling to bootstrap without decoding raw Norito bytes.
-- `GET /v1/soradns/directory/events` — Server-Sent Events stream that emits
+- `GET /v2/soradns/directory/events` — Server-Sent Events stream that emits
   the `ResolverDirectoryEventV1` variants as JSON objects with
   `event`/`payload` keys (hex digests, builder keys, revocation metadata, and
   rotation policy updates) so subscribers can keep caches in sync.
@@ -168,7 +168,7 @@ enum ResolverDirectoryEventV1 {
 }
 ```
 
-Torii streams these events over `/v1/soradns/directory/events` using SSE.
+Torii streams these events over `/v2/soradns/directory/events` using SSE.
 Gateways persist the last block height and resume streams on failure so
 they never miss a publication, revocation, or policy change. Each event
 includes the Merkle proof (when applicable) so clients can validate
@@ -208,7 +208,7 @@ The resolver CLI now exposes tooling for RAD/directory verification:
   downloads the latest `ResolverDirectoryRecordV1` and matching `directory.json`,
   canonicalises the listing, verifies the recorded digest/count, and writes
   both artefacts to the supplied directory. Operators can point this at the
-  Torii `/v1/soradns/directory/latest` endpoint plus the public SoraFS gateway to
+  Torii `/v2/soradns/directory/latest` endpoint plus the public SoraFS gateway to
   bootstrap a verified cache before enabling resolver clients.
 - Both commands accept offline-friendly flags: `--record-file` and
   `--directory-file` let you validate artifacts that were fetched via other

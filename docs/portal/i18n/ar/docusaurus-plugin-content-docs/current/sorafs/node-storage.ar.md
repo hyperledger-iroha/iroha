@@ -120,8 +120,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > تعرض بوابة Torii الآن مساعدات قراءة فقط مدعومة بنفسي `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — إعادة البيان Norito المخزن (base64) مع الملخص/البيانات الوصفية.[crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — إعادة خطة القطع الحتمية JSON (`chunk_fetch_specs`) لأدوات downstream.[crates/iroha_torii/src/sorafs/api.rs:1259]
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — إعادة البيان Norito المخزن (base64) مع الملخص/البيانات الوصفية.[crates/iroha_torii/src/sorafs/api.rs:1207]
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — إعادة خطة القطع الحتمية JSON (`chunk_fetch_specs`) لأدوات downstream.[crates/iroha_torii/src/sorafs/api.rs:1259]
 >
 > هذه النقاط تعتبر نقاط CLI بحيث يمكن تحويل الخطوط من النصوص البرمجية بشكل سريع إلى فحوصات HTTP دون تغيير الإبداعات.
 
@@ -143,9 +143,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 6. **الكائنات/تطبيق الحصص**:
    - عند طرح القدرة على رفض الدبابيس العقدية الجديدة افتراضيا. يمكن للمشغلين السياسات الرسمية للشركة (مثل TTL وLRU) عند توافق نموذج التصل؛ التي تم تحديدها حاليًا لحصاها وبدء إلغاء تثبيتها.
 
-### تكامل إعلان السعة والجدولة- تتضمن Torii TBTB تحديثات `CapacityDeclarationRecord` من `/v1/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة عرضا في الذاكرة لتخصيصات Chunker/lane الملتزم بها. يكشف المدير لقطات للقراءة فقط للتليمترية (`GET /v1/sorafs/capacity/state`) ويفرض التغييرات لكل ملف تعريف أو حارة قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- يقبل نقطة النهاية `/v1/sorafs/capacity/schedule` حمولات `ReplicationOrderV1` التحرير عن الـتغرب. عندما يستهدف الأمر المتحكم المحلي، يتحقق المدير من التكرار، ويفحص قطع القطعة/الحارة، ويحجز الجانب النقدي، ويعيد `ReplicationPlan` يصف السعة المتبقية لتمكين أدوات التوزيع من تطبيق العنصر. يتم الحصول على المصادقة بالأوامر الخاصة من خلال خدمة استقبال النزلاء المستجيبة I18NI0000 سير00087X تسهيل العمل متعدد التشغيل.[crates/iroha_torii/src/routing.rs:4845]
-- تقوم الخطافات الاكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v1/sorafs/capacity/complete` تسعى الحجوزات عبر `CapacityManager::complete_order`. الرد يشمل لقطة `ReplicationRelease` (الإجماليات المتبقية وبقايا Chunker/lane) حتى بدء أدوات الأوركسترا من جدولة الأمر التالي دون الاقتراع. سيُوصل هذا النبات مصنع القطع عند المنطق الجذري.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+### تكامل إعلان السعة والجدولة- تتضمن Torii TBTB تحديثات `CapacityDeclarationRecord` من `/v2/sorafs/capacity/declare` إلى `CapacityManager` المضمن، بحيث يبني كل عقدة عرضا في الذاكرة لتخصيصات Chunker/lane الملتزم بها. يكشف المدير لقطات للقراءة فقط للتليمترية (`GET /v2/sorafs/capacity/state`) ويفرض التغييرات لكل ملف تعريف أو حارة قبل قبول أوامر جديدة.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- يقبل نقطة النهاية `/v2/sorafs/capacity/schedule` حمولات `ReplicationOrderV1` التحرير عن الـتغرب. عندما يستهدف الأمر المتحكم المحلي، يتحقق المدير من التكرار، ويفحص قطع القطعة/الحارة، ويحجز الجانب النقدي، ويعيد `ReplicationPlan` يصف السعة المتبقية لتمكين أدوات التوزيع من تطبيق العنصر. يتم الحصول على المصادقة بالأوامر الخاصة من خلال خدمة استقبال النزلاء المستجيبة I18NI0000 سير00087X تسهيل العمل متعدد التشغيل.[crates/iroha_torii/src/routing.rs:4845]
+- تقوم الخطافات الاكمال (مثل ما يحدث بعد نجاح الإدخال) باستدعاء `POST /v2/sorafs/capacity/complete` تسعى الحجوزات عبر `CapacityManager::complete_order`. الرد يشمل لقطة `ReplicationRelease` (الإجماليات المتبقية وبقايا Chunker/lane) حتى بدء أدوات الأوركسترا من جدولة الأمر التالي دون الاقتراع. سيُوصل هذا النبات مصنع القطع عند المنطق الجذري.【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - يمكن تعديل `TelemetryAccumulator` المضمن عبر `NodeHandle::update_telemetry`، مما يسمح لعمال الخلفية يختلف PoR/uptime وفي النهاية اشتقاق حمولات `CapacityTelemetryV1` ممتاز دون لمس Internals الـ جدولة.[صناديق/sorafs_node/src/lib.rs:142][صناديق/sorafs_node/src/telemetry.rs:1]### تكاملات المبدأ المستقبلي
 
 - **التوسع**: النهائي `sorafs_pin_registry_tracker.md` بتليمترية التخزين (معدل نجاح PoR، وتغيير القرص). يمكن لسياسات اشتراط تحسين دنيا أو إلى حد أدنى لنجاح PoR قبل قبول الإعلانات.

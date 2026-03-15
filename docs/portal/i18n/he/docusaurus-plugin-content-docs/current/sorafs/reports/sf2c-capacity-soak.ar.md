@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 يعرض Torii الآن لقطات رصيد المزوّدين جنبًا إلى جنب مع fee ledgers حتى تتمكن لوحات المتابعة
 من الضبط على الأرصدة المنخفضة وpenalty strikes:
 
-- REST: `GET /v1/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
+- REST: `GET /v2/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
   تعكس حقول ledger التي تم التحقق منها في اختبار soak. راجع
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` يرسم

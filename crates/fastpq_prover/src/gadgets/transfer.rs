@@ -711,8 +711,6 @@ fn numeric_to_u64(field: &'static str, value: &Numeric) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::Hash;
     use iroha_data_model::{
         asset::id::AssetDefinitionId,
@@ -789,7 +787,7 @@ mod tests {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         let alice = (*ALICE_ID).clone();
         let bob = (*BOB_ID).clone();
-        let asset = AssetDefinitionId::from_str("rose#wonderland").expect("asset definition id");
+        let asset = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
         let delta = TransferDeltaTranscript {
             from_account: alice.clone(),
             to_account: bob.clone(),
@@ -950,8 +948,10 @@ mod tests {
         let second_delta = TransferDeltaTranscript {
             from_account: (*BOB_ID).clone(),
             to_account: (*ALICE_ID).clone(),
-            asset_definition: AssetDefinitionId::from_str("lily#wonderland")
-                .expect("asset definition id"),
+            asset_definition: AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "lily".parse().unwrap(),
+            ),
             amount: Numeric::from(7u32),
             from_balance_before: Numeric::from(90u32),
             from_balance_after: Numeric::from(83u32),

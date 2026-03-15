@@ -56,12 +56,12 @@ Sidebar_label: محرك الحبال
 ## Integracao com Torii
 
 يعرض Torii نقاط النهاية المخصصة ليبلغ المحققون عن استخدامها وتواصلها
-ciclo de vida do acordo sem الأسلاك تنهد متوسط:- `POST /v1/sorafs/deal/usage` جهاز القياس عن بعد `DealUsageReport` والإرجاع
+ciclo de vida do acordo sem الأسلاك تنهد متوسط:- `POST /v2/sorafs/deal/usage` جهاز القياس عن بعد `DealUsageReport` والإرجاع
   نتائج تحديد المراقبة (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` تم الانتهاء من الإدخال التلقائي، الإرسال
+- `POST /v2/sorafs/deal/settle` تم الانتهاء من الإدخال التلقائي، الإرسال
   نتيجة `DealSettlementRecord` مرتبطة بـ `DealSettlementV1` في base64
   Pronto para publicacao no DAG de Goveranca.
-- تغذية `/v1/events/sse` إلى Torii قبل إرسال السجلات `SorafsGatewayEvent::DealUsage`
+- تغذية `/v2/events/sse` إلى Torii قبل إرسال السجلات `SorafsGatewayEvent::DealUsage`
   استئناف كل إرسالية من الاستخدام (العصر، ومتوسطات GiB-hours، وعدادات التذاكر،
   تحديد الكوبرانكا)، السجلات `SorafsGatewayEvent::DealSettlement`
   تتضمن لقطة Canonico do Ledger de Liquidacao أكثر من Digest/tamanho/base64

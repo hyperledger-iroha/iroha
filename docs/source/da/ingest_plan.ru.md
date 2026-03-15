@@ -34,7 +34,7 @@ _Составлено: 20 февраля 2026 г. – Владелец: Рабо
 ## Поверхность API (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 Внутренняя ошибка | Неожиданный сбой (зарегистрированный + оповещение). |
 
 ```
-GET /v1/da/proof_policies
+GET /v2/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 не требуется дополнительный обход для привязки доказательства к активному набору политик.
 
 ```
-GET /v1/da/proof_policy_snapshot
+GET /v2/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ pub struct DaIngestReceipt {
 - `iroha app da get` добавляет псевдоним, ориентированный на DA, для оркестратора с несколькими источниками, который уже работает.
   `iroha app sorafs fetch`. Операторы могут указать на артефакты манифеста и плана фрагментов (`--manifest`,
   `--plan`, `--manifest-id`) **или** просто передайте билет хранилища Torii через `--storage-ticket`. Когда
-  используется путь к билету, CLI извлекает манифест из `/v1/da/manifests/<ticket>`, сохраняет пакет
+  используется путь к билету, CLI извлекает манифест из `/v2/da/manifests/<ticket>`, сохраняет пакет
   под `artifacts/da/fetch_<timestamp>/` (переопределить с помощью `--manifest-cache-dir`), получает **манифест
   хэш** для `--manifest-id`, а затем запускает оркестратор с предоставленным `--gateway-provider`.
   список. Проверка полезной нагрузки по-прежнему опирается на встроенный дайджест CAR/`blob_hash`, в то время как идентификатор шлюза равен
@@ -248,7 +248,7 @@ pub struct DaIngestReceipt {
   переопределения, экспорт табло и пути `--output`), а конечную точку манифеста можно переопределить с помощью
   `--manifest-endpoint` для пользовательских хостов Torii, поэтому сквозные проверки доступности полностью выполняются под
   Пространство имен `da` без дублирования логики оркестратора.
-— `iroha app da get-blob` извлекает канонические манифесты прямо из Torii через `GET /v1/da/manifests/{storage_ticket}`.
+— `iroha app da get-blob` извлекает канонические манифесты прямо из Torii через `GET /v2/da/manifests/{storage_ticket}`.
   Команда теперь помечает артефакты хешем манифеста (идентификатором большого объекта), записывая
   `manifest_{manifest_hash}.norito`, `manifest_{manifest_hash}.json` и `chunk_plan_{manifest_hash}.json`.
   под `artifacts/da/fetch_<timestamp>/` (или предоставленный пользователем `--output-dir`), повторяя точную
@@ -259,7 +259,7 @@ pub struct DaIngestReceipt {
   `ToriiClient.getDaManifestBundle(...)`. Оба возвращают декодированные байты Norito, манифест JSON, хэш манифеста,и план фрагментов, чтобы вызывающие SDK могли увлажнять сеансы оркестратора, не обращаясь к CLI, и Swift
   клиенты могут дополнительно вызвать `fetchDaPayloadViaGateway(...)` для передачи этих пакетов через собственный
   Оболочка оркестратора SoraFS.【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:240】
-- Ответы `/v1/da/manifests` теперь отображают `manifest_hash` и оба помощника CLI + SDK (`iroha app da get`,
+- Ответы `/v2/da/manifests` теперь отображают `manifest_hash` и оба помощника CLI + SDK (`iroha app da get`,
   `ToriiClient.fetchDaPayloadViaGateway` и оболочки шлюза Swift/JS) рассматривают этот дайджест как
   канонический идентификатор манифеста, продолжая при этом проверять полезные данные по встроенному хешу CAR/BLOB-объекта.
 - `iroha app da rent-quote` вычисляет детерминистическую разбивку арендной платы и стимулов для предоставленного размера хранилища.
@@ -277,7 +277,7 @@ pub struct DaIngestReceipt {
 - Паритет реестра выводов теперь распространяется на SDK: `ToriiClient.registerSorafsPinManifest(...)` в
   JavaScript SDK создает точную полезную нагрузку, используемую `iroha app sorafs pin register`, обеспечивая соблюдение канонических
   метаданные чанка, политики закрепления, доказательства псевдонимов и дайджесты преемников перед отправкой POST
-  `/v1/sorafs/pin/register`. Это удерживает CI-ботов и автоматизацию от использования CLI при
+  `/v2/sorafs/pin/register`. Это удерживает CI-ботов и автоматизацию от использования CLI при
   запись регистрации манифеста, а помощник поставляется с поддержкой TypeScript/README, поэтому DA-8
   Паритет инструментов «отправить/получить/доказать» полностью удовлетворяется на JS вместе с Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` объединяет все вышеперечисленное: берет билет хранилища, загружает
@@ -334,7 +334,7 @@ pub struct DaIngestReceipt {
   неизвестные версии, гарантирующие детерминированные обновления при выпуске новых макетов манифеста.【crates/iroha_data_model/src/da/types.rs:308】
 - **перехватчики PDP/PoTR** — обязательства PDP извлекаются непосредственно из хранилища фрагментов и сохраняются.
   помимо манифестов, чтобы планировщики DA-5 могли запускать задачи выборки из канонических данных; тот
-  Заголовок `Sora-PDP-Commitment` теперь поставляется как с `/v1/da/ingest`, так и с `/v1/da/manifests/{ticket}`.
+  Заголовок `Sora-PDP-Commitment` теперь поставляется как с `/v2/da/ingest`, так и с `/v2/da/manifests/{ticket}`.
   ответы, чтобы SDK немедленно запоминали подписанное обязательство, на которое будут ссылаться будущие зонды.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
 - **Журнал курсора сегмента** — метаданные полосы могут указывать `da_shard_id` (по умолчанию `lane_id`), и
   Sumeragi теперь сохраняет самый высокий `(epoch, sequence)` для `(shard_id, lane_id)` в
@@ -357,7 +357,7 @@ pub struct DaIngestReceipt {
   раскрытие байтов полезной нагрузки. Получает гидрат от Куры во время воспроизведения, поэтому валидаторы восстанавливают то же самое.
   метаданные конфиденциальности после перезапуска.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/confidential.rs】【crates/iroha_core/src/da/confidential_store.rs】【crates/iroha_core/src/state.rs】
 
-## Замечания по реализации- Конечная точка `/v1/da/ingest` Torii теперь нормализует сжатие полезной нагрузки, обеспечивает кэширование повторов,
+## Замечания по реализации- Конечная точка `/v2/da/ingest` Torii теперь нормализует сжатие полезной нагрузки, обеспечивает кэширование повторов,
   детерминированно разбивает канонические байты, перестраивает `DaManifestV1` и удаляет закодированную полезную нагрузку.
   в `config.da_ingest.manifest_store_dir` для оркестрации SoraFS перед выдачей квитанции; тот
   обработчик также присоединяет заголовок `Sora-PDP-Commitment`, чтобы клиенты могли зафиксировать закодированное обязательство.
@@ -370,7 +370,7 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` обложка Rust, Python `ToriiClient`
   теперь экспортирует `decode_pdp_commitment_header`, а `IrohaSwift` поставляет соответствующие мобильные помощники
   клиенты могут немедленно сохранить закодированный график выборки.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii также предоставляет `GET /v1/da/manifests/{storage_ticket}`, чтобы SDK и операторы могли получать манифесты.
+- Torii также предоставляет `GET /v2/da/manifests/{storage_ticket}`, чтобы SDK и операторы могли получать манифесты.
   и планы фрагментов, не затрагивая каталог спула узла. Ответ возвращает байты Norito.
   (base64), обработанный манифест JSON, большой двоичный объект JSON `chunk_plan`, готовый для `sorafs fetch`, а также соответствующие
   шестнадцатеричные дайджесты (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), чтобы последующие инструменты могли
@@ -388,7 +388,7 @@ pub struct DaIngestReceipt {
   `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
 
 ### Поток потоковой передачи больших объемов полезной нагрузкиКлиенты, которым необходимо принять ресурсы, превышающие настроенный лимит одного запроса, инициируют
-сеанс потоковой передачи, вызвав `POST /v1/da/ingest/chunk/start`. Torii отвечает
+сеанс потоковой передачи, вызвав `POST /v2/da/ingest/chunk/start`. Torii отвечает
 `ChunkSessionId` (BLAKE3 — получено из запрошенных метаданных большого двоичного объекта) и согласованный размер фрагмента.
 Каждый последующий запрос `DaIngestChunk` содержит:
 
@@ -403,7 +403,7 @@ Torii сохраняет проверенные фрагменты под `confi
 записывает прогресс внутри кэша воспроизведения для соблюдения идемпотентности. Когда приземлится последний кусочек, Torii
 повторно собирает полезную нагрузку на диске (потоковая передача через каталог фрагментов, чтобы избежать скачков памяти),
 вычисляет канонический манифест/квитанцию точно так же, как при однократной загрузке, и, наконец, отвечает на
-`POST /v1/da/ingest` путем использования промежуточного артефакта. Неудачные сеансы могут быть прерваны явно или
+`POST /v2/da/ingest` путем использования промежуточного артефакта. Неудачные сеансы могут быть прерваны явно или
 собираются мусором после `config.da_ingest.replay_cache_ttl`. Эта конструкция сохраняет сетевой формат
 Совместим с Norito, позволяет избежать возобновляемых протоколов, специфичных для клиента, и повторно использует существующий конвейер манифеста.
 без изменений.

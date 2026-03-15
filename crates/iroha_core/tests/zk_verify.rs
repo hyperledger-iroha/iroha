@@ -25,7 +25,7 @@ use nonzero_ext::nonzero;
 #[path = "common/world_fixture.rs"]
 mod test_world;
 
-const TINY_ADD_CIRCUIT_ID: &str = "halo2/ipa:tiny-add-v1";
+const TINY_ADD_CIRCUIT_ID: &str = "halo2/ipa:tiny-add";
 
 fn build_vk_record(
     _name: &str,

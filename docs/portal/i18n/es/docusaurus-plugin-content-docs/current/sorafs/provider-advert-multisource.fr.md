@@ -62,7 +62,7 @@ La cobertura de regresión se trouve dans
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Herramientas y accesorios- Las cargas útiles de anuncios de proveedores deben incluir los metadones `range_capability`,
-  `stream_budget` y `transport_hints`. Validez via les reponses `/v1/sorafs/providers` et les
+  `stream_budget` y `transport_hints`. Validez via les reponses `/v2/sorafs/providers` et les
   accesorios de admisión; Los currículums JSON deben incluir la capacidad de análisis y el presupuesto de flujo.
   y los cuadros de sugerencias para la ingestión telemétrica.
 - `cargo xtask sorafs-admission-fixtures` expone los presupuestos de flujo y sugerencias de transporte en
@@ -72,7 +72,7 @@ La cobertura de regresión se trouve dans
   - `multi_fetch_plan.json` para que las suites SDK puedan reanudar un plan de recuperación
     determinista de múltiples pares.
 
-## Integración con el orquestador y Torii- Torii `/v1/sorafs/providers` envíe los metadones de capacite de plage parsees con
+## Integración con el orquestador y Torii- Torii `/v2/sorafs/providers` envíe los metadones de capacite de plage parsees con
   `stream_budget` y `transport_hints`. Los anuncios de degradación se debilitan cuando
   los proveedores omettent la nouvelle metadonnee, et les endpoints de plage du gateway
   aplique los memes contraintes para los clientes directos.

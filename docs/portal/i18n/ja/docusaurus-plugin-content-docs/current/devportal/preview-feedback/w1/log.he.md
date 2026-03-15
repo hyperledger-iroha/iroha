@@ -31,7 +31,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ 完了 2025-04-26 | sorafs-op-01; orchestrator docs parity の証跡を重点確認。 |
 | partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ 完了 2025-04-26 | sorafs-op-02; Norito/telemetry cross-links を検証。 |
 | partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ 完了 2025-04-26 | sorafs-op-03; multi-source failover drills を実施。 |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ 完了 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook のレビュー。 |
+| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ 完了 2025-04-26 | torii-int-01; Torii `/v2/pipeline` + Try it cookbook のレビュー。 |
 | partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ 完了 2025-04-26 | torii-int-02; Try it スクリーンショット更新に同行 (docs-preview/w1 #2)。 |
 | partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ 完了 2025-04-26 | sdk-partner-01; JS/Swift cookbook のフィードバック + ISO bridge sanity checks。 |
 | partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ 完了 2025-04-26 | sdk-partner-02; compliance は 2025-04-11 に承認、Connect/telemetry メモに集中。 |

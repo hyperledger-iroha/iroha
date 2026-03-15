@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 # Norito-RPC тойм
 
 Norito-RPC нь Torii API-д зориулсан хоёртын дамжуулалт юм. Энэ нь ижил HTTP замыг дахин ашигладаг
-`/v1/pipeline` хэлбэрээр гэхдээ схемийг агуулсан Norito хүрээтэй ачааллыг солилцдог
+`/v2/pipeline` хэлбэрээр гэхдээ схемийг агуулсан Norito хүрээтэй ачааллыг солилцдог
 хэш болон хяналтын нийлбэр. Тодорхой, баталгаатай хариулт хэрэгтэй үед үүнийг ашиглаарай
 дамжуулах хоолойн JSON хариултууд саад болж хувирах үед.
 
@@ -30,7 +30,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v1/transactions/submit
+  https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. Ачаагаа Norito кодлогчоор (`iroha_client`, SDK туслахууд эсвэл
@@ -56,7 +56,7 @@ SDK-д зориулсан заавар:
 1. [Прокси эхлүүлнэ](./try-it.md#start-the-proxy-locally) ба тохируулна уу
    `TRYIT_PROXY_PUBLIC_URL`, ингэснээр виджетүүд хаашаа траффик илгээхээ мэддэг.
 2. Энэ хуудсан дээрх **Оролдоод үз** карт эсвэл `/reference/torii-swagger`-г нээнэ үү.
-   самбар болон `POST /v1/pipeline/submit` гэх мэт төгсгөлийн цэгийг сонгоно уу.
+   самбар болон `POST /v2/pipeline/submit` гэх мэт төгсгөлийн цэгийг сонгоно уу.
 3. **Агуулгын төрөл**-г `application/x-norito` болгож, **Хоёртын файл**-г сонгоно уу.
    засварлагч болон `fixtures/norito_rpc/transfer_asset.norito` байршуулна уу
    (эсвэл жагсаалтад орсон аливаа ачаа

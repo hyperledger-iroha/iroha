@@ -69,7 +69,7 @@ atualizacoes.
 ## נקודות קצה של טווח עושים שערGateways aceitam requisicoes HTTP deterministas que espelham os metadados do
 פרסומת.
 
-### `GET /v1/sorafs/storage/car/{manifest_id}`
+### `GET /v2/sorafs/storage/car/{manifest_id}`
 
 | Requisito | פרטים |
 |----------------|--------|
@@ -77,7 +77,7 @@ atualizacoes.
 | **Respostas** | `206` com `Content-Type: application/vnd.ipld.car`, `Content-Range` descrevendo a janela servida, metadados `X-Sora-Chunk-Range` e headers de chunker/token ecoados. |
 | **פלחס** | `416` עבור טווחי desalinhados, `401` עבור אסימונים ausentes/invalidos, `429` quando budgets de stream/bytes sao excedidos. |
 
-### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Fetch de chunk unico com os mesmos headers mais o digest determinista do chunk.
 השתמש בניסיון חוזר או הורדות פורסמות quando slices de CAR דרושות.
@@ -127,11 +127,11 @@ Erros comuns apresentados a operators/SDKs:
 ## Helpers de CLI e REST- `iroha app sorafs pin list|show`, `alias list` ו-`replication list` envolvem OS
   נקודות קצה REST ל-Pin-Registry e Imprimem Norito JSON bruto com blocos de
   אישור על הוכחות דה אודיטוריה.
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` aceitam manifests
+- `iroha app sorafs storage pin` e `torii /v2/sorafs/pin/register` aceitam manifests
   Norito או JSON com alias הוכחות ואופציות של יורשים; הוכחה למלפורמדוס
   geram `400`, הוכחות מעופשות retornam `503` com `Warning: 110`, e proofs expirados
   retornam `412`.
-- נקודות קצה REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
+- נקודות קצה REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
   כולל אישורים עבור לקוחות אימות קונטרה אוס
   Ultimos headers de bloco antes de agir.
 

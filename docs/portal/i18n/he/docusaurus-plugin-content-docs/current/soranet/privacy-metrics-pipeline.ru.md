@@ -75,7 +75,7 @@ SNNet-8a разворачивает двойные אספנים, которые 
 
 ## Эндпоинты приема Torii
 
-Torii צור קשר עם טלפון טלפון HTTP, ממסרים ואספנים מפעילים את מערכות ההפעלה собственного транспорта:- `POST /v1/soranet/privacy/event` принимает מטען `RecordSoranetPrivacyEventDto`. Тело оборачивает `SoranetPrivacyEventV1` плюс необязательную метку `source`. Torii מציע טלפונים פעילים, שיתוף פעולה ושירותי HTTP ```promql
+Torii צור קשר עם טלפון טלפון HTTP, ממסרים ואספנים מפעילים את מערכות ההפעלה собственного транспорта:- `POST /v2/soranet/privacy/event` принимает מטען `RecordSoranetPrivacyEventDto`. Тело оборачивает `SoranetPrivacyEventV1` плюс необязательную метку `source`. Torii מציע טלפונים פעילים, שיתוף פעולה ושירותי HTTP ```promql
 /* Suppression ratio per relay mode (30 minute window) */
 (
   increase(soranet_privacy_suppression_total{reason=~"insufficient_contributors|collector_suppressed|collector_window_elapsed|forced_flush_window_elapsed"}[30m])
@@ -96,7 +96,7 @@ clamp_min(
 1
 )
 ``` Norito JSON-конвертом, содержащим вычисленное окно (`bucket_start_unix`, `bucket_duration_secs`) וממסר режим.
-- `POST /v1/soranet/privacy/share` принимает מטען `RecordSoranetPrivacyShareDto`. Тело несет `SoranetPrivacyPrioShareV1` и необязательную подсказку `forwarded_by`, чтобы операторы могли аудитировать аудитировать аудитировать collectors. Успешные отправки возвращают HTTP `202 Accepted` с Norito JSON-конвертом, суммирующим collector, окинкодско подавления; ошибки валидации сопоставляются с телеметрическим ответом `Conversion`, чтобы сохранить детерми ошибок между אספנים. Цикл событий מתזמר теперь выпускает эти מניות при опросе ממסרים, сохраняя синхронизацию Prio-аккумулятора I180NT07 relay relay.
+- `POST /v2/soranet/privacy/share` принимает מטען `RecordSoranetPrivacyShareDto`. Тело несет `SoranetPrivacyPrioShareV1` и необязательную подсказку `forwarded_by`, чтобы операторы могли аудитировать аудитировать аудитировать collectors. Успешные отправки возвращают HTTP `202 Accepted` с Norito JSON-конвертом, суммирующим collector, окинкодско подавления; ошибки валидации сопоставляются с телеметрическим ответом `Conversion`, чтобы сохранить детерми ошибок между אספנים. Цикл событий מתזמר теперь выпускает эти מניות при опросе ממסרים, сохраняя синхронизацию Prio-аккумулятора I180NT07 relay relay.
 
 Оба эндпоинта учитывают профиль телеметрии: они возвращают `503 Service Unavailable`, когда метрики отключ. Клиенты могут отправлять Norito בינארי (`application/x.norito`) או Norito JSON (`application/x.norito+json`) טלאי; сервер автоматически договаривается о формате через стандартные Torii מחלצים.
 
@@ -175,7 +175,7 @@ cargo xtask soranet-privacy-report \
 
 Говернанс по-прежнему требует доказать, что первая автоматизированная сессия уложилась в бюджет דיכוי. Хелпер теперь принимает `--max-suppression-ratio <0-1>`, чтобы CI или операторы могли быстро завершаться ошибкой, דליים מדכאים допустимое окно (по умолчанию 10%) или когда דליים еще отсутствуют. Рекомендуемый поток:
 
-1. התקן את NDJSON עם ממסר נקודות קצה של אדמין ותזמר `/v1/soranet/privacy/event|share` ב-`artifacts/sorafs_privacy/<relay>.ndjson`.
+1. התקן את NDJSON עם ממסר נקודות קצה של אדמין ותזמר `/v2/soranet/privacy/event|share` ב-`artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Запустить хелпер с бюджетом политики:
 
    ```bash

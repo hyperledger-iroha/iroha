@@ -33,16 +33,16 @@ iroha = { path = "../../crates/iroha", features = ["client"] }
 use iroha::client::{Client, ClientConfiguration};
 
 fn main() -> eyre::Result<()> {
-    let cfg = ClientConfiguration {
-        torii_url: "http://127.0.0.1:8080".parse()?,
-        telemetry_url: Some("http://127.0.0.1:8080".parse()?),
-        // account_id, key_pair and other options can be populated here or via helper builders
-        ..ClientConfiguration::default()
-    };
+ let cfg = ClientConfiguration {
+ torii_url: "http://127.0.0.1:8080".parse()?,
+ telemetry_url: Some("http://127.0.0.1:8080".parse()?),
+ // account_id, key_pair and other options can be populated here or via helper builders
+ ..ClientConfiguration::default()
+ };
 
-    let client = Client::new(cfg)?;
-    println!("Node status: {:?}", client.get_status()?);
-    Ok(())
+ let client = Client::new(cfg)?;
+ println!("Node status: {:?}", client.get_status()?);
+ Ok(())
 }
 ```
 
@@ -54,38 +54,38 @@ fn main() -> eyre::Result<()> {
 ```rust
 use iroha::client::{Client, ClientConfiguration};
 use iroha_data_model::{
-    isi::prelude::*,
-    prelude::{AccountId, ChainId, DomainId, Name},
+ isi::prelude::*,
+ prelude::{AccountId, ChainId, DomainId, Name},
 };
 use iroha_crypto::{KeyPair, PublicKey};
 
 fn submit_example() -> eyre::Result<()> {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let account_id = AccountId::new(
-        Name::from_str("alice")?,
-        DomainId::from_str("wonderland")?,
-    );
+ let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+ let account_id = AccountId::new(
+ Name::from_str("alice")?,
+ DomainId::from_str("wonderland")?,
+ );
 
-    let key_pair = KeyPair::generate_ed25519(); // replace with a persistent key in real apps
+ let key_pair = KeyPair::generate_ed25519(); // replace with a persistent key in real apps
 
-    let cfg = ClientConfiguration {
-        chain: chain_id.clone(),
-        account: account_id.clone(),
-        key_pair: key_pair.clone(),
-        ..ClientConfiguration::test()
-    };
+ let cfg = ClientConfiguration {
+ chain: chain_id.clone(),
+ account: account_id.clone(),
+ key_pair: key_pair.clone(),
+ ..ClientConfiguration::test()
+ };
 
-    let client = Client::new(cfg)?;
+ let client = Client::new(cfg)?;
 
-    let instruction = Register {
-        object: Domain::new(Name::from_str("research")?, None),
-    };
+ let instruction = Register {
+ object: Domain::new(Name::from_str("research")?, None),
+ };
 
-    let tx = client.build_transaction([instruction]);
-    let signed = tx.sign(&key_pair)?;
-    let hash = client.submit_transaction(&signed)?;
-    println!("Submitted transaction: {hash}");
-    Ok(())
+ let tx = client.build_transaction([instruction]);
+ let signed = tx.sign(&key_pair)?;
+ let hash = client.submit_transaction(&signed)?;
+ println!("Submitted transaction: {hash}");
+ Ok(())
 }
 ```
 
@@ -101,18 +101,18 @@ use iroha::da::DaIngestParams;
 use iroha_data_model::{da::types::ExtraMetadata, nexus::LaneId};
 
 fn submit_da_blob() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let mut params = DaIngestParams::default();
-    params.lane_id = LaneId::new(7);
-    params.epoch = 42;
-    let payload = std::fs::read("payload.car")?;
-    let metadata = ExtraMetadata::default();
-    let result = client.submit_da_blob(payload, &params, metadata, None)?;
-    println!(
-        "status={} duplicate={} bytes={}",
-        result.status, result.duplicate, result.payload_len
-    );
-    Ok(())
+ let client = Client::new(ClientConfiguration::test())?;
+ let mut params = DaIngestParams::default();
+ params.lane_id = LaneId::new(7);
+ params.epoch = 42;
+ let payload = std::fs::read("payload.car")?;
+ let metadata = ExtraMetadata::default();
+ let result = client.submit_da_blob(payload, &params, metadata, None)?;
+ println!(
+ "status={} duplicate={} bytes={}",
+ result.status, result.duplicate, result.payload_len
+ );
+ Ok(())
 }
 ```
 
@@ -127,12 +127,12 @@ use iroha::client::{Client, ClientConfiguration};
 use iroha_data_model::query::prelude::*;
 
 fn list_domains() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let response = client.request(&FindAllDomains::new())?;
-    for domain in response {
-        println!("{}", domain.name());
-    }
-    Ok(())
+ let client = Client::new(ClientConfiguration::test())?;
+ let response = client.request(&FindAllDomains::new())?;
+ for domain in response {
+ println!("{}", domain.name());
+ }
+ Ok(())
 }
 ```
 
@@ -144,29 +144,24 @@ fn list_domains() -> eyre::Result<()> {
 
 ```rust
 use iroha::client::{
-    Client, ClientConfiguration, ExplorerAccountQrOptions,
+ Client, ClientConfiguration,
 };
 
 fn download_qr() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let snapshot = client.get_explorer_account_qr(
-        "i105...",
-        Some(ExplorerAccountQrOptions {
-        }),
-    )?;
-    println!("Canonical literal: {}", snapshot.literal);
-    println!("SVG payload: {}", snapshot.svg);
-    Ok(())
+ let client = Client::new(ClientConfiguration::test())?;
+ let snapshot = client.get_explorer_account_qr(
+ "i105...",
+ )?;
+ println!("Canonical literal: {}", snapshot.literal);
+ println!("SVG payload: {}", snapshot.svg);
+ Ok(())
 }
 ```
 
-`ExplorerAccountQrSnapshot` は `/v1/explorer/accounts/{id}/qr` JSON をミラーリングします。
+`ExplorerAccountQrSnapshot` は `/v2/explorer/accounts/{id}/qr` JSON をミラーリングします。
 表面: 正規のアカウント ID、つまり、
 要求された形式、ネットワーク プレフィックス/エラー修正メタデータ、QR 寸法、および
-ウォレット/エクスプローラーが直接埋め込むことができるインライン SVG ペイロード。省略
-`ExplorerAccountQrOptions` をデフォルトで優先 I105 出力に設定するか、設定します
-canonical I105 output で 2 番目に良いものを取得します
-ADDR-6b で使用される `i105` バリアント。
+ウォレット/エクスプローラーが直接埋め込むことができるインライン SVG ペイロード。
 
 ## 7. イベントを購読する
 
@@ -176,15 +171,15 @@ use iroha_data_model::events::pipeline::PipelineEventFilterBox;
 use futures_lite::stream::StreamExt;
 
 async fn listen_for_blocks() -> eyre::Result<()> {
-    let client = Client::new(ClientConfiguration::test())?;
-    let mut stream = client
-        .listen_for_events([PipelineEventFilterBox::any()])
-        .await?;
+ let client = Client::new(ClientConfiguration::test())?;
+ let mut stream = client
+ .listen_for_events([PipelineEventFilterBox::any()])
+ .await?;
 
-    while let Some(event) = stream.next().await {
-        println!("Received event: {:?}", event?);
-    }
-    Ok(())
+ while let Some(event) = stream.next().await {
+ println!("Received event: {:?}", event?);
+ }
+ Ok(())
 }
 ```
 
@@ -194,22 +189,22 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 ## その他の例
 
 - エンドツーエンド フローは、`crates/iroha` の `tests/` の下に存在します。統合の検索
-  より豊富なシナリオのための `transaction_submission.rs` などのテスト。
+ より豊富なシナリオのための `transaction_submission.rs` などのテスト。
 - CLI (`iroha_cli`) は同じクライアント モジュールを使用します。閲覧する
-  `crates/iroha_cli/src/`: 認証、バッチ処理、および再試行がどのように行われるかを確認します。
-  生産ツールで処理されます。
+ `crates/iroha_cli/src/`: 認証、バッチ処理、および再試行がどのように行われるかを確認します。
+ 生産ツールで処理されます。
 - Norito に留意してください。クライアントが `serde_json` にフォールバックすることはありません。あなたが
-  SDK を拡張し、JSON エンドポイントの `norito::json` ヘルパーに依存し、
-  バイナリペイロードの場合は `norito::codec`。
+ SDK を拡張し、JSON エンドポイントの `norito::json` ヘルパーに依存し、
+ バイナリペイロードの場合は `norito::codec`。
 
 ## 関連する Norito の例
 
 - [始まりのエントリポイント スケルトン](../norito/examples/hajimari-entrypoint) — コンパイル、実行、デプロイ
-  このクイックスタートのセットアップ フェーズを反映する最小限の Kotodama スキャフォールド。
+ このクイックスタートのセットアップ フェーズを反映する最小限の Kotodama スキャフォールド。
 - [ドメインとミント資産の登録](../norito/examples/register-and-mint) —
-  上記の `Register` + `Mint` フローにより、コントラクトから同じ操作を再現できます。
+ 上記の `Register` + `Mint` フローにより、コントラクトから同じ操作を再現できます。
 - [アカウント間での資産の転送](../norito/examples/transfer-asset) — を示します。
-  SDK クイックスタートが使用するのと同じアカウント ID を持つ `transfer_asset` syscall。
+ SDK クイックスタートが使用するのと同じアカウント ID を持つ `transfer_asset` syscall。
 
 これらのビルディング ブロックを使用すると、Torii を Rust サービスまたは CLI に統合できます。
 完全なセットについては、生成されたドキュメントとデータ モデル クレートを参照してください。

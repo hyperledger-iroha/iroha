@@ -47,7 +47,7 @@ surface et cut-over pour la récupération de fragments multi-sources et la réc
      -`profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` et `max_span`
      - TLV GRAISSE pour `allow_unknown_capabilities=<true|false>`
-   - `/v1/sorafs/providers` et `sorafs_fetch` pour valider la commande inconnu
+   - `/v2/sorafs/providers` et `sorafs_fetch` pour valider la commande inconnu
      capacités, avertissements, triage,
 3. **Valider la préparation multi-sources.**
    - `sorafs_fetch` et `--provider-advert=<path>` pour le produit Par `chunk_range_fetch`
@@ -164,8 +164,8 @@ Voici la syntaxe `promtool check rules` de la syntaxe `promtool check rules` de 
 
 - ** Mailer d'état hebdomadaire. ** Mesures d'admission DevRel, avertissements en suspens et délais et délais de livraison
 - **Réponse aux incidents.** Alertes `reject` en cas d'astreinte :
-  1. Découverte Torii (`/v1/sorafs/providers`) et récupération d'annonces incriminées
-  2. Pipeline du fournisseur pour la validation de l'annonce et pour `/v1/sorafs/providers` pour comparer et reproduire l'erreur.
+  1. Découverte Torii (`/v2/sorafs/providers`) et récupération d'annonces incriminées
+  2. Pipeline du fournisseur pour la validation de l'annonce et pour `/v2/sorafs/providers` pour comparer et reproduire l'erreur.
   3. Le fournisseur coordonne les coordonnées du fournisseur pour le délai d'actualisation et la rotation de l'annonce.
 - **Le changement se fige.** Le schéma de capacités R1/R2 est en cours de déploiement en cours de déploiement. Essais GREASE et fenêtre de maintenance et calendrier et grand livre de migration et journal de bord
 

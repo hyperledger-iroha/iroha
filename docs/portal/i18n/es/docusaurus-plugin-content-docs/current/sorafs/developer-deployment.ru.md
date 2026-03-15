@@ -30,7 +30,7 @@ El panel de control SoraFS utiliza un parámetro de configuración, un período 
 
 ## Configuración de configuración
 
-- Las puertas de enlace permiten la transmisión a prueba de endpoints (`POST /v1/sorafs/proof/stream`), y la CLI puede transmitir datos telefónicos.
+- Las puertas de enlace permiten la transmisión a prueba de endpoints (`POST /v2/sorafs/proof/stream`), y la CLI puede transmitir datos telefónicos.
 - Configure la política `sorafs_alias_cache` con el asistente CLI (`sorafs_cli manifest submit --alias-*`).
 - Guarde los tokens de transmisión (o el Torii) en su administrador secreto.
 - Включите телеметрические exportadores (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) и отправляйте их в ваш стек Prometheus/OTel.## Lanzamiento de la estrategia

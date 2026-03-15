@@ -154,14 +154,19 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 
     // #region register_asset_create_asset
     // Create an asset
-    let asset_def_id = "time#looking_glass".parse::<AssetDefinitionId>()
-        .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
+    let asset_def_id = AssetDefinitionId::new(
+        "looking_glass".parse().expect("valid domain identifier"),
+        "time".parse().expect("valid asset identifier"),
+    );
     // #endregion register_asset_create_asset
 
     // #region register_asset_init_submit
     // Initialise the registration time
-    let register_time =
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()).mintable_once());
+    let register_time = Register::asset_definition(
+        AssetDefinition::numeric(asset_def_id.clone())
+            .with_name("time".to_owned())
+            .mintable_once(),
+    );
 
     // Submit a registration time
     client.submit(register_time)?;
@@ -197,8 +202,10 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
-    let roses: AssetDefinitionId = "rose#wonderland".parse()
-        .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
+    let roses = AssetDefinitionId::new(
+        "wonderland".parse().expect("valid domain identifier"),
+        "rose".parse().expect("valid asset identifier"),
+    );
     let alice = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
@@ -248,8 +255,10 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
-    let roses: AssetDefinitionId = "rose#wonderland".parse()
-        .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
+    let roses = AssetDefinitionId::new(
+        "wonderland".parse().expect("valid domain identifier"),
+        "rose".parse().expect("valid asset identifier"),
+    );
     let alice = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

@@ -5,7 +5,7 @@ use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    data_model::{asset::AssetDefinition, prelude::*},
+    data_model::{asset::AssetDefinition, isi::InstructionBox, prelude::*},
 };
 use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_test_network::*;
@@ -80,17 +80,47 @@ fn pagination_behaves() -> Result<()> {
 fn register_assets(client: &Client) -> Result<()> {
     const MAX_INSTRUCTIONS_PER_TX: usize = 5;
 
-    let register: Vec<_> = ('a'..='j')
-        .map(|c| c.to_string())
-        .map(|name| (name + "#wonderland").parse().expect("Valid"))
-        .map(|asset_definition_id| {
-            Register::asset_definition(AssetDefinition::numeric(asset_definition_id))
+    let register: Vec<InstructionBox> = pagination_asset_definition_ids()
+        .into_iter()
+        .map(|asset_definition_id: AssetDefinitionId| {
+            Register::asset_definition({
+                let __asset_definition_id = asset_definition_id;
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into()
         })
         .collect();
 
     for chunk in register.chunks(MAX_INSTRUCTIONS_PER_TX) {
-        client.submit_all_blocking(chunk.iter().cloned())?;
+        client.submit_all_blocking::<InstructionBox>(chunk.iter().cloned())?;
     }
 
     Ok(())
+}
+
+fn pagination_asset_definition_ids() -> Vec<AssetDefinitionId> {
+    ('a'..='j')
+        .map(|c| c.to_string())
+        .map(|name| {
+            AssetDefinitionId::new(
+                "wonderland"
+                    .parse::<DomainId>()
+                    .expect("wonderland domain is valid"),
+                name.parse::<Name>().expect("single-letter name is valid"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn pagination_asset_definition_ids_are_canonical_aid_literals() {
+    let ids = pagination_asset_definition_ids();
+    assert_eq!(ids.len(), 10);
+    for id in ids {
+        let literal = id.to_string();
+        assert!(literal.starts_with("aid:"));
+        assert_eq!(literal.len(), 36);
+        assert_eq!(literal.parse::<AssetDefinitionId>().expect("canonical"), id);
+    }
 }

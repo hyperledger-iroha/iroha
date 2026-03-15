@@ -23,17 +23,17 @@ va konfiguratsiya qilinganida, brokerlar chekka o'rni nomidan ML-DSA qabul token
 U beshta HTTP so'nggi nuqtalarini ko'rsatadi:
 
 - `GET /healthz` - jonli zond.
-- `GET /v1/puzzle/config` - olingan samarali PoW/jumboq parametrlarini qaytaradi
+- `GET /v2/puzzle/config` - olingan samarali PoW/jumboq parametrlarini qaytaradi
   JSON relesidan (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - Argon2 chiptasini zarb qiladi; ixtiyoriy JSON tanasi
+- `POST /v2/puzzle/mint` - Argon2 chiptasini zarb qiladi; ixtiyoriy JSON tanasi
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   qisqaroq TTL so'raydi (qoida oynasiga mahkamlangan), chiptani a ga bog'laydi
   transkript xesh va rele imzolangan chipta + imzo barmoq izini qaytaradi
   imzolash kalitlari sozlanganda.
-- `GET /v1/token/config` - qachon `pow.token.enabled = true`, faolni qaytaradi
+- `GET /v2/token/config` - qachon `pow.token.enabled = true`, faolni qaytaradi
   Qabul qilish tokeni siyosati (emitentning barmoq izi, TTL/soatning egilish chegaralari, reley identifikatori,
   va birlashtirilgan bekor qilish to'plami).
-- `POST /v1/token/mint` - etkazib berilganga bog'langan ML-DSA qabul tokenini chiqaradi
+- `POST /v2/token/mint` - etkazib berilganga bog'langan ML-DSA qabul tokenini chiqaradi
   xeshni davom ettirish; so'rov organi `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` ni qabul qiladi.
 
 Xizmat tomonidan ishlab chiqarilgan chiptalar tasdiqlangan
@@ -76,19 +76,19 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` maxfiy tarmoqdan tashqarida boshqarilsa ham mavjud
-asboblar quvur liniyasi. Bekor qilish faylini kuzatuvchisi `/v1/token/config` oqimini saqlaydi;
+asboblar quvur liniyasi. Bekor qilish faylini kuzatuvchisi `/v2/token/config` oqimini saqlaydi;
 orqada qolmaslik uchun yangilanishlarni `soranet-admission-token revoke` buyrug'i bilan muvofiqlashtiring
 bekor qilish holati.
 
 ML-DSA-44 ommabopini reklama qilish uchun JSON releyida `pow.signed_ticket_public_key_hex` ni o'rnating
-imzolangan PoW chiptalarini tekshirish uchun ishlatiladigan kalit; `/v1/puzzle/config` kalit va uning BLAKE3 ni aks ettiradi
+imzolangan PoW chiptalarini tekshirish uchun ishlatiladigan kalit; `/v2/puzzle/config` kalit va uning BLAKE3 ni aks ettiradi
 barmoq izi (`signed_ticket_public_key_fingerprint_hex`), shuning uchun mijozlar tekshirgichni mahkamlashi mumkin.
 Imzolangan chiptalar reley identifikatori va transkript bog'lanishlari bilan tasdiqlanadi va bir xil bo'ladi
 bekor qilish do'koni; Xom 74 bayt PoW chiptalari imzolangan chipta tekshiruvchisi bo'lganda haqiqiy bo'lib qoladi
 tuzilgan. Imzolovchi sirini `--signed-ticket-secret-hex` yoki orqali o'tkazing
 Puzzle xizmatini ishga tushirishda `--signed-ticket-secret-path`; ishga tushirish mos kelmasligini rad etadi
 agar sir `pow.signed_ticket_public_key_hex` ga qarshi tasdiqlanmasa, kalit juftlari.
-`POST /v1/puzzle/mint` `"signed": true` (va ixtiyoriy `"transcript_hash_hex"`) ni qabul qiladi
+`POST /v2/puzzle/mint` `"signed": true` (va ixtiyoriy `"transcript_hash_hex"`) ni qabul qiladi
 Xom chipta baytlari bilan birga Norito kodli imzolangan chiptani qaytaring; javoblar kiradi
 `signed_ticket_b64` va `signed_ticket_fingerprint_hex` barmoq izlarini takrorlashni kuzatishga yordam beradi.
 Imzolovchi siri sozlanmagan boʻlsa, `signed = true` soʻrovlari rad etiladi.
@@ -106,10 +106,10 @@ Imzolovchi siri sozlanmagan boʻlsa, `signed = true` soʻrovlari rad etiladi.
 3. **Qayta ishga tushirishni bosqichma-bosqich o'tkazing.** Boshqaruvdan so'ng tizim blokini yoki konteynerni qayta yuklang
    aylanishni kesish haqida e'lon qiladi. Xizmat issiq qayta yuklashni qo'llab-quvvatlamaydi; a
    yangi deskriptor majburiyatini olish uchun qayta ishga tushirish talab qilinadi.
-4. **Tasdiqlash.** `POST /v1/puzzle/mint` orqali chipta chiqaring va tasdiqlang
+4. **Tasdiqlash.** `POST /v2/puzzle/mint` orqali chipta chiqaring va tasdiqlang
    qaytarilgan `difficulty` va `expires_at` yangi siyosatga mos keladi. Sovutish hisoboti
    (`docs/source/soranet/reports/pow_resilience.md`) kutilgan kechikishni ushlaydi
-   ma'lumot uchun chegaralar. Tokenlar yoqilganda, `/v1/token/config` ni oling
+   ma'lumot uchun chegaralar. Tokenlar yoqilganda, `/v2/token/config` ni oling
    e'lon qilingan emitentning barmoq izlari va bekor qilish soni mos kelishiga ishonch hosil qiling
    kutilgan qiymatlar.
 
@@ -121,7 +121,7 @@ Imzolovchi siri sozlanmagan boʻlsa, `signed = true` soʻrovlari rad etiladi.
    Argon2 darvozasi oflayn.
 3. O'zgartirishni qo'llash uchun releyni ham, jumboq xizmatini ham qayta ishga tushiring.
 4. Qiyinchilikni kamaytirish uchun `soranet_handshake_pow_difficulty` ni monitor qiling
-   kutilgan hashcash qiymati va `/v1/puzzle/config` hisobotlarini tekshiring
+   kutilgan hashcash qiymati va `/v2/puzzle/config` hisobotlarini tekshiring
    `puzzle = null`.
 
 ## Monitoring va ogohlantirish
@@ -133,16 +133,16 @@ Imzolovchi siri sozlanmagan boʻlsa, `signed = true` soʻrovlari rad etiladi.
   `pow.quotas` sovutish vaqtini sozlash uchun (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Bulmacani tekislash:** `soranet_handshake_pow_difficulty` mos kelishi kerak
-  qiyinchilik `/v1/puzzle/config` tomonidan qaytarildi. Divergentsiya eskirgan releyni ko'rsatadi
+  qiyinchilik `/v2/puzzle/config` tomonidan qaytarildi. Divergentsiya eskirgan releyni ko'rsatadi
   konfiguratsiya yoki muvaffaqiyatsiz qayta ishga tushirish.
-- **Token tayyorligi:** `/v1/token/config` `enabled = false` ga tushsa, ogohlantirish
+- **Token tayyorligi:** `/v2/token/config` `enabled = false` ga tushsa, ogohlantirish
   kutilmaganda yoki `revocation_source` eskirgan vaqt belgilari haqida xabar bersa. Operatorlar
   Agar token bo'lsa, Norito bekor qilish faylini CLI orqali aylantirishi kerak
   bu yakuniy nuqtani aniq saqlash uchun nafaqaga chiqqan.
 - **Xizmat salomatligi:** `/healthz` probini odatdagi jonli kadans va ogohlantirishda
-  agar `/v1/puzzle/mint` HTTP 500 javoblarini qaytarsa (Argon2 parametrini bildiradi)
+  agar `/v2/puzzle/mint` HTTP 500 javoblarini qaytarsa (Argon2 parametrini bildiradi)
   mos kelmasligi yoki RNG xatosi). Token zarb qilish xatolari HTTP 4xx/5xx orqali yuzaga keladi
-  `/v1/token/mint` bo'yicha javoblar; takroriy nosozliklarni peyjing holati sifatida ko'rib chiqing.
+  `/v2/token/mint` bo'yicha javoblar; takroriy nosozliklarni peyjing holati sifatida ko'rib chiqing.
 
 ## Muvofiqlik va audit jurnali
 

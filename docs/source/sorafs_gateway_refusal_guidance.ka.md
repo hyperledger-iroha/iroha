@@ -59,7 +59,7 @@ dashboards and alerts remain portable across deployments.
 
 1. Inspect the request log entry for the `chunker_handle` hint emitted by Torii.
 2. Compare against the manifest profile list served by the Pin Registry
-   (`/v1/sorafs/pin/<cid>`). The manifest MUST include a chunker matching the
+   (`/v2/sorafs/pin/<cid>`). The manifest MUST include a chunker matching the
    request.
 3. If the manifest is missing, publish a successor manifest via
    `sorafs-manifest submit` and wait for governance approval.

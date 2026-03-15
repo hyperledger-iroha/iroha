@@ -80,11 +80,11 @@ default_margin_percent = "0.025"
 
 ### 3.1 Post-Approval Configuration Snapshots
 
-referendum یا governance vote مکمل ہونے اور `[settlement.repo]` تبدیلی rollout ہونے کے بعد، ہر peer سے `/v1/configuration` snapshots capture کریں تاکہ auditors ثابت کر سکیں کہ approved policy cluster بھر میں live ہے (دیکھیں `docs/source/finance/repo_ops.md` sec 2.9).
+referendum یا governance vote مکمل ہونے اور `[settlement.repo]` تبدیلی rollout ہونے کے بعد، ہر peer سے `/v2/configuration` snapshots capture کریں تاکہ auditors ثابت کر سکیں کہ approved policy cluster بھر میں live ہے (دیکھیں `docs/source/finance/repo_ops.md` sec 2.9).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
+curl -fsSL https://peer01.example/v2/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
 | Peer / source | File | SHA-256 | Block height | Notes |

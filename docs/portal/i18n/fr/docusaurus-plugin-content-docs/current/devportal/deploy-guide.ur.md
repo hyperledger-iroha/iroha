@@ -24,7 +24,7 @@ exportations de coquilles
 
 ## پیشگی شرائط- Nœud 18.18+ pour `npm` ou `pnpm`.
 - `sorafs_cli` et `cargo run -p sorafs_car --features cli --bin sorafs_cli` ou `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- Torii URL et `/v1/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
+- Torii URL et `/v2/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
   مینی فیسٹس اور alias جمع کر سکے۔
 - Émetteur OIDC (GitHub Actions, GitLab, Workload Identity et autres)
   `SIGSTORE_ID_TOKEN` منٹ کیا جا سکے۔
@@ -821,7 +821,7 @@ le travail consiste à créer des secrets/variables du référentiel :
 
 | Nom | Objectif |
 |------|--------------|
-| `DOCS_SORAFS_TORII_URL` | Hôte Torii et `/v1/sorafs/pin/register` pour les utilisateurs |
+| `DOCS_SORAFS_TORII_URL` | Hôte Torii et `/v2/sorafs/pin/register` pour les utilisateurs |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | soumissions کے ساتھ ریکارڈ ہونے والا identifiant d'époque۔ |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | soumission manifeste کے لئے pouvoir de signature۔ |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | alias tuple par `perform_submit` true pour manifest et bind pour |

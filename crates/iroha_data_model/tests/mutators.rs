@@ -32,7 +32,10 @@ fn domain_metadata_mut_and_set_owned_by() {
 fn asset_definition_mutators_metadata_mintable_owner() {
     // Build an AssetDefinition and exercise mutators
     let _domain_id: DomainId = "land".parse().expect("valid");
-    let asset_def_id: AssetDefinitionId = "rose#land".parse().expect("valid asset id");
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "land".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     // Create an owner account in the same domain
     let owner_key = KeyPair::random();

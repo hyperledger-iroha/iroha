@@ -257,7 +257,7 @@ fn expected_fhe_param_set() -> FheParamSetV1 {
         schema_version: FHE_PARAM_SET_VERSION_V1,
         param_set: "fhe_bfv_med".parse().expect("valid name"),
         version: NonZeroU32::new(2).expect("nonzero"),
-        backend: "fhe/bfv-rns/v1".to_string(),
+        backend: "fhe/bfv-rns/v2".to_string(),
         scheme: FheSchemeV1::Bfv,
         ciphertext_modulus_bits: vec![
             NonZeroU16::new(60).expect("nonzero"),

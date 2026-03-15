@@ -90,6 +90,17 @@ pub trait StorageReadOnly<K: Key, V: Value> {
         K: Ord + Borrow<Q>,
         Q: Ord + ?Sized;
 
+    /// Read entry from the storage together with the canonical key reference.
+    ///
+    /// This helper is useful when callers need the key reference borrowed from
+    /// the storage (for example to build a `Ref<'_, K, V>` pair) rather than a
+    /// cloned key value.
+    fn get_key_value(&self, key: &K) -> Option<(&K, &V)> {
+        self.range(key..=key)
+            .next()
+            .filter(|(candidate, _)| *candidate == key)
+    }
+
     /// Iterate over all entries in the storage
     fn iter(&self) -> Iter<'_, K, V>;
 

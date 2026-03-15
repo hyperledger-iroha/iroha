@@ -5,8 +5,8 @@
 mod offline_balance_proof_utils;
 
 use std::{
+    collections::BTreeSet,
     fs,
-    str::FromStr,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -123,16 +123,8 @@ fn build_harness() -> Harness {
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -175,16 +167,8 @@ fn build_harness_without_offline_issuer() -> Harness {
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -227,16 +211,8 @@ fn build_harness_without_offline_issuer_skip_build_claim_verification() -> Harne
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -293,16 +269,8 @@ fn build_harness_with_issuer(primary_seed: u8, legacy_seeds: &[u8]) -> Harness {
     let fixtures = build_fixtures();
     let world = world_from_fixtures(&fixtures);
     let chain_id = ChainId::from("test-chain");
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = true;
     state.settlement.offline.proof_mode =
         iroha_config::parameters::actual::OfflineProofMode::Optional;
@@ -353,16 +321,8 @@ fn build_harness_for_app_attest_fixture(
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let world = world_from_fixtures(&fixtures);
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        query,
-        chain_id.clone(),
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id.clone());
+    let mut state =
+        State::new_with_chain_for_testing(world, Arc::clone(&kura), query, chain_id.clone());
     state.settlement.offline.skip_platform_attestation = false;
     state.settlement.offline.apple_app_attest_strict_signature = strict_signature;
     state.settlement.offline.skip_build_claim_verification = true;
@@ -550,7 +510,7 @@ async fn submit_replay_fixture_with_harness(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -567,7 +527,7 @@ async fn submit_replay_fixture_with_harness(
                 Request::builder()
                     .method(axum::http::Method::GET)
                     .uri(format!(
-                        "/v1/pipeline/transactions/status?hash={queued_tx_hash_hex}"
+                        "/v2/pipeline/transactions/status?hash={queued_tx_hash_hex}"
                     ))
                     .body(Body::empty())
                     .expect("pipeline status request"),
@@ -668,7 +628,7 @@ async fn query_settlement_record_by_bundle(harness: &Harness, bundle_id_hex: &st
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements/query")
+                .uri("/v2/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -733,6 +693,13 @@ async fn assert_replay_final_settlement_status(
 }
 
 fn world_from_fixtures(fixtures: &Fixtures) -> World {
+    let domain_id = fixtures
+        .certificate
+        .allowance
+        .asset
+        .definition()
+        .domain()
+        .clone();
     let domains = [Domain {
         id: fixtures
             .certificate
@@ -752,6 +719,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::from([domain_id.clone()]),
     };
     let receiver = Account {
         id: fixtures.receiver.clone(),
@@ -759,6 +727,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::from([domain_id.clone()]),
     };
     let operator = Account {
         id: fixtures.certificate.operator.clone(),
@@ -766,6 +735,7 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
+        linked_domains: BTreeSet::from([domain_id]),
     };
 
     // `RegisterOfflineAllowance` seeding resolves the definition in order to evaluate
@@ -779,6 +749,9 @@ fn world_from_fixtures(fixtures: &Fixtures) -> World {
     );
     let asset_definition = AssetDefinition {
         id: fixtures.certificate.allowance.asset.definition().clone(),
+        name: "OfflineAsset".to_owned(),
+        description: None,
+        alias: None,
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,
@@ -805,8 +778,10 @@ fn build_fixtures() -> Fixtures {
     let receiver_keys = KeyPair::from_seed(vec![0x31; 32], Algorithm::Ed25519);
     let receiver = AccountId::of(receiver_keys.public_key().clone());
     let spend_keys = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-    let asset_definition =
-        AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
+    let asset_definition = AssetDefinitionId::new(
+        "merchants".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
     let allowance_asset = AssetId::new(asset_definition, controller.clone());
     let lineage_scope = "merchants-main-wallet";
     let ios_bundle_id = "com.example.merchants";
@@ -1538,7 +1513,7 @@ async fn offline_spend_receipts_submit_returns_poseidon_root() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/spend-receipts")
+                .uri("/v2/offline/spend-receipts")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1587,7 +1562,7 @@ async fn offline_allowances_issue_returns_certificate_id() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/allowances")
+                .uri("/v2/offline/allowances")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1631,7 +1606,7 @@ async fn offline_build_claims_issue_returns_signed_claim_accepted_by_settlement(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/build-claims/issue")
+                .uri("/v2/offline/build-claims/issue")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(claim_body))
                 .expect("request"),
@@ -1693,7 +1668,7 @@ async fn offline_build_claims_issue_returns_signed_claim_accepted_by_settlement(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(submit_body))
                 .expect("request"),
@@ -1729,7 +1704,7 @@ async fn offline_build_claims_issue_uses_legacy_operator_key_when_primary_rotate
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/build-claims/issue")
+                .uri("/v2/offline/build-claims/issue")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(claim_body))
                 .expect("request"),
@@ -1795,7 +1770,7 @@ async fn offline_settlements_submit_auto_issues_missing_build_claims() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(submit_body))
                 .expect("request"),
@@ -1867,7 +1842,7 @@ async fn offline_settlements_submit_rejects_missing_build_claim_when_issuer_disa
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1915,7 +1890,7 @@ async fn offline_settlements_submit_accepts_missing_build_claim_when_verificatio
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -1961,7 +1936,7 @@ async fn offline_settlements_submit_rejects_android_multi_package_without_overri
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2026,7 +2001,7 @@ async fn offline_settlements_submit_uses_override_for_android_multi_package() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2095,7 +2070,7 @@ async fn offline_settlements_submit_rejects_unknown_build_claim_override_tx_id()
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2161,7 +2136,7 @@ async fn offline_settlements_submit_rejects_duplicate_build_claim_override_tx_id
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2216,7 +2191,7 @@ async fn offline_settlements_submit_rejects_override_for_existing_claim_without_
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2268,7 +2243,7 @@ async fn offline_settlements_submit_keeps_invalid_existing_claim_without_repair(
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2329,7 +2304,7 @@ async fn offline_settlements_submit_repairs_existing_claim_when_requested() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2380,7 +2355,7 @@ async fn offline_settlements_submit_returns_bundle_id_and_transaction_hash() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2412,7 +2387,7 @@ async fn offline_settlements_submit_returns_bundle_id_and_transaction_hash() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::GET)
-                .uri(format!("/v1/pipeline/transactions/status?hash={tx_hash}"))
+                .uri(format!("/v2/pipeline/transactions/status?hash={tx_hash}"))
                 .body(Body::empty())
                 .expect("pipeline status request"),
         )
@@ -2455,7 +2430,7 @@ async fn pipeline_transaction_status_unknown_hash_surfaces_not_found_error_paylo
             Request::builder()
                 .method(axum::http::Method::GET)
                 .uri(format!(
-                    "/v1/pipeline/transactions/status?hash={unknown_hash}"
+                    "/v2/pipeline/transactions/status?hash={unknown_hash}"
                 ))
                 .body(Body::empty())
                 .expect("request"),
@@ -2522,7 +2497,7 @@ async fn offline_settlements_submit_persists_settled_record() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2589,7 +2564,7 @@ async fn offline_settlements_submit_persists_settled_record() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements/query")
+                .uri("/v2/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -2646,7 +2621,7 @@ async fn offline_settlements_submit_persists_settled_record_for_android_build_cl
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2711,7 +2686,7 @@ async fn offline_settlements_submit_persists_settled_record_for_android_build_cl
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements/query")
+                .uri("/v2/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -2782,7 +2757,7 @@ async fn offline_settlements_submit_persists_rejected_record_for_platform_signat
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2856,7 +2831,7 @@ async fn offline_settlements_submit_persists_rejected_record_for_offline_error()
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -2922,7 +2897,7 @@ async fn offline_settlements_submit_persists_rejected_record_for_offline_error()
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements/query")
+                .uri("/v2/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -2992,7 +2967,7 @@ async fn offline_settlements_submit_rejects_duplicate_bundle_with_reject_code() 
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements")
+                .uri("/v2/offline/settlements")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),
@@ -3076,7 +3051,7 @@ async fn offline_settlements_query_includes_rejected_record_with_reason() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements/query")
+                .uri("/v2/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(query_body))
                 .expect("request"),
@@ -3138,7 +3113,7 @@ async fn offline_settlements_query_includes_rejected_record_with_reason() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/settlements/query")
+                .uri("/v2/offline/settlements/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(status_body))
                 .expect("request"),
@@ -3219,7 +3194,7 @@ async fn offline_allowances_renew_returns_new_certificate_id() {
     );
     let body = json::to_vec(&Value::Object(map)).expect("serialize request");
 
-    let uri = format!("/v1/offline/allowances/{old_id_hex}/renew");
+    let uri = format!("/v2/offline/allowances/{old_id_hex}/renew");
     let resp = harness
         .app
         .clone()
@@ -3276,7 +3251,7 @@ async fn offline_certificates_revoke_returns_verdict_id() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/certificates/revoke")
+                .uri("/v2/offline/certificates/revoke")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(body))
                 .expect("request"),

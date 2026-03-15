@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/data_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3c110536e456d6582c2dd2bd72a71fef25e3f43f7f369b3f1c0ce802564f0dbd
-source_last_modified: "2026-01-28T18:33:51.649272+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 683bfb31442f8f4ce7b1bf5038f9dba92fe092545e655f43b51195c21535d3c4
+source_last_modified: "2026-03-12T11:24:23.059339+00:00"
+translation_last_reviewed: 2026-03-12
 translator: machine-google-reviewed
 ---
 
@@ -21,23 +21,19 @@ translator: machine-google-reviewed
 - ملاحظة IVM: يتم تعطيل بعض عمليات التحقق من صحة وقت إلغاء التسلسل عند استهداف الجهاز الظاهري Iroha (IVM)، حيث يقوم المضيف بإجراء التحقق من الصحة قبل استدعاء العقود (راجع مستندات الصناديق في `src/lib.rs`).
 - بوابات FFI: يتم شرح بعض الأنواع بشكل مشروط لـ FFI عبر `iroha_ffi` خلف `ffi_export`/`ffi_import` لتجنب الحمل الزائد عندما لا تكون هناك حاجة إلى FFI.
 
-## السمات الأساسية والمساعدين
-
-- `Identifiable`: للكيانات `Id` و`fn id(&self) -> &Self::Id` المستقر. يجب أن يتم اشتقاقها باستخدام `IdEqOrdHash` لسهولة الخريطة/المجموعة.
+## السمات الأساسية والمساعدين- `Identifiable`: للكيانات `Id` و`fn id(&self) -> &Self::Id` المستقر. يجب أن يتم اشتقاقها باستخدام `IdEqOrdHash` لسهولة الخريطة/المجموعة.
 - `Registrable`/`Registered`: تستخدم العديد من الكيانات (على سبيل المثال، `Domain`، `AssetDefinition`، `Role`) نمط الإنشاء. يربط `Registered` نوع وقت التشغيل بنوع منشئ خفيف الوزن (`With`) مناسب لمعاملات التسجيل.
 - `HasMetadata`: الوصول الموحد إلى خريطة المفتاح/القيمة `Metadata`.
-- `IntoKeyValue`: مساعد تقسيم التخزين لتخزين `Key` (المعرف) و`Value` (البيانات) بشكل منفصل لتقليل التكرار.
+- `IntoKeyValue`: مساعد تقسيم التخزين لتخزين `Key` (ID) و`Value` (البيانات) بشكل منفصل لتقليل التكرار.
 - `Owned<T>`/`Ref<'world, K, V>`: أغلفة خفيفة الوزن تستخدم في المخازن ومرشحات الاستعلام لتجنب النسخ غير الضرورية.
 
-## الأسماء والمعرفات
-
-- `Name`: معرف نصي صالح. لا يسمح بالمسافات البيضاء والأحرف المحجوزة `@`، `#`، `$` (المستخدمة في المعرفات المركبة). قابلة للإنشاء عبر `FromStr` مع التحقق من الصحة. تتم تسوية الأسماء إلى Unicode NFC عند التحليل (يتم التعامل مع التهجئة المكافئة قانونيًا على أنها متطابقة ومخزنة). الاسم الخاص `genesis` محجوز (تم تحديده بشكل غير حساس لحالة الأحرف).
+## الأسماء والمعرفات- `Name`: معرف نصي صالح. لا يسمح بالمسافات البيضاء والأحرف المحجوزة `@`، `#`، `$` (المستخدمة في المعرفات المركبة). قابلة للإنشاء عبر `FromStr` مع التحقق من الصحة. تتم تسوية الأسماء إلى Unicode NFC عند التحليل (يتم التعامل مع التهجئة المكافئة قانونيًا على أنها متطابقة ومخزنة). الاسم الخاص `genesis` محجوز (تم تحديده بشكل غير حساس لحالة الأحرف).
 - `IdBox`: مظروف من النوع الإجمالي لأي معرف معتمد (`DomainId`، `AccountId`، `AssetDefinitionId`، `AssetId`، `NftId`، `PeerId`، `TriggerId`، `RoleId`، `Permission`، `CustomParameterId`). مفيد للتدفقات العامة وترميز Norito كنوع واحد.
 - `ChainId`: معرف سلسلة غير شفاف يستخدم لحماية إعادة التشغيل في المعاملات.نماذج سلسلة من المعرفات (قابلة للتعثر مع `Display`/`FromStr`):
 - `DomainId`: `name` (على سبيل المثال، `wonderland`).
-- `AccountId`: المعرف الأساسي المشفر عبر `AccountAddress`، والذي يكشف I105، وSora المضغوط (`i105`)، وبرامج الترميز السداسية الأساسية (`AccountAddress::to_i105`، `to_i105`، `canonical_hex`، `parse_encoded`). I105 هو تنسيق الحساب المفضل؛ يعد النموذج `i105` هو ثاني أفضل نموذج لـ Sora-only UX. يتم الاحتفاظ بالاسم المستعار للتوجيه المناسب للإنسان `alias` (rejected legacy form) لـ UX ولكن لم يعد يتم التعامل معه كمعرف رسمي. يقوم Torii بتسوية السلاسل الواردة من خلال `AccountAddress::parse_encoded`. تدعم معرفات الحساب كلاً من وحدات التحكم ذات المفتاح الواحد والمتعددة التوقيعات.
-- `AssetDefinitionId`: `asset#domain` (على سبيل المثال، `xor#soramitsu`).
-- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
+- `AccountId`: معرف الحساب الأساسي بدون نطاق المشفر عبر `AccountAddress` كـ I105 فقط. يجب أن تكون مدخلات المحلل اللغوي I105 الأساسية؛ يتم رفض لاحقات المجال (`@domain`)، وأحرف I105 الأساسية، وأحرف الاسم المستعار، وإدخال المحلل اللغوي السداسي الكنسي، وحمولات `norito:` القديمة، ونماذج محلل الحساب `uaid:`/`opaque:`.
+- `AssetDefinitionId`: `aid:<32-lower-hex-no-dash>` الأساسي (UUID-v4 بايت).
+- `AssetId`: `norito:<hex>` الحرفي المشفر الأساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).
 - `NftId`: `nft$domain` (على سبيل المثال، `rose$garden`).
 - `PeerId`: `public_key` (تتم المساواة بين الأقران عن طريق المفتاح العام).
 
@@ -45,24 +41,27 @@ translator: machine-google-reviewed
 
 ### المجال
 - `DomainId { name: Name }` – اسم فريد.
--`Domain { id, logo: Option<IpfsPath>, metadata: Metadata, owned_by: AccountId }`.
-- المنشئ: `NewDomain` مع `with_logo`، `with_metadata`، ثم `Registrable::build(authority)` يعين `owned_by`.
-
-### الحساب
-- `AccountId { domain: DomainId, controller: AccountController }` (وحدة التحكم = مفتاح واحد أو سياسة التوقيع المتعدد).
+-`Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
+- المنشئ: `NewDomain` مع `with_logo`، `with_metadata`، ثم `Registrable::build(authority)` يعين `owned_by`.### الحساب
+- `AccountId` هي هوية الحساب بدون مجال الأساسية التي يتم مفتاحها بواسطة وحدة التحكم والمشفرة كـ I105 الأساسية.
+- يحمل `ScopedAccountId { account: AccountId, domain: DomainId }` سياق المجال الصريح فقط عندما يكون العرض محدد النطاق مطلوبًا.
 - `Account { id, metadata, label?, uaid? }` — `label` هو اسم مستعار ثابت اختياري تستخدمه سجلات إعادة المفتاح، ويحمل `uaid` نطاق Nexus [معرف الحساب العالمي] (./universal_accounts_guide.md) الاختياري.
-- المنشئ: `NewAccount` عبر `Account::new(id)`؛ `HasMetadata` لكل من المنشئ والكيان.
+- المنشئ: `NewAccount` عبر `Account::new(id)`؛ يتطلب التسجيل مجال `ScopedAccountId` صريحًا ولا يستنتج واحدًا من الإعدادات الافتراضية.
 
 ### تعريفات الأصول والأصول
--`AssetDefinitionId { domain: DomainId, name: Name }`.
--`AssetDefinition { id, spec: NumericSpec, mintable: Mintable, logo: Option<IpfsPath>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` معروض نصيًا كـ `aid:<32-hex-no-dash>`.
+-`AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+  - `name` مطلوب نص عرض ذو واجهة بشرية ويجب ألا يحتوي على `#`/`@`.
+  - `alias` اختياري ويجب أن يكون واحدًا مما يلي:
+    -`<name>#<domain>@<dataspace>`
+    -`<name>#<dataspace>`
+    مع الجزء الأيسر المطابق تمامًا لـ `AssetDefinition.name`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
-  - الإنشاءات: `AssetDefinition::new(id, spec)` أو الراحة `numeric(id)`؛ أدوات ضبط `metadata`، `mintable`، `owned_by`.
--`AssetId { account: AccountId, definition: AssetDefinitionId }`.
+  - الإنشاءات: `AssetDefinition::new(id, spec)` أو الراحة `numeric(id)`؛ مطلوب `name` ويجب تعيينه عبر `.with_name(...)`.
+-`AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
 - `Asset { id, value: Numeric }` مع `AssetEntry`/`AssetValue` سهل التخزين.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` مكشوف لواجهات برمجة التطبيقات الموجزة.
-
-### إن إف تي
+- `AssetBalanceScope`: `Global` للأرصدة غير المقيدة و`Dataspace(DataSpaceId)` للأرصدة المقيدة بمساحة البيانات.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` مكشوف لواجهات برمجة التطبيقات الموجزة.### إن إف تي
 -`NftId { domain: DomainId, name: Name }`.
 - `Nft { id, content: Metadata, owned_by: AccountId }` (المحتوى عبارة عن بيانات تعريف مفتاح/قيمة عشوائية).
 - المنشئ: `NewNft` عبر `Nft::new(id, content)`.
@@ -74,13 +73,13 @@ translator: machine-google-reviewed
 
 ### أقرانهم
 -`PeerId { public_key: PublicKey }`.
-- `Peer { address: SocketAddr, id: PeerId }` وشكل السلسلة `public_key@address` القابل للتحليل.### أساسيات التشفير (الميزة `sm`)
+- `Peer { address: SocketAddr, id: PeerId }` وشكل السلسلة `public_key@address` القابل للتحليل.
+
+### أساسيات التشفير (الميزة `sm`)
 - `Sm2PublicKey` و`Sm2Signature`: النقاط المتوافقة مع SEC1 وتوقيعات `r∥s` ذات العرض الثابت لـ SM2. يتحقق المنشئون من صحة عضوية المنحنى والمعرفات المميزة؛ يعكس ترميز Norito التمثيل الأساسي الذي يستخدمه `iroha_crypto`.
 - `Sm3Hash`: `[u8; 32]` النوع الجديد الذي يمثل ملخص GM/T 0004، المستخدم في البيانات والقياس عن بعد واستجابات syscall.
 - `Sm4Key`: غلاف مفاتيح متماثل 128 بت مشترك بين مكالمات النظام المضيفة وتركيبات نموذج البيانات.
-توجد هذه الأنواع جنبًا إلى جنب مع عناصر Ed25519/BLS/ML-DSA الأولية الحالية وتصبح جزءًا من المخطط العام بمجرد إنشاء مساحة العمل باستخدام `--features sm`.
-
-### المشغلات والأحداث
+توجد هذه الأنواع جنبًا إلى جنب مع عناصر Ed25519/BLS/ML-DSA الأولية الحالية وتصبح جزءًا من المخطط العام بمجرد إنشاء مساحة العمل باستخدام `--features sm`.### المشغلات والأحداث
 - `TriggerId { name: Name }` و`Trigger { id, action: action::Action }`.
 -`action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
   - `Repeats`: `Indefinitely` أو `Exactly(u32)`؛ وشملت المرافق طلب واستنفاد.
@@ -98,9 +97,7 @@ translator: machine-google-reviewed
 - التعدادات أحادية المعلمة: `SumeragiParameter`، و`BlockParameter`، و`TransactionParameter`، و`SmartContractParameter` للتحديثات والتكرارات المشابهة للفرق.
 - المعلمات المخصصة: محددة من قبل المنفذ، ويتم حملها كـ `Json`، ويتم تعريفها بواسطة `CustomParameterId` (a `Name`).
 
-## ISI (Iroha تعليمات خاصة)
-
-- السمة الأساسية: `Instruction` مع `dyn_encode`، و`as_any`، ومعرف ثابت لكل نوع `id()` (الاسم الافتراضي هو اسم النوع المحدد). جميع التعليمات هي `Send + Sync + 'static`.
+## ISI (Iroha تعليمات خاصة)- السمة الأساسية: `Instruction` مع `dyn_encode`، و`as_any`، ومعرف ثابت لكل نوع `id()` (الاسم الافتراضي هو اسم النوع المحدد). جميع التعليمات هي `Send + Sync + 'static`.
 - `InstructionBox`: غلاف `Box<dyn Instruction>` المملوك مع النسخ/المعادل/ord الذي يتم تنفيذه عبر معرف النوع + البايتات المشفرة.
 - يتم تنظيم عائلات التعليمات المدمجة تحت:
   - `mint_burn`، و`transfer`، و`register`، ومجموعة `transparent` من المساعدين.
@@ -117,9 +114,7 @@ translator: machine-google-reviewed
   - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` مع مساعدات التجزئة.
   - `ExecutionStep(ConstVec<InstructionBox>)`: دفعة واحدة مرتبة من التعليمات في المعاملة.
 
-## كتل
-
-- يحتوي `SignedBlock` (الإصدار) على ما يلي:
+## كتل- يحتوي `SignedBlock` (الإصدار) على ما يلي:
   - `signatures: BTreeSet<BlockSignature>` (من المدققين)،
   - `payload: BlockPayload { header: BlockHeader, transactions: Vec<SignedTransaction> }`،
   - `result: BlockResult` (حالة التنفيذ الثانوية) التي تحتوي على `time_triggers`، وأشجار Merkle للإدخال/النتيجة، و`transaction_results`، و`fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`.
@@ -128,9 +123,7 @@ translator: machine-google-reviewed
 - تعرض إثباتات تضمين الكتلة (`BlockProofs`) كلاً من إثباتات Merkle للإدخال/النتيجة وخريطة `fastpq_transcripts` حتى يتمكن المثبتون خارج السلسلة من جلب دلتا النقل المرتبطة بتجزئة المعاملة.
 - رسائل `ExecWitness` (التي يتم بثها عبر Torii والمدعومة بالإجماع) تتضمن الآن كلاً من `fastpq_transcripts` و`fastpq_batches: Vec<FastpqTransitionBatch>` الجاهز للإثبات مع `public_inputs` المضمن (dsid، فتحة، جذور، perm_root، tx_set_hash)، حتى يتمكن المثبتون الخارجيون من استيعاب صفوف FASTPQ الأساسية دون إعادة تشفير النصوص.
 
-## الاستعلامات
-
-- نكهتين:
+## الاستعلامات- نكهتين:
   - المفرد: تنفيذ `SingularQuery<Output>` (على سبيل المثال، `FindParameters`، `FindExecutorDataModel`).
   - قابل للتكرار: تنفيذ `Query<Item>` (على سبيل المثال، `FindAccounts`، `FindAssets`، `FindDomains`، وما إلى ذلك).
 - النماذج الممحاة بالنوع:
@@ -153,18 +146,14 @@ translator: machine-google-reviewed
   - تم تعريف المعلمة المخصصة كنوع قابل للتحويل إلى `CustomParameter`،
   - تعليمات مخصصة متسلسلة في `CustomInstruction` للتنفيذ.
 
-### تعليمات مخصصة (ISI المعرفة من قبل المنفذ)
-
-- النوع: `isi::CustomInstruction { payload: Json }` مع معرف السلك الثابت `"iroha.custom"`.
+### تعليمات مخصصة (ISI المعرفة من قبل المنفذ)- النوع: `isi::CustomInstruction { payload: Json }` مع معرف السلك الثابت `"iroha.custom"`.
 - الغرض: مظروف للتعليمات الخاصة بالمنفذ في الشبكات الخاصة/شبكات الاتحاد أو للنماذج الأولية، دون تفرع نموذج البيانات العامة.
 - سلوك المنفذ الافتراضي: لا ينفذ المنفذ المضمن في `iroha_core` `CustomInstruction` وسيصاب بالذعر إذا تمت مواجهته. يجب أن يقوم المنفذ المخصص بخفض `InstructionBox` إلى `CustomInstruction` وتفسير الحمولة النافعة على كافة أدوات التحقق من الصحة بشكل حتمي.
-- Norito: يتم التشفير/فك التشفير عبر `norito::codec::{Encode, Decode}` مع تضمين المخطط؛ يتم إجراء تسلسل للحمولة النافعة `Json` بشكل حتمي. تكون الرحلات ذهابًا وإيابًا مستقرة طالما أن سجل التعليمات يتضمن `CustomInstruction` (وهو جزء من السجل الافتراضي).
+- Norito: يتم التشفير/فك التشفير عبر `norito::codec::{Encode, Decode}` مع تضمين المخطط؛ يتم إجراء تسلسل للحمولة `Json` بشكل حتمي. تكون الرحلات ذهابًا وإيابًا مستقرة طالما أن سجل التعليمات يتضمن `CustomInstruction` (وهو جزء من السجل الافتراضي).
 - IVM: يتم تجميع Kotodama إلى الكود الثانوي IVM (`.to`) وهو المسار الموصى به لمنطق التطبيق. استخدم `CustomInstruction` فقط للامتدادات على مستوى المنفذ والتي لا يمكن التعبير عنها بعد في Kotodama. ضمان الحتمية والثنائيات المنفذة المتطابقة عبر الأقران.
 - ليس للشبكات العامة: لا تستخدم للسلاسل العامة حيث يخاطر المنفذون غير المتجانسون بشوك الإجماع. تفضل اقتراح ISI المضمن الجديد عند الحاجة إلى ميزات النظام الأساسي.
 
-## البيانات الوصفية
-
-- `Metadata(BTreeMap<Name, Json>)`: مخزن المفتاح/القيمة المرفق بكيانات متعددة (`Domain`، `Account`، `AssetDefinition`، `Nft`، المشغلات، والمعاملات).
+## البيانات الوصفية- `Metadata(BTreeMap<Name, Json>)`: مخزن المفتاح/القيمة المرفق بكيانات متعددة (`Domain`، `Account`، `AssetDefinition`، `Nft`، المشغلات، والمعاملات).
 - واجهة برمجة التطبيقات: `contains`، و`iter`، و`get`، و`insert`، و(مع `transparent_api`) `remove`.
 
 ## الميزات والحتمية
@@ -173,9 +162,9 @@ translator: machine-google-reviewed
 - الحتمية: تستخدم جميع عمليات التسلسل ترميز Norito لتكون محمولة عبر الأجهزة. الرمز الثانوي IVM هو عبارة عن فقاعة بايت غير شفافة؛ يجب ألا يقدم التنفيذ تخفيضات غير حتمية. يقوم المضيف بالتحقق من صحة المعاملات ويوفر المدخلات إلى IVM بشكل حتمي.
 
 ### واجهة برمجة التطبيقات الشفافة (`transparent_api`)- الغرض: الكشف عن الوصول الكامل والقابل للتغيير إلى بنيات/تعدادات `#[model]` للمكونات الداخلية مثل Torii والمنفذين واختبارات التكامل. بدونها، تكون هذه العناصر غير شفافة عن قصد، لذا لا ترى حزم SDK الخارجية سوى المنشئات الآمنة والحمولات المشفرة.
-- الميكانيكا: يقوم الماكرو `iroha_data_model_derive::model` بإعادة كتابة كل حقل عام باستخدام `#[cfg(feature = "transparent_api")] pub` ويحتفظ بنسخة خاصة للإنشاء الافتراضي. يؤدي تمكين الميزة إلى قلب تلك cfgs، لذا فإن تدمير `Account`، و`Domain`، و`Asset`، وما إلى ذلك، يصبح قانونيًا خارج الوحدات النمطية المحددة الخاصة بها.
+- الميكانيكا: يعيد الماكرو `iroha_data_model_derive::model` كتابة كل حقل عام باستخدام `#[cfg(feature = "transparent_api")] pub` ويحتفظ بنسخة خاصة للإنشاء الافتراضي. يؤدي تمكين الميزة إلى قلب تلك cfgs، لذا فإن تدمير `Account`، و`Domain`، و`Asset`، وما إلى ذلك، يصبح قانونيًا خارج الوحدات النمطية المحددة الخاصة بها.
 - الكشف عن السطح: يقوم الصندوق بتصدير ثابت `TRANSPARENT_API: bool` (الذي تم إنشاؤه إما إلى `transparent_api.rs` أو `non_transparent_api.rs`). يمكن للكود المصب التحقق من هذه العلامة والفرع عندما يحتاج إلى الرجوع إلى المساعدين غير الشفافين.
-- التمكين: أضف `features = ["transparent_api"]` إلى التبعية في `Cargo.toml`. تقوم صناديق مساحة العمل التي تحتاج إلى إسقاط JSON (على سبيل المثال، `iroha_torii`) بإعادة توجيه العلامة تلقائيًا، ولكن يجب على مستهلكي الطرف الثالث إيقاف تشغيلها ما لم يتحكموا في النشر ويقبلوا سطح واجهة برمجة التطبيقات الأوسع.
+- التمكين: أضف `features = ["transparent_api"]` إلى التبعية في `Cargo.toml`. تقوم صناديق مساحة العمل التي تحتاج إلى إسقاط JSON (على سبيل المثال، `iroha_torii`) بإعادة توجيه العلامة تلقائيًا، ولكن يجب على المستهلكين الخارجيين إيقاف تشغيلها ما لم يتحكموا في النشر ويقبلوا سطح واجهة برمجة التطبيقات الأوسع.
 
 ## أمثلة سريعة
 
@@ -192,12 +181,14 @@ let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default(
 
 // Account
 let kp = KeyPair::random();
-let account_id = AccountId::new(domain_id.clone(), kp.public_key().clone());
-let new_account = Account::new(account_id.clone()).with_metadata(Metadata::default());
+let account_id = AccountId::new(kp.public_key().clone());
+let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+    .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "xor#wonderland".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
+    .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
 let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
 let asset = Asset::new(asset_id.clone(), Numeric::from(100));
@@ -228,7 +219,7 @@ let q: QueryBox<QueryOutputBatchBox> =
 // Encode and send via Torii; decode on server using the query registry
 ```
 
-استخدم رمز العقد الذكي IVM:
+استخدم الرمز الثانوي للعقد الذكي IVM:
 
 ```rust
 use iroha_data_model::prelude::*;
@@ -238,6 +229,37 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .with_bytecode(bytecode)
     .sign(kp.private_key());
 ```
+
+`aid` / المرجع السريع للاسم المستعار (CLI + Torii):
+
+```bash
+# Register an asset definition with canonical aid + explicit name + alias
+iroha ledger asset definition register \
+  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --name pkr \
+  --alias pkr#ubl@sbp
+
+# Short alias form (no owner segment): <name>#<dataspace>
+iroha ledger asset definition register \
+  --id aid:550e8400e29b41d4a7164466554400dd \
+  --name pkr \
+  --alias pkr#sbp
+
+# Mint using alias + account components (no manual norito hex copy/paste)
+iroha ledger asset mint \
+  --definition-alias pkr#ubl@sbp \
+  --account sorauﾛ1P... \
+  --quantity 500
+
+# Resolve alias to canonical aid via Torii
+curl -sS http://127.0.0.1:8080/v2/assets/aliases/resolve \
+  -H 'content-type: application/json' \
+  -d '{"alias":"pkr#ubl@sbp"}'
+```مذكرة الهجرة:
+- لا يتم قبول معرفات تعريف الأصول `name#domain` القديمة في الإصدار 1.
+- تظل معرفات الأصول الخاصة بالنعناع/النسخ/النقل هي `norito:<hex>` الأساسية؛ بناء لهم مع:
+  -`iroha tools encode asset-id --definition aid:... --account <i105>`
+  - أو `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 
 ## الإصدار
 

@@ -74,13 +74,13 @@ translator: machine-google-reviewed
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. የግኝቱን የመጨረሻ ነጥብ ይጠይቁ እና ማስታወቂያው በቀኖናዊ ተለዋጭ ስሞች መከሰቱን ያረጋግጡ።
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    `profile_aliases` `"sorafs.sf1@1.0.0"`ን እንደ መጀመሪያው ግቤት ማካተቱን ያረጋግጡ።

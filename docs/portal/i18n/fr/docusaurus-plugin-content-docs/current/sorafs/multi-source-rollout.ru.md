@@ -31,7 +31,7 @@ Avant, pour l'exploitation du secteur, dans les rames SF-6, vous devez effectuer
 > **См. также:** [Runbook по эксплуатации оркестратора](./orchestrator-ops.md) подробно описывает процедуры на прогон (снятие scoreboard, переключатели поэтапного déploiement, restauration). Utilisez les solutions les plus adaptées à votre projet.
 
 ## 1. Validation préalable1. **Подтвердить входные данные gouvernance.**
-   - Les candidats fournisseurs doivent publier les conversions `ProviderAdvertV1` avec la charge utile, les diapasons et les postes de travail. Vérifiez que vous disposez du `/v1/sorafs/providers` et assurez-vous que les produits sont correctement installés.
+   - Les candidats fournisseurs doivent publier les conversions `ProviderAdvertV1` avec la charge utile, les diapasons et les postes de travail. Vérifiez que vous disposez du `/v2/sorafs/providers` et assurez-vous que les produits sont correctement installés.
    - Les images télémétriques avec les mesures latentes et les problèmes doivent avoir lieu 15 minutes avant le programme Canary.
 2. **Подготовить конфигурацию.**
    - Connectez l'opérateur de configuration JSON au site `iroha_config` :

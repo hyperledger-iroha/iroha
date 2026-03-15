@@ -55,7 +55,7 @@ La plomberie dans l'exécution passe en tant qu'interface PoR via `sorafs_node::
 Notes de mise en œuvre :
 
 - Utilisez la pile Axum de Torii avec les charges utiles `norito::json`.
-- Ajout des schémas Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).- `/v1/sorafs/por/ingestion/{manifest_digest_hex}` a récemment exposé la profondeur du backlog plus à l'époque/date limite plus ancienne et les horodatages plus récents de succès/échec par fournisseur, via `sorafs_node::NodeHandle::por_ingestion_status`, et Torii enregistrent les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour tableaux de bord. [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src/metrics.rs:5390]
+- Ajout des schémas Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).- `/v2/sorafs/por/ingestion/{manifest_digest_hex}` a récemment exposé la profondeur du backlog plus à l'époque/date limite plus ancienne et les horodatages plus récents de succès/échec par fournisseur, via `sorafs_node::NodeHandle::por_ingestion_status`, et Torii enregistrent les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour tableaux de bord. [crates/sorafs_node/src/lib.rs:510] [crates/iroha_torii/src/sorafs/api.rs:1883] [crates/iroha_torii/src/routing.rs:7244] [crates/iroha_telemetry/src/metrics.rs:5390]
 
 ### D. Planificateur et gestion des quotas
 

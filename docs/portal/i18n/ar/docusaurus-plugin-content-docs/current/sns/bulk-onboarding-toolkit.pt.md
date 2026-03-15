@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v2/sns/registrations
   done
 ```
 
@@ -128,9 +128,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- يا مساعد ابعث um `POST /v1/sns/registrations` للطلب والإجهاض بدون أول
+```- يا مساعد ابعث um `POST /v2/sns/registrations` للطلب والإجهاض بدون أول
   خطأ HTTP. كما تم الرد على استفسارك في السجل كتسجيل NDJSON.
-- `--poll-status` إعادة استشارة `/v1/sns/registrations/{selector}` بعد كل إرسال
+- `--poll-status` إعادة استشارة `/v2/sns/registrations/{selector}` بعد كل إرسال
   (ate `--poll-attempts`, default 5) لتأكيد رؤية السجل.
   Forneca `--suffix-map` (JSON de `suffix_id` للقيم "اللاحقة") من أجل ذلك
   تشتق الأدوات حرفيًا `{label}.{suffix}` للاقتراع.

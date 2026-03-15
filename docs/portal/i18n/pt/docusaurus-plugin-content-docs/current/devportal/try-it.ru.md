@@ -132,7 +132,7 @@ Norito-RPC é usado para proxy e encanamento OAuth, rotas JSON e; Este é o `Con
 ### Ativando a carga útil Norito do console Try It
 
 1. Fixação de fixação, exemplo `fixtures/norito_rpc/transfer_asset.norito`. Este arquivo contém envelopes Norito; **não** codifique-o em base64.
-2. No Swagger ou RapiDoc, selecione o endpoint NRPC (por exemplo, `POST /v1/pipeline/submit`) e selecione o seletor **Content-Type** em `application/x-norito`.
+2. No Swagger ou RapiDoc, selecione o endpoint NRPC (por exemplo, `POST /v2/pipeline/submit`) e selecione o seletor **Content-Type** em `application/x-norito`.
 3. Selecione o editor de tela para **binário** (regimente "Arquivo" no Swagger ou "Binário/Arquivo" no RapiDoc) e selecione `.norito` falo. Verifique se os bytes são proxy sem configuração.
 4. Abra a tampa. Ou Torii usa `X-Iroha-Error-Code: schema_mismatch`, убедитесь, что вызываете endpoint, принимающий бинарные payloads, и Portanto, esse hash de esquema em `fixtures/norito_rpc/schema_hashes.json` é fornecido com a compilação Torii.
 
@@ -145,10 +145,10 @@ Esses fixtures podem ser instalados no portal `curl`, que é usado para testar p
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
 ```
 
-Ative o fixture na entrada principal de `transaction_fixtures.manifest.json` ou conecte seu comando de carga útil `cargo xtask norito-rpc-fixtures`. Se o Torii funcionar na versão canary, você pode usar o `curl` no proxy try-it (`https://docs.sora.example/proxy/v1/pipeline/submit`), isso é provado por você Esta é a infraestrutura, aqui e você pode ver o portal.
+Ative o fixture na entrada principal de `transaction_fixtures.manifest.json` ou conecte seu comando de carga útil `cargo xtask norito-rpc-fixtures`. Se o Torii funcionar na versão canary, você pode usar o `curl` no proxy try-it (`https://docs.sora.example/proxy/v2/pipeline/submit`), isso é provado por você Esta é a infraestrutura, aqui e você pode ver o portal.
 
 ## Observabilidade e operaçõesКаждый запрос логируется один раз с método, caminho, origem, status upstream e histórico de autenticação (`override`, `default` ou `client`). Tokens não são suportados - cabeçalhos de portador e значения `X-TryIt-Auth` редактируются перед логированием, поэтому можно Verifique o stdout no coletor central sem arriscar os segredos.
 
@@ -158,7 +158,7 @@ Verifique a sonda de teste antes da implantação ou pela descrição:
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
 ```
 
 Oкружения dos botões:

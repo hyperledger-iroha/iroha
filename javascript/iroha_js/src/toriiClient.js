@@ -2947,6 +2947,12 @@ export class ToriiClient {
           this._dataModelCompatibility = { status: "incompatible", actual: null };
           throw new ToriiDataModelCompatibilityError(expected, null, error);
         }
+        if (error instanceof ToriiHttpError && error.status === 404) {
+          // Some deployments do not expose the capability advert yet. In that
+          // case, proceed with the client-side expected model version.
+          this._dataModelCompatibility = { status: "compatible", actual: expected };
+          return;
+        }
         throw error;
       }
       const actual = capabilities.dataModelVersion;
@@ -3558,7 +3564,7 @@ export class ToriiClient {
    * @returns {Promise<ToriiExplorerAccountQrSnapshot>}
    */
   async getExplorerAccountQr(accountId, options = {}) {
-    const { signal } = normalizeExplorerAccountQrOptions(options);
+    const { signal } = normalizeExplorerRequestOptions(options);
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
     const response = await this._request(
       "GET",
@@ -12539,7 +12545,7 @@ function normalizeExplorerMetricsResponse(payload) {
 
 const EXPLORER_ACCOUNT_QR_OPTION_KEYS = new Set(["signal"]);
 
-function normalizeExplorerAccountQrOptions(options) {
+function normalizeExplorerRequestOptions(options) {
   if (options === undefined) {
     return { signal: undefined };
   }

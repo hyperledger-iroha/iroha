@@ -3642,8 +3642,10 @@ mod tests {
     }
 
     fn sample_asset(domain: &str) -> AssetId {
-        let definition =
-            AssetDefinitionId::from_str(&format!("usd#{domain}")).expect("definition id");
+        let definition = AssetDefinitionId::new(
+            domain.parse().expect("domain id"),
+            "usd".parse().expect("asset name"),
+        );
         AssetId::new(definition, sample_account(0xD4, domain))
     }
 
@@ -4209,7 +4211,8 @@ mod receipt_challenge_tests {
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {
-        let definition = AssetDefinitionId::from_str("xor#wonderland").expect("definition id");
+        let definition =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
         AssetId::new(definition, owner.clone())
     }
 

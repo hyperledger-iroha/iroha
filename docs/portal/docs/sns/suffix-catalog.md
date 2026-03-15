@@ -76,7 +76,7 @@ tooling can load the same parameters without scraping status docs.
 
 1. Load the JSON snapshot and hash/sign it before distributing to operators.
 2. Registrar tooling should surface the `suffix_id`, term limits, and pricing
-   from the catalog whenever a request hits `/v1/sns/*`.
+   from the catalog whenever a request hits `/v2/sns/*`.
 3. DNS/Gateway helpers read the reserved label metadata when generating GAR
    templates so DNS responses stay aligned with governance controls.
 4. KPI annex jobs tag dashboard exports with suffix metadata so alerts match the

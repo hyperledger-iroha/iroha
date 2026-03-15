@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level integration test for /v1/contracts/deploy and /v1/contracts/code-bytes/{hash}
+//! Router-level integration test for /v2/contracts/deploy and /v2/contracts/code-bytes/{hash}
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
 
@@ -43,7 +43,7 @@ async fn contracts_deploy_and_fetch_code_bytes() {
     // Wire routes
     let app = Router::new()
         .route(
-            "/v1/contracts/deploy",
+            "/v2/contracts/deploy",
             post({
                 let chain_id = Arc::new(chain_id.clone());
                 let queue = queue.clone();
@@ -62,7 +62,7 @@ async fn contracts_deploy_and_fetch_code_bytes() {
             }),
         )
         .route(
-            "/v1/contracts/code-bytes/{code_hash}",
+            "/v2/contracts/code-bytes/{code_hash}",
             get({
                 let state = state.clone();
                 move |axum::extract::Path(ch): axum::extract::Path<String>| async move {
@@ -80,7 +80,7 @@ async fn contracts_deploy_and_fetch_code_bytes() {
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v1/contracts/deploy")
+        .uri("/v2/contracts/deploy")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -98,7 +98,7 @@ async fn contracts_deploy_and_fetch_code_bytes() {
     assert!(applied > 0, "no transactions applied from queue");
 
     // Fetch back code bytes via GET (now stored on-chain via RegisterSmartContractBytes)
-    let uri = format!("/v1/contracts/code-bytes/{ch}");
+    let uri = format!("/v2/contracts/code-bytes/{ch}");
     let req2 = http::Request::builder()
         .method("GET")
         .uri(&uri)

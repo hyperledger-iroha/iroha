@@ -31,10 +31,12 @@ macro_rules! impl_decode_from_slice_via_archived {
 // Core ID and value types
 impl_decode_from_slice_via_archived! {
     crate::ipfs::IpfsPath,
+    crate::sorafs_uri::SorafsUri,
     crate::peer::PeerId,
     crate::domain::DomainId,
     crate::asset::id::AssetId,
     crate::asset::id::AssetDefinitionId,
+    crate::asset::alias::AssetDefinitionAlias,
     crate::nft::NftId,
     crate::trigger::TriggerId,
     crate::role::RoleId,

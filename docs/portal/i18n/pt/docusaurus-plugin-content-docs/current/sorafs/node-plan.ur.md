@@ -60,7 +60,7 @@ Notas de implementação:
 - Torii کے Pilha Axum کو Cargas úteis `norito::json` کے ساتھ استعمال کریں۔
 - respostas کے لیے Esquemas Norito شامل کریں (`PinResultV1`, `FetchErrorV1`, estruturas de telemetria)۔
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب profundidade do backlog کے ساتھ época/prazo mais antigo اور ہر provedor کے carimbos de data/hora recentes de sucesso/falha دکھاتا ہے, جو `sorafs_node::NodeHandle::por_ingestion_status` سے alimentado ہے، Os painéis Torii possuem registro de medidores `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` اب profundidade do backlog کے ساتھ época/prazo mais antigo اور ہر provedor کے carimbos de data/hora recentes de sucesso/falha دکھاتا ہے, جو `sorafs_node::NodeHandle::por_ingestion_status` سے alimentado ہے، Os painéis Torii possuem registro de medidores `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. Agendador e aplicação de cotas
 

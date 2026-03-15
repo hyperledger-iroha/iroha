@@ -164,7 +164,7 @@ Isso confirma que o instante do TEU, os metadados do alias e os sinalizadores do
 
 ## 6. Ejercita os valores predeterminados do cliente- **Rust/CLI.** `iroha_cli` e o cliente da caixa de Rust omitem o campo `lane_id` quando não há passagem `--lane-id` / `LaneSelector`. O roteador de cola por tanto recorre a `default_lane`. Use as bandeiras explícitas `--lane-id`/`--dataspace-id` somente quando aponte para uma pista não predeterminada.
 - **JS/Swift/Android.** As últimas versões do SDK tratam `laneId`/`lane_id` como opcionais e fazem fallback ao valor anunciado por `/status`. Mantenha a política de enrutamiento sincronizada entre a preparação e a produção para que os aplicativos móveis não precisem de reconfigurações de emergência.
-- **Testes de pipeline/SSE.** Os filtros de eventos de transações aceitam os predicados `tx_lane_id == <u32>` (versão `docs/source/pipeline.md`). Inscreva-se em `/v1/pipeline/events/transactions` com este filtro para demonstrar que as escrituras enviadas sem uma via explícita são negadas abaixo do ID da via de fallback.
+- **Testes de pipeline/SSE.** Os filtros de eventos de transações aceitam os predicados `tx_lane_id == <u32>` (versão `docs/source/pipeline.md`). Inscreva-se em `/v2/pipeline/events/transactions` com este filtro para demonstrar que as escrituras enviadas sem uma via explícita são negadas abaixo do ID da via de fallback.
 
 ## 7. Observabilidade e ganchos de governança
 

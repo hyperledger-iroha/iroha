@@ -96,7 +96,10 @@ fn zk_register_shield_permissions_and_events() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, domain));
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let ad: AssetDefinitionId = "rose#domain".parse().unwrap();
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     // Seed asset def and balance
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
     // Mint to alice using direct WSV primitive for setup
@@ -186,7 +189,10 @@ fn unshield_requires_verify_even_with_permission() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, domain));
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let ad: AssetDefinitionId = "gold#domain".parse().unwrap();
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "gold".parse().unwrap(),
+    );
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
     // Grant permissions including Unshield
     wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
@@ -257,7 +263,10 @@ fn zk_transfer_requires_matching_vk_reference() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, domain));
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let ad: AssetDefinitionId = "lily#domain".parse().unwrap();
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "domain".parse().unwrap(),
+        "lily".parse().unwrap(),
+    );
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
     let vk_transfer = VerifyingKeyId::new("halo2/ipa", "vk_transfer_ref");
     let vk_other = VerifyingKeyId::new("halo2/ipa", "vk_other_ref");

@@ -1979,7 +1979,10 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse encoded account literal");
-    let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let domain: DomainId = "wonderland".parse().expect("domain");
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
 

@@ -96,7 +96,7 @@ precisa de uma negociação explícita para o cliente (`Accept-Chunker` + `Accep
 Implantação da televisão:
 
 - **Telemetria de busca de pedaços** — CLI Iroha `sorafs toolkit pack` fornece resumos de pedaços, metadados CAR e racines PoR para ingestão nos painéis.
-- **Anúncios de provedores** — as cargas úteis de anúncios incluem metadados de capacidade e alias; valide a cobertura via `/v1/sorafs/providers` (ex., presença da capacidade `range`).
+- **Anúncios de provedores** — as cargas úteis de anúncios incluem metadados de capacidade e alias; valide a cobertura via `/v2/sorafs/providers` (ex., presença da capacidade `range`).
 - **Gateway de vigilância** — os operadores devem relatar os acoplamentos `Content-Chunker`/`Content-Digest` para detectar downgrades inatender; O uso da ponte é censurado e tende a zero antes da depreciação.
 
 Política de depreciação: uma vez que um perfil de sucesso foi ratificado, planeje uma janela de dupla publicação

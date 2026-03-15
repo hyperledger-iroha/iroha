@@ -62,11 +62,11 @@ use rand_core_06::OsRng;
 #[path = "common/world_fixture.rs"]
 mod test_world;
 
-const ROSTER_VK_NAME: &str = "kaigi_roster_v1";
-const USAGE_VK_NAME: &str = "kaigi_usage_v1";
-const ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_v1","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
+const ROSTER_VK_NAME: &str = "kaigi_roster_current";
+const USAGE_VK_NAME: &str = "kaigi_usage_current";
+const ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_current","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
 const USAGE_PUBLIC_INPUTS_DESC: &[u8] =
-    br#"{"schema":"kaigi_usage_v1","inputs":["usage_commitment"]}"#;
+    br#"{"schema":"kaigi_usage_current","inputs":["usage_commitment"]}"#;
 
 struct RosterArtifacts {
     vk_id: VerifyingKeyId,

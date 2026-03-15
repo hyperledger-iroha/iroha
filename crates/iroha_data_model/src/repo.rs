@@ -262,11 +262,19 @@ mod tests {
                 .expect("public key"),
         );
         let cash_leg = RepoCashLeg {
-            asset_definition_id: "usd#wonderland".parse().unwrap(),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "usd".parse().unwrap(),
+            ),
             quantity: Numeric::from(1_000u32),
         };
-        let collateral_leg =
-            RepoCollateralLeg::new("bond#wonderland".parse().unwrap(), Numeric::from(1_100u32));
+        let collateral_leg = RepoCollateralLeg::new(
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "bond".parse().unwrap(),
+            ),
+            Numeric::from(1_100u32),
+        );
         RepoAgreement::new(
             "daily".parse().unwrap(),
             initiator,

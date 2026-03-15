@@ -43,13 +43,13 @@ fn ipa_poly_open_roundtrip_ok_and_fail() {
         domain_tag: None,
     };
     let bytes = norito::to_bytes(&env).expect("encode");
-    let pb_ok = ProofBox::new("halo2/ipa-v1/poly-open".into(), bytes.clone());
-    assert!(verify_backend("halo2/ipa-v1/poly-open", &pb_ok, None));
+    let pb_ok = ProofBox::new("halo2/ipa/poly-open".into(), bytes.clone());
+    assert!(verify_backend("halo2/ipa/poly-open", &pb_ok, None));
 
     // Corrupt t in the envelope and expect verification failure
     let mut env_bad = env.clone();
     env_bad.public.t[0] ^= 1;
     let bad_bytes = norito::to_bytes(&env_bad).expect("encode");
-    let pb_bad = ProofBox::new("halo2/ipa-v1/poly-open".into(), bad_bytes);
-    assert!(!verify_backend("halo2/ipa-v1/poly-open", &pb_bad, None));
+    let pb_bad = ProofBox::new("halo2/ipa/poly-open".into(), bad_bytes);
+    assert!(!verify_backend("halo2/ipa/poly-open", &pb_bad, None));
 }

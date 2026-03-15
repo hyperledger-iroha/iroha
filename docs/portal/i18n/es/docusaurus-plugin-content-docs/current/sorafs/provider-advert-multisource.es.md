@@ -62,7 +62,7 @@ La cobertura de regresión vive en
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Herramientas y accesorios- Los payloads de anuncios de proveedor deben incluir metadatos `range_capability`,
-  `stream_budget` y `transport_hints`. Valida vía respuestas de `/v1/sorafs/providers` y
+  `stream_budget` y `transport_hints`. Valida vía respuestas de `/v2/sorafs/providers` y
   accesorios de admisión; los resúmenes JSON deben incluir la capacidad parseada,
   el stream Budget y los arrays de tips para ingestión de telemetría.
 - `cargo xtask sorafs-admission-fixtures` exponen presupuestos de flujo y sugerencias de transporte dentro de
@@ -73,7 +73,7 @@ La cobertura de regresión vive en
   - `multi_fetch_plan.json` para que las suites de SDK reproduzcan un plan de recuperación
     determinista de pares múltiples.
 
-## Integración con orquestador y Torii- Torii `/v1/sorafs/providers` devuelve metadatos de capacidad de rango parseada junto con
+## Integración con orquestador y Torii- Torii `/v2/sorafs/providers` devuelve metadatos de capacidad de rango parseada junto con
   `stream_budget` y `transport_hints`. Se disparan advertencias de downgrade cuando los
   los proveedores omiten la nueva metadatos, y los endpoints de rango del gateway aplican las
   Mismas restricciones para clientes directos.

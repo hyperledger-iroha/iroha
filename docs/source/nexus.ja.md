@@ -60,7 +60,7 @@ Dataspace-aware gossip
 
 Capability manifests と UAID
 - Universal accounts: 各参加者に決定論的 UAID（`crates/iroha_data_model/src/nexus/manifest.rs` の `UniversalAccountId`）を付与。Capability manifests（`AssetPermissionManifest`）は UAID を dataspace、activation/expiry epoch、allow/deny `ManifestEntry` ルール（`dataspace`, `program_id`, `method`, `asset`, optional AMX roles）に結び付ける。deny が優先され、評価は `ManifestVerdict::Denied`（監査理由付き）または `Allowed`（該当 allowance metadata 付き）を返す。
-- UAID ポートフォリオスナップショットは `GET /v1/accounts/{uaid}/portfolio`（`docs/source/torii/portfolio_api.md`）で公開。`iroha_core::nexus::portfolio` の決定論的アグリゲータがバック。
+- UAID ポートフォリオスナップショットは `GET /v2/accounts/{uaid}/portfolio`（`docs/source/torii/portfolio_api.md`）で公開。`iroha_core::nexus::portfolio` の決定論的アグリゲータがバック。
 - Allowances: allow エントリは `AllowanceWindow` バケット（`PerSlot`, `PerMinute`, `PerDay`）と optional `max_amount` を持つ。Hosts と SDK は同じ Norito payload を消費し、実装差を排除する。
 - Audit telemetry: Space Directory は `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}`（`crates/iroha_data_model/src/events/data/space_directory.rs`）を発行。`SpaceDirectoryEventFilter` により Torii/data-event から UAID 更新/失効/deny-wins を監視可能。
 
@@ -122,16 +122,16 @@ Space Directory 操作は 2 つの形で提供される。1) バイナリ内 CLI
 
 オペレーター/SDK は HTTPS 経由でも同様の操作が可能。Torii は同じ権限チェックを行い、指定 authority のためにトランザクションへ署名する（秘密鍵は Torii セキュアハンドラのメモリ内のみで扱う）。
 
-- `GET /v1/space-directory/uaids/{uaid}` — UAID の現在の dataspace bindings を解決（正規化アドレス、dataspace ids、program bindings）。Sora Name Service 形式には `canonical I105 output` を付与（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
-- `GET /v1/accounts/{uaid}/portfolio` — Norito バックの aggregator。`ToriiClient.getUaidPortfolio` をミラーし、wallet が dataspace 横断保有を表示できる。単一アセットに絞る場合は `asset_id=<asset#definition::owner>` を指定する。
-- `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — 正規マニフェスト JSON、ライフサイクル metadata、hash を取得。
-- `POST /v1/space-directory/manifests` — JSON から新規/置換マニフェストを送信（`authority`, `private_key`, `manifest`, optional `reason`）。Torii は `202 Accepted` を返す。
-- `POST /v1/space-directory/manifests/revoke` — UAID、dataspace id、effective epoch、optional reason を指定して緊急 revoke をキュー。
+- `GET /v2/space-directory/uaids/{uaid}` — UAID の現在の dataspace bindings を解決（正規化アドレス、dataspace ids、program bindings）。Sora Name Service 形式には `canonical I105 output` を付与（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
+- `GET /v2/accounts/{uaid}/portfolio` — Norito バックの aggregator。`ToriiClient.getUaidPortfolio` をミラーし、wallet が dataspace 横断保有を表示できる。単一アセットに絞る場合は `asset_id=<asset#definition::owner>` を指定する。
+- `GET /v2/space-directory/uaids/{uaid}/manifests?dataspace={id}` — 正規マニフェスト JSON、ライフサイクル metadata、hash を取得。
+- `POST /v2/space-directory/manifests` — JSON から新規/置換マニフェストを送信（`authority`, `private_key`, `manifest`, optional `reason`）。Torii は `202 Accepted` を返す。
+- `POST /v2/space-directory/manifests/revoke` — UAID、dataspace id、effective epoch、optional reason を指定して緊急 revoke をキュー。
 
 JS SDK（`javascript/iroha_js/src/toriiClient.js`）は `ToriiClient.getUaidPortfolio` / `.getUaidBindings` / `.getUaidManifests` でこれらの read 面をすでにラップしている。Swift/Python も同じ REST payload を再利用予定。`docs/source/torii/portfolio_api.md` に request/response schema、`docs/space-directory.md` に運用 playbook を記載。
 
 Recent SDK/AMX updates
-- **NX-11 (cross-lane relay verification):** SDK helpers は `/v1/sumeragi/status` の lane relay envelope を検証するようになった。Rust クライアントは relay proof の生成/検証と重複 `(lane_id, dataspace_id, height)` 拒否のための `iroha::nexus` helper を提供。Python は `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`、JS SDK は `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample` を提供し、下流転送前に一貫したハッシュで検証できる。
+- **NX-11 (cross-lane relay verification):** SDK helpers は `/v2/sumeragi/status` の lane relay envelope を検証するようになった。Rust クライアントは relay proof の生成/検証と重複 `(lane_id, dataspace_id, height)` 拒否のための `iroha::nexus` helper を提供。Python は `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`、JS SDK は `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample` を提供し、下流転送前に一貫したハッシュで検証できる。
   【crates/iroha/src/nexus.rs:1】【python/iroha_python/iroha_python_rs/src/lib.rs:666】【crates/iroha_js_host/src/lib.rs:640】【javascript/iroha_js/src/nexus.js:1】
 - **NX-17 (AMX budget guardrails):** `ivm::analysis::enforce_amx_budget` が静的解析レポートから dataspace/グループの実行コストを見積もり、30 ms / 140 ms の予算を適用。DS/グループ予算の違反を明確に報告し、unit tests で担保。Nexus scheduler と SDK tooling の AMX スロット予算を決定論的にする。
   【crates/ivm/src/analysis.rs:142】【crates/ivm/src/analysis.rs:241】
@@ -323,7 +323,7 @@ Configuration and Determinism
 
 ### Runtime Lane Lifecycle Control
 
-- **Admin endpoint:** `POST /v1/nexus/lifecycle`（Torii）が `additions`（`LaneConfig` 完全オブジェクト）と `retire`（lane ids）を受け取り、再起動なしで lane を追加/削除。`nexus.enabled=true` で gated し、同じ Nexus configuration/state view を使用。
+- **Admin endpoint:** `POST /v2/nexus/lifecycle`（Torii）が `additions`（`LaneConfig` 完全オブジェクト）と `retire`（lane ids）を受け取り、再起動なしで lane を追加/削除。`nexus.enabled=true` で gated し、同じ Nexus configuration/state view を使用。
 - **Behaviour:** 成功時に WSV/Kura metadata を更新し、queue routing/limits/manifests を再構築し、`{ ok: true, lane_count: <u32> }` を返す。検証失敗（未知の retire ids、重複 alias/id、Nexus 無効）時は `400 Bad Request` と `lane_lifecycle_error` を返す。
 - **Safety:** shared state view lock を使い読み手との競合を回避。外部で lifecycle 更新のシリアライズは必要。
 - **伝播:** キューのルーティング/リミットと lane マニフェストは更新済みカタログから再構築され、consensus/DA/RBC ワーカーは状態スナップショット経由で最新の lane config を読み取るため、スケジューリングとバリデータ選定が再起動なしで切り替わる（進行中の作業は旧設定で完了）。

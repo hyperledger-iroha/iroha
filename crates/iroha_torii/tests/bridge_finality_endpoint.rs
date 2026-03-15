@@ -137,7 +137,7 @@ async fn bridge_finality_endpoint_roundtrips_into_verifier() {
     let app = torii.api_router_for_tests();
 
     let req = Request::builder()
-        .uri("/v1/bridge/finality/1")
+        .uri("/v2/bridge/finality/1")
         .body(Body::empty())
         .expect("request");
     let resp = app.oneshot(req).await.expect("response");

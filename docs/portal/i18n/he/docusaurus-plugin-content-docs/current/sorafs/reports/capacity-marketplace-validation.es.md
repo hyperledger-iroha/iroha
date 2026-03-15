@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-02-07
 
 | צ'קאו | Validacion | Evidencia |
 |-------|----------------|--------|
-| El registry acepta declaraciones canonicas de capacidad | בדיקת אינטגרציה בעלות בעלות `/v1/sorafs/capacity/declare` באמצעות API של אפליקציה, אימות אל ניהול החברות, קלטת מטא נתונים והעברת מטא נתונים ברישום. | `crates/iroha_torii/src/routing.rs:7654` |
+| El registry acepta declaraciones canonicas de capacidad | בדיקת אינטגרציה בעלות בעלות `/v2/sorafs/capacity/declare` באמצעות API של אפליקציה, אימות אל ניהול החברות, קלטת מטא נתונים והעברת מטא נתונים ברישום. | `crates/iroha_torii/src/routing.rs:7654` |
 | El smart contract rechaza payloads desalineados | El test unitario asegura que los IDs de provider y los campos de GiB comprometidos coinciden con la declaracion firmada antes de persistir. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | El CLI emite artefactos canonicos de onboarding | הרתמה ל-CLI תרשום את הסלולר Norito/JSON/Base64 לקבוע נסיעות הלוך ושוב עבור מבצעי הפעלה או הכרזה במצב לא מקוון. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | La guia de operadores captura el flujo de admision y los guards de gobernanza | La documentacion enumera el esquema declaracion, los defaults de policy y los pasos de revision para el Council. | `../storage-capacity-marketplace.md` |

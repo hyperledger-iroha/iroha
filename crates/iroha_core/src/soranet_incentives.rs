@@ -558,7 +558,7 @@ mod tests {
     fn default_policy() -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
             minimum_exit_bond: numeric(1_000),
-            bond_asset_id: AssetDefinitionId::from_str("xor#sora").expect("asset id"),
+            bond_asset_id: AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap()),
             uptime_floor_per_mille: 900,
             slash_penalty_basis_points: 250,
             activation_grace_epochs: 0,
@@ -569,7 +569,7 @@ mod tests {
         RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
             bonded_amount: numeric(amount),
-            bond_asset_id: AssetDefinitionId::from_str("xor#sora").expect("asset id"),
+            bond_asset_id: AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap()),
             bonded_since_unix: 1_000,
             exit_capable,
         }
@@ -691,7 +691,8 @@ mod tests {
     #[test]
     fn skip_when_asset_mismatch() {
         let mut cfg = config();
-        cfg.policy.bond_asset_id = AssetDefinitionId::from_str("usd#sora").expect("asset id");
+        cfg.policy.bond_asset_id =
+            AssetDefinitionId::new("sora".parse().unwrap(), "usd".parse().unwrap());
         let calc = RelayRewardCalculator::new(cfg).expect("config valid");
         let metrics = metrics(RelayComplianceStatusV1::Clean, 3_600, 3_600, 1_000_000);
         let bond = bond(true, 2_000);
@@ -757,7 +758,10 @@ mod tests {
             relay_id: [0xAA; 32],
             epoch: 11,
             beneficiary: sample_account("relay"),
-            payout_asset_id: AssetDefinitionId::from_str("xor#sora").expect("asset id"),
+            payout_asset_id: AssetDefinitionId::new(
+                "sora".parse().unwrap(),
+                "xor".parse().unwrap(),
+            ),
             payout_amount: Numeric::new(12_345, 3),
             reward_score: 812,
             budget_approval_id: Some(budget_id()),
@@ -792,7 +796,10 @@ mod tests {
             relay_id: [0xBB; 32],
             epoch: 21,
             beneficiary: sample_account("relay"),
-            payout_asset_id: AssetDefinitionId::from_str("xor#sora").expect("asset id"),
+            payout_asset_id: AssetDefinitionId::new(
+                "sora".parse().unwrap(),
+                "xor".parse().unwrap(),
+            ),
             payout_amount: Numeric::new(7_500, 2),
             reward_score: 650,
             budget_approval_id: Some(budget_id()),

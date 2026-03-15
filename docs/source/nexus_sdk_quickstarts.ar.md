@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-01-01
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
-export NEXUS_PIPELINE_URL="https://torii.nexus.sora.org/v1/pipeline"
+export NEXUS_PIPELINE_URL="https://torii.nexus.sora.org/v2/pipeline"
 export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<hex-peer-public-key>"
 ```
@@ -94,14 +94,12 @@ fn persist_da_payload(client: &Client, payload: Vec<u8>, storage_ticket: &str) -
 
 ```rust
 use iroha_client::client::{
-    Client, ExplorerAccountQrOptions,
+    Client,
 };
 
 fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
     let snapshot = client.get_explorer_account_qr(
         "i105...",
-        Some(ExplorerAccountQrOptions {
-        }),
     )?;
     println!("I105 literal: {}", snapshot.literal);
     std::fs::write("alice_qr.svg", snapshot.svg)?;

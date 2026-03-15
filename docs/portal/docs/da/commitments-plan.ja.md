@@ -33,7 +33,7 @@ JSON は使用しません。
 - ライトクライアントが特定ブロックに manifest hash が最終確定したことを検証できる
   決定論的 membership proof を提供する。
 - relays、SDK、ガバナンス自動化が全ブロック再生なしで availability を監査できるように、
-  Torii のクエリ (`/v1/da/commitments/*`) と proof を提供する。
+  Torii のクエリ (`/v2/da/commitments/*`) と proof を提供する。
 - `SignedBlockWire` の正規エンベロープを維持し、Norito メタデータヘッダとブロック hash
   派生に新構造を通す。
 
@@ -45,7 +45,7 @@ JSON は使用しません。
    (`crates/iroha_core/src/queue.rs` と `crates/iroha_core/src/block.rs`)。
 3. WSV がコミットメントのクエリに高速応答できるようにする **永続化/インデックス**
    (`iroha_core/src/wsv/mod.rs`)。
-4. `/v1/da/commitments` 配下で list/query/prove を提供する **Torii RPC 追加**。
+4. `/v2/da/commitments` 配下で list/query/prove を提供する **Torii RPC 追加**。
 5. `integration_tests/tests/da/commitments.rs` で wire layout と proof フローを検証する
    **統合テスト/fixture**。
 
@@ -130,9 +130,9 @@ Torii は 3 つの endpoint を公開します。
 
 | Route | Method | Payload | Notes |
 |-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (lane/epoch/sequence の範囲フィルタ、pagination) | `DaCommitmentPage` を返し、total count、commitments、block hash を含みます。 |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash または `(epoch, sequence)` タプル)。 | `DaCommitmentProof` (record + Merkle path + block hash) を返します。 |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | stateless helper。ブロック hash 計算を再実行し、包含を検証します。`iroha_crypto` に直接リンクできない SDK 向け。 |
+| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (lane/epoch/sequence の範囲フィルタ、pagination) | `DaCommitmentPage` を返し、total count、commitments、block hash を含みます。 |
+| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash または `(epoch, sequence)` タプル)。 | `DaCommitmentProof` (record + Merkle path + block hash) を返します。 |
+| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | stateless helper。ブロック hash 計算を再実行し、包含を検証します。`iroha_crypto` に直接リンクできない SDK 向け。 |
 
 全 payload は `iroha_data_model::da::commitment` に存在します。Torii の router は既存の
 DA ingest endpoint の隣に handlers を配置し、token/mTLS ポリシーを再利用します。

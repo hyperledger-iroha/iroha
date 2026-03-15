@@ -49,7 +49,7 @@ fn tags_section() -> Value {
     aliases.insert("name".into(), Value::String("Aliases".to_owned()));
     aliases.insert(
         "description".into(),
-        Value::String("Alias helper endpoints exposed under `/v1/aliases/*`.".to_owned()),
+        Value::String("Alias helper endpoints exposed under `/v2/aliases/*`.".to_owned()),
     );
 
     let mut time = Map::new();
@@ -70,14 +70,14 @@ fn tags_section() -> Value {
     da.insert("name".into(), Value::String("DataAvailability".to_owned()));
     da.insert(
         "description".into(),
-        Value::String("Data availability commitments exposed under `/v1/da/*`.".to_owned()),
+        Value::String("Data availability commitments exposed under `/v2/da/*`.".to_owned()),
     );
 
     let mut sumeragi = Map::new();
     sumeragi.insert("name".into(), Value::String("Sumeragi".to_owned()));
     sumeragi.insert(
         "description".into(),
-        Value::String("Consensus diagnostics and checkpoints under `/v1/sumeragi/*`.".to_owned()),
+        Value::String("Consensus diagnostics and checkpoints under `/v2/sumeragi/*`.".to_owned()),
     );
 
     let mut offline = Map::new();
@@ -85,7 +85,7 @@ fn tags_section() -> Value {
     offline.insert(
         "description".into(),
         Value::String(
-            "Offline wallet, audit, and settlement endpoints under `/v1/offline/*`.".to_owned(),
+            "Offline wallet, audit, and settlement endpoints under `/v2/offline/*`.".to_owned(),
         ),
     );
 
@@ -93,14 +93,14 @@ fn tags_section() -> Value {
     bridge.insert("name".into(), Value::String("Bridge".to_owned()));
     bridge.insert(
         "description".into(),
-        Value::String("Bridge finality surfaces exposed under `/v1/bridge/*`.".to_owned()),
+        Value::String("Bridge finality surfaces exposed under `/v2/bridge/*`.".to_owned()),
     );
 
     let mut kaigi = Map::new();
     kaigi.insert("name".into(), Value::String("Kaigi".to_owned()));
     kaigi.insert(
         "description".into(),
-        Value::String("Kaigi relay telemetry endpoints under `/v1/kaigi/*`.".to_owned()),
+        Value::String("Kaigi relay telemetry endpoints under `/v2/kaigi/*`.".to_owned()),
     );
 
     let mut nexus = Map::new();
@@ -454,16 +454,20 @@ fn event_stream_response(description: &str) -> Value {
 fn alias_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/aliases/voprf/evaluate".to_owned(),
+        "/v2/aliases/voprf/evaluate".to_owned(),
         Value::Object(alias_voprf_evaluate_operation()),
     );
     paths.insert(
-        "/v1/aliases/resolve".to_owned(),
+        "/v2/aliases/resolve".to_owned(),
         Value::Object(alias_resolve_operation()),
     );
     paths.insert(
-        "/v1/aliases/resolve_index".to_owned(),
+        "/v2/aliases/resolve_index".to_owned(),
         Value::Object(alias_resolve_index_operation()),
+    );
+    paths.insert(
+        "/v2/assets/aliases/resolve".to_owned(),
+        Value::Object(asset_alias_resolve_operation()),
     );
     paths
 }
@@ -471,11 +475,11 @@ fn alias_paths() -> Map {
 fn time_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/time/now".to_owned(),
+        "/v2/time/now".to_owned(),
         Value::Object(time_now_operation()),
     );
     paths.insert(
-        "/v1/time/status".to_owned(),
+        "/v2/time/status".to_owned(),
         Value::Object(time_status_operation()),
     );
     paths
@@ -484,19 +488,19 @@ fn time_paths() -> Map {
 fn ledger_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/ledger/headers".to_owned(),
+        "/v2/ledger/headers".to_owned(),
         Value::Object(ledger_headers_operation()),
     );
     paths.insert(
-        "/v1/ledger/state/{height}".to_owned(),
+        "/v2/ledger/state/{height}".to_owned(),
         Value::Object(ledger_state_root_operation()),
     );
     paths.insert(
-        "/v1/ledger/state-proof/{height}".to_owned(),
+        "/v2/ledger/state-proof/{height}".to_owned(),
         Value::Object(ledger_state_proof_operation()),
     );
     paths.insert(
-        "/v1/ledger/block/{height}/proof/{entry_hash}".to_owned(),
+        "/v2/ledger/block/{height}/proof/{entry_hash}".to_owned(),
         Value::Object(ledger_block_proof_operation()),
     );
     paths
@@ -505,7 +509,7 @@ fn ledger_paths() -> Map {
 fn da_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/da/ingest".to_owned(),
+        "/v2/da/ingest".to_owned(),
         Value::Object(json_post_operation(
             "DataAvailability",
             "Ingest DA payloads.",
@@ -516,7 +520,7 @@ fn da_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/da/manifests/{ticket}".to_owned(),
+        "/v2/da/manifests/{ticket}".to_owned(),
         Value::Object(json_get_operation(
             "DataAvailability",
             "Fetch DA manifest payload.",
@@ -529,7 +533,7 @@ fn da_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/da/proof_policies".to_owned(),
+        "/v2/da/proof_policies".to_owned(),
         Value::Object(json_get_operation(
             "DataAvailability",
             "List DA proof policies.",
@@ -539,7 +543,7 @@ fn da_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/da/proof_policy_snapshot".to_owned(),
+        "/v2/da/proof_policy_snapshot".to_owned(),
         Value::Object(json_get_operation(
             "DataAvailability",
             "Fetch the DA proof policy snapshot.",
@@ -549,19 +553,19 @@ fn da_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/da/commitments".to_owned(),
+        "/v2/da/commitments".to_owned(),
         Value::Object(da_commitments_operation()),
     );
     paths.insert(
-        "/v1/da/commitments/prove".to_owned(),
+        "/v2/da/commitments/prove".to_owned(),
         Value::Object(da_commitments_prove_operation()),
     );
     paths.insert(
-        "/v1/da/commitments/verify".to_owned(),
+        "/v2/da/commitments/verify".to_owned(),
         Value::Object(da_commitments_verify_operation()),
     );
     paths.insert(
-        "/v1/da/pin_intents".to_owned(),
+        "/v2/da/pin_intents".to_owned(),
         Value::Object(json_post_operation(
             "DataAvailability",
             "List DA pin intents.",
@@ -572,7 +576,7 @@ fn da_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/da/pin_intents/prove".to_owned(),
+        "/v2/da/pin_intents/prove".to_owned(),
         Value::Object(json_post_operation(
             "DataAvailability",
             "Fetch a DA pin intent proof placeholder.",
@@ -583,7 +587,7 @@ fn da_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/da/pin_intents/verify".to_owned(),
+        "/v2/da/pin_intents/verify".to_owned(),
         Value::Object(json_post_operation(
             "DataAvailability",
             "Verify a DA pin intent proof.",
@@ -599,63 +603,63 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/allowances".to_owned(),
+        "/v2/offline/allowances".to_owned(),
         Value::Object(offline_allowances_operation()),
     );
     paths.insert(
-        "/v1/offline/allowances/{certificate_id_hex}".to_owned(),
+        "/v2/offline/allowances/{certificate_id_hex}".to_owned(),
         Value::Object(offline_allowance_detail_operation()),
     );
     paths.insert(
-        "/v1/offline/allowances/{certificate_id_hex}/renew".to_owned(),
+        "/v2/offline/allowances/{certificate_id_hex}/renew".to_owned(),
         Value::Object(offline_allowance_renew_operation()),
     );
     paths.insert(
-        "/v1/offline/certificates".to_owned(),
+        "/v2/offline/certificates".to_owned(),
         Value::Object(offline_allowances_operation()),
     );
     paths.insert(
-        "/v1/offline/certificates/issue".to_owned(),
+        "/v2/offline/certificates/issue".to_owned(),
         Value::Object(offline_certificate_issue_operation()),
     );
     paths.insert(
-        "/v1/offline/build-claims/issue".to_owned(),
+        "/v2/offline/build-claims/issue".to_owned(),
         Value::Object(offline_build_claim_issue_operation()),
     );
     paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}".to_owned(),
+        "/v2/offline/certificates/{certificate_id_hex}".to_owned(),
         Value::Object(offline_allowance_detail_operation()),
     );
     paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}/renew".to_owned(),
+        "/v2/offline/certificates/{certificate_id_hex}/renew".to_owned(),
         Value::Object(offline_allowance_renew_operation()),
     );
     paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}/renew/issue".to_owned(),
+        "/v2/offline/certificates/{certificate_id_hex}/renew/issue".to_owned(),
         Value::Object(offline_certificate_renew_issue_operation()),
     );
     paths.insert(
-        "/v1/offline/certificates/revoke".to_owned(),
+        "/v2/offline/certificates/revoke".to_owned(),
         Value::Object(offline_certificates_revoke_operation()),
     );
     paths.insert(
-        "/v1/offline/allowances/query".to_owned(),
+        "/v2/offline/allowances/query".to_owned(),
         Value::Object(offline_allowances_query_operation()),
     );
     paths.insert(
-        "/v1/offline/certificates/query".to_owned(),
+        "/v2/offline/certificates/query".to_owned(),
         Value::Object(offline_allowances_query_operation()),
     );
     paths.insert(
-        "/v1/offline/receipts".to_owned(),
+        "/v2/offline/receipts".to_owned(),
         Value::Object(offline_receipts_operation()),
     );
     paths.insert(
-        "/v1/offline/receipts/query".to_owned(),
+        "/v2/offline/receipts/query".to_owned(),
         Value::Object(offline_receipts_query_operation()),
     );
     paths.insert(
-        "/v1/offline/revocations".to_owned(),
+        "/v2/offline/revocations".to_owned(),
         Value::Object(json_get_operation(
             "Offline",
             "List offline revocations.",
@@ -665,7 +669,7 @@ fn offline_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/offline/revocations/query".to_owned(),
+        "/v2/offline/revocations/query".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
             "Query offline revocations via JSON envelope.",
@@ -676,19 +680,19 @@ fn offline_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/offline/transfers".to_owned(),
+        "/v2/offline/transfers".to_owned(),
         Value::Object(offline_transfers_operation()),
     );
     paths.insert(
-        "/v1/offline/transfers/{bundle_id_hex}".to_owned(),
+        "/v2/offline/transfers/{bundle_id_hex}".to_owned(),
         Value::Object(offline_transfer_detail_operation()),
     );
     paths.insert(
-        "/v1/offline/transfers/query".to_owned(),
+        "/v2/offline/transfers/query".to_owned(),
         Value::Object(offline_transfers_query_operation()),
     );
     paths.insert(
-        "/v1/offline/transfers/proof".to_owned(),
+        "/v2/offline/transfers/proof".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
             "Build offline transfer proof requests.",
@@ -699,39 +703,39 @@ fn offline_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/offline/settlements".to_owned(),
+        "/v2/offline/settlements".to_owned(),
         Value::Object(offline_settlements_operation()),
     );
     paths.insert(
-        "/v1/offline/settlements/{bundle_id_hex}".to_owned(),
+        "/v2/offline/settlements/{bundle_id_hex}".to_owned(),
         Value::Object(offline_transfer_detail_operation()),
     );
     paths.insert(
-        "/v1/offline/settlements/query".to_owned(),
+        "/v2/offline/settlements/query".to_owned(),
         Value::Object(offline_transfers_query_operation()),
     );
     paths.insert(
-        "/v1/offline/spend-receipts".to_owned(),
+        "/v2/offline/spend-receipts".to_owned(),
         Value::Object(offline_spend_receipts_operation()),
     );
     paths.insert(
-        "/v1/offline/state".to_owned(),
+        "/v2/offline/state".to_owned(),
         Value::Object(offline_state_operation()),
     );
     paths.insert(
-        "/v1/offline/bundle/proof_status".to_owned(),
+        "/v2/offline/bundle/proof_status".to_owned(),
         Value::Object(offline_bundle_proof_status_operation()),
     );
     paths.insert(
-        "/v1/offline/rejections".to_owned(),
+        "/v2/offline/rejections".to_owned(),
         Value::Object(offline_rejections_operation()),
     );
     paths.insert(
-        "/v1/offline/summaries".to_owned(),
+        "/v2/offline/summaries".to_owned(),
         Value::Object(offline_summaries_operation()),
     );
     paths.insert(
-        "/v1/offline/summaries/query".to_owned(),
+        "/v2/offline/summaries/query".to_owned(),
         Value::Object(offline_summaries_query_operation()),
     );
     paths
@@ -1074,7 +1078,7 @@ fn offline_settlements_operation() -> Map {
     );
     get_op.insert(
         "description".into(),
-        Value::String("Alias of `/v1/offline/transfers` for settlement audit readers.".to_owned()),
+        Value::String("Alias of `/v2/offline/transfers` for settlement audit readers.".to_owned()),
     );
     get_op.insert(
         "operationId".into(),
@@ -1280,7 +1284,7 @@ fn offline_transfer_detail_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the same enriched transfer payload as `/v1/offline/transfers`, scoped to a \
+            "Returns the same enriched transfer payload as `/v2/offline/transfers`, scoped to a \
              single `bundle_id_hex`."
                 .to_owned(),
         ),
@@ -1592,7 +1596,7 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     ));
     params.push(string_query_param(
         "account",
-        "Filter transfer instructions by participant account (source or destination; accepts canonical I105 account literals).",
+        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -2388,7 +2392,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/api/versions".to_owned(),
+        "/v2/api/versions".to_owned(),
         Value::Object(json_get_operation(
             "System",
             "List supported Torii API versions.",
@@ -2490,7 +2494,7 @@ fn system_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/policy".to_owned(),
+        "/v2/policy".to_owned(),
         Value::Object(json_get_operation(
             "System",
             "Fetch node policy snapshot.",
@@ -2500,7 +2504,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/pipeline/recovery/{height}".to_owned(),
+        "/v2/pipeline/recovery/{height}".to_owned(),
         Value::Object(json_get_operation(
             "System",
             "Fetch pipeline recovery metadata.",
@@ -2514,7 +2518,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/debug/axt/cache".to_owned(),
+        "/v2/debug/axt/cache".to_owned(),
         Value::Object(json_get_operation(
             "System",
             "Inspect cached AXT proof state.",
@@ -2524,7 +2528,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/telemetry/peers-info".to_owned(),
+        "/v2/telemetry/peers-info".to_owned(),
         Value::Object(json_get_operation(
             "System",
             "Fetch peer telemetry summary.",
@@ -2534,7 +2538,7 @@ fn system_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/telemetry/live".to_owned(),
+        "/v2/telemetry/live".to_owned(),
         Value::Object(event_stream_get_operation(
             "System",
             "Stream live telemetry updates.",
@@ -2547,19 +2551,19 @@ fn system_paths() -> Map {
 fn operator_auth_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/operator/auth/registration/options".to_owned(),
+        "/v2/operator/auth/registration/options".to_owned(),
         Value::Object(operator_auth_registration_options_operation()),
     );
     paths.insert(
-        "/v1/operator/auth/registration/verify".to_owned(),
+        "/v2/operator/auth/registration/verify".to_owned(),
         Value::Object(operator_auth_registration_verify_operation()),
     );
     paths.insert(
-        "/v1/operator/auth/login/options".to_owned(),
+        "/v2/operator/auth/login/options".to_owned(),
         Value::Object(operator_auth_login_options_operation()),
     );
     paths.insert(
-        "/v1/operator/auth/login/verify".to_owned(),
+        "/v2/operator/auth/login/verify".to_owned(),
         Value::Object(operator_auth_login_verify_operation()),
     );
     paths
@@ -2598,11 +2602,11 @@ fn transaction_paths() -> Map {
         }
     }
     paths.insert(
-        "/v1/pipeline/transactions/status".to_owned(),
+        "/v2/pipeline/transactions/status".to_owned(),
         Value::Object(pipeline_status),
     );
     paths.insert(
-        "/v1/iso20022/pacs008".to_owned(),
+        "/v2/iso20022/pacs008".to_owned(),
         Value::Object(json_post_operation(
             "ISO20022",
             "Submit ISO 20022 pacs.008 payload.",
@@ -2613,7 +2617,7 @@ fn transaction_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/iso20022/pacs009".to_owned(),
+        "/v2/iso20022/pacs009".to_owned(),
         Value::Object(json_post_operation(
             "ISO20022",
             "Submit ISO 20022 pacs.009 payload.",
@@ -2624,7 +2628,7 @@ fn transaction_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/iso20022/status/{msg_id}".to_owned(),
+        "/v2/iso20022/status/{msg_id}".to_owned(),
         Value::Object(json_get_operation(
             "ISO20022",
             "Fetch ISO 20022 message status.",
@@ -2653,7 +2657,7 @@ fn query_paths() -> Map {
 fn stream_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/events/sse".to_owned(),
+        "/v2/events/sse".to_owned(),
         Value::Object(event_stream_get_operation(
             "Streams",
             "Subscribe to event stream.",
@@ -2693,7 +2697,7 @@ fn stream_paths() -> Map {
 fn connect_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/connect/session".to_owned(),
+        "/v2/connect/session".to_owned(),
         Value::Object(json_post_operation(
             "Connect",
             "Open a Connect session.",
@@ -2704,7 +2708,7 @@ fn connect_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/connect/session/{sid}".to_owned(),
+        "/v2/connect/session/{sid}".to_owned(),
         Value::Object(json_delete_operation(
             "Connect",
             "Close a Connect session.",
@@ -2714,7 +2718,7 @@ fn connect_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/connect/ws".to_owned(),
+        "/v2/connect/ws".to_owned(),
         Value::Object(text_get_operation(
             "Connect",
             "Connect to the Connect WebSocket.",
@@ -2723,7 +2727,7 @@ fn connect_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/connect/status".to_owned(),
+        "/v2/connect/status".to_owned(),
         Value::Object(json_get_operation(
             "Connect",
             "Fetch Connect status.",
@@ -2790,14 +2794,14 @@ fn mcp_paths() -> Map {
     methods.insert("post".to_owned(), Value::Object(post_operation));
 
     let mut paths = Map::new();
-    paths.insert("/v1/mcp".to_owned(), Value::Object(methods));
+    paths.insert("/v2/mcp".to_owned(), Value::Object(methods));
     paths
 }
 
 fn proof_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/proofs/{id}".to_owned(),
+        "/v2/proofs/{id}".to_owned(),
         Value::Object(json_get_operation(
             "Proofs",
             "Fetch a proof record.",
@@ -2807,7 +2811,7 @@ fn proof_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/proofs/retention".to_owned(),
+        "/v2/proofs/retention".to_owned(),
         Value::Object(json_get_operation(
             "Proofs",
             "Fetch proof retention status.",
@@ -2817,7 +2821,7 @@ fn proof_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/proofs/query".to_owned(),
+        "/v2/proofs/query".to_owned(),
         Value::Object(json_post_operation(
             "Proofs",
             "Query proof records.",
@@ -2833,7 +2837,7 @@ fn proof_paths() -> Map {
 fn contracts_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/contracts/code".to_owned(),
+        "/v2/contracts/code".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
             "Register contract code.",
@@ -2844,7 +2848,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/code/{code_hash}".to_owned(),
+        "/v2/contracts/code/{code_hash}".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
             "Fetch contract metadata.",
@@ -2854,7 +2858,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/code-bytes/{code_hash}".to_owned(),
+        "/v2/contracts/code-bytes/{code_hash}".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
             "Fetch contract code bytes.",
@@ -2864,7 +2868,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/deploy".to_owned(),
+        "/v2/contracts/deploy".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
             "Deploy a contract.",
@@ -2875,7 +2879,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/instance".to_owned(),
+        "/v2/contracts/instance".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
             "Create a contract instance.",
@@ -2886,7 +2890,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/instance/activate".to_owned(),
+        "/v2/contracts/instance/activate".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
             "Activate a contract instance.",
@@ -2897,7 +2901,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/call".to_owned(),
+        "/v2/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
             "Call a contract instance.",
@@ -2908,7 +2912,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/state".to_owned(),
+        "/v2/contracts/state".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
             "Read smart contract state.",
@@ -2932,7 +2936,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/instances/{ns}".to_owned(),
+        "/v2/contracts/instances/{ns}".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
             "List contract instances by namespace.",
@@ -2942,7 +2946,7 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/confidential/derive-keyset".to_owned(),
+        "/v2/confidential/derive-keyset".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
             "Derive a confidential keyset.",
@@ -2958,7 +2962,7 @@ fn contracts_paths() -> Map {
 fn zk_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/zk/roots".to_owned(),
+        "/v2/zk/roots".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Fetch ZK roots.",
@@ -2969,7 +2973,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/verify".to_owned(),
+        "/v2/zk/verify".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Verify a ZK proof.",
@@ -2980,7 +2984,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/submit-proof".to_owned(),
+        "/v2/zk/submit-proof".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Submit a ZK proof.",
@@ -2991,7 +2995,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/ivm/prove".to_owned(),
+        "/v2/zk/ivm/prove".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Prove IVM execution (job).",
@@ -3002,7 +3006,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/ivm/prove/{job_id}".to_owned(),
+        "/v2/zk/ivm/prove/{job_id}".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "ZK",
@@ -3035,7 +3039,7 @@ fn zk_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/zk/attachments".to_owned(),
+        "/v2/zk/attachments".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "ZK",
@@ -3063,7 +3067,7 @@ fn zk_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/zk/attachments/{id}".to_owned(),
+        "/v2/zk/attachments/{id}".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "ZK",
@@ -3090,7 +3094,7 @@ fn zk_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/zk/attachments/count".to_owned(),
+        "/v2/zk/attachments/count".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
             "Count ZK attachments.",
@@ -3100,7 +3104,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vote/tally".to_owned(),
+        "/v2/zk/vote/tally".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Compute ZK vote tally.",
@@ -3111,7 +3115,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vk/register".to_owned(),
+        "/v2/zk/vk/register".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Register a verification key.",
@@ -3122,7 +3126,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vk/update".to_owned(),
+        "/v2/zk/vk/update".to_owned(),
         Value::Object(json_post_operation(
             "ZK",
             "Update a verification key.",
@@ -3133,7 +3137,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vk/{backend}/{name}".to_owned(),
+        "/v2/zk/vk/{backend}/{name}".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
             "Fetch a verification key.",
@@ -3146,7 +3150,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vk".to_owned(),
+        "/v2/zk/vk".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
             "List verification keys.",
@@ -3156,7 +3160,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/proofs".to_owned(),
+        "/v2/zk/proofs".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
             "List proofs.",
@@ -3166,7 +3170,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/proofs/count".to_owned(),
+        "/v2/zk/proofs/count".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
             "Count proofs.",
@@ -3176,7 +3180,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/proof/{backend}/{hash}".to_owned(),
+        "/v2/zk/proof/{backend}/{hash}".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
             "Fetch a proof by backend and hash.",
@@ -3189,7 +3193,7 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/proof-tags/{backend}/{hash}".to_owned(),
+        "/v2/zk/proof-tags/{backend}/{hash}".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
             "Fetch proof tags.",
@@ -3207,7 +3211,7 @@ fn zk_paths() -> Map {
 fn governance_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/gov/proposals/deploy-contract".to_owned(),
+        "/v2/gov/proposals/deploy-contract".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Propose contract deployment.",
@@ -3218,7 +3222,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/proposals/{id}".to_owned(),
+        "/v2/gov/proposals/{id}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "Fetch a proposal.",
@@ -3228,7 +3232,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/locks/{rid}".to_owned(),
+        "/v2/gov/locks/{rid}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "Fetch governance locks.",
@@ -3238,7 +3242,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/referenda/{id}".to_owned(),
+        "/v2/gov/referenda/{id}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "Fetch a referendum.",
@@ -3248,7 +3252,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/tally/{id}".to_owned(),
+        "/v2/gov/tally/{id}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "Fetch a tally snapshot.",
@@ -3258,7 +3262,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/ballots/zk".to_owned(),
+        "/v2/gov/ballots/zk".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ZK ballot.",
@@ -3269,7 +3273,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/ballots/zk-v1".to_owned(),
+        "/v2/gov/ballots/zk-v1".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ZK ballot (v1).",
@@ -3280,7 +3284,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/ballots/zk-v1/ballot-proof".to_owned(),
+        "/v2/gov/ballots/zk-v1/ballot-proof".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ballot proof.",
@@ -3291,7 +3295,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/ballots/plain".to_owned(),
+        "/v2/gov/ballots/plain".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Submit a plain ballot.",
@@ -3302,7 +3306,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/finalize".to_owned(),
+        "/v2/gov/finalize".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Finalize a referendum.",
@@ -3313,7 +3317,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/protected-namespaces".to_owned(),
+        "/v2/gov/protected-namespaces".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "Governance",
@@ -3341,7 +3345,7 @@ fn governance_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/gov/stream".to_owned(),
+        "/v2/gov/stream".to_owned(),
         Value::Object(event_stream_get_operation(
             "Governance",
             "Stream governance updates.",
@@ -3349,7 +3353,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/unlocks/stats".to_owned(),
+        "/v2/gov/unlocks/stats".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "Fetch unlock statistics.",
@@ -3359,7 +3363,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/instances/{ns}".to_owned(),
+        "/v2/gov/instances/{ns}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "List contract instances by namespace.",
@@ -3369,7 +3373,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/enact".to_owned(),
+        "/v2/gov/enact".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Enact a referendum.",
@@ -3380,7 +3384,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/council/current".to_owned(),
+        "/v2/gov/council/current".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "Fetch current council.",
@@ -3390,7 +3394,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/council/persist".to_owned(),
+        "/v2/gov/council/persist".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Persist a council roster.",
@@ -3401,7 +3405,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/council/replace".to_owned(),
+        "/v2/gov/council/replace".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Replace a council member.",
@@ -3412,7 +3416,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/council/audit".to_owned(),
+        "/v2/gov/council/audit".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
             "Audit council derivation.",
@@ -3422,7 +3426,7 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/council/derive-vrf".to_owned(),
+        "/v2/gov/council/derive-vrf".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Derive council VRF inputs.",
@@ -3438,7 +3442,7 @@ fn governance_paths() -> Map {
 fn runtime_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/node/capabilities".to_owned(),
+        "/v2/node/capabilities".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
             "Fetch node capabilities.",
@@ -3448,7 +3452,7 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/runtime/abi/active".to_owned(),
+        "/v2/runtime/abi/active".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
             "Fetch active ABI versions.",
@@ -3458,7 +3462,7 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/runtime/abi/hash".to_owned(),
+        "/v2/runtime/abi/hash".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
             "Fetch the active ABI hash.",
@@ -3468,7 +3472,7 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/runtime/metrics".to_owned(),
+        "/v2/runtime/metrics".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
             "Fetch runtime metrics.",
@@ -3478,7 +3482,7 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/runtime/upgrades".to_owned(),
+        "/v2/runtime/upgrades".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
             "List runtime upgrades.",
@@ -3488,7 +3492,7 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/runtime/upgrades/propose".to_owned(),
+        "/v2/runtime/upgrades/propose".to_owned(),
         Value::Object(json_post_operation(
             "Runtime",
             "Propose a runtime upgrade.",
@@ -3499,7 +3503,7 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/runtime/upgrades/activate/{id}".to_owned(),
+        "/v2/runtime/upgrades/activate/{id}".to_owned(),
         Value::Object(json_post_operation(
             "Runtime",
             "Activate a runtime upgrade.",
@@ -3510,7 +3514,7 @@ fn runtime_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/runtime/upgrades/cancel/{id}".to_owned(),
+        "/v2/runtime/upgrades/cancel/{id}".to_owned(),
         Value::Object(json_post_operation(
             "Runtime",
             "Cancel a runtime upgrade.",
@@ -3526,7 +3530,7 @@ fn runtime_paths() -> Map {
 fn account_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/accounts".to_owned(),
+        "/v2/accounts".to_owned(),
         Value::Object(json_get_operation(
             "Accounts",
             "List accounts.",
@@ -3536,7 +3540,7 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/accounts/query".to_owned(),
+        "/v2/accounts/query".to_owned(),
         Value::Object(json_post_operation(
             "Accounts",
             "Query accounts.",
@@ -3547,7 +3551,7 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/accounts/onboard".to_owned(),
+        "/v2/accounts/onboard".to_owned(),
         Value::Object(json_post_operation(
             "Accounts",
             "Onboard an account.",
@@ -3558,7 +3562,7 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/accounts/{account_id}/transactions/query".to_owned(),
+        "/v2/accounts/{account_id}/transactions/query".to_owned(),
         Value::Object(json_post_operation(
             "Accounts",
             "Query account transactions.",
@@ -3569,7 +3573,7 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/accounts/{account_id}/assets".to_owned(),
+        "/v2/accounts/{account_id}/assets".to_owned(),
         Value::Object({
             let mut params = vec![string_path_param("account_id", "Account identifier.")];
             params.extend(account_assets_list_query_parameters());
@@ -3583,7 +3587,7 @@ fn account_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/accounts/{account_id}/assets/query".to_owned(),
+        "/v2/accounts/{account_id}/assets/query".to_owned(),
         Value::Object(json_post_operation(
             "Accounts",
             "Query account assets.",
@@ -3594,7 +3598,7 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/accounts/{account_id}/permissions".to_owned(),
+        "/v2/accounts/{account_id}/permissions".to_owned(),
         Value::Object(json_get_operation(
             "Accounts",
             "List account permissions.",
@@ -3604,7 +3608,7 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/accounts/{account_id}/transactions".to_owned(),
+        "/v2/accounts/{account_id}/transactions".to_owned(),
         Value::Object({
             let mut params = vec![string_path_param("account_id", "Account identifier.")];
             params.extend(account_transactions_list_query_parameters());
@@ -3618,7 +3622,7 @@ fn account_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/accounts/{uaid}/portfolio".to_owned(),
+        "/v2/accounts/{uaid}/portfolio".to_owned(),
         Value::Object({
             let mut params = vec![string_path_param("uaid", "User account identifier.")];
             params.push(string_query_param(
@@ -3640,7 +3644,7 @@ fn account_paths() -> Map {
 fn domain_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/domains".to_owned(),
+        "/v2/domains".to_owned(),
         Value::Object(json_get_operation(
             "Domains",
             "List domains.",
@@ -3650,7 +3654,7 @@ fn domain_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/domains/query".to_owned(),
+        "/v2/domains/query".to_owned(),
         Value::Object(json_post_operation(
             "Domains",
             "Query domains.",
@@ -3666,7 +3670,7 @@ fn domain_paths() -> Map {
 fn asset_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/assets/definitions".to_owned(),
+        "/v2/assets/definitions".to_owned(),
         Value::Object(json_get_operation(
             "Assets",
             "List asset definitions.",
@@ -3676,7 +3680,7 @@ fn asset_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/assets/definitions/query".to_owned(),
+        "/v2/assets/definitions/query".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
             "Query asset definitions.",
@@ -3687,7 +3691,7 @@ fn asset_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/assets/{definition_id}/holders".to_owned(),
+        "/v2/assets/{definition_id}/holders".to_owned(),
         Value::Object({
             let mut params = vec![string_path_param(
                 "definition_id",
@@ -3704,7 +3708,7 @@ fn asset_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/assets/{definition_id}/holders/query".to_owned(),
+        "/v2/assets/{definition_id}/holders/query".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
             "Query asset holders.",
@@ -3718,7 +3722,7 @@ fn asset_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/confidential/assets/{definition_id}/transitions".to_owned(),
+        "/v2/confidential/assets/{definition_id}/transitions".to_owned(),
         Value::Object(json_get_operation(
             "Assets",
             "Fetch confidential asset transitions.",
@@ -3736,7 +3740,7 @@ fn asset_paths() -> Map {
 fn nft_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/nfts".to_owned(),
+        "/v2/nfts".to_owned(),
         Value::Object(json_get_operation(
             "NFTs",
             "List NFTs.",
@@ -3746,7 +3750,7 @@ fn nft_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/nfts/query".to_owned(),
+        "/v2/nfts/query".to_owned(),
         Value::Object(json_post_operation(
             "NFTs",
             "Query NFTs.",
@@ -3785,7 +3789,7 @@ fn subscription_paths() -> Map {
         "#/components/schemas/JsonValue",
         Vec::new(),
     ));
-    paths.insert("/v1/subscriptions/plans".to_owned(), Value::Object(plans));
+    paths.insert("/v2/subscriptions/plans".to_owned(), Value::Object(plans));
 
     let subscription_query_params = vec![
         string_query_param("owned_by", "Filter subscriptions by subscriber account id."),
@@ -3816,11 +3820,11 @@ fn subscription_paths() -> Map {
         "#/components/schemas/JsonValue",
         Vec::new(),
     ));
-    paths.insert("/v1/subscriptions".to_owned(), Value::Object(subs));
+    paths.insert("/v2/subscriptions".to_owned(), Value::Object(subs));
 
     let sub_param = string_path_param("subscription_id", "Subscription NFT identifier.");
     paths.insert(
-        "/v1/subscriptions/{subscription_id}".to_owned(),
+        "/v2/subscriptions/{subscription_id}".to_owned(),
         Value::Object(json_get_operation(
             "Subscriptions",
             "Fetch a subscription.",
@@ -3830,7 +3834,7 @@ fn subscription_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/subscriptions/{subscription_id}/pause".to_owned(),
+        "/v2/subscriptions/{subscription_id}/pause".to_owned(),
         Value::Object(json_post_operation(
             "Subscriptions",
             "Pause a subscription.",
@@ -3841,7 +3845,7 @@ fn subscription_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/subscriptions/{subscription_id}/resume".to_owned(),
+        "/v2/subscriptions/{subscription_id}/resume".to_owned(),
         Value::Object(json_post_operation(
             "Subscriptions",
             "Resume a subscription.",
@@ -3852,7 +3856,7 @@ fn subscription_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/subscriptions/{subscription_id}/cancel".to_owned(),
+        "/v2/subscriptions/{subscription_id}/cancel".to_owned(),
         Value::Object(json_post_operation(
             "Subscriptions",
             "Cancel a subscription.",
@@ -3863,7 +3867,7 @@ fn subscription_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/subscriptions/{subscription_id}/keep".to_owned(),
+        "/v2/subscriptions/{subscription_id}/keep".to_owned(),
         Value::Object(json_post_operation(
             "Subscriptions",
             "Keep a subscription.",
@@ -3874,7 +3878,7 @@ fn subscription_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/subscriptions/{subscription_id}/usage".to_owned(),
+        "/v2/subscriptions/{subscription_id}/usage".to_owned(),
         Value::Object(json_post_operation(
             "Subscriptions",
             "Record subscription usage.",
@@ -3885,7 +3889,7 @@ fn subscription_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/subscriptions/{subscription_id}/charge-now".to_owned(),
+        "/v2/subscriptions/{subscription_id}/charge-now".to_owned(),
         Value::Object(json_post_operation(
             "Subscriptions",
             "Charge a subscription now.",
@@ -3901,7 +3905,7 @@ fn subscription_paths() -> Map {
 fn parameter_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/parameters".to_owned(),
+        "/v2/parameters".to_owned(),
         Value::Object(json_get_operation(
             "Parameters",
             "Fetch parameter snapshots.",
@@ -3916,7 +3920,7 @@ fn parameter_paths() -> Map {
 fn space_directory_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/space-directory/uaids/{uaid}".to_owned(),
+        "/v2/space-directory/uaids/{uaid}".to_owned(),
         Value::Object(json_get_operation(
             "SpaceDirectory",
             "Fetch space directory bindings.",
@@ -3926,7 +3930,7 @@ fn space_directory_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/space-directory/uaids/{uaid}/manifests".to_owned(),
+        "/v2/space-directory/uaids/{uaid}/manifests".to_owned(),
         Value::Object(json_get_operation(
             "SpaceDirectory",
             "Fetch space directory manifests.",
@@ -3936,7 +3940,7 @@ fn space_directory_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/space-directory/manifests".to_owned(),
+        "/v2/space-directory/manifests".to_owned(),
         Value::Object(json_post_operation(
             "SpaceDirectory",
             "Publish a space directory manifest.",
@@ -3947,7 +3951,7 @@ fn space_directory_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/space-directory/manifests/revoke".to_owned(),
+        "/v2/space-directory/manifests/revoke".to_owned(),
         Value::Object(json_post_operation(
             "SpaceDirectory",
             "Revoke a space directory manifest.",
@@ -3963,7 +3967,7 @@ fn space_directory_paths() -> Map {
 fn explorer_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/explorer/accounts".to_owned(),
+        "/v2/explorer/accounts".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "List accounts (explorer).",
@@ -3973,7 +3977,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/domains".to_owned(),
+        "/v2/explorer/domains".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "List domains (explorer).",
@@ -3983,7 +3987,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/asset-definitions".to_owned(),
+        "/v2/explorer/asset-definitions".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "List asset definitions (explorer).",
@@ -3993,7 +3997,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/assets".to_owned(),
+        "/v2/explorer/assets".to_owned(),
         Value::Object({
             let params = explorer_assets_query_parameters();
             json_get_operation(
@@ -4006,7 +4010,7 @@ fn explorer_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/explorer/nfts".to_owned(),
+        "/v2/explorer/nfts".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "List NFTs (explorer).",
@@ -4016,7 +4020,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/blocks".to_owned(),
+        "/v2/explorer/blocks".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "List blocks (explorer).",
@@ -4026,7 +4030,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/blocks/stream".to_owned(),
+        "/v2/explorer/blocks/stream".to_owned(),
         Value::Object(event_stream_get_operation(
             "Explorer",
             "Stream blocks (explorer).",
@@ -4034,7 +4038,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/transactions".to_owned(),
+        "/v2/explorer/transactions".to_owned(),
         Value::Object({
             let params = explorer_transactions_query_parameters();
             json_get_operation(
@@ -4047,7 +4051,7 @@ fn explorer_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/explorer/transactions/stream".to_owned(),
+        "/v2/explorer/transactions/stream".to_owned(),
         Value::Object(event_stream_get_operation(
             "Explorer",
             "Stream transactions (explorer).",
@@ -4055,7 +4059,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/instructions".to_owned(),
+        "/v2/explorer/instructions".to_owned(),
         Value::Object({
             let params = explorer_instructions_query_parameters();
             json_get_operation(
@@ -4068,7 +4072,7 @@ fn explorer_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/explorer/instructions/stream".to_owned(),
+        "/v2/explorer/instructions/stream".to_owned(),
         Value::Object(event_stream_get_operation(
             "Explorer",
             "Stream instructions (explorer).",
@@ -4076,7 +4080,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/metrics".to_owned(),
+        "/v2/explorer/metrics".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch explorer metrics.",
@@ -4086,7 +4090,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/accounts/{account_id}".to_owned(),
+        "/v2/explorer/accounts/{account_id}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch account detail (explorer).",
@@ -4096,7 +4100,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/accounts/{account_id}/qr".to_owned(),
+        "/v2/explorer/accounts/{account_id}/qr".to_owned(),
         Value::Object({
             let mut operation = Map::new();
             operation.insert(
@@ -4124,7 +4128,7 @@ fn explorer_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/explorer/domains/{domain_id}".to_owned(),
+        "/v2/explorer/domains/{domain_id}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch domain detail (explorer).",
@@ -4134,7 +4138,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/asset-definitions/{definition_id}".to_owned(),
+        "/v2/explorer/asset-definitions/{definition_id}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch asset definition detail (explorer).",
@@ -4147,7 +4151,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/asset-definitions/{definition_id}/econometrics".to_owned(),
+        "/v2/explorer/asset-definitions/{definition_id}/econometrics".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch asset definition econometrics (explorer).",
@@ -4160,7 +4164,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/asset-definitions/{definition_id}/snapshot".to_owned(),
+        "/v2/explorer/asset-definitions/{definition_id}/snapshot".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch asset definition snapshot (explorer).",
@@ -4173,7 +4177,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/assets/{asset_id}".to_owned(),
+        "/v2/explorer/assets/{asset_id}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch asset detail (explorer).",
@@ -4183,7 +4187,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/nfts/{nft_id}".to_owned(),
+        "/v2/explorer/nfts/{nft_id}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch NFT detail (explorer).",
@@ -4193,7 +4197,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/blocks/{identifier}".to_owned(),
+        "/v2/explorer/blocks/{identifier}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch block detail (explorer).",
@@ -4206,7 +4210,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/transactions/{hash}".to_owned(),
+        "/v2/explorer/transactions/{hash}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch transaction detail (explorer).",
@@ -4216,7 +4220,7 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/explorer/instructions/{hash}/{index}".to_owned(),
+        "/v2/explorer/instructions/{hash}/{index}".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch instruction detail (explorer).",
@@ -4234,7 +4238,7 @@ fn explorer_paths() -> Map {
 fn sorafs_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/sorafs/pin/register".to_owned(),
+        "/v2/sorafs/pin/register".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Register a pin manifest.",
@@ -4245,7 +4249,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/declare".to_owned(),
+        "/v2/sorafs/capacity/declare".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Declare capacity.",
@@ -4256,7 +4260,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/telemetry".to_owned(),
+        "/v2/sorafs/capacity/telemetry".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit capacity telemetry.",
@@ -4267,7 +4271,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/dispute".to_owned(),
+        "/v2/sorafs/capacity/dispute".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit a capacity dispute.",
@@ -4278,7 +4282,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/schedule".to_owned(),
+        "/v2/sorafs/capacity/schedule".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit a capacity schedule.",
@@ -4289,7 +4293,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/complete".to_owned(),
+        "/v2/sorafs/capacity/complete".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit a capacity completion.",
@@ -4300,7 +4304,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/uptime".to_owned(),
+        "/v2/sorafs/capacity/uptime".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit capacity uptime.",
@@ -4311,7 +4315,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/por-challenge".to_owned(),
+        "/v2/sorafs/capacity/por-challenge".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit PoR challenge.",
@@ -4322,7 +4326,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/por-proof".to_owned(),
+        "/v2/sorafs/capacity/por-proof".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit PoR proof.",
@@ -4333,7 +4337,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/por-verdict".to_owned(),
+        "/v2/sorafs/capacity/por-verdict".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit PoR verdict.",
@@ -4344,7 +4348,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/por/status".to_owned(),
+        "/v2/sorafs/por/status".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch PoR status.",
@@ -4354,7 +4358,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/por/export".to_owned(),
+        "/v2/sorafs/por/export".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Export PoR report.",
@@ -4364,7 +4368,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/por/ingestion/{manifest_digest_hex}".to_owned(),
+        "/v2/sorafs/por/ingestion/{manifest_digest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch PoR ingestion status.",
@@ -4377,7 +4381,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/por/report/{iso_week}".to_owned(),
+        "/v2/sorafs/por/report/{iso_week}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch PoR report.",
@@ -4387,7 +4391,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/por".to_owned(),
+        "/v2/sorafs/capacity/por".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit PoR capacity report.",
@@ -4398,7 +4402,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/failure".to_owned(),
+        "/v2/sorafs/capacity/failure".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit capacity failure report.",
@@ -4409,7 +4413,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/audit/repair/report".to_owned(),
+        "/v2/sorafs/audit/repair/report".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit repair report.",
@@ -4420,7 +4424,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/audit/repair/slash".to_owned(),
+        "/v2/sorafs/audit/repair/slash".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit repair slash.",
@@ -4431,7 +4435,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/audit/repair/claim".to_owned(),
+        "/v2/sorafs/audit/repair/claim".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Claim repair ticket.",
@@ -4442,7 +4446,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/audit/repair/heartbeat".to_owned(),
+        "/v2/sorafs/audit/repair/heartbeat".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Repair heartbeat.",
@@ -4453,7 +4457,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/audit/repair/complete".to_owned(),
+        "/v2/sorafs/audit/repair/complete".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Complete repair ticket.",
@@ -4464,7 +4468,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/audit/repair/fail".to_owned(),
+        "/v2/sorafs/audit/repair/fail".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Fail repair ticket.",
@@ -4482,7 +4486,7 @@ fn sorafs_paths() -> Map {
         string_query_param("provider", "Filter by provider id (hex)."),
     ];
     paths.insert(
-        "/v1/sorafs/audit/repair/status".to_owned(),
+        "/v2/sorafs/audit/repair/status".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "List repair status.",
@@ -4492,7 +4496,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/audit/repair/status/{manifest_hex}".to_owned(),
+        "/v2/sorafs/audit/repair/status/{manifest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch repair status.",
@@ -4509,7 +4513,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/providers".to_owned(),
+        "/v2/sorafs/providers".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "List providers.",
@@ -4519,7 +4523,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/providers/advert".to_owned(),
+        "/v2/sorafs/providers/advert".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit provider advert.",
@@ -4530,7 +4534,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/capacity/state".to_owned(),
+        "/v2/sorafs/capacity/state".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch capacity state.",
@@ -4540,7 +4544,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/pin".to_owned(),
+        "/v2/sorafs/pin".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch pin registry.",
@@ -4550,7 +4554,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/pin/{digest_hex}".to_owned(),
+        "/v2/sorafs/pin/{digest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch a pin manifest.",
@@ -4563,7 +4567,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/aliases".to_owned(),
+        "/v2/sorafs/aliases".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "List aliases.",
@@ -4573,7 +4577,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/replication".to_owned(),
+        "/v2/sorafs/replication".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "List replication orders.",
@@ -4583,7 +4587,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/state".to_owned(),
+        "/v2/sorafs/storage/state".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch storage state.",
@@ -4593,7 +4597,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/manifest/{manifest_id}".to_owned(),
+        "/v2/sorafs/storage/manifest/{manifest_id}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch storage manifest.",
@@ -4603,7 +4607,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/plan/{manifest_id}".to_owned(),
+        "/v2/sorafs/storage/plan/{manifest_id}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch storage plan.",
@@ -4613,7 +4617,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/pin".to_owned(),
+        "/v2/sorafs/storage/pin".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Pin storage content.",
@@ -4624,7 +4628,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/fetch".to_owned(),
+        "/v2/sorafs/storage/fetch".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Fetch storage content.",
@@ -4635,7 +4639,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/token".to_owned(),
+        "/v2/sorafs/storage/token".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Request storage token.",
@@ -4646,7 +4650,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/car/{manifest_id}".to_owned(),
+        "/v2/sorafs/storage/car/{manifest_id}".to_owned(),
         Value::Object({
             let mut operation = Map::new();
             operation.insert(
@@ -4677,7 +4681,7 @@ fn sorafs_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}".to_owned(),
+        "/v2/sorafs/storage/chunk/{manifest_id}/{chunk_digest}".to_owned(),
         Value::Object({
             let mut operation = Map::new();
             operation.insert(
@@ -4708,7 +4712,7 @@ fn sorafs_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/sorafs/storage/por-sample".to_owned(),
+        "/v2/sorafs/storage/por-sample".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Request a PoR sample.",
@@ -4719,7 +4723,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/proof/stream".to_owned(),
+        "/v2/sorafs/proof/stream".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Stream proofs.",
@@ -4730,7 +4734,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/por-challenge".to_owned(),
+        "/v2/sorafs/storage/por-challenge".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit storage PoR challenge.",
@@ -4741,7 +4745,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/por-proof".to_owned(),
+        "/v2/sorafs/storage/por-proof".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit storage PoR proof.",
@@ -4752,7 +4756,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/storage/por-verdict".to_owned(),
+        "/v2/sorafs/storage/por-verdict".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit storage PoR verdict.",
@@ -4763,7 +4767,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/deal/usage".to_owned(),
+        "/v2/sorafs/deal/usage".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit deal usage.",
@@ -4774,7 +4778,7 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sorafs/deal/settle".to_owned(),
+        "/v2/sorafs/deal/settle".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit deal settlement.",
@@ -4790,7 +4794,7 @@ fn sorafs_paths() -> Map {
 fn soradns_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/soradns/directory/latest".to_owned(),
+        "/v2/soradns/directory/latest".to_owned(),
         Value::Object(json_get_operation(
             "SoraDNS",
             "Fetch latest directory snapshot.",
@@ -4800,7 +4804,7 @@ fn soradns_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/soradns/directory/events".to_owned(),
+        "/v2/soradns/directory/events".to_owned(),
         Value::Object(event_stream_get_operation(
             "SoraDNS",
             "Stream directory events.",
@@ -4813,7 +4817,7 @@ fn soradns_paths() -> Map {
 fn content_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/content/{bundle}/{path}".to_owned(),
+        "/v2/content/{bundle}/{path}".to_owned(),
         Value::Object({
             let mut operation = Map::new();
             operation.insert(
@@ -4854,7 +4858,7 @@ Role- or sponsor-gated bundles require canonical request headers \
 fn sns_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/sns/registrations".to_owned(),
+        "/v2/sns/registrations".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
             "Register a SNS suffix.",
@@ -4865,7 +4869,7 @@ fn sns_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}".to_owned(),
+        "/v2/sns/registrations/{selector}".to_owned(),
         Value::Object(json_get_operation(
             "SNS",
             "Fetch a SNS registration.",
@@ -4875,7 +4879,7 @@ fn sns_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/renew".to_owned(),
+        "/v2/sns/registrations/{selector}/renew".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
             "Renew a SNS registration.",
@@ -4886,7 +4890,7 @@ fn sns_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/transfer".to_owned(),
+        "/v2/sns/registrations/{selector}/transfer".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
             "Transfer a SNS registration.",
@@ -4897,7 +4901,7 @@ fn sns_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/controllers".to_owned(),
+        "/v2/sns/registrations/{selector}/controllers".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
             "Update SNS controllers.",
@@ -4908,7 +4912,7 @@ fn sns_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/freeze".to_owned(),
+        "/v2/sns/registrations/{selector}/freeze".to_owned(),
         Value::Object({
             let post_op = json_post_operation(
                 "SNS",
@@ -4936,7 +4940,7 @@ fn sns_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/sns/policies/{suffix_id}".to_owned(),
+        "/v2/sns/policies/{suffix_id}".to_owned(),
         Value::Object(json_get_operation(
             "SNS",
             "Fetch SNS policy.",
@@ -4946,7 +4950,7 @@ fn sns_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sns/governance/cases".to_owned(),
+        "/v2/sns/governance/cases".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "SNS",
@@ -4979,7 +4983,7 @@ fn sns_paths() -> Map {
 fn soranet_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/soranet/privacy/event".to_owned(),
+        "/v2/soranet/privacy/event".to_owned(),
         Value::Object(json_post_operation(
             "SoraNet",
             "Submit a privacy event.",
@@ -4990,7 +4994,7 @@ fn soranet_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/soranet/privacy/share".to_owned(),
+        "/v2/soranet/privacy/share".to_owned(),
         Value::Object(json_post_operation(
             "SoraNet",
             "Submit a privacy share payload.",
@@ -5006,7 +5010,7 @@ fn soranet_paths() -> Map {
 fn push_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/notify/devices".to_owned(),
+        "/v2/notify/devices".to_owned(),
         Value::Object({
             let mut operation = Map::new();
             operation.insert(
@@ -5064,7 +5068,7 @@ fn push_paths() -> Map {
 fn webhook_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/webhooks".to_owned(),
+        "/v2/webhooks".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "Webhooks",
@@ -5092,7 +5096,7 @@ fn webhook_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/webhooks/{id}".to_owned(),
+        "/v2/webhooks/{id}".to_owned(),
         Value::Object(json_delete_operation(
             "Webhooks",
             "Delete a webhook.",
@@ -5107,19 +5111,19 @@ fn webhook_paths() -> Map {
 fn kaigi_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/kaigi/relays".to_owned(),
+        "/v2/kaigi/relays".to_owned(),
         Value::Object(kaigi_relays_operation()),
     );
     paths.insert(
-        "/v1/kaigi/relays/{relay_id}".to_owned(),
+        "/v2/kaigi/relays/{relay_id}".to_owned(),
         Value::Object(kaigi_relay_detail_operation()),
     );
     paths.insert(
-        "/v1/kaigi/relays/health".to_owned(),
+        "/v2/kaigi/relays/health".to_owned(),
         Value::Object(kaigi_relays_health_operation()),
     );
     paths.insert(
-        "/v1/kaigi/relays/events".to_owned(),
+        "/v2/kaigi/relays/events".to_owned(),
         Value::Object(kaigi_relays_events_operation()),
     );
     paths
@@ -5128,7 +5132,7 @@ fn kaigi_paths() -> Map {
 fn nexus_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/nexus/lifecycle".to_owned(),
+        "/v2/nexus/lifecycle".to_owned(),
         Value::Object(json_post_operation(
             "Nexus",
             "Apply a lane lifecycle plan.",
@@ -5139,19 +5143,19 @@ fn nexus_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/nexus/public_lanes/{lane_id}/validators".to_owned(),
+        "/v2/nexus/public_lanes/{lane_id}/validators".to_owned(),
         Value::Object(nexus_public_lane_validators_operation()),
     );
     paths.insert(
-        "/v1/nexus/public_lanes/{lane_id}/stake".to_owned(),
+        "/v2/nexus/public_lanes/{lane_id}/stake".to_owned(),
         Value::Object(nexus_public_lane_stake_operation()),
     );
     paths.insert(
-        "/v1/nexus/public_lanes/{lane_id}/rewards/pending".to_owned(),
+        "/v2/nexus/public_lanes/{lane_id}/rewards/pending".to_owned(),
         Value::Object(nexus_public_lane_rewards_operation()),
     );
     paths.insert(
-        "/v1/nexus/dataspaces/accounts/{literal}/summary".to_owned(),
+        "/v2/nexus/dataspaces/accounts/{literal}/summary".to_owned(),
         Value::Object(nexus_dataspaces_account_summary_operation()),
     );
     paths
@@ -5160,7 +5164,7 @@ fn nexus_paths() -> Map {
 fn sumeragi_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/sumeragi/evidence/count".to_owned(),
+        "/v2/sumeragi/evidence/count".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Count evidence entries.",
@@ -5170,7 +5174,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/evidence".to_owned(),
+        "/v2/sumeragi/evidence".to_owned(),
         Value::Object({
             let get_op = json_get_operation(
                 "Sumeragi",
@@ -5198,7 +5202,7 @@ fn sumeragi_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/sumeragi/new_view/sse".to_owned(),
+        "/v2/sumeragi/new_view/sse".to_owned(),
         Value::Object(event_stream_get_operation(
             "Sumeragi",
             "Stream new view events.",
@@ -5206,7 +5210,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/new_view/json".to_owned(),
+        "/v2/sumeragi/new_view/json".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch new view status.",
@@ -5216,7 +5220,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/status".to_owned(),
+        "/v2/sumeragi/status".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch Sumeragi status.",
@@ -5226,7 +5230,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/status/sse".to_owned(),
+        "/v2/sumeragi/status/sse".to_owned(),
         Value::Object(event_stream_get_operation(
             "Sumeragi",
             "Stream Sumeragi status.",
@@ -5234,7 +5238,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/leader".to_owned(),
+        "/v2/sumeragi/leader".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch current leader.",
@@ -5244,7 +5248,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/bls_keys".to_owned(),
+        "/v2/sumeragi/bls_keys".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch consensus BLS keys.",
@@ -5254,7 +5258,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/qc".to_owned(),
+        "/v2/sumeragi/qc".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch QC snapshots.",
@@ -5264,7 +5268,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/checkpoints".to_owned(),
+        "/v2/sumeragi/checkpoints".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch checkpoint snapshots.",
@@ -5274,7 +5278,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/consensus-keys".to_owned(),
+        "/v2/sumeragi/consensus-keys".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch consensus keys.",
@@ -5284,11 +5288,11 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/commit-certificates".to_owned(),
+        "/v2/sumeragi/commit-certificates".to_owned(),
         Value::Object(sumeragi_commit_qcs_operation()),
     );
     paths.insert(
-        "/v1/sumeragi/rbc".to_owned(),
+        "/v2/sumeragi/rbc".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch RBC status.",
@@ -5298,7 +5302,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
+        "/v2/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch RBC delivered status.",
@@ -5311,7 +5315,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/pacemaker".to_owned(),
+        "/v2/sumeragi/pacemaker".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch pacemaker status.",
@@ -5321,7 +5325,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/phases".to_owned(),
+        "/v2/sumeragi/phases".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch phase status.",
@@ -5331,27 +5335,27 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/bridge/finality/{height}".to_owned(),
+        "/v2/bridge/finality/{height}".to_owned(),
         Value::Object(bridge_finality_operation()),
     );
     paths.insert(
-        "/v1/bridge/finality/bundle/{height}".to_owned(),
+        "/v2/bridge/finality/bundle/{height}".to_owned(),
         Value::Object(bridge_finality_bundle_operation()),
     );
     paths.insert(
-        "/v1/sumeragi/validator-sets".to_owned(),
+        "/v2/sumeragi/validator-sets".to_owned(),
         Value::Object(sumeragi_validator_sets_operation()),
     );
     paths.insert(
-        "/v1/sumeragi/validator-sets/{height}".to_owned(),
+        "/v2/sumeragi/validator-sets/{height}".to_owned(),
         Value::Object(sumeragi_validator_set_by_height_operation()),
     );
     paths.insert(
-        "/v1/sumeragi/key-lifecycle".to_owned(),
+        "/v2/sumeragi/key-lifecycle".to_owned(),
         Value::Object(sumeragi_key_lifecycle_operation()),
     );
     paths.insert(
-        "/v1/sumeragi/telemetry".to_owned(),
+        "/v2/sumeragi/telemetry".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch Sumeragi telemetry.",
@@ -5361,7 +5365,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/params".to_owned(),
+        "/v2/sumeragi/params".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch Sumeragi parameters.",
@@ -5371,7 +5375,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/rbc/sessions".to_owned(),
+        "/v2/sumeragi/rbc/sessions".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "List RBC sessions.",
@@ -5381,7 +5385,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/commit_qc/{hash}".to_owned(),
+        "/v2/sumeragi/commit_qc/{hash}".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch commit QC.",
@@ -5391,7 +5395,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/collectors".to_owned(),
+        "/v2/sumeragi/collectors".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch collector status.",
@@ -5401,7 +5405,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/vrf/penalties/{epoch}".to_owned(),
+        "/v2/sumeragi/vrf/penalties/{epoch}".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch VRF penalties.",
@@ -5415,7 +5419,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/vrf/epoch/{epoch}".to_owned(),
+        "/v2/sumeragi/vrf/epoch/{epoch}".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
             "Fetch VRF epoch data.",
@@ -5429,7 +5433,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/vrf/commit".to_owned(),
+        "/v2/sumeragi/vrf/commit".to_owned(),
         Value::Object(json_post_operation(
             "Sumeragi",
             "Submit VRF commit.",
@@ -5440,7 +5444,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/vrf/reveal".to_owned(),
+        "/v2/sumeragi/vrf/reveal".to_owned(),
         Value::Object(json_post_operation(
             "Sumeragi",
             "Submit VRF reveal.",
@@ -5451,7 +5455,7 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/rbc/sample".to_owned(),
+        "/v2/sumeragi/rbc/sample".to_owned(),
         Value::Object(json_post_operation(
             "Sumeragi",
             "Sample RBC sessions.",
@@ -5724,11 +5728,11 @@ fn sumeragi_validator_set_by_height_operation() -> Map {
 fn repo_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/repo/agreements".to_owned(),
+        "/v2/repo/agreements".to_owned(),
         Value::Object(repo_agreements_get_operation()),
     );
     paths.insert(
-        "/v1/repo/agreements/query".to_owned(),
+        "/v2/repo/agreements/query".to_owned(),
         Value::Object(repo_agreements_query_operation()),
     );
     paths
@@ -6719,6 +6723,84 @@ fn alias_resolve_index_operation() -> Map {
     methods
 }
 
+fn asset_alias_resolve_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Aliases".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Resolve an asset alias into canonical asset definition fields.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns canonical `aid` plus human-readable fields for `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` aliases."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("assetAliasResolve".to_owned()),
+    );
+    operation.insert("requestBody".into(), asset_alias_resolve_request_body());
+    operation.insert(
+        "responses".into(),
+        Value::Object(asset_alias_resolve_responses()),
+    );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn asset_alias_resolve_request_body() -> Value {
+    let mut media = Map::new();
+    media.insert(
+        "application/json".into(),
+        Value::Object({
+            let mut schema = Map::new();
+            schema.insert("schema".into(), schema_ref("AssetAliasResolveRequest"));
+            schema
+        }),
+    );
+
+    let mut body = Map::new();
+    body.insert("required".into(), Value::Bool(true));
+    body.insert("content".into(), Value::Object(media));
+    Value::Object(body)
+}
+
+fn asset_alias_resolve_responses() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Asset alias successfully resolved.",
+            schema_ref("AssetAliasResolveResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed request (alias missing or invalid).",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response("Asset alias not found.", error_schema_reference()),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Asset alias is ambiguously bound to multiple definitions.",
+            error_schema_reference(),
+        ),
+    );
+    responses
+}
+
 fn alias_resolve_index_request_body() -> Value {
     let mut media = Map::new();
     media.insert(
@@ -7632,6 +7714,20 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "AssetAliasResolveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Asset alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) to resolve."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "AliasResolveResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -7654,6 +7750,42 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Backend source for the alias mapping."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetAliasResolveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "asset_definition_id", "asset_name"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Canonical alias representation."
+                },
+                "asset_definition_id": {
+                    "type": "string",
+                    "description": "Canonical asset definition id (`aid:<32-lower-hex>`)."
+                },
+                "asset_name": {
+                    "type": "string",
+                    "description": "Human-readable asset name."
+                },
+                "description": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional asset description."
+                },
+                "logo": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional SoraFS logo URI."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Resolver source."
                 }
             }
         }),
@@ -8430,7 +8562,7 @@ fn openapi_schemas() -> Map {
                 },
                 "controller_display": {
                     "type": "string",
-                    "description": "Controller rendered with the requested address format."
+                    "description": "Controller rendered as canonical I105 account literal."
                 },
                 "receiver_id": {
                     "type": "string",
@@ -8438,7 +8570,7 @@ fn openapi_schemas() -> Map {
                 },
                 "receiver_display": {
                     "type": "string",
-                    "description": "Receiver rendered with requested address format."
+                    "description": "Receiver rendered as canonical I105 account literal."
                 },
                 "deposit_account_id": {
                     "type": "string",
@@ -8446,7 +8578,7 @@ fn openapi_schemas() -> Map {
                 },
                 "deposit_account_display": {
                     "type": "string",
-                    "description": "Deposit account rendered with requested address format."
+                    "description": "Deposit account rendered as canonical I105 account literal."
                 },
                 "asset_id": {
                     "type": "string",
@@ -10257,54 +10389,55 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
-        assert!(paths.contains_key("/v1/aliases/voprf/evaluate"));
-        assert!(paths.contains_key("/v1/aliases/resolve"));
-        assert!(paths.contains_key("/v1/aliases/resolve_index"));
-        assert!(paths.contains_key("/v1/time/now"));
-        assert!(paths.contains_key("/v1/time/status"));
-        assert!(paths.contains_key("/v1/ledger/headers"));
-        assert!(paths.contains_key("/v1/ledger/state/{height}"));
-        assert!(paths.contains_key("/v1/ledger/state-proof/{height}"));
-        assert!(paths.contains_key("/v1/ledger/block/{height}/proof/{entry_hash}"));
-        assert!(paths.contains_key("/v1/da/commitments"));
-        assert!(paths.contains_key("/v1/da/commitments/prove"));
-        assert!(paths.contains_key("/v1/da/commitments/verify"));
-        assert!(paths.contains_key("/v1/sumeragi/commit-certificates"));
-        assert!(paths.contains_key("/v1/bridge/finality/{height}"));
-        assert!(paths.contains_key("/v1/bridge/finality/bundle/{height}"));
-        assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
-        assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
+        assert!(paths.contains_key("/v2/aliases/voprf/evaluate"));
+        assert!(paths.contains_key("/v2/aliases/resolve"));
+        assert!(paths.contains_key("/v2/aliases/resolve_index"));
+        assert!(paths.contains_key("/v2/assets/aliases/resolve"));
+        assert!(paths.contains_key("/v2/time/now"));
+        assert!(paths.contains_key("/v2/time/status"));
+        assert!(paths.contains_key("/v2/ledger/headers"));
+        assert!(paths.contains_key("/v2/ledger/state/{height}"));
+        assert!(paths.contains_key("/v2/ledger/state-proof/{height}"));
+        assert!(paths.contains_key("/v2/ledger/block/{height}/proof/{entry_hash}"));
+        assert!(paths.contains_key("/v2/da/commitments"));
+        assert!(paths.contains_key("/v2/da/commitments/prove"));
+        assert!(paths.contains_key("/v2/da/commitments/verify"));
+        assert!(paths.contains_key("/v2/sumeragi/commit-certificates"));
+        assert!(paths.contains_key("/v2/bridge/finality/{height}"));
+        assert!(paths.contains_key("/v2/bridge/finality/bundle/{height}"));
+        assert!(paths.contains_key("/v2/sumeragi/validator-sets"));
+        assert!(paths.contains_key("/v2/sumeragi/validator-sets/{height}"));
         assert!(paths.contains_key("/health"));
-        assert!(paths.contains_key("/v1/operator/auth/login/verify"));
-        assert!(paths.contains_key("/v1/kaigi/relays"));
-        assert!(paths.contains_key("/v1/kaigi/relays/{relay_id}"));
-        assert!(paths.contains_key("/v1/kaigi/relays/health"));
-        assert!(paths.contains_key("/v1/kaigi/relays/events"));
-        assert!(paths.contains_key("/v1/nexus/public_lanes/{lane_id}/validators"));
-        assert!(paths.contains_key("/v1/nexus/public_lanes/{lane_id}/stake"));
-        assert!(paths.contains_key("/v1/repo/agreements"));
-        assert!(paths.contains_key("/v1/repo/agreements/query"));
+        assert!(paths.contains_key("/v2/operator/auth/login/verify"));
+        assert!(paths.contains_key("/v2/kaigi/relays"));
+        assert!(paths.contains_key("/v2/kaigi/relays/{relay_id}"));
+        assert!(paths.contains_key("/v2/kaigi/relays/health"));
+        assert!(paths.contains_key("/v2/kaigi/relays/events"));
+        assert!(paths.contains_key("/v2/nexus/public_lanes/{lane_id}/validators"));
+        assert!(paths.contains_key("/v2/nexus/public_lanes/{lane_id}/stake"));
+        assert!(paths.contains_key("/v2/repo/agreements"));
+        assert!(paths.contains_key("/v2/repo/agreements/query"));
         assert!(paths.contains_key("/transaction"));
         assert!(paths.contains_key("/query"));
         assert!(paths.contains_key("/events"));
-        assert!(paths.contains_key("/v1/da/ingest"));
-        assert!(paths.contains_key("/v1/connect/session"));
-        assert!(paths.contains_key("/v1/mcp"));
-        assert!(paths.contains_key("/v1/zk/attachments"));
-        assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
-        assert!(paths.contains_key("/v1/gov/stream"));
-        assert!(paths.contains_key("/v1/telemetry/live"));
-        assert!(paths.contains_key("/v1/runtime/abi/active"));
-        assert!(paths.contains_key("/v1/accounts"));
-        assert!(paths.contains_key("/v1/assets/definitions"));
-        assert!(paths.contains_key("/v1/explorer/accounts"));
-        assert!(paths.contains_key("/v1/sorafs/providers"));
-        assert!(paths.contains_key("/v1/soradns/directory/latest"));
-        assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
-        assert!(paths.contains_key("/v1/sns/registrations"));
-        assert!(paths.contains_key("/v1/soranet/privacy/event"));
-        assert!(paths.contains_key("/v1/webhooks"));
-        assert!(paths.contains_key("/v1/notify/devices"));
+        assert!(paths.contains_key("/v2/da/ingest"));
+        assert!(paths.contains_key("/v2/connect/session"));
+        assert!(paths.contains_key("/v2/mcp"));
+        assert!(paths.contains_key("/v2/zk/attachments"));
+        assert!(paths.contains_key("/v2/gov/proposals/deploy-contract"));
+        assert!(paths.contains_key("/v2/gov/stream"));
+        assert!(paths.contains_key("/v2/telemetry/live"));
+        assert!(paths.contains_key("/v2/runtime/abi/active"));
+        assert!(paths.contains_key("/v2/accounts"));
+        assert!(paths.contains_key("/v2/assets/definitions"));
+        assert!(paths.contains_key("/v2/explorer/accounts"));
+        assert!(paths.contains_key("/v2/sorafs/providers"));
+        assert!(paths.contains_key("/v2/soradns/directory/latest"));
+        assert!(paths.contains_key("/v2/content/{bundle}/{path}"));
+        assert!(paths.contains_key("/v2/sns/registrations"));
+        assert!(paths.contains_key("/v2/soranet/privacy/event"));
+        assert!(paths.contains_key("/v2/webhooks"));
+        assert!(paths.contains_key("/v2/notify/devices"));
     }
 
     #[test]
@@ -10335,17 +10468,17 @@ mod tests {
         }
 
         let doc = generate_spec();
-        let account_assets = params_for(&doc, "/v1/accounts/{account_id}/assets");
+        let account_assets = params_for(&doc, "/v2/accounts/{account_id}/assets");
         assert!(account_assets.contains(&"limit".to_owned()));
         assert!(account_assets.contains(&"offset".to_owned()));
         assert!(account_assets.contains(&"asset_id".to_owned()));
 
-        let account_transactions = params_for(&doc, "/v1/accounts/{account_id}/transactions");
+        let account_transactions = params_for(&doc, "/v2/accounts/{account_id}/transactions");
         assert!(account_transactions.contains(&"limit".to_owned()));
         assert!(account_transactions.contains(&"offset".to_owned()));
         assert!(account_transactions.contains(&"asset_id".to_owned()));
 
-        let asset_holders = params_for(&doc, "/v1/assets/{definition_id}/holders");
+        let asset_holders = params_for(&doc, "/v2/assets/{definition_id}/holders");
         assert!(asset_holders.contains(&"limit".to_owned()));
         assert!(asset_holders.contains(&"offset".to_owned()));
         assert!(asset_holders.contains(&"asset_id".to_owned()));
@@ -10379,7 +10512,7 @@ mod tests {
         }
 
         let doc = generate_spec();
-        let portfolio = params_for(&doc, "/v1/accounts/{uaid}/portfolio");
+        let portfolio = params_for(&doc, "/v2/accounts/{uaid}/portfolio");
         assert!(portfolio.contains(&"asset_id".to_owned()));
     }
 
@@ -10411,7 +10544,7 @@ mod tests {
         }
 
         let doc = generate_spec();
-        let rewards = params_for(&doc, "/v1/nexus/public_lanes/{lane_id}/rewards/pending");
+        let rewards = params_for(&doc, "/v2/nexus/public_lanes/{lane_id}/rewards/pending");
         assert!(rewards.contains(&"asset_id".to_owned()));
         assert!(rewards.contains(&"account".to_owned()));
     }
@@ -10444,7 +10577,7 @@ mod tests {
         }
 
         let doc = generate_spec();
-        let explorer_assets = params_for(&doc, "/v1/explorer/assets");
+        let explorer_assets = params_for(&doc, "/v2/explorer/assets");
         assert!(explorer_assets.contains(&"page".to_owned()));
         assert!(explorer_assets.contains(&"per_page".to_owned()));
         assert!(explorer_assets.contains(&"asset_id".to_owned()));
@@ -10480,7 +10613,7 @@ mod tests {
         }
 
         let doc = generate_spec();
-        let explorer_transactions = params_for(&doc, "/v1/explorer/transactions");
+        let explorer_transactions = params_for(&doc, "/v2/explorer/transactions");
         assert!(explorer_transactions.contains(&"page".to_owned()));
         assert!(explorer_transactions.contains(&"per_page".to_owned()));
         assert!(explorer_transactions.contains(&"asset_id".to_owned()));
@@ -10517,7 +10650,7 @@ mod tests {
         }
 
         let doc = generate_spec();
-        let explorer_instructions = params_for(&doc, "/v1/explorer/instructions");
+        let explorer_instructions = params_for(&doc, "/v2/explorer/instructions");
         assert!(explorer_instructions.contains(&"page".to_owned()));
         assert!(explorer_instructions.contains(&"per_page".to_owned()));
         assert!(explorer_instructions.contains(&"asset_id".to_owned()));
@@ -10530,6 +10663,41 @@ mod tests {
     }
 
     #[test]
+    fn explorer_instructions_account_param_description_mentions_non_transfer_matches() {
+        fn parameter_description(doc: &Value, path: &str, name: &str) -> String {
+            let paths = doc
+                .get("paths")
+                .and_then(Value::as_object)
+                .expect("paths section");
+            let entry = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .expect("path entry");
+            let get_op = entry.get("get").and_then(Value::as_object).expect("get op");
+            get_op
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find_map(|param| {
+                    let obj = param.as_object()?;
+                    let param_name = obj.get("name")?.as_str()?;
+                    (param_name == name)
+                        .then(|| obj.get("description")?.as_str().map(str::to_owned))
+                        .flatten()
+                })
+                .expect("parameter description")
+        }
+
+        let doc = generate_spec();
+        let description =
+            parameter_description(&doc, "/v2/explorer/instructions", "account").to_lowercase();
+        assert!(description.contains("mint/burn"));
+        assert!(description.contains("multisig"));
+        assert!(description.contains("reward"));
+    }
+
+    #[test]
     fn pipeline_status_documents_not_found_response() {
         let doc = generate_spec();
         let paths = doc
@@ -10537,7 +10705,7 @@ mod tests {
             .and_then(Value::as_object)
             .expect("paths section");
         let status = paths
-            .get("/v1/pipeline/transactions/status")
+            .get("/v2/pipeline/transactions/status")
             .and_then(Value::as_object)
             .expect("pipeline status path");
         let get = status
@@ -10704,27 +10872,27 @@ mod tests {
             PathCase {
                 label: "aliases",
                 builder: alias_paths,
-                expected: "/v1/aliases/resolve",
+                expected: "/v2/aliases/resolve",
             },
             PathCase {
                 label: "time",
                 builder: time_paths,
-                expected: "/v1/time/now",
+                expected: "/v2/time/now",
             },
             PathCase {
                 label: "ledger",
                 builder: ledger_paths,
-                expected: "/v1/ledger/headers",
+                expected: "/v2/ledger/headers",
             },
             PathCase {
                 label: "da",
                 builder: da_paths,
-                expected: "/v1/da/ingest",
+                expected: "/v2/da/ingest",
             },
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/revocations",
+                expected: "/v2/offline/revocations",
             },
             PathCase {
                 label: "system",
@@ -10734,7 +10902,7 @@ mod tests {
             PathCase {
                 label: "operator_auth",
                 builder: operator_auth_paths,
-                expected: "/v1/operator/auth/login/options",
+                expected: "/v2/operator/auth/login/options",
             },
             PathCase {
                 label: "transactions",
@@ -10754,127 +10922,127 @@ mod tests {
             PathCase {
                 label: "connect",
                 builder: connect_paths,
-                expected: "/v1/connect/session",
+                expected: "/v2/connect/session",
             },
             PathCase {
                 label: "mcp",
                 builder: mcp_paths,
-                expected: "/v1/mcp",
+                expected: "/v2/mcp",
             },
             PathCase {
                 label: "proofs",
                 builder: proof_paths,
-                expected: "/v1/proofs/retention",
+                expected: "/v2/proofs/retention",
             },
             PathCase {
                 label: "contracts",
                 builder: contracts_paths,
-                expected: "/v1/contracts/deploy",
+                expected: "/v2/contracts/deploy",
             },
             PathCase {
                 label: "zk",
                 builder: zk_paths,
-                expected: "/v1/zk/roots",
+                expected: "/v2/zk/roots",
             },
             PathCase {
                 label: "governance",
                 builder: governance_paths,
-                expected: "/v1/gov/proposals/deploy-contract",
+                expected: "/v2/gov/proposals/deploy-contract",
             },
             PathCase {
                 label: "runtime",
                 builder: runtime_paths,
-                expected: "/v1/runtime/abi/active",
+                expected: "/v2/runtime/abi/active",
             },
             PathCase {
                 label: "accounts",
                 builder: account_paths,
-                expected: "/v1/accounts",
+                expected: "/v2/accounts",
             },
             PathCase {
                 label: "domains",
                 builder: domain_paths,
-                expected: "/v1/domains",
+                expected: "/v2/domains",
             },
             PathCase {
                 label: "assets",
                 builder: asset_paths,
-                expected: "/v1/assets/definitions",
+                expected: "/v2/assets/definitions",
             },
             PathCase {
                 label: "nfts",
                 builder: nft_paths,
-                expected: "/v1/nfts",
+                expected: "/v2/nfts",
             },
             PathCase {
                 label: "parameters",
                 builder: parameter_paths,
-                expected: "/v1/parameters",
+                expected: "/v2/parameters",
             },
             PathCase {
                 label: "space_directory",
                 builder: space_directory_paths,
-                expected: "/v1/space-directory/uaids/{uaid}",
+                expected: "/v2/space-directory/uaids/{uaid}",
             },
             PathCase {
                 label: "explorer",
                 builder: explorer_paths,
-                expected: "/v1/explorer/accounts",
+                expected: "/v2/explorer/accounts",
             },
             PathCase {
                 label: "sorafs",
                 builder: sorafs_paths,
-                expected: "/v1/sorafs/providers",
+                expected: "/v2/sorafs/providers",
             },
             PathCase {
                 label: "soradns",
                 builder: soradns_paths,
-                expected: "/v1/soradns/directory/latest",
+                expected: "/v2/soradns/directory/latest",
             },
             PathCase {
                 label: "content",
                 builder: content_paths,
-                expected: "/v1/content/{bundle}/{path}",
+                expected: "/v2/content/{bundle}/{path}",
             },
             PathCase {
                 label: "sns",
                 builder: sns_paths,
-                expected: "/v1/sns/registrations",
+                expected: "/v2/sns/registrations",
             },
             PathCase {
                 label: "soranet",
                 builder: soranet_paths,
-                expected: "/v1/soranet/privacy/event",
+                expected: "/v2/soranet/privacy/event",
             },
             PathCase {
                 label: "push",
                 builder: push_paths,
-                expected: "/v1/notify/devices",
+                expected: "/v2/notify/devices",
             },
             PathCase {
                 label: "webhooks",
                 builder: webhook_paths,
-                expected: "/v1/webhooks",
+                expected: "/v2/webhooks",
             },
             PathCase {
                 label: "kaigi",
                 builder: kaigi_paths,
-                expected: "/v1/kaigi/relays",
+                expected: "/v2/kaigi/relays",
             },
             PathCase {
                 label: "nexus",
                 builder: nexus_paths,
-                expected: "/v1/nexus/lifecycle",
+                expected: "/v2/nexus/lifecycle",
             },
             PathCase {
                 label: "sumeragi",
                 builder: sumeragi_paths,
-                expected: "/v1/sumeragi/status",
+                expected: "/v2/sumeragi/status",
             },
             PathCase {
                 label: "repo",
                 builder: repo_paths,
-                expected: "/v1/repo/agreements",
+                expected: "/v2/repo/agreements",
             },
         ];
 

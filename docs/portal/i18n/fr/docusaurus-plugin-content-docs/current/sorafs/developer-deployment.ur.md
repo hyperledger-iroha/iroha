@@ -30,7 +30,7 @@ SoraFS Déterminisme du flux de travail d'emballage pour les garde-corps opérat
 
 ##Configuration de l'environnement
 
-- Les passerelles et le point de terminaison de streaming de preuve (`POST /v1/sorafs/proof/stream`) permettent aux résumés de télémétrie CLI d'émettre des messages instantanés.
+- Les passerelles et le point de terminaison de streaming de preuve (`POST /v2/sorafs/proof/stream`) permettent aux résumés de télémétrie CLI d'émettre des messages instantanés.
 - Politique `sorafs_alias_cache` et valeurs par défaut `iroha_config` et assistant CLI (`sorafs_cli manifest submit --alias-*`) pour configurer la configuration
 - Jetons de flux (identifiants Torii) et gestionnaire de secrets pour le gestionnaire de secrets
 - Les exportateurs de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) permettent d'expédier la pile Prometheus/OTel pour expédier des fichiers.

@@ -45,7 +45,7 @@ fn proof_verified_filter_uri() -> String {
         ),
     ]);
     let filter = json::to_string(&filter_value).expect("serialize filter");
-    format!("/v1/events/sse?filter={}", urlencoding::encode(&filter))
+    format!("/v2/events/sse?filter={}", urlencoding::encode(&filter))
 }
 
 /// Emit a non-matching and matching proof verification event into the broadcast channel.
@@ -80,7 +80,7 @@ async fn first_data_json(resp: axum::response::Response<axum::body::Body>) -> no
 async fn proof_verified_fields_and_filtering() {
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let app = Router::new().route(
-        "/v1/events/sse",
+        "/v2/events/sse",
         get({
             let events = events.clone();
             move |q| async move { iroha_torii::handle_v1_events_sse(events, q) }

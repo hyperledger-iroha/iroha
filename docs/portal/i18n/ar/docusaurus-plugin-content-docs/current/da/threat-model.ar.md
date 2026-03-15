@@ -221,7 +221,7 @@ whitelist لمزودين خبيثين، او يخفي التنبيهات.
 
 - إعادة تشغيل ذاكرة التخزين المؤقت واستمرار المؤشرات تم انجازهما في DA-2. التنفيذ في
   `crates/iroha_core/src/da/replay_cache.rs` (منطقة التخزين المؤقت) وتكامل Torii في
-  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر يتحقق من بصمة الإصبع عبر `/v1/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر يتحقق من بصمة الإصبع عبر `/v2/da/ingest`.
 - محاكاة دفق PDP/PoTR عبر تسخير إثبات التدفق في
   `crates/sorafs_car/tests/sorafs_cli.rs`، وتغطي تدفقات طلب PoR/PDP/PoTR وسيناريوهات
   يجب الإشارة إليها في النموذج.

@@ -247,7 +247,7 @@ Nexus e artefatos de الحكم المتعافي sob falhas bizantinas، de rede
 - إعادة تشغيل ذاكرة التخزين المؤقت واستمرارية تضييق المؤشرات على DA-2. فيجا أ
   قم بتنفيذ `crates/iroha_core/src/da/replay_cache.rs` (منطق ذاكرة التخزين المؤقت)
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`، الذي يقوم بالتحقق من
-  بصمة الإصبع عبر `/v1/da/ingest`.
+  بصمة الإصبع عبر `/v2/da/ingest`.
 - كما يتم محاكاة دفق PDP/PoTR من خلال البث التجريبي
   em `crates/sorafs_car/tests/sorafs_cli.rs`، تدفقات كوبريندو المطلوبة
   PoR/PDP/PoTR وسيناريوهات الرسوم المتحركة ليست نموذجًا أمريكيًا.

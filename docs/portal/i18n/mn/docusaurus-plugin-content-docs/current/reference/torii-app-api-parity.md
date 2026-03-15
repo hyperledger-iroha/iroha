@@ -16,14 +16,14 @@ translation_last_reviewed: 2026-02-07
 Замын зургийн лавлагаа: TORII-APP-1 — `app_api` паритын аудит
 
 Энэ хуудас нь дотоод `TORII-APP-1` аудитыг (`docs/source/torii/app_api_parity_audit.md`) толилуулж байна.
-Ингэснээр моно-репогийн гадна байгаа уншигчид `/v1/*` гадаргуу нь утастай, туршилт,
+Ингэснээр моно-репогийн гадна байгаа уншигчид `/v2/*` гадаргуу нь утастай, туршилт,
 болон баримтжуулсан. Аудит нь `Torii::add_app_api_routes`-ээр дамжуулан дахин экспортолсон маршрутуудыг хянаж,
 `add_contracts_and_vk_routes`, `add_connect_routes`.
 
 ## Хамрах хүрээ ба арга
 
 Аудит нь `crates/iroha_torii/src/lib.rs:256-522` болон олон нийтийн реэкспортыг шалгадаг.
-онцлог хаалгатай маршрут бүтээгчид. Замын зураг дээрх `/v1/*` гадаргуу бүрийн хувьд бид дараахыг баталгаажуулсан:
+онцлог хаалгатай маршрут бүтээгчид. Замын зураг дээрх `/v2/*` гадаргуу бүрийн хувьд бид дараахыг баталгаажуулсан:
 
 - `crates/iroha_torii/src/routing.rs` дахь зохицуулагчийн хэрэгжилт ба DTO тодорхойлолтууд.
 - `app_api` эсвэл `connect` онцлог бүлгүүдийн дагуу чиглүүлэгчийн бүртгэл.
@@ -42,25 +42,25 @@ translation_last_reviewed: 2026-02-07
 - Жишээ хэсгүүд:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v2/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Төгсгөлийн цэгийн бүртгэл
 
-### Дансны зөвшөөрөл (`/v1/accounts/{id}/permissions`) — Хамгаалагдсан
+### Дансны зөвшөөрөл (`/v2/accounts/{id}/permissions`) — Хамгаалагдсан
 - Ажиллагч: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 - DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - Чиглүүлэгчийн холболт: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -68,7 +68,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Эзэмшигч: Torii платформ.
 - Тайлбар: Хариулт нь `items`/`total` бүхий Norito JSON их бие бөгөөд SDK хуудасны туслахуудтай таарч байна.
 
-### Alias OPRF үнэлгээ (`POST /v1/aliases/voprf/evaluate`) — Хамгаалагдсан
+### Alias OPRF үнэлгээ (`POST /v2/aliases/voprf/evaluate`) — Хамгаалагдсан
 - Ажиллагч: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 - DTO: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -78,7 +78,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Эзэмшигч: Torii платформ.
 - Тайлбар: Хариултын гадаргуу нь детерминистик hex болон backend identifiers-ийг хэрэгжүүлдэг; SDK нь DTO-г ашигладаг.
 
-### Нотлох үйл явдлууд SSE (`GET /v1/events/sse`) — Хамгаалагдсан
+### Нотлох үйл явдлууд SSE (`GET /v2/events/sse`) — Хамгаалагдсан
 - Ажиллагч: `handle_v1_events_sse` шүүлтүүрийн дэмжлэгтэй (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) нэмэлт шүүлтүүрийн утас.
 - Чиглүүлэгчийн холболт: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -88,7 +88,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Эзэмшигч: Torii платформ (ажиллуулах хугацаа), Интеграцийн туршилтын ажлын хэсэг (бэхэлгээ).
 - Тэмдэглэл: Шүүлтүүрийн замыг эцэс төгсгөл хүртэл баталгаажуулсан; баримт бичиг нь `docs/source/zk_app_api.md` дор амьдардаг.
 
-### Гэрээний амьдралын мөчлөг (`/v1/contracts/*`) — Хамгаалагдсан
+### Гэрээний амьдралын мөчлөг (`/v2/contracts/*`) — Хамгаалагдсан
 - Ажиллагчид: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
@@ -103,7 +103,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Эзэмшигч: Torii платформтой Ухаалаг гэрээний ажлын хэсэг.
 - Тэмдэглэл: Төгсгөлийн цэгүүд гарын үсэг зурсан гүйлгээг дараалалд оруулж, хуваалцсан телеметрийн хэмжигдэхүүнийг дахин ашигладаг (`handle_transaction_with_metrics`).
 
-### Түлхүүр амьдралын мөчлөгийг баталгаажуулж байна (`/v1/zk/vk/*`) — Хамгаалагдсан
+### Түлхүүр амьдралын мөчлөгийг баталгаажуулж байна (`/v2/zk/vk/*`) — Хамгаалагдсан
 - Ажиллагчид: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) болон `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTO: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
@@ -115,7 +115,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 - Эзэмшигч: Torii платформын дэмжлэгтэй ZK Ажлын хэсэг.
 - Тэмдэглэл: DTO нь SDK-ийн иш татсан Norito схемтэй нийцдэг; хурдны хязгаарлалтыг `limits.rs`-ээр хэрэгжүүлсэн.
 
-### Nexus Холбох (`/v1/connect/*`) — Хамгаалагдсан (`connect` онцлог)
+### Nexus Холбох (`/v2/connect/*`) — Хамгаалагдсан (`connect` онцлог)
 - Ажиллагчид: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 - DTO: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),

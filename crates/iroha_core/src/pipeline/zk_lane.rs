@@ -1151,7 +1151,7 @@ mod tests {
         let proofs = crate::zk::collect_trace_proofs_for_height(header.height().get());
         assert_eq!(proofs.len(), 1, "digest artifact recorded");
         let artifact = &proofs[0];
-        assert_eq!(artifact.backend, "zk-trace/digest-v1");
+        assert_eq!(artifact.backend, "zk-trace/digest");
         assert_eq!(artifact.proof, expected_digest.to_vec());
     }
 }

@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 批准后配置快照
 
 公投或治理投票完成后，`[settlement.repo]`
-更改已推出，从每个对等方捕获 `/v1/configuration` 快照，以便
+更改已推出，从每个对等方捕获 `/v2/configuration` 快照，以便
 审计员可以证明批准的政策在整个集群中有效（参见
 `docs/source/finance/repo_ops.md` §2.9 证据工作流程）。
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration \
+curl -fsSL https://peer01.example/v2/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

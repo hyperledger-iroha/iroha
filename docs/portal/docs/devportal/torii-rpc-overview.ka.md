@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # Norito-RPC მიმოხილვა
 
 Norito-RPC არის ორობითი ტრანსპორტი Torii API-ებისთვის. ის ხელახლა იყენებს იგივე HTTP ბილიკებს
-როგორც `/v1/pipeline`, მაგრამ ცვლის Norito ჩარჩოს მქონე დატვირთვას, რომელიც მოიცავს სქემას
+როგორც `/v2/pipeline`, მაგრამ ცვლის Norito ჩარჩოს მქონე დატვირთვას, რომელიც მოიცავს სქემას
 ჰეშები და ჩეკსუმები. გამოიყენეთ იგი, როდესაც გჭირდებათ განმსაზღვრელი, დადასტურებული პასუხები ან
 როდესაც მილსადენის JSON პასუხები ხდება ბოთლი.
 
@@ -32,7 +32,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v1/transactions/submit
+  https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. დაალაგეთ თქვენი დატვირთვა Norito კოდეკით (`iroha_client`, SDK დამხმარეები, ან
@@ -59,7 +59,7 @@ SDK-ს სპეციფიკური მითითებები:
    `TRYIT_PROXY_PUBLIC_URL`, რათა ვიჯეტებმა იცოდნენ სად გაგზავნონ ტრაფიკი.
 2. გახსენით **სცადეთ** ბარათი ამ გვერდზე ან `/reference/torii-swagger`
    For MCP/agent flows, use `/reference/torii-mcp`.
-   პანელი და აირჩიეთ საბოლოო წერტილი, როგორიცაა `POST /v1/pipeline/submit`.
+   პანელი და აირჩიეთ საბოლოო წერტილი, როგორიცაა `POST /v2/pipeline/submit`.
 3. გადართეთ **Content-Type** `application/x-norito`-ზე, აირჩიეთ **ორობითი**
    რედაქტორი და ატვირთეთ `fixtures/norito_rpc/transfer_asset.norito`
    (ან ჩამოთვლილი ნებისმიერი დატვირთვა

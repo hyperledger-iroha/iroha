@@ -26,7 +26,7 @@ Este runbook guia os operadores de governança na abertura de disputas de capaci
 ## 1. Avaliar o incidente
 
 - **Condições de gatilho:** detecção de violação de SLA (uptime/falha de PoR), déficit de replicação ou divergência de cobranca.
-- **Confirmar telemetria:** capture snapshots de `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` do provedor.
+- **Confirmar telemetria:** capture snapshots de `/v2/sorafs/capacity/state` e `/v2/sorafs/capacity/telemetry` do provedor.
 - **Notificar partes interessadas:** Equipe de Armazenamento (operações do provedor), Conselho de Governança (órgão decisor), Observabilidade (atualizações de dashboards).
 
 ## 2. Preparando o pacote de evidências
@@ -74,7 +74,7 @@ Este runbook guia os operadores de governança na abertura de disputas de capaci
    ```
 
 3. Revise `dispute_summary.json` (confirme tipo, resumo das evidências e carimbos de data/hora).
-4. Envie o JSON da requisição para Torii `/v1/sorafs/capacity/dispute` via fila de transações de governança. Capture o valor da resposta `dispute_id_hex`; ele ancora as ações de revogação posteriores e os relatórios de auditoria.
+4. Envie o JSON da requisição para Torii `/v2/sorafs/capacity/dispute` via fila de transações de governança. Capture o valor da resposta `dispute_id_hex`; ele ancora as ações de revogação posteriores e os relatórios de auditoria.
 
 ## 4. Evacuação e revogação
 

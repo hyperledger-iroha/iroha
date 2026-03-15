@@ -195,7 +195,7 @@ lane-ingest boshqaruv paneli.
   qayta konfiguratsiyalar.
 - **Quvurlar/SSE testlari.** Tranzaksiya hodisasi filtrlari qabul qilinadi
   `tx_lane_id == <u32>` predikatlar (qarang: `docs/source/pipeline.md`). Obuna bo'ling
-  `/v1/pipeline/events/transactions` ushbu filtr bilan yozilganligini isbotlash uchun yuborilgan
+  `/v2/pipeline/events/transactions` ushbu filtr bilan yozilganligini isbotlash uchun yuborilgan
   aniq yo'laksiz orqa chiziq identifikatori ostida keladi.
 
 ## 7. Kuzatish va boshqarish ilgaklari

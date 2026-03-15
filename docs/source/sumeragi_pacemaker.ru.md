@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-01-01
 
 Экспортируемая телеметрия (см. telemetry.md):
 - Runtime: `sumeragi_pacemaker_backoff_ms`, `sumeragi_pacemaker_rtt_floor_ms`, `sumeragi_phase_latency_ema_ms{phase=...}`
-- REST snapshot: `/v1/sumeragi/phases` теперь включает `ema_ms` вместе с последними
+- REST snapshot: `/v2/sumeragi/phases` теперь включает `ema_ms` вместе с последними
   перефазными задержками, чтобы дашборды могли строить тренд EMA без прямого опроса
   Prometheus.
 - Config: `sumeragi.advanced.pacemaker.backoff_multiplier`, `sumeragi.advanced.pacemaker.rtt_floor_multiplier`, `sumeragi.advanced.pacemaker.max_backoff_ms`

@@ -76,7 +76,7 @@ async fn nexus_public_lane_endpoints_exist() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/validators")
+                .uri("/v2/nexus/public_lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -88,7 +88,7 @@ async fn nexus_public_lane_endpoints_exist() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/stake")
+                .uri("/v2/nexus/public_lanes/0/stake")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -112,7 +112,7 @@ async fn nexus_public_lane_endpoints_list_records() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/validators")
+                .uri("/v2/nexus/public_lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -134,7 +134,7 @@ async fn nexus_public_lane_endpoints_list_records() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/stake")
+                .uri("/v2/nexus/public_lanes/0/stake")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -148,7 +148,7 @@ async fn nexus_public_lane_endpoints_list_records() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/0/stake?validator={validator}"
+                    "/v2/nexus/public_lanes/0/stake?validator={validator}"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -170,7 +170,7 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/nexus/public_lanes/0/validators")
+                .uri("/v2/nexus/public_lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -200,7 +200,7 @@ async fn da_commitments_reject_when_nexus_disabled() {
         .oneshot(
             Request::builder()
                 .method(Method::POST)
-                .uri("/v1/da/commitments")
+                .uri("/v2/da/commitments")
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from("{}"))
                 .expect("request"),
@@ -236,7 +236,10 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let escrow = Account::new(escrow_id.to_account_id(domain_id.clone())).build(&escrow_id);
 
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
-    let asset_definition_id: AssetDefinitionId = "xor#nexus".parse().expect("asset definition");
+    let asset_definition_id = AssetDefinitionId::new(
+        "nexus".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
     let asset_definition =
         AssetDefinition::numeric(asset_definition_id.clone()).build(&validator_id);
 

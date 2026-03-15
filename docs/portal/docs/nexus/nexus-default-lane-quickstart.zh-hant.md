@@ -197,7 +197,7 @@ curl -s http://127.0.0.1:8080/status \
   重新配置。
 - **管道/SSE 測試。 ** 交易事件過濾器接受
   `tx_lane_id == <u32>` 謂詞（請參閱 `docs/source/pipeline.md`）。訂閱
-  `/v1/pipeline/events/transactions` 使用該過濾器來證明寫入已發送
+  `/v2/pipeline/events/transactions` 使用該過濾器來證明寫入已發送
   沒有明確的車道到達後備車道 ID 下。
 
 ## 7. 可觀察性和治理掛鉤

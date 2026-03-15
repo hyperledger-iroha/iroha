@@ -162,9 +162,9 @@ e cargas úteis para a API Torii.【crates/sorafs_node/tests/cli.rs:1】> Partid
 > Torii gateway теперь предоставляет auxiliares somente leitura em основе того же
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — configuração de segurança
+> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — configuração de segurança
 > Manifesto Norito (base64) em digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — determinação de valor
+> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — determinação de valor
 > Configurações de plano JSON (`chunk_fetch_specs`) para ferramentas downstream.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Este ponto de acesso é o CLI que você deseja, pois a configuração pode ser transferida do local
@@ -207,18 +207,18 @@ e cargas úteis para a API Torii.【crates/sorafs_node/tests/cli.rs:1】> Partid
      modelo de governança corporativa; пока дизайн предполагает строгие квоты и
      desafixar operação, iniciar operação.
 
-### Интеграция деклараций емкости и agendamento- Torii tem a capacidade de recuperar `CapacityDeclarationRecord` de `/v1/sorafs/capacity/declare`
+### Интеграция деклараций емкости и agendamento- Torii tem a capacidade de recuperar `CapacityDeclarationRecord` de `/v2/sorafs/capacity/declare`
   no `CapacityManager`, então este caso está usando uma estrutura na memória para fornecer seu serviço
   Alocação de chunker/lane. Менеджер публикует instantâneos somente leitura para telemetria
-  (`GET /v1/sorafs/capacity/state`) e selecione configurações por perfil/por pista para novas atualizações
+  (`GET /v2/sorafs/capacity/state`) e selecione configurações por perfil/por pista para novas atualizações
   заказов.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- Эндпоинт `/v1/sorafs/capacity/schedule` принимает `ReplicationOrderV1` emitido pela governança
+- Эндпоинт `/v2/sorafs/capacity/schedule` принимает `ReplicationOrderV1` emitido pela governança
   cargas úteis. Você pode fazer isso em um provedor local, mas não precisa de um provedor local
   расписаний, валидирует емкость chunker/lane, резервирует слот e возвращает `ReplicationPlan`
   com a descrição de que o consumo está disponível, essa orquestração pode produzir ingestão. Заказы для
   других провайдеров подтверждаются ответом `ignored`, упрощая fluxos de trabalho multi-operador.【crates/iroha_torii/src/routing.rs:4845】
 - Ganchos de conclusão (например, после успешной ingerir) вызывают
-  `POST /v1/sorafs/capacity/complete` para operação de reserva de energia
+  `POST /v2/sorafs/capacity/complete` para operação de reserva de energia
   `CapacityManager::complete_order`. Ответ включает snapshot `ReplicationRelease`
   (totais de остаточные, остатки chunker/lane), ferramentas de orquestração de чтобы могло
   ставить следующий заказ без polling. A tarefa de trabalhar com este pipeline é

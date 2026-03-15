@@ -86,7 +86,7 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
             "RBC sessions endpoint should expose items array"
         );
 
-        let telemetry_url = client.torii_url.join("v1/sumeragi/telemetry")?;
+        let telemetry_url = client.torii_url.join("v2/sumeragi/telemetry")?;
         rt.block_on(async {
             let http = HttpClient::new();
             let resp = http.get(telemetry_url.clone()).send().await?;

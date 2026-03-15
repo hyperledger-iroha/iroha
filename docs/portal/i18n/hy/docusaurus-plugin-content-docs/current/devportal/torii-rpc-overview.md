@@ -12,7 +12,7 @@ translation_last_reviewed: 2026-02-07
 # Norito-RPC ակնարկ
 
 Norito-RPC-ը Torii API-ների երկուական փոխադրումն է: Այն նորից օգտագործում է նույն HTTP ուղիները
-որպես `/v1/pipeline`, բայց փոխանակում է Norito շրջանակով օգտակար բեռներ, որոնք ներառում են սխեմա
+որպես `/v2/pipeline`, բայց փոխանակում է Norito շրջանակով օգտակար բեռներ, որոնք ներառում են սխեմա
 հեշեր և չեկային գումարներ: Օգտագործեք այն, երբ ձեզ անհրաժեշտ են որոշիչ, վավերացված պատասխաններ կամ
 երբ խողովակաշարի JSON պատասխանները դառնում են խցան:
 
@@ -30,7 +30,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v1/transactions/submit
+  https://torii.devnet.sora.example/v2/transactions/submit
 ```
 
 1. Սերիալացրեք ձեր օգտակար բեռը Norito կոդեկով (`iroha_client`, SDK օգնականներ կամ
@@ -56,7 +56,7 @@ SDK-ի հատուկ ուղեցույց.
 1. [Սկսել վստահված անձը] (./try-it.md#start-the-proxy-locally) և սահմանել
    `TRYIT_PROXY_PUBLIC_URL`, որպեսզի վիջեթներն իմանան, թե ուր ուղարկել թրաֆիկը:
 2. Բացեք այս էջում **Փորձեք** քարտը կամ `/reference/torii-swagger`
-   վահանակ և ընտրեք վերջնակետ, ինչպիսին է `POST /v1/pipeline/submit`:
+   վահանակ և ընտրեք վերջնակետ, ինչպիսին է `POST /v2/pipeline/submit`:
 3. Անցեք **Content-Type**-ը `application/x-norito`-ի, ընտրեք **Երկուական**
    խմբագրել և վերբեռնել `fixtures/norito_rpc/transfer_asset.norito`
    (կամ ցանկացած օգտակար բեռ, որը նշված է

@@ -80,8 +80,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 Бер тапҡыр I18NT0000000005X тура эфирҙа һеҙ HTTP аша шул уҡ артефакттарҙы ала алаһығыҙ:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Ике ос нөктәһе лә встраиваемый һаҡлау эшсеһе тарафынан хеҙмәтләндерә, шуға күрә CLI төтөн һынауҙары һәм шлюз зондтары синхронлаша.【крат/ироха_тории/сраф/ап. #L1207】【крат/ироха_тории/срк/sorafs/aporafs/ap.#L1259】
@@ -92,7 +92,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифестты base64 кодлауы менән тапшырығыҙ:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -101,7 +101,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Ҡырҡылған мәғлүмәттәрҙе ала:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -150,7 +150,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. PoR өлгөһөн һорағыҙ:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",

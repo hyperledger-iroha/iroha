@@ -33,12 +33,19 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = "zkd".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "zcoin#zkd".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "zkd".parse().unwrap(),
+        "zcoin".parse().unwrap(),
+    );
     let (owner, _owner_key) = gen_account_in("zkd");
     let init: [InstructionBox; 5] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone())).into(),
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        )
+        .into(),
         Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
@@ -60,7 +67,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     }
 
     // 1) ZkTransfer emits zk.transfer.last with proof_hash
-    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let transfer_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_transfer = transfer_fixture.proof_box("halo2/ipa");
     let vk_transfer = transfer_fixture
         .vk_box("halo2/ipa")
@@ -108,7 +115,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
-    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+    let unshield_fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
     let pr_unshield = unshield_fixture.proof_box("halo2/ipa");
     let vk_unshield = unshield_fixture
         .vk_box("halo2/ipa")

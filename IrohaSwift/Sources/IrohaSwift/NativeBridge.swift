@@ -1044,6 +1044,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
+    private typealias DecodeAssetIdFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?
+    ) -> Int32
 
     private typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias SetChainDiscriminantFn = @convention(c) (UInt16) -> UInt16
@@ -1576,6 +1581,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeGovernancePersistCouncilWithAlgFn: EncodeGovernancePersistCouncilWithAlgFn? = nil
     private var decodeSignedFn: DecodeSignedFn? = nil
     private var decodeReceiptFn: DecodeReceiptFn? = nil
+    private var decodeAssetIdFn: DecodeAssetIdFn? = nil
     private var freeFn: FreeFn? = nil
     private var setChainDiscriminantFn: SetChainDiscriminantFn? = nil
     private var setAccelerationConfigFn: SetAccelerationConfigFn? = nil
@@ -1686,6 +1692,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeGovernancePersistCouncilFn: Any? = nil
     private let encodeGovernancePersistCouncilWithAlgFn: Any? = nil
     private let decodeSignedFn: Any? = nil
+    private let decodeAssetIdFn: Any? = nil
     private let freeFn: Any? = nil
     private let setChainDiscriminantFn: Any? = nil
     private let setAccelerationConfigFn: Any? = nil
@@ -2006,6 +2013,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.decodeReceiptFn = unsafeBitCast(decodeReceiptSymbol, to: DecodeReceiptFn.self)
             } else {
                 self.decodeReceiptFn = nil
+            }
+            if let decodeAssetIdSymbol = dlsym(handle, "connect_norito_decode_asset_id_json") {
+                self.decodeAssetIdFn = unsafeBitCast(decodeAssetIdSymbol, to: DecodeAssetIdFn.self)
+            } else {
+                self.decodeAssetIdFn = nil
             }
             if let publicKeyFromPrivateSymbol = dlsym(handle, "connect_norito_public_key_from_private") {
                 self.publicKeyFromPrivateFn = unsafeBitCast(publicKeyFromPrivateSymbol, to: PublicKeyFromPrivateFn.self)
@@ -2411,6 +2423,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeGovernancePersistCouncilFn = nil
             self.encodeGovernancePersistCouncilWithAlgFn = nil
             self.decodeSignedFn = nil
+            self.decodeReceiptFn = nil
+            self.decodeAssetIdFn = nil
             self.freeFn = nil
             self.setChainDiscriminantFn = nil
             self.setAccelerationConfigFn = nil
@@ -4942,6 +4956,32 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
         let status = data.withUnsafeBytes { buffer -> Int32 in
             decodeReceiptFn(buffer.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &jsonPtr, &jsonLen)
+        }
+
+        guard status == 0, let jsonPtr else {
+            if let jsonPtr { freeFn(jsonPtr) }
+            return nil
+        }
+
+        let jsonData = Data(bytes: jsonPtr, count: Int(jsonLen))
+        freeFn(jsonPtr)
+        return String(data: jsonData, encoding: .utf8)
+        #else
+        return nil
+        #endif
+    }
+
+    func decodeAssetId(_ literal: String) -> String? {
+        #if canImport(Darwin)
+        guard let decodeAssetIdFn, let freeFn else { return nil }
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        var jsonPtr: UnsafeMutablePointer<UInt8>? = nil
+        var jsonLen: UInt = 0
+
+        let status = trimmed.withCString { cString -> Int32 in
+            decodeAssetIdFn(cString, UInt(trimmed.utf8.count), &jsonPtr, &jsonLen)
         }
 
         guard status == 0, let jsonPtr else {

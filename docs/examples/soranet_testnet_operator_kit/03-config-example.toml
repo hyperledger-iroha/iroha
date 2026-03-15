@@ -71,8 +71,8 @@ target = 5
 # bulletin (`docs/source/soranet/directory_publisher_plan.md`).
 [orchestrator.directory]
 bootstrap_urls = [
-  "https://directory.testnet.soranet.org/v1/relays",
-  "https://directory.testnet.backup.soranet.org/v1/relays"
+  "https://directory.testnet.soranet.org/v2/relays",
+  "https://directory.testnet.backup.soranet.org/v2/relays"
 ]
 
 [orchestrator.stream_tokens]

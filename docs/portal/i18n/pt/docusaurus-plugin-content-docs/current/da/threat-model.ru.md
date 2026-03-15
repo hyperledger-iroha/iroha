@@ -222,7 +222,7 @@ lista de permissões - provedores maliciosos ou alertas.
 
 **Isso é mais importante:**- Cache de repetição e cursores de persistência pousados ​​no DA-2. Realização em
   `crates/iroha_core/src/da/replay_cache.rs` (lógica de cache) e integração Torii em
-  `crates/iroha_torii/src/da/ingest.rs`, as verificações de impressão digital são processadas pelo `/v1/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs`, as verificações de impressão digital são processadas pelo `/v2/da/ingest`.
 - Simulações de streaming PDP / PoTR упражняются через arnês de fluxo de prova em
   `crates/sorafs_car/tests/sorafs_cli.rs`, fluxos de solicitação PoR/PDP/PoTR e
   cenários de falha do modelo do jogo.

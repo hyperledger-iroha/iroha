@@ -186,7 +186,7 @@ authors, SDK owners, and reviewers can replay the exact bytes that CI uses.
 1. Pick a fixture such as `fixtures/norito_rpc/transfer_asset.norito`. These
    files are raw Norito envelopes; do **not** base64-encode them.
 2. In Swagger or RapiDoc, locate the NRPC endpoint (for example
-   `POST /v1/pipeline/submit`) and switch the **Content-Type** selector to
+   `POST /v2/pipeline/submit`) and switch the **Content-Type** selector to
    `application/x-norito`.
 3. Toggle the request body editor to **binary** (Swagger's "File" mode or
    RapiDoc's "Binary/File" selector) and upload the `.norito` file. The widget
@@ -214,13 +214,13 @@ curl \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: ${TOKEN}" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v1/pipeline/submit"
+  "${TORII}/v2/pipeline/submit"
 ```
 
 Swap the fixture for any entry listed in `transaction_fixtures.manifest.json`
 or encode your own payload with `cargo xtask norito-rpc-fixtures`. When Torii
 is in canary mode you can point `curl` at the try-it proxy
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) to exercise the same
+(`https://docs.sora.example/proxy/v2/pipeline/submit`) to exercise the same
 infrastructure that the portal widgets use.
 
 ## Observability & operations
@@ -238,7 +238,7 @@ Run the bundled probe during deployments or on a schedule:
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
 npm run probe:tryit-proxy
 ```
 

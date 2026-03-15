@@ -1226,7 +1226,8 @@ pub mod genesis_instructions_json {
             let account_id = ALICE_ID.clone();
             let domain_id: DomainId = "wonderland".parse().unwrap();
             let domain = Domain::new(domain_id.clone());
-            let asset_def_id: AssetDefinitionId = format!("coin#{domain_id}").parse().unwrap();
+            let asset_def_id: AssetDefinitionId =
+                AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap());
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
 
             let parameter = Parameter::Transaction(TransactionParameter::MaxInstructions(
@@ -4359,8 +4360,10 @@ impl GenesisDomainBuilder {
 
     /// Add [`AssetDefinition`] to this domain.
     pub fn asset(mut self, asset_name: Name, asset_spec: NumericSpec) -> Self {
+        let asset_display_name = asset_name.to_string();
         let asset_definition_id = AssetDefinitionId::new(self.domain_id.clone(), asset_name);
-        let asset_definition = AssetDefinition::new(asset_definition_id, asset_spec);
+        let asset_definition =
+            AssetDefinition::new(asset_definition_id, asset_spec).with_name(asset_display_name);
         self.current_tx_mut()
             .instructions
             .push(Register::asset_definition(asset_definition).into());
@@ -5429,9 +5432,13 @@ mod tests {
             );
             assert_eq!(
                 instructions[7],
-                Register::asset_definition(AssetDefinition::numeric(
-                    "hats#meadow".parse().unwrap(),
-                ))
+                Register::asset_definition(
+                    AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
+                        "meadow".parse().unwrap(),
+                        "hats".parse().unwrap()
+                    ),)
+                    .with_name("hats".to_owned())
+                )
                 .into()
             );
         }

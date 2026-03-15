@@ -103,8 +103,11 @@ fn wrong_type_for_set_account_detail_value_rejected() {
     let key_payload = to_bytes(&key).expect("encode name");
     let key = tlv_envelope(PointerType::Name as u16, &key_payload);
     // Wrong type: AssetDefinitionId TLV where Json is expected
-    let asset_def_payload = to_bytes(&"coin#wonder".parse::<AssetDefinitionId>().unwrap())
-        .expect("encode asset definition");
+    let asset_def_payload = to_bytes(&AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "coin".parse().unwrap(),
+    ))
+    .expect("encode asset definition");
     let wrong = tlv_envelope(PointerType::AssetDefinitionId as u16, &asset_def_payload);
     let align8 = |n: u64| (n + 7) & !7;
     let off_acc = 0u64;

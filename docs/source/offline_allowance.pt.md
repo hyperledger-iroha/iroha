@@ -158,7 +158,7 @@ entire allowance by registering an `OfflineVerdictRevocation`:
 | `metadata` | Structured metadata (JSON/Norito) for auditors—attach incident tickets, regulator references, etc. |
 
 `RegisterOfflineVerdictRevocation` stores these records in `offline_verdict_revocations` keyed by
-`verdict_id`. Torii exposes them via `/v1/offline/revocations` (JSON list + query envelope), and
+`verdict_id`. Torii exposes them via `/v2/offline/revocations` (JSON list + query envelope), and
 `iroha_cli offline revocation list` prints the same data so POS devices or merchant tooling can sync
 a deny list even when they only have intermittent connectivity.
 
@@ -445,9 +445,9 @@ bundles whose proofs are missing (`aggregate_proof_missing`) or invalid.
 When available, include the FASTPQ identifiers in `metadata` (string values):
 
 - `fastpq.parameter_set` — parameter-set label (for example, `"fastpq-offline-v1"`).  
-- `fastpq.circuit.sum` — sum circuit identifier (for example, `"fastpq/offline_sum/v1"`).  
-- `fastpq.circuit.counter` — counter circuit identifier (for example, `"fastpq/offline_counter/v1"`).  
-- `fastpq.circuit.replay` — replay circuit identifier (for example, `"fastpq/offline_replay/v1"`).
+- `fastpq.circuit.sum` — sum circuit identifier (for example, `"fastpq/offline_sum/v2"`).  
+- `fastpq.circuit.counter` — counter circuit identifier (for example, `"fastpq/offline_counter/v2"`).  
+- `fastpq.circuit.replay` — replay circuit identifier (for example, `"fastpq/offline_replay/v2"`).
 
 #### Witness request payloads
 
@@ -460,7 +460,7 @@ host builders can stream identical witness bytes into the deterministic proof bu
 FASTPQ APIs. Refer to `crates/iroha_data_model/src/offline/mod.rs` for the canonical schema, and use
 `iroha offline transfer proof --bundle <PATH> --kind sum` (counter/replay variants supported via
 `--kind {counter,replay}`) to dump the canonical Norito JSON for local bundle payloads. Torii
-exposes the same payloads over HTTP via `POST /v1/offline/transfers/proof` and accepts a transfer
+exposes the same payloads over HTTP via `POST /v2/offline/transfers/proof` and accepts a transfer
 payload (`transfer`), returning the Norito JSON for the requested proof type.
 
 For replay proofs, `replay_log_head_hex` / `replay_log_tail_hex` come from the receiver/POS
@@ -504,7 +504,7 @@ resource envelopes defined in OA14.1; SDKs call the host through the FFI/bridge 
    vectors via `cargo xtask offline-poseidon-fixtures`.  
 2. `docs/source/offline_allowance.md` (this section) references the artifact version so auditors can
    reproduce hashes offline.  
-3. Torii exposes `/v1/offline/bundle/proof_status` in OA14.3 to let operators check whether bundles
+3. Torii exposes `/v2/offline/bundle/proof_status` in OA14.3 to let operators check whether bundles
    carried proofs, their verification status, and the `receipts_root` they referenced without
    downloading the full payloads.
 
@@ -591,7 +591,7 @@ against duplicate `(certificate_id, counter)` claims.
 5. **Issue the certificate.** Serialize the `OfflineWalletCertificatePayload` (controller, allowance,
    spend key, attestation bytes, timestamps, policy, metadata) and sign it with the operator’s
    private key whose public key controls the allowance asset. This can be done with
-   `POST /v1/offline/certificates/issue` (or the renewal variant) when
+   `POST /v2/offline/certificates/issue` (or the renewal variant) when
    `torii.offline_issuer.operator_private_key` is configured; the endpoint returns the signed
    certificate and its id.
 6. **Register on-ledger.** Submit `RegisterOfflineAllowance { certificate }` from the controller’s
@@ -759,51 +759,51 @@ See `scripts/offline_topup/README.md` for the full CLI and spec schema.
 ## 8. Torii Offline Query Surfaces (OA7.2)
 
 Torii ships dedicated offline APIs for both inspection and wallet flows. The handlers live under
-`/v1/offline/*`, enforce the usual `app_api` gates, and reuse the shared Norito filter DSL so SDKs,
+`/v2/offline/*`, enforce the usual `app_api` gates, and reuse the shared Norito filter DSL so SDKs,
 CLI tools, and dashboards stay in sync with the roadmap requirements.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET`  | `/v1/offline/allowances` | Lightweight pagination over registered allowances. |
-| `POST` | `/v1/offline/allowances` | Register an allowance certificate (submits `RegisterOfflineAllowance`). |
-| `GET`  | `/v1/offline/allowances/{certificate_id_hex}` | Fetch a single allowance record. |
-| `POST` | `/v1/offline/allowances/{certificate_id_hex}/renew` | Renew an allowance certificate. |
-| `POST` | `/v1/offline/allowances/query` | Full `QueryEnvelope` (filter + sort + selector + pagination). |
-| `GET`  | `/v1/offline/certificates` | Alias for `/v1/offline/allowances`. |
-| `POST` | `/v1/offline/certificates` | Alias for `/v1/offline/allowances` issuance. |
-| `POST` | `/v1/offline/certificates/issue` | Issue an operator-signed certificate without registering it on-ledger. |
-| `POST` | `/v1/offline/certificates/query` | Alias for `/v1/offline/allowances/query`. |
-| `GET`  | `/v1/offline/certificates/{certificate_id_hex}` | Alias for `/v1/offline/allowances/{certificate_id_hex}`. |
-| `POST` | `/v1/offline/certificates/{certificate_id_hex}/renew` | Alias for allowance renewal. |
-| `POST` | `/v1/offline/certificates/{certificate_id_hex}/renew/issue` | Issue a renewed certificate after confirming the allowance exists. |
-| `POST` | `/v1/offline/certificates/revoke` | Register a verdict revocation for a certificate. |
-| `GET`  | `/v1/offline/transfers` | Paginate bundles awaiting ledger admission. |
-| `GET`  | `/v1/offline/transfers/{bundle_id_hex}` | Fetch a bundle summary by id. |
-| `POST` | `/v1/offline/transfers/query` | Envelope-based queries for bundles. |
-| `GET`  | `/v1/offline/settlements` | Alias for `/v1/offline/transfers`. |
-| `POST` | `/v1/offline/settlements` | Submit a bundle for on-ledger settlement (submits `SubmitOfflineToOnlineTransfer`). |
-| `GET`  | `/v1/offline/settlements/{bundle_id_hex}` | Alias bundle detail endpoint. |
-| `POST` | `/v1/offline/settlements/query` | Alias bundle query endpoint. |
-| `POST` | `/v1/offline/transfers/proof` | Build `{sum,counter,replay}` witness payloads from a transfer payload. |
-| `GET`  | `/v1/offline/receipts` | Audit list of flattened receipts extracted from settled bundles. |
-| `POST` | `/v1/offline/receipts/query` | Envelope-based queries for receipts. |
-| `POST` | `/v1/offline/spend-receipts` | Validate receipts and return their Poseidon `receipts_root`. |
-| `GET`  | `/v1/offline/state` | Full offline state snapshot for wallet sync. |
-| `GET`  | `/v1/offline/summaries` | List hardware counter summaries. |
-| `POST` | `/v1/offline/summaries/query` | Envelope-based queries for counter summaries. |
-| `GET`  | `/v1/offline/revocations` | List registered verdict revocations. |
-| `POST` | `/v1/offline/revocations/query` | Envelope-based queries for revocations. |
-| `GET`  | `/v1/offline/bundle/proof_status` | Lightweight proof status for a bundle. |
-| `GET`  | `/v1/offline/rejections` | Aggregated per-platform rejection counters (requires telemetry). |
+| `GET`  | `/v2/offline/allowances` | Lightweight pagination over registered allowances. |
+| `POST` | `/v2/offline/allowances` | Register an allowance certificate (submits `RegisterOfflineAllowance`). |
+| `GET`  | `/v2/offline/allowances/{certificate_id_hex}` | Fetch a single allowance record. |
+| `POST` | `/v2/offline/allowances/{certificate_id_hex}/renew` | Renew an allowance certificate. |
+| `POST` | `/v2/offline/allowances/query` | Full `QueryEnvelope` (filter + sort + selector + pagination). |
+| `GET`  | `/v2/offline/certificates` | Alias for `/v2/offline/allowances`. |
+| `POST` | `/v2/offline/certificates` | Alias for `/v2/offline/allowances` issuance. |
+| `POST` | `/v2/offline/certificates/issue` | Issue an operator-signed certificate without registering it on-ledger. |
+| `POST` | `/v2/offline/certificates/query` | Alias for `/v2/offline/allowances/query`. |
+| `GET`  | `/v2/offline/certificates/{certificate_id_hex}` | Alias for `/v2/offline/allowances/{certificate_id_hex}`. |
+| `POST` | `/v2/offline/certificates/{certificate_id_hex}/renew` | Alias for allowance renewal. |
+| `POST` | `/v2/offline/certificates/{certificate_id_hex}/renew/issue` | Issue a renewed certificate after confirming the allowance exists. |
+| `POST` | `/v2/offline/certificates/revoke` | Register a verdict revocation for a certificate. |
+| `GET`  | `/v2/offline/transfers` | Paginate bundles awaiting ledger admission. |
+| `GET`  | `/v2/offline/transfers/{bundle_id_hex}` | Fetch a bundle summary by id. |
+| `POST` | `/v2/offline/transfers/query` | Envelope-based queries for bundles. |
+| `GET`  | `/v2/offline/settlements` | Alias for `/v2/offline/transfers`. |
+| `POST` | `/v2/offline/settlements` | Submit a bundle for on-ledger settlement (submits `SubmitOfflineToOnlineTransfer`). |
+| `GET`  | `/v2/offline/settlements/{bundle_id_hex}` | Alias bundle detail endpoint. |
+| `POST` | `/v2/offline/settlements/query` | Alias bundle query endpoint. |
+| `POST` | `/v2/offline/transfers/proof` | Build `{sum,counter,replay}` witness payloads from a transfer payload. |
+| `GET`  | `/v2/offline/receipts` | Audit list of flattened receipts extracted from settled bundles. |
+| `POST` | `/v2/offline/receipts/query` | Envelope-based queries for receipts. |
+| `POST` | `/v2/offline/spend-receipts` | Validate receipts and return their Poseidon `receipts_root`. |
+| `GET`  | `/v2/offline/state` | Full offline state snapshot for wallet sync. |
+| `GET`  | `/v2/offline/summaries` | List hardware counter summaries. |
+| `POST` | `/v2/offline/summaries/query` | Envelope-based queries for counter summaries. |
+| `GET`  | `/v2/offline/revocations` | List registered verdict revocations. |
+| `POST` | `/v2/offline/revocations/query` | Envelope-based queries for revocations. |
+| `GET`  | `/v2/offline/bundle/proof_status` | Lightweight proof status for a bundle. |
+| `GET`  | `/v2/offline/rejections` | Aggregated per-platform rejection counters (requires telemetry). |
 
 Top-ups are a two-step flow: issue a certificate with
-`/v1/offline/certificates/issue` (or the renewal variant) and then register it
-via `/v1/offline/allowances` (or `/v1/offline/allowances/{certificate_id_hex}/renew`).
+`/v2/offline/certificates/issue` (or the renewal variant) and then register it
+via `/v2/offline/allowances` (or `/v2/offline/allowances/{certificate_id_hex}/renew`).
 There is no single “top-up” endpoint; SDK helpers simply chain the two calls
 and verify the certificate ids match.
 
 When build-claim verification is enabled and `torii.offline_issuer` is
-configured, `/v1/offline/settlements` auto-issues missing receipt build claims
+configured, `/v2/offline/settlements` auto-issues missing receipt build claims
 before submitting the transaction. Use `build_claim_overrides[]` on the
 settlement request for per-receipt overrides (`app_id`, `build_number`, or
 claim window), and set `repair_existing_build_claims=true` to re-issue already
@@ -814,7 +814,7 @@ Integrity or marker-key metadata with more than one entry). In that case Torii
 cannot infer a single `app_id`; callers must provide `build_claim_overrides[]`
 for the affected receipt `tx_id_hex`.
 
-Issuer endpoints (`/v1/offline/certificates/*/issue`) are only enabled when
+Issuer endpoints (`/v2/offline/certificates/*/issue`) are only enabled when
 `torii.offline_issuer` is configured. Use `torii.offline_issuer.allowed_controllers` to restrict
 which controller accounts may request new certificates.
 
@@ -822,7 +822,7 @@ When a request fails due to an offline validation rejection, Torii surfaces a st
 the `x-iroha-reject-code` response header (for example `certificate_expired`, `counter_conflict`,
 `max_tx_value_exceeded`, `allowance_exceeded`, `invoice_duplicate`).
 
-`/v1/offline/transfers/proof` accepts a Norito/JSON body with a `transfer` payload plus proof
+`/v2/offline/transfers/proof` accepts a Norito/JSON body with a `transfer` payload plus proof
 parameters. The `kind` field selects the FASTPQ proof (`sum`, `counter`, or `replay`), optional
 `counter_checkpoint` overrides the inferred checkpoint (default = first receipt counter `- 1`), and
 replay proofs must provide both log hashes. The response mirrors the `OfflineProofRequest*` structs
@@ -831,7 +831,7 @@ so SDKs can pass the payloads directly to the prover.
 Example request/response:
 
 ```json
-POST /v1/offline/transfers/proof
+POST /v2/offline/transfers/proof
 {
   "transfer": {
     "bundle_id": "11F7...C0DE",
@@ -880,7 +880,7 @@ All GET surfaces accept the compact `ListFilterParams` struct via query paramete
 - Account literals are rendered as canonical I105; Torii no longer accepts an `canonical I105 rendering` selector on this endpoint.
   response accordingly.
 
-`/v1/offline/allowances` additionally exposes roadmap-driven convenience filters so dashboards and
+`/v2/offline/allowances` additionally exposes roadmap-driven convenience filters so dashboards and
 SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
 
 - `controller_id` — filter allowances by controller account. Torii accepts only canonical I105 account literals or
@@ -900,7 +900,7 @@ SDKs can avoid building JSON predicates for the common expiry/verdict workflows:
   elapsed). By default the handler mirrors `iroha_cli offline allowance list` and skips allowances
   whose certificate, policy, or refresh deadlines have passed.
 
-`/v1/offline/transfers` exposes a parallel set of filters so bundle reviewers can scope results by
+`/v2/offline/transfers` exposes a parallel set of filters so bundle reviewers can scope results by
 the same certificate metadata without composing JSON:
 
 - `controller_id` / `receiver_id` / `deposit_account_id` — filter bundles by the originating
@@ -962,13 +962,13 @@ expr = {"op": "eq", "args": ["controller_id", "i105..."]}
 print(urllib.parse.quote(json.dumps(expr)))
 PY
 )
-curl -s "$TORII/v1/offline/allowances?limit=25&sort=registered_at_ms:desc&filter=$FILTER" \
+curl -s "$TORII/v2/offline/allowances?limit=25&sort=registered_at_ms:desc&filter=$FILTER" \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
 ### 8.2 POST envelopes (`QueryEnvelope`)
 
-`POST /v1/offline/*/query` accepts a Norito/JSON `QueryEnvelope` for collection endpoints
+`POST /v2/offline/*/query` accepts a Norito/JSON `QueryEnvelope` for collection endpoints
 (`allowances`/`certificates`, `transfers`/`settlements`, `receipts`, `summaries`, `revocations`) with
 richer controls:
 
@@ -1000,7 +1000,7 @@ Sample envelope and invocation:
 Save the envelope above as `envelope.json` and call:
 
 ```sh
-curl -s -X POST "$TORII/v1/offline/allowances/query" \
+curl -s -X POST "$TORII/v2/offline/allowances/query" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   --data @envelope.json | jq '.items[0]'
@@ -1043,11 +1043,11 @@ Responses always follow `{ "items": [...], "total": <u64> }`. Allowance items ex
   into `artifacts/offline_bundle/<label>/` with a `bundle_summary.json` manifest so automation can
   capture the Poseidon root, witness filenames, and aggregate-proof metadata in a single place.
 - `iroha offline rejection stats [--telemetry-profile=<label>]` hits
-  `/v1/offline/rejections`, normalises the `{platform,reason,count}` tuples, and prints the JSON
+  `/v2/offline/rejections`, normalises the `{platform,reason,count}` tuples, and prints the JSON
   response so operators and CI jobs can consume the same telemetry that powers dashboards. Passing a
   telemetry profile forwards the `X-Torii-Telemetry-Profile` header to target a specific tenant; the
   command exits with a friendly message when the profile does not expose rejection metrics.
-- HTTP clients calling `/v1/offline/transfers{,/query}` can supply `platform_policy=play_integrity`
+- HTTP clients calling `/v2/offline/transfers{,/query}` can supply `platform_policy=play_integrity`
   or `platform_policy=hms_safety_detect` to receive only the bundles backed by those attestation
   providers, mirroring the CLI/SDK convenience flag.【crates/iroha_torii/src/openapi.rs:540】【crates/iroha_torii/src/routing.rs:19321】
 - `iroha_cli offline transfer list` also accepts `--platform-policy {play-integrity,hms-safety-detect}`
@@ -1055,11 +1055,11 @@ Responses always follow `{ "items": [...], "total": <u64> }`. Allowance items ex
   without post-processing the output.【crates/iroha_cli/src/offline.rs:330】【crates/iroha_cli/src/offline.rs:780】
 - Transfer responses now embed `verdict_snapshot` (certificate id, verdict id/nonce, refresh/certificate/policy expiries) so SDKs/POS devices can cache the attestation metadata that was in effect when the bundle settled, even if the certificate later rotates.【crates/iroha_data_model/src/offline/mod.rs:1691】【crates/iroha_cli/src/offline.rs:592】【crates/iroha_torii/src/routing.rs:25398】
 - `platform_token_snapshot` captures the Play Integrity / HMS Safety Detect attestation token (base64 JWS) used during settlement, giving auditors and POS devices an immutable copy of the token bytes the ledger verified.【crates/iroha_data_model/src/offline/mod.rs:1691】【crates/iroha_cli/src/offline.rs:592】【crates/iroha_torii/src/routing.rs:25398】
-- Torii event subscribers can now filter directly on the attestation provider by calling `OfflineTransferEventFilter::for_platform_policy(...)`, which only emits `OfflineTransferEvent::Settled` payloads whose `platform_token_snapshot` matches the requested `AndroidIntegrityPolicy`. The `/v1/events/sse` endpoint exposes the same selector via `?filter={"op":"eq","args":["platform_policy","play_integrity"]}` so webhooks, SDKs, and CLI watchers can stick to a single filter grammar.【crates/iroha_data_model/src/events/data/filters.rs:580】【crates/iroha_torii/src/routing.rs:18735】
+- Torii event subscribers can now filter directly on the attestation provider by calling `OfflineTransferEventFilter::for_platform_policy(...)`, which only emits `OfflineTransferEvent::Settled` payloads whose `platform_token_snapshot` matches the requested `AndroidIntegrityPolicy`. The `/v2/events/sse` endpoint exposes the same selector via `?filter={"op":"eq","args":["platform_policy","play_integrity"]}` so webhooks, SDKs, and CLI watchers can stick to a single filter grammar.【crates/iroha_data_model/src/events/data/filters.rs:580】【crates/iroha_torii/src/routing.rs:18735】
 - Validators reject bundles whose cached verdicts are stale: `SubmitOfflineToOnlineTransfer` now enforces the `refresh_at_ms` deadline from either the allowance record or certificate, returning `VerdictExpired` when wallets fail to fetch fresh attestations before reconciling.【crates/iroha_core/src/smartcontracts/isi/offline.rs:767】【crates/iroha_data_model/src/offline/mod.rs:1643】
 - The new `iroha_offline_attestation_policy_total{policy}` metric records how often each Android integrity policy is exercised so dashboards/alerts can spot Safety Detect or Play Integrity drift before it affects settlement.【crates/iroha_telemetry/src/metrics.rs:4794】
 - Metrics labelled `torii.offline_allowances.*`/`torii.offline_transfers.*` record per-endpoint
-  access along with the caller’s requested address format, giving observability parity across SDKs.
+  access along with the canonical I105 rendering, giving observability parity across SDKs.
 - Every transfer record now surfaces a `status_transitions` array derived from `OfflineTransferRecord.history`, so CLI/REST callers can see precisely when a bundle settled, hit the hot-retention cutoff, and was eventually pruned from storage.【crates/iroha_data_model/src/offline/mod.rs:1684】【crates/iroha_cli/src/offline.rs:579】【crates/iroha_torii/src/routing.rs:25398】
 - Each `status_transitions` entry now carries the same `verdict_snapshot` that Torii captured at settlement, giving POS importers and SDKs the certificate/verdict metadata aligned to each lifecycle event without scraping the top-level record.【crates/iroha_data_model/src/offline/mod.rs:1684】【crates/iroha_torii/src/routing.rs:26370】【crates/iroha_cli/src/offline.rs:862】
 - Retention is governed by `settlement.offline.hot_retention_blocks` (archive window) and the new `settlement.offline.cold_retention_blocks` + `prune_batch_size` knobs; once the cold window elapses validators remove the archived bundle, increment `iroha_offline_transfer_pruned_total`, and emit an `OfflineTransferEvent::Pruned` payload so operators can archive the record before deletion.【crates/iroha_config/src/parameters/user.rs:3997】【crates/iroha_core/src/smartcontracts/isi/offline.rs:1111】【crates/iroha_telemetry/src/metrics.rs:4794】
@@ -1122,7 +1122,7 @@ user or operator flips the toggle, and require a change ticket ID + approval bef
 - Enable audit logging before minting OA1 allowances; store the toggle state in the change record.
 - Schedule a weekly (or per-jurisdiction) `fetchTransfersWithAudit` run and ship the new digest to
   the compliance bucket.
-- When exporting evidence for regulators, bundle the Torii `/v1/offline/transfers` JSON,
+- When exporting evidence for regulators, bundle the Torii `/v2/offline/transfers` JSON,
   the audit-log JSON, and the digest in the same artefact.
 - Automate drift detection by hashing the local log daily and alert when the digest diverges from
   the escrow copy (protects against silent truncation).
@@ -1164,7 +1164,7 @@ user or operator flips the toggle, and require a change ticket ID + approval bef
     `--policy-expires-before-ms/--policy-expires-after-ms`) complement the existing `--verdict-id`,
     `--attestation-nonce`, and `--refresh-*-ms` switches so support teams can zero in on allowances
     that are about to lapse or already outside the acceptable policy window during audits.
-- **REST + queries.** Torii exposes `/v1/offline/*`, including list + `/query` endpoints for
+- **REST + queries.** Torii exposes `/v2/offline/*`, including list + `/query` endpoints for
   `allowances`/`certificates`, `transfers`/`settlements`, `receipts`, `summaries`, and `revocations`,
   so SDKs and support tools can page/filter over the registry via HTTP using the same filter spec as
   other collections.【crates/iroha_torii/src/routing.rs:23200】【crates/iroha_torii/src/routing.rs:23442】
@@ -1175,7 +1175,7 @@ user or operator flips the toggle, and require a change ticket ID + approval bef
   `OfflineTransferRecord`, enabling the new
   `FindOfflineToOnlineTransfersBy{Controller,Receiver,Status}` queries and corresponding CLI flags
   (`iroha offline transfer list --controller ... --receiver ... --status settled|archived`). Torii’s
-  `/v1/offline/transfers{,/query}` endpoints now accept the same certificate/verdict filters
+  `/v2/offline/transfers{,/query}` endpoints now accept the same certificate/verdict filters
   (`certificate_id_hex`, `certificate_expires_before_ms`, `refresh_before_ms`, `verdict_id_hex`,
   etc.) and export `controller_id`, `controller_display`, `status`, `recorded_at_{ms,height}`,
   `archived_at_height`, plus the certificate metadata (`certificate_id_hex`,
@@ -1216,7 +1216,7 @@ user or operator flips the toggle, and require a change ticket ID + approval bef
 `OfflineCounterSummary` captures the latest counter checkpoints per certificate, including the
 const deterministic `summary_hash` that receivers can sign or gossip when auditing merchants.【crates/iroha_data_model/src/offline/mod.rs:424】
 For every allowance the node derives a summary lazily and exposes it through both the gRPC query
-surface and the `/v1/offline/summaries{,/query}` Torii endpoints so merchants do not need extra
+surface and the `/v2/offline/summaries{,/query}` Torii endpoints so merchants do not need extra
 indexes.【crates/iroha_torii/src/routing.rs:10204】
 
 - **Publishing digests:** `iroha offline summary export --output counters.json --pretty` now streams
@@ -1257,7 +1257,7 @@ claimed delta to `C_0 → C_1`.【crates/iroha_data_model/src/isi/offline.rs:4�
    into the allowance record so the next `OfflineCounterSummary` reflects the new checkpoint, and
    `OfflineTransferRecord` stores the full submission for telemetry/audit queries.【crates/iroha_core/src/smartcontracts/isi/offline.rs:788】
 4. **Operator inspection:** CLI helpers (`iroha offline allowance list|get`, `iroha offline transfer
-   list|get`, `iroha offline summary list/export`) plus the `/v1/offline/*` REST endpoints provide a
+   list|get`, `iroha offline summary list/export`) plus the `/v2/offline/*` REST endpoints provide a
    reconciliation dashboard without shipping custom database scripts.【crates/iroha_cli/src/offline.rs:29】【crates/iroha_torii/src/routing.rs:23200】
 
 SDKs already build the exact payloads required by OA4: `OfflineWallet` on Swift/Android batches
@@ -1283,8 +1283,8 @@ recording the attempt in their journals.【IrohaSwift/Sources/IrohaSwift/Offline
   rejection path with `record_offline_transfer_rejection`, which feeds the
   `iroha_offline_transfer_rejections_total{platform,reason}` counter so operators can see which
   App Attest / KeyMint checks are failing. Torii exposes both the historical records
-  (`/v1/offline/*`) and the aggregated rejection stats via
-  `/v1/offline/rejections`, letting dashboards surface per-platform/per-reason trends without
+  (`/v2/offline/*`) and the aggregated rejection stats via
+  `/v2/offline/rejections`, letting dashboards surface per-platform/per-reason trends without
   scraping Prometheus directly. The JavaScript SDK mirrors this surface through
   `ToriiClient.getOfflineRejectionStats`, so browser dashboards and CI agents can read the same
   counters without bespoke HTTP plumbing.【crates/iroha_core/src/smartcontracts/isi/offline.rs:681】【crates/iroha_telemetry/src/metrics.rs:6001】【crates/iroha_torii/src/routing.rs:23427】【javascript/iroha_js/src/toriiClient.js:395】【javascript/iroha_js/index.d.ts:1950】

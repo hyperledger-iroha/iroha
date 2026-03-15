@@ -18,7 +18,7 @@ use tokio::{
 };
 
 async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
-    let asset_definition_id = "rose#wonderland".parse()?;
+    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
     let account_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_definition_id, account_id);
     let trigger_id = "mint_rose_event".parse::<TriggerId>()?;

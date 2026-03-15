@@ -635,7 +635,7 @@ Sev1/2 后续行动并将证据存档于 `incident/<date>-android-*.md` 中。
 **信号**
 
 - `android_sdk_submission_latency`、`android_sdk_pending_queue_depth` 上的警报，
-  `android_sdk_offline_replay_errors` 和 Torii `/v1/pipeline` 错误率。
+  `android_sdk_offline_replay_errors` 和 Torii `/v2/pipeline` 错误率。
 - `operator-console` 小部件（示例/android）显示停滞的队列耗尽或
   重试陷入指数退避。
 
@@ -685,7 +685,7 @@ Sev1/2 后续行动并将证据存档于 `incident/<date>-android-*.md` 中。
 **恢复**
 
 1. 如果 Torii 降级，请接听 Torii 并继续重放
-   一旦 `/v1/pipeline` 接受流量就排队。
+   一旦 `/v2/pipeline` 接受流量就排队。
 2. 仅通过签名的 `iroha_config` 清单重新配置受影响的客户端。的
    `ClientConfig` 热重载观察程序必须在事件发生之前发出成功日志
    可以关闭。

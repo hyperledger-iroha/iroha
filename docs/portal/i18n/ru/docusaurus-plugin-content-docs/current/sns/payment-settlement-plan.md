@@ -31,7 +31,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | Компонент | Назначение | Доказательство |
 |-----------|-----------|----------------|
-| `sns_settlementd` | Применяет политику, подписывает bundles, публикует `/v1/sns/settlements`. | JSON bundle + hash. |
+| `sns_settlementd` | Применяет политику, подписывает bundles, публикует `/v2/sns/settlements`. | JSON bundle + hash. |
 | Settlement queue & writer | Идемпотентная очередь + отправитель ledger, управляемый `iroha_cli app sns settlement ledger`. | bundle hash <-> tx hash manifest. |
 | Reconciliation job | Ежедневный diff + ежемесячный отчет под `docs/source/sns/reports/`. | Markdown + JSON digest. |
 | Refund desk | Возвраты, одобренные управлением через `/settlements/{id}/refund`. | `RefundRecordV1` + ticket. |

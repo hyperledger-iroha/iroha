@@ -50,7 +50,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
   ```
 
 - ודאו שלתהליך Torii יש גישת קריאה/כתיבה ל-`data_dir`.
-- אשרו שהצומת מפרסם את הקיבולת הצפויה דרך `GET /v1/sorafs/capacity/state` לאחר
+- אשרו שהצומת מפרסם את הקיבולת הצפויה דרך `GET /v2/sorafs/capacity/state` לאחר
   שנרשמה הצהרה.
 - כאשר ההחלקה מופעלת, הדשבורדים חושפים גם את מוני GiB·hour/PoR הגולמיים וגם את
   המוחלקים כדי להדגיש מגמות ללא ג'יטר לצד ערכים נקודתיים.
@@ -99,8 +99,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 לאחר ש-Torii פעיל ניתן לשלוף את אותם ארטיפקטים דרך HTTP:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 שתי נקודות הקצה מוגשות על ידי עובד האחסון המשולב, כך שבדיקות smoke של CLI ובדיקות
@@ -113,7 +113,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
 2. שלחו את ה-manifest בקידוד base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -123,7 +123,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
 3. אחזרו את הנתונים שהוצמדו:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -140,7 +140,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
 2. הפעילו מחדש את תהליך Torii (או את הצומת כולו).
 3. שלחו שוב את בקשת ה-fetch. ה-payload חייב להישאר בר-שליפה וה-digest המוחזר
    חייב להתאים לערך שלפני ההפעלה מחדש.
-4. בדקו את `GET /v1/sorafs/storage/state` כדי לוודא ש-`bytes_used` משקף את
+4. בדקו את `GET /v2/sorafs/storage/state` כדי לוודא ש-`bytes_used` משקף את
    ה-manifests שנשמרו לאחר האתחול מחדש.
 
 ## 4. בדיקת דחיית מכסה
@@ -158,7 +158,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
 2. בקשו דגימת PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -183,7 +183,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
 - הדשבורדים צריכים לעקוב אחר:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` ו-`torii_sorafs_storage_fetch_inflight`
-  - מוני הצלחה/כשל של PoR שמוצגים דרך `/v1/sorafs/capacity/state`
+  - מוני הצלחה/כשל של PoR שמוצגים דרך `/v2/sorafs/capacity/state`
   - ניסיונות פרסום settlement דרך `sorafs_node_deal_publish_total{result=success|failure}`
 
 ביצוע התרגילים הללו מבטיח שעובד האחסון המשולב יוכל לקלוט נתונים, לשרוד הפעלות

@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 ### Why it matters
 - Norito-RPC provides deterministic, checksum-protected messaging for all Torii RPC calls.
-- It keeps `/v1/pipeline` paths but moves clients toward a binary transport with schema hashes.
+- It keeps `/v2/pipeline` paths but moves clients toward a binary transport with schema hashes.
 - RFC sign-off unblocks NRPC-2 (server rollout plan) and NRPC-3 (Android client architecture).
 
 ### What changed

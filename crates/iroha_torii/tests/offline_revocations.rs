@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v1/offline/revocations{,/query}` endpoints.
+//! Integration tests for the `/v2/offline/revocations{,/query}` endpoints.
 #![cfg(feature = "app_api")]
 
-use std::{str::FromStr, sync::Arc};
+use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 
 use axum::{
     Router,
@@ -58,7 +58,7 @@ async fn offline_revocations_list_supports_filtering_and_sorting() {
         .expect("fixture with note");
     let filter_json = json::to_string(&exists_filter("note")).expect("serialize filter");
     let uri = format!(
-        "/v1/offline/revocations?sort=issuer_id:asc&filter={}",
+        "/v2/offline/revocations?sort=issuer_id:asc&filter={}",
         encode(&filter_json)
     );
 
@@ -133,7 +133,7 @@ async fn offline_revocations_query_respects_sorting() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v1/offline/revocations/query")
+                .uri("/v2/offline/revocations/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     json::to_vec(&envelope).expect("serialize envelope"),
@@ -307,6 +307,7 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         });
         accounts.push(Account {
             id: seed.certificate.operator.clone(),
@@ -314,6 +315,7 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
         });
     }
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
@@ -326,6 +328,9 @@ fn world_from_revocation_seeds(seeds: &[RevocationSeed]) -> World {
     );
     let asset_definition = AssetDefinition {
         id: first.certificate.allowance.asset.definition().clone(),
+        name: "OfflineAsset".to_owned(),
+        description: None,
+        alias: None,
         spec: NumericSpec::integer(),
         mintable: Default::default(),
         logo: None,
@@ -357,8 +362,10 @@ fn build_revocation_seeds() -> Vec<RevocationSeed> {
             .clone(),
     );
     let spend_pair = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-    let asset_definition =
-        AssetDefinitionId::from_str("xor#merchants").expect("asset definition id");
+    let asset_definition = AssetDefinitionId::new(
+        "merchants".parse().expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
 
     let mut cert_one = OfflineWalletCertificate {
         controller: controller_one.clone(),

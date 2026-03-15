@@ -30,20 +30,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     // Build minimal state
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut core_state = CoreState::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut core_state = CoreState::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
+    let mut core_state = CoreState::new_for_testing(World::new(), kura, query);
     core_state.zk.halo2.enabled = true;
     core_state.zk.verify_timeout = Duration::ZERO;
     let state = Arc::new(core_state);

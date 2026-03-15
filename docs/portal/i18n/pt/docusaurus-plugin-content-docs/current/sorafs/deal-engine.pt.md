@@ -58,12 +58,12 @@ transferência de crédito com resultados de liquidação.
 ## Integração com Torii
 
 Torii expoe endpoints dedicados para que provedores reportem uso e conduzam o
-ciclo de vida do acordo sem fiação sob medida:- `POST /v1/sorafs/deal/usage` aceita telemetria `DealUsageReport` e retorna
+ciclo de vida do acordo sem fiação sob medida:- `POST /v2/sorafs/deal/usage` aceita telemetria `DealUsageReport` e retorna
   resultados deterministas de contabilidade (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finaliza a janela atual, transmitindo o
+- `POST /v2/sorafs/deal/settle` finaliza a janela atual, transmitindo o
   `DealSettlementRecord` resultante junto com um `DealSettlementV1` em base64
   pronto para publicação no DAG de governança.
-- O feed `/v1/events/sse` do Torii agora transmite registros `SorafsGatewayEvent::DealUsage`
+- O feed `/v2/events/sse` do Torii agora transmite registros `SorafsGatewayEvent::DealUsage`
   resumindo cada envio de uso (época, GiB-horas medidas, contadores de tickets,
   cobrancas deterministas), registros `SorafsGatewayEvent::DealSettlement`
   que inclui o snapshot canônico do ledger de liquidação mais o digest/tamanho/base64

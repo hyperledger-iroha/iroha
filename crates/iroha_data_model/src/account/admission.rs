@@ -234,7 +234,10 @@ mod tests {
     fn fee_and_minimums_roundtrip() {
         let mut minimums = BTreeMap::new();
         minimums.insert(
-            "rose#wonderland".parse().expect("asset definition"),
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            ),
             Numeric::new(5, 0),
         );
         let policy = AccountAdmissionPolicy {
@@ -242,7 +245,10 @@ mod tests {
             max_implicit_creations_per_tx: None,
             max_implicit_creations_per_block: None,
             implicit_creation_fee: Some(ImplicitAccountCreationFee {
-                asset_definition_id: "rose#wonderland".parse().expect("asset definition"),
+                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "rose".parse().unwrap(),
+                ),
                 amount: Numeric::new(2, 0),
                 destination: ImplicitAccountFeeDestination::Burn,
             }),
@@ -258,9 +264,14 @@ mod tests {
             policy.implicit_creation_fee()
         );
         assert_eq!(
-            decoded
-                .min_initial_amount_for(&"rose#wonderland".parse().expect("asset definition id")),
-            policy.min_initial_amount_for(&"rose#wonderland".parse().expect("asset definition id"))
+            decoded.min_initial_amount_for(&iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap()
+            )),
+            policy.min_initial_amount_for(&iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap()
+            ))
         );
         assert_eq!(
             decoded.default_role_on_create(),

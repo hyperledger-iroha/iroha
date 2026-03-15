@@ -19,7 +19,7 @@ _Status: Draft update 2026-04-05 (SN13-C Manifests & SoraNS anchors)_ — Owners
 Media Platform WG / DA Program / Networking TL
 
 This runbook explains how to monitor the Taikai routing-manifest (TRM)
-anchoring path once `/v1/da/ingest` begins persisting `taikai-trm-state-*`
+anchoring path once `/v2/da/ingest` begins persisting `taikai-trm-state-*`
 ledgers and emitting alias rotation telemetry. It complements the envelope
 spec in `docs/source/taikai_segment_envelope.md` and the evidence template in
 `docs/examples/taikai_anchor_lineage_packet.md` by focusing on the operational
@@ -62,7 +62,7 @@ signals exported by Torii and the SoraFS orchestrator.
 | `taikai_ingest_segment_latency_ms` (histogram) | `crates/iroha_telemetry/src/metrics.rs:9065` | Measures CMAF ingest latency per cluster/stream. Keep p95 < 750 ms, p99 < 900 ms. Drives the "Segment Latency" panel and `TaikaiLiveEdgeDrift` alert indirectly. |
 | `taikai_ingest_live_edge_drift_ms` (histogram) | `crates/iroha_telemetry/src/metrics.rs:9076` | Tracks live-edge drift between encoder and anchor workers. `TaikaiLiveEdgeDrift` pages when p99 > 1.5 s for 10 min. |
 | `taikai_ingest_segment_errors_total{reason}` | `crates/iroha_telemetry/src/metrics.rs:9087` | Counts failed segments by reason (`decode`, `manifest_mismatch`, `lineage_replay`, etc.). Any increase triggers the `TaikaiIngestFailure` warning. |
-| `taikai_trm_alias_rotations_total` | `crates/iroha_torii/src/da/taikai.rs:1969`, `crates/iroha_telemetry/src/metrics.rs:11672` | Increments when `/v1/da/ingest` accepts a new TRM per alias. Use it to prove rotation cadence and detect stalled windows. |
+| `taikai_trm_alias_rotations_total` | `crates/iroha_torii/src/da/taikai.rs:1969`, `crates/iroha_telemetry/src/metrics.rs:11672` | Increments when `/v2/da/ingest` accepts a new TRM per alias. Use it to prove rotation cadence and detect stalled windows. |
 | `telemetry.taikai_alias_rotations[]` snapshot | `crates/iroha_telemetry/src/metrics.rs:2047` | JSON payload surfaced via `/status` showing `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total`, and timestamps per alias. Required for governance evidence. |
 | `taikai_viewer_*` metrics (`*_rebuffer_events_total`, `*_cek_rotation_seconds_ago`, `*_alerts_firing_total`) | `crates/iroha_telemetry/src/metrics.rs:5681-5693` | Viewer health telemetry surfacing CEK rotation age, PQ circuit percentages, and alert counts. Map to the viewer dashboard and CEK rotation warning. |
 

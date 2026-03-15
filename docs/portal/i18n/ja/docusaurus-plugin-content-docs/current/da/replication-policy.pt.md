@@ -32,7 +32,7 @@ configurada、garantindo que cada Node validador/armazenamento retenha o numero
 | _デフォルト（デフォルトクラスとしてのtodas）_ | 6 ホラ |直径30 | 3 | `warm` | `da.default` |
 
 Esses valores sao embutidos em `torii.da_ingest.replication_policy` e aplicados
-提出物 `/v1/da/ingest` としての todas。 Torii パーフィルのマニフェストを再取得します
+提出物 `/v2/da/ingest` としての todas。 Torii パーフィルのマニフェストを再取得します
 警告を保持し、価値観の相違を発する警告を発する
 パラケ オペラドールは、SDK のデサチュアリザドを検出します。
 
@@ -153,5 +153,5 @@ SoraFS 形式の再レプリカ BLOB を設定します。
    SRE のポッサム参照、メスモ ダイジェスト、証拠 PDP を参照してください。
 
 `integration_tests/tests/da/replication_policy.rs` で問題が解決されました。
-`/v1/da/ingest` と Verifica の相違点を示すスイート
+`/v2/da/ingest` と Verifica の相違点を示すスイート
 呼び出し元のマニフェスト バスカド エキスポを実行し、インポストを実行します。

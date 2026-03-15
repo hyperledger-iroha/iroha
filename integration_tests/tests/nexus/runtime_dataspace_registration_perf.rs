@@ -619,8 +619,8 @@ async fn post_lane_lifecycle_plan(
 ) -> Result<()> {
     let url = client
         .torii_url
-        .join("v1/nexus/lifecycle")
-        .wrap_err("compose /v1/nexus/lifecycle URL")?;
+        .join("v2/nexus/lifecycle")
+        .wrap_err("compose /v2/nexus/lifecycle URL")?;
     let body = norito::json::to_json(plan).wrap_err("serialize lane lifecycle plan")?;
     let operator_headers = operator_signature_headers(client, "POST", url.path(), body.as_bytes())?;
 
@@ -639,7 +639,7 @@ async fn post_lane_lifecycle_plan(
         .body(body)
         .send()
         .await
-        .wrap_err("send /v1/nexus/lifecycle request")?;
+        .wrap_err("send /v2/nexus/lifecycle request")?;
     let status = response.status();
     let payload = response.text().await.unwrap_or_default();
     ensure!(
@@ -1131,7 +1131,7 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         );
         if max == 0 {
             eprintln!(
-                "[registration-perf] note: lifecycle visibility completed without commit-height advancement on any peer (expected for control-plane /v1/nexus/lifecycle state mutation)"
+                "[registration-perf] note: lifecycle visibility completed without commit-height advancement on any peer (expected for control-plane /v2/nexus/lifecycle state mutation)"
             );
         }
     }

@@ -64,7 +64,7 @@ A cobertura de regressão se encontrou em
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Utilitários e luminárias- As cargas úteis de anúncios de fornecedores devem incluir os metadonnes `range_capability`,
-  `stream_budget` e `transport_hints`. Validade por meio das respostas `/v1/sorafs/providers` e das
+  `stream_budget` e `transport_hints`. Validade por meio das respostas `/v2/sorafs/providers` e das
   luminárias de admissão; os currículos JSON devem incluir a capacidade de análise, o orçamento de fluxo
   e tabelas de dicas para ingestão telemétrica.
 - `cargo xtask sorafs-admission-fixtures` expõe os orçamentos de fluxo e dicas de transporte em
@@ -76,7 +76,7 @@ A cobertura de regressão se encontrou em
 
 ## Integração com o orquestrador e Torii
 
-- Torii `/v1/sorafs/providers` envia os metadonnes de capacidade de praia analisados ​​com
+- Torii `/v2/sorafs/providers` envia os metadonnes de capacidade de praia analisados ​​com
   `stream_budget` e `transport_hints`. As advertências de downgrade diminuem quando
   os fornecedores oferecem a nova metadona e os pontos finais da praia do gateway
   aplique memes contraintes para clientes diretos.

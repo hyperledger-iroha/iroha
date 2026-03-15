@@ -78,7 +78,7 @@ esquemas Norito в Rust и помощниках по проверке подли
 
 | Компонент | Тарефа | Ответить(есть) |
 |------------|--------|-----------------|
-| Сервис Torii | Экспорт `/v1/sorafs/pin` (отправка), `/v1/sorafs/pin/{cid}` (поиск), `/v1/sorafs/aliases` (список/привязка), `/v1/sorafs/replication` (заказы/поступления). Fornecer paginacao + фильтрем. | Сетевые TL/Core Infra |
+| Сервис Torii | Экспорт `/v2/sorafs/pin` (отправка), `/v2/sorafs/pin/{cid}` (поиск), `/v2/sorafs/aliases` (список/привязка), `/v2/sorafs/replication` (заказы/поступления). Fornecer paginacao + фильтрем. | Сетевые TL/Core Infra |
 | Атестакао | Включите изменения/хеширование реестра для ответов; дополнительная проверка подлинности Norito для использования нескольких SDK. | Основная инфраструктура |
 | интерфейс командной строки | Estender `sorafs_manifest_stub` или новый CLI `sorafs_pin` с `pin submit`, `alias bind`, `order issue`, `registry export`. | Инструментальная рабочая группа |
 | SDK | Добавлены клиентские привязки (Rust/Go/TS) для данной задачи Norito; дополнительные яички для интеграции. | Команды SDK |
@@ -133,10 +133,10 @@ esquemas Norito в Rust и помощниках по проверке подли
 Контрольный список для SF-4 должен быть ссылаться на этот план, когда он будет продвигаться вперед.
 Перед входом в REST конечные точки списка с подтверждением:
 
-- `GET /v1/sorafs/pin` и `GET /v1/sorafs/pin/{digest}` retornam манифестирует com
+- `GET /v2/sorafs/pin` и `GET /v2/sorafs/pin/{digest}` retornam манифестирует com
   привязки псевдонимов, заказы репликации и производные объекты проверки
   хеш-до последнего блока.
-- `GET /v1/sorafs/aliases` и `GET /v1/sorafs/replication` экспозиция или каталог
+- `GET /v2/sorafs/aliases` и `GET /v2/sorafs/replication` экспозиция или каталог
   псевдоним ativo и отставание в заказах репликации с последовательностью страниц и
   фильтры статуса.Инкапсула CLI essas chamadas (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) для того, чтобы операторы могли автоматизировать аудитории

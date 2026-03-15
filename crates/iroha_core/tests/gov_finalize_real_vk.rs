@@ -49,13 +49,13 @@ fn zk_finalize_verifies_with_inline_vk_public_input() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public-v1", [0u8; 32]);
+    let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-public", [0u8; 32]);
     let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
     let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
     let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_tally");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        "halo2/pasta/tiny-add-public-v1",
+        "halo2/pasta/tiny-add-public",
         BackendTag::Halo2IpaPasta,
         "pallas",
         fixture.schema_hash,

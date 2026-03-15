@@ -43,7 +43,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
 
     let (account, _account_keypair) = gen_account_in("domain");
     let domain_id: DomainId = "domain".parse()?;
-    let asset_def: AssetDefinitionId = "xor#domain".parse()?;
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new("domain".parse()?, "xor".parse()?);
     // Register a new peer early to keep the pre-join block history short.
     let new_peer = NetworkPeer::builder().build(network.env());
     let new_peer_id = new_peer.id();
@@ -117,7 +117,12 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
                     .submit_all::<InstructionBox>([
                         Register::domain(Domain::new(domain_id.clone())).into(),
                         Register::account(Account::new(account.to_account_id(domain_id))).into(),
-                        Register::asset_definition(AssetDefinition::numeric(asset_def)).into(),
+                        Register::asset_definition({
+                            let __asset_definition_id = asset_def;
+                            AssetDefinition::numeric(__asset_definition_id.clone())
+                                .with_name(__asset_definition_id.name().to_string())
+                        })
+                        .into(),
                     ])
                     .map(|_| ())
             }

@@ -29,7 +29,7 @@ O instantâneo telemétrico ou a triagem são usados ​​no ponto de contato, 
 | parceiro-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 03/04/2025 | 12/04/2025 15:00 | 12/04/2025 15:11 | ✅ Finalizado 2025/04/26 | sorafs-op-01; сфокусирован на доказательствах paridade para orquestrador docs. |
 | parceiro-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 03/04/2025 | 12/04/2025 15:03 | 12/04/2025 15:15 | ✅ Finalizado 2025/04/26 | sorafs-op-02; проверил ligações cruzadas Norito/telemetria. |
 | parceiro-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 04/04/2025 | 12/04/2025 15:06 | 12/04/2025 15:18 | ✅ Finalizado 2025/04/26 | sorafs-op-03; executou exercícios de failover de múltiplas fontes. |
-| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04/04/2025 | 12/04/2025 15:09 | 12/04/2025 15:21 | ✅ Finalizado 2025/04/26 | torii-int-01; ревью livro de receitas Torii `/v1/pipeline` + Experimente. |
+| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04/04/2025 | 12/04/2025 15:09 | 12/04/2025 15:21 | ✅ Finalizado 2025/04/26 | torii-int-01; ревью livro de receitas Torii `/v2/pipeline` + Experimente. |
 | parceiro-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 05/04/2025 | 12/04/2025 15:12 | 12/04/2025 15:23 | ✅ Finalizado 2025/04/26 | torii-int-02; участвовал в обновлении скриншота Experimente (docs-preview/w1 #2). |
 | parceiro-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 05/04/2025 | 12/04/2025 15:15 | 12/04/2025 15:26 | ✅ Finalizado 2025/04/26 | SDK-parceiro-01; feedback sobre o livro de receitas JS/Swift + verificações de sanidade para ponte ISO. |
 | parceiro-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 11/04/2025 | 12/04/2025 15:18 | 12/04/2025 15:29 | ✅ Finalizado 2025/04/26 | SDK-parceiro-02; conformidade закрыт 2025-04-11, фокус на заметках Connect/telemetry. |

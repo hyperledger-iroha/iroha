@@ -58,13 +58,13 @@ Iroha מריצה שאילתות לקריאה על צילום מצב (`StateView`
 
 1) ברירת מחדל `ephemeral`, ללא עקיפה:
 
-POST /v1/query  
+POST /v2/query  
 Body: בקשת Start בקידוד Norito  
 Response: אצווה ראשונה; ‎`cursor=null`
 
 2) עקיפה ל-`stored` עם יחידות גז:
 
-POST /v1/query?cursor_mode=stored&gas_units=100  
+POST /v2/query?cursor_mode=stored&gas_units=100  
 Body: בקשת Start בקידוד Norito  
 Response: אצווה ראשונה ו-`cursor` להמשך
 

@@ -203,7 +203,7 @@ Lista blanca de لمزودين خبيثين، او يخفي التنبيهات.*
 
 **اين تتابع:**- caché de reproducción واستمرار المؤشرات تم انجازهما في DA-2. راجع التنفيذ في
   `crates/iroha_core/src/da/replay_cache.rs` (caché externo) y Torii aquí
-  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر verifica la huella digital عبر `/v1/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs` الذي يمرر verifica la huella digital عبر `/v2/da/ingest`.
 - محاكاة streaming PDP/PoTR تمارس عبر arnés prueba-stream في
   `crates/sorafs_car/tests/sorafs_cli.rs`, y تغطي تدفقات طلب PoR/PDP/PoTR y سيناريوهات
   الفشل المشار اليها في نموذج التهديدات.

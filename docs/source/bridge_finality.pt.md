@@ -58,7 +58,7 @@ hash via o payload de commitment hoje.
 MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
 from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+API: `GET /v2/bridge/finality/bundle/{height}` (Norito/JSON).
 
 A verificacao e analoga a prova basica: recompute `block_hash` a partir do header, verifique
 as assinaturas do commit certificate e confirme que os campos do commitment correspondem ao
@@ -100,9 +100,9 @@ o hash do validator set e o epoch da primeira prova antes de continuar a impor e
 
 ## Superficie de API
 
-- `GET /v1/bridge/finality/{height}` - retorna `BridgeFinalityProof` para a altura de bloco
+- `GET /v2/bridge/finality/{height}` - retorna `BridgeFinalityProof` para a altura de bloco
   solicitada. A negociacao de conteudo via `Accept` suporta Norito ou JSON.
-- `GET /v1/bridge/finality/bundle/{height}` - retorna `BridgeFinalityBundle`
+- `GET /v2/bridge/finality/bundle/{height}` - retorna `BridgeFinalityBundle`
   (commitment + justification + header/certificate) para a altura solicitada.
 
 ## Notas e follow-ups

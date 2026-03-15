@@ -62,7 +62,7 @@ Una cobertura de regressao vive em
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## Herramientas y accesorios- Las cargas útiles de anuncios de proveedor deben incluir metadatos `range_capability`,
-  `stream_budget` e `transport_hints`. Validar vía respuestas de `/v1/sorafs/providers`
+  `stream_budget` e `transport_hints`. Validar vía respuestas de `/v2/sorafs/providers`
   e accesorios de admisión; Los resúmenes JSON deben incluir una capacidad analizada o transmitida.
   presupuesto y matrices de sugerencias para ingestao de telemetría.
 - `cargo xtask sorafs-admission-fixtures` muestra presupuestos de flujo y sugerencias de transporte dentro
@@ -74,7 +74,7 @@ Una cobertura de regressao vive em
 
 ## Integracao com orquestador e Torii
 
-- Torii `/v1/sorafs/providers` retorna metadatos de rango parseada junto com
+- Torii `/v2/sorafs/providers` retorna metadatos de rango parseada junto com
   `stream_budget` e `transport_hints`. Avisos de downgrade disparam quando
   Los proveedores omiten los nuevos metadatos y los puntos finales de alcance de las aplicaciones de puerta de enlace.
   mesmas restringidas para clientes directos.

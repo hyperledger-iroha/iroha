@@ -663,7 +663,7 @@ pub async fn wait_for_tx_applied(
     timeout: Duration,
     stage: &str,
 ) -> Result<()> {
-    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
+    let mut status_url = torii_url.join("v2/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex);
@@ -739,7 +739,7 @@ pub async fn wait_for_tx_rejected(
     timeout: Duration,
     stage: &str,
 ) -> Result<norito::json::Value> {
-    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
+    let mut status_url = torii_url.join("v2/pipeline/transactions/status")?;
     status_url
         .query_pairs_mut()
         .append_pair("hash", tx_hash_hex);
@@ -912,9 +912,10 @@ pub async fn setup_runtime_governance_fixture(
         .await
         .wrap_err("wait for governance domain registration")?;
     alice
-        .submit(Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-        )))
+        .submit(Register::asset_definition(
+            AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string()),
+        ))
         .wrap_err("register governance numeric asset definition")?;
     wait_for_asset_definition_registration(&alice, &asset_def_id, Duration::from_secs(180))
         .await

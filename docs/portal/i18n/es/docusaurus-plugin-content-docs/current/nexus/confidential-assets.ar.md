@@ -42,7 +42,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ### Calendario
 
-اغلفة memo السرية تشحن الان مع قانوني في `fixtures/confidential/encrypted_payload_v1.json`. تلتقط مجموعة البيانات sobre v1 صحيحا مع عينات سلبية تالفة حتى تتمكن SDKs من اثبات تطابق التحليل. Modelo de datos de Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) y Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) para la codificación del dispositivo y la codificación Norito وتغطية الانحدار مع تطور الكودك.Para los SDK de Swift, incluye escudo y pegamento JSON. Nombre: `ShieldRequest`, nota de compromiso, 32 notas, carga útil y metadatos de débito. Utilice `IrohaSDK.submit(shield:keypair:)` (او `submitAndWait`) para conectar y desconectar `/v1/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال compromisos, y يمرر `ConfidentialEncryptedPayload`, Norito codificador, y diseño `zk::Shield`, موضح ادناه حتى تبقى المحافظ متزامنة مع Rust.
+اغلفة memo السرية تشحن الان مع قانوني في `fixtures/confidential/encrypted_payload_v1.json`. تلتقط مجموعة البيانات sobre v1 صحيحا مع عينات سلبية تالفة حتى تتمكن SDKs من اثبات تطابق التحليل. Modelo de datos de Rust (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) y Swift (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) para la codificación del dispositivo y la codificación Norito وتغطية الانحدار مع تطور الكودك.Para los SDK de Swift, incluye escudo y pegamento JSON. Nombre: `ShieldRequest`, nota de compromiso, 32 notas, carga útil y metadatos de débito. Utilice `IrohaSDK.submit(shield:keypair:)` (او `submitAndWait`) para conectar y desconectar `/v2/pipeline/transactions`. يقوم المساعد بالتحقق من اطوال compromisos, y يمرر `ConfidentialEncryptedPayload`, Norito codificador, y diseño `zk::Shield`, موضح ادناه حتى تبقى المحافظ متزامنة مع Rust.
 
 ## Compromisos الاجماع و Gating القدرات
 - تكشف رؤوس الكتل `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`؛ يشارك digest في hash الاجماع ويجب ان يساوي عرض السجل المحلي لقبول الكتلة.
@@ -70,7 +70,7 @@ SPDX-License-Identifier: Apache-2.0
 
 #### مراقبة الانتقالات عبر Torii
 
-تستعلم المحافظ y المدققون `GET /v1/confidential/assets/{definition_id}/transitions` لفحص `AssetConfidentialPolicy` النشطة. Carga útil JSON دائما على ID de activo القانوني، اخر ارتفاع كتلة ملاحظ، `current_mode` للسياسة، الوضع الفعال عند ذلك الارتفاع (نوافذ التحويل تبلغ مؤقتا `Convertible`), y معرفات معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
+تستعلم المحافظ y المدققون `GET /v2/confidential/assets/{definition_id}/transitions` لفحص `AssetConfidentialPolicy` النشطة. Carga útil JSON دائما على ID de activo القانوني، اخر ارتفاع كتلة ملاحظ، `current_mode` للسياسة، الوضع الفعال عند ذلك الارتفاع (نوافذ التحويل تبلغ مؤقتا `Convertible`), y معرفات معلمات `vk_set_hash`/Poseidon/Pedersen المتوقعة. عند وجود انتقال حوكمة معلق يتضمن الرد ايضا:
 
 - `transition_id` - identificador de auditoría المعاد من `ScheduleConfidentialPolicyTransition`.
 - `previous_mode`/`new_mode`.
@@ -113,7 +113,7 @@ SPDX-License-Identifier: Apache-2.0
 
 1. **Preparar registros:** فعّل كل مدخلات verifier والمعلمات المشار اليها في السياسة المستهدفة. تعلن العقد `conf_features` الناتجة حتى يتمكن peers من التحقق من التوافق.
 2. **Etapa la transición:** قدّم `ScheduleConfidentialPolicyTransition` مع `effective_height` يراعي `policy_transition_delay_blocks`. Utilice el dispositivo `ShieldedOnly` y utilice el dispositivo (`window ≥ policy_transition_window_blocks`).
-3. **Publicar guía del operador:** سجّل `transition_id` المعاد ووزع runbook للـ rampa de entrada/salida. Utilice el `/v1/confidential/assets/{id}/transitions` para conectar y desconectar el dispositivo.
+3. **Publicar guía del operador:** سجّل `transition_id` المعاد ووزع runbook للـ rampa de entrada/salida. Utilice el `/v2/confidential/assets/{id}/transitions` para conectar y desconectar el dispositivo.
 4. **Aplicación de ventanas:** عند فتح النافذة يحول runtime السياسة الى `Convertible`, ويصدر `PolicyTransitionWindowOpened { transition_id }` ويبدأ في رفض طلبات الحوكمة المتعارضة.
 5. **Finalizar o cancelar:** عند `effective_height` يتحقق runtime من الشروط المسبقة (عرض شفاف صفر، عدم وجود سحب طارئ، الخ). النجاح يقلب السياسة للوضع المطلوب؛ Asegúrese de que `PolicyTransitionPrerequisiteFailed` esté conectado a la red eléctrica y de que esté conectado.
 6. **Actualizaciones de esquema:** بعد نجاح الانتقال ترفع الحوكمة نسخة مخطط الاصل (مثلا `asset_definition.v2`) وتتطلب ادوات CLI حقل `confidential_policy` Se manifiesta عند تسلسل. توجه وثائق ترقية genesis المشغلين لاضافة اعدادات السياسة وبصمات registro قبل اعادة تشغيل المدققين.الشبكات الجديدة التي تبدأ مع تمكين السرية ترمز السياسة المطلوبة مباشرة في genesis. مع ذلك تتبع نفس قائمة التحقق عند تغيير الاوضاع بعد الاطلاق كي تبقى نوافذ التحويل حتمية وتمتلك المحافظ وقتا للتكيف.
@@ -210,7 +210,7 @@ Descripción detallada del runbook de operaciones سياسات الحوكمة ا
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Notas de cargas útiles de تستخدم المشفرة AEAD مع مفاتيح مشتركة مشتقة من ECDH؛ يمكن ارفاق claves de vista de auditor اختيارية الى salidas حسب سياسة الاصل.
-- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memorandos y notas `iroha app zk envelope` لانتاج/فحص sobres Norito دون اتصال. Utilice Torii para conectar `POST /v1/confidential/derive-keyset` y hexadecimal y base64 para conectar archivos. المفاتيح برمجيا.## الغاز، الحدود، وضوابط DoS
+- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memorandos y notas `iroha app zk envelope` لانتاج/فحص sobres Norito دون اتصال. Utilice Torii para conectar `POST /v2/confidential/derive-keyset` y hexadecimal y base64 para conectar archivos. المفاتيح برمجيا.## الغاز، الحدود، وضوابط DoS
 - جدول gas حتمي:
   - Halo2 (Plonkish): اساس `250_000` gas + `2_000` gas لكل entrada pública.
   - `5` gas لكل بايت prueba, مع رسوم لكل anulador (`300`) y compromiso (`500`).

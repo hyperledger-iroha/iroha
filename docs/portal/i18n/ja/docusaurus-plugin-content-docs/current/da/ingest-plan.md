@@ -35,7 +35,7 @@ serde/JSON のフォールバックは許可されません。
 ## API サーフェス (Torii)
 
 ```
-POST /v1/da/ingest
+POST /v2/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -205,14 +205,14 @@ pub struct DaIngestReceipt {
 - `iroha app da get` は `iroha app sorafs fetch` を動かす multi-source orchestrator の DA 向け
   エイリアスです。manifest + chunk-plan artefact (`--manifest`, `--plan`, `--manifest-id`)
   を指定するか、Torii storage ticket を `--storage-ticket` で渡せます。ticket パスでは
-  `/v1/da/manifests/<ticket>` から manifest を取得し、`artifacts/da/fetch_<timestamp>/`
+  `/v2/da/manifests/<ticket>` から manifest を取得し、`artifacts/da/fetch_<timestamp>/`
   に保存 (`--manifest-cache-dir` で上書き可)、`--manifest-id` 用に blob hash を導出して
   `--gateway-provider` で orchestrator を実行します。SoraFS fetcher の高度な knobs
   (manifest envelopes、client labels、guard caches、匿名 transport overrides、
   scoreboard export、`--output` パス) はそのまま維持され、`--manifest-endpoint` で
   manifest endpoint を差し替え可能です。これにより end-to-end availability 検証は
   `da` 名前空間内で完結し、orchestrator ロジックの複製が不要になります。
-- `iroha app da get-blob` は Torii から `GET /v1/da/manifests/{storage_ticket}` で正規
+- `iroha app da get-blob` は Torii から `GET /v2/da/manifests/{storage_ticket}` で正規
   manifest を直接取得します。`manifest_{ticket}.norito`、`manifest_{ticket}.json`、
   `chunk_plan_{ticket}.json` を `artifacts/da/fetch_<timestamp>/` (または `--output-dir`)
   に書き込み、続く orchestrator fetch に必要な `iroha app da get` コマンド

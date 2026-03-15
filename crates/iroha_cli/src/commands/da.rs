@@ -58,7 +58,7 @@ use std::{
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Submit a raw blob to `/v1/da/ingest` and capture the signed receipt.
+    /// Submit a raw blob to `/v2/da/ingest` and capture the signed receipt.
     Submit(SubmitArgs),
     /// Fetch blobs via the multi-source orchestrator (thin wrapper over `sorafs fetch`).
     Get(FetchArgs),
@@ -168,7 +168,7 @@ pub struct SubmitArgs {
     /// Optional pre-generated Norito manifest to embed in the request.
     #[arg(long = "manifest", value_name = "PATH")]
     pub manifest_path: Option<PathBuf>,
-    /// Override for the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`).
+    /// Override for the Torii DA ingest endpoint (defaults to `$TORII/v2/da/ingest`).
     #[arg(long = "endpoint", value_name = "URL")]
     pub endpoint: Option<String>,
     /// Override the caller-supplied blob identifier (hex). Defaults to BLAKE3(payload).
@@ -216,7 +216,7 @@ pub struct GetBlobArgs {
     /// Optional block hash used to seed deterministic sampling in the manifest response.
     #[arg(long = "block-hash", value_name = "HEX")]
     pub block_hash: Option<String>,
-    /// Optional override for the Torii manifest endpoint (defaults to `$TORII/v1/da/manifests/`).
+    /// Optional override for the Torii manifest endpoint (defaults to `$TORII/v2/da/manifests/`).
     #[arg(long = "endpoint", value_name = "URL")]
     pub endpoint: Option<String>,
     /// Directory for storing the fetched manifest + chunk plan artefacts.
@@ -995,8 +995,8 @@ pub struct RentLedgerArgs {
     /// Account earmarked for `PoTR` bonus payouts.
     #[arg(long = "potr-bonus-account", value_name = "ACCOUNT_ID")]
     pub potr_bonus_account: String,
-    /// Asset definition identifier used for XOR transfers (e.g., `xor#sora`).
-    #[arg(long = "asset-definition", value_name = "NAME#DOMAIN")]
+    /// Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`).
+    #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }
 
@@ -2633,7 +2633,10 @@ mod tests {
         let pdp = AccountId::new(pdp_key.public_key().clone());
         let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
         let potr = AccountId::new(potr_key.public_key().clone());
-        let asset_definition: AssetDefinitionId = "xor#sora".parse().expect("asset definition");
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "sora".parse().unwrap(),
+            "xor".parse().unwrap(),
+        );
         let accounts = da::DaRentLedgerAccounts {
             payer: &payer,
             treasury: &treasury,

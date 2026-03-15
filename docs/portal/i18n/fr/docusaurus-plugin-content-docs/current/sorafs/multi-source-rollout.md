@@ -26,7 +26,7 @@ Il suppose que la pile d'orchestration livrée sous SF-6 est déjà déployée (
 ## 1. Validation pré-déploiement
 
 1. **Confirmer les entrées de gouvernance.**
-   - Tous les fournisseurs candidats doivent publier des enveloppes `ProviderAdvertV1` avec des payloads de capacité de plage et des budgets de flux. Validez via `/v1/sorafs/providers` et comparez aux champs de capacité attendus.
+   - Tous les fournisseurs candidats doivent publier des enveloppes `ProviderAdvertV1` avec des payloads de capacité de plage et des budgets de flux. Validez via `/v2/sorafs/providers` et comparez aux champs de capacité attendus.
    - Les snapshots de télémétrie fournissant les taux de latence/échec doivent dater de moins de 15 minutes avant chaque exécution canary.
 2. **Préparer la configuration.**
    - Persistez la configuration JSON de l'orchestrateur dans l'arborescence `iroha_config` en couches :

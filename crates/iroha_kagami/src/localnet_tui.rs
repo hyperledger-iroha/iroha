@@ -15,7 +15,7 @@ use crate::{
     Outcome, RunArgs,
     localnet::{
         AssetSpec, BuildLineArg, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST, LocalnetOptions,
-        SoraProfile, generate_localnet,
+        SoraProfile, canonical_asset_definition_literal, generate_localnet,
     },
     tui,
 };
@@ -170,8 +170,9 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 .with_default(1u16)
                 .prompt()?;
             for i in 0..count {
-                let default_id = format!("asset{i}#wonderland");
-                let id = Text::new("Asset id (asset#domain)")
+                let default_id =
+                    canonical_asset_definition_literal("wonderland", &format!("asset{i}"));
+                let id = Text::new("Asset definition id (aid:<32-lower-hex>)")
                     .with_default(&default_id)
                     .prompt()?;
                 let qty: u64 = CustomType::new("Mint quantity to Alice (I105)?")

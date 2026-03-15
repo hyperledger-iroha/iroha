@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 Les SDK de Swift peuvent désormais émettre des instructions Shield sans colle JSON sur mesure : construire un
 `ShieldRequest` avec l'engagement de 32 octets, la charge utile encryptée et les métadonnées de débit,
 luego lama `IrohaSDK.submit(shield:keypair:)` (ou `submitAndWait`) pour annoncer et envoyer la
-transaction sur `/v1/pipeline/transactions`. El helper valide les longitudes de l'engagement,
+transaction sur `/v2/pipeline/transactions`. El helper valide les longitudes de l'engagement,
 Enhebra `ConfidentialEncryptedPayload` et l'encodeur Norito, et reflète la disposition `zk::Shield`
 décrit ci-dessous pour que les portefeuilles soient synchronisés avec Rust.## Engagements de consensus et contrôle des capacités
 - Les en-têtes de blocage exponen `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` ; le résumé participe au hachage de consensus et doit être identique à la vue locale du registre pour accepter le blocage.
@@ -72,7 +72,7 @@ décrit ci-dessous pour que les portefeuilles soient synchronisés avec Rust.## 
 
 #### Surveillance des transitions via Torii
 
-Portefeuilles et auditeurs consultent `GET /v1/confidential/assets/{definition_id}/transitions` pour inspecter l'actif `AssetConfidentialPolicy`. La charge utile JSON inclut toujours l'identifiant d'actif canonique, la dernière hauteur de blocage observée, le `current_mode` de la politique, le mode efficace à cette hauteur (les fenêtres de conversion rapportées temporellement `Convertible`), et les identifiants attendus de `vk_set_hash`/Poséidon/Pedersen. Lorsque vous avez une transition pendant que la réponse comprend également :
+Portefeuilles et auditeurs consultent `GET /v2/confidential/assets/{definition_id}/transitions` pour inspecter l'actif `AssetConfidentialPolicy`. La charge utile JSON inclut toujours l'identifiant d'actif canonique, la dernière hauteur de blocage observée, le `current_mode` de la politique, le mode efficace à cette hauteur (les fenêtres de conversion rapportées temporellement `Convertible`), et les identifiants attendus de `vk_set_hash`/Poséidon/Pedersen. Lorsque vous avez une transition pendant que la réponse comprend également :
 
 - `transition_id` - poignée de salle conçue pour `ScheduleConfidentialPolicyTransition`.
 -`previous_mode`/`new_mode`.
@@ -114,7 +114,7 @@ Les transitions no listadas arriba se rechazane durante el soumission de gouvern
 
 ### Sécurité de migration1. **Préparer les registres :** activer toutes les entrées de vérificateur et paramètres référencés pour l'objet politique. Les nœuds annoncent le résultat `conf_features` pour que les pairs vérifient la cohérence.
 2. **Programmer la transition :** envoyer `ScheduleConfidentialPolicyTransition` avec un `effective_height` qui correspond à `policy_transition_delay_blocks`. Au déplacement vers `ShieldedOnly`, précisez une fenêtre de conversion (`window >= policy_transition_window_blocks`).
-3. **Guide public pour les opérateurs :** enregistrez le `transition_id` en développant et en circulaire un runbook de rampe d'accès/sortie. Wallets et auditeurs s'abonnent au `/v1/confidential/assets/{id}/transitions` pour connaître la hauteur d'ouverture de la fenêtre.
+3. **Guide public pour les opérateurs :** enregistrez le `transition_id` en développant et en circulaire un runbook de rampe d'accès/sortie. Wallets et auditeurs s'abonnent au `/v2/confidential/assets/{id}/transitions` pour connaître la hauteur d'ouverture de la fenêtre.
 4. **Utiliser la fenêtre :** lorsque vous ouvrez la fenêtre, le runtime change la politique en `Convertible`, émet `PolicyTransitionWindowOpened { transition_id }` et répond aux demandes de gouvernance en conflit.
 5. **Finaliser ou abandonner :** dans `effective_height`, le runtime vérifie les prérequis de la transition (fournir un zéro transparent, sans urgence, etc.). Si pasa, changez la politique à la mode sollicitée ; si vous tombez, émettez `PolicyTransitionPrerequisiteFailed`, nettoyez la transition pendante et laissez la politique sans changement.6. **Mises à niveau du schéma :** après une transition exitosa, la gouvernance sous la version du schéma de l'actif (par exemple, `asset_definition.v2`) et l'outil CLI nécessitent `confidential_policy` pour sérialiser les manifestes. Les documents de mise à niveau de Genesis instruisent les opérateurs pour ajouter les paramètres politiques et les empreintes digitales du registre avant de réinitialiser les validateurs.
 
@@ -207,7 +207,7 @@ La documentation remplace les paramètres régionaux dans le runbook d'opératio
 - Jerarquia de dérivacion por account:
   - `sk_spend` -> `nk` (clé d'annulation), `ivk` (clé de visualisation entrante), `ovk` (clé de visualisation sortante), `fvk`.
 - Charges utiles de notes encriptadas utilisant AEAD avec des clés partagées dérivées de ECDH ; se pueden adjuntar view clés des auditeurs optionnels et des résultats en fonction de la politique de l'actif.
-- Ajouts à la CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, outils d'auditeur pour décrire des mémos et assistant `iroha app zk envelope` pour produire/inspecter des enveloppes Norito hors ligne. Torii expose le même flux de dérivation via `POST /v1/confidential/derive-keyset`, en restituant les formats hex et base64 pour que les portefeuilles obtiennent des jerarquias de clés par programme.## Gas, limites et contrôles DoS
+- Ajouts à la CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, outils d'auditeur pour décrire des mémos et assistant `iroha app zk envelope` pour produire/inspecter des enveloppes Norito hors ligne. Torii expose le même flux de dérivation via `POST /v2/confidential/derive-keyset`, en restituant les formats hex et base64 pour que les portefeuilles obtiennent des jerarquias de clés par programme.## Gas, limites et contrôles DoS
 - Calendrier de gaz déterministe :
   - Halo2 (Plonkish) : base `250_000` gaz + `2_000` gaz par entrée publique.
   - `5` gas por proof byte, mais cargos por nullifier (`300`) et por engagement (`500`).

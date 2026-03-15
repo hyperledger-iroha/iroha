@@ -62,7 +62,7 @@ translation_last_reviewed: 2026-02-07
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
 ## تركيبات الأدوات- تتضمن حمولات الإعلانات المثبتة البيانات الوصفية `range_capability`،
-  `stream_budget` و`transport_hints`. صالحة عبر ردود `/v1/sorafs/providers`
+  `stream_budget` و`transport_hints`. صالحة عبر ردود `/v2/sorafs/providers`
   تركيبات القبول الإلكترونية. تتضمن ملفات JSON إمكانية التحليل أو الدفق
   الميزانية ومصفوفات التلميحات لاستيعاب القياس عن بعد.
 - `cargo xtask sorafs-admission-fixtures` يعرض الميزانيات وتلميحات النقل في الداخل
@@ -74,7 +74,7 @@ translation_last_reviewed: 2026-02-07
 
 ## التكامل مع الأوركسترا e Torii
 
-- Torii `/v1/sorafs/providers` يعيد تحليل البيانات الوصفية للنطاق إلى جانب com
+- Torii `/v2/sorafs/providers` يعيد تحليل البيانات الوصفية للنطاق إلى جانب com
   `stream_budget` و`transport_hints`. تحذيرات التخفيض عند حدوث ذلك
   يقوم الباحثون بحذف البيانات الوصفية الجديدة، كما يتم تطبيق البوابة على نقاط نهاية النطاق
   القيود المفروضة على العملاء مباشرة.

@@ -162,7 +162,7 @@ fn reject_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Resul
 pub struct VoteArgs {
     #[arg(long, value_name = "REFERENDUM_ID")]
     pub referendum_id: String,
-    /// Voting mode override. Defaults to auto-detect via GET /v1/gov/referenda/{id}.
+    /// Voting mode override. Defaults to auto-detect via GET /v2/gov/referenda/{id}.
     #[arg(long, value_enum, default_value_t = VoteMode::Auto)]
     pub mode: VoteMode,
     /// Base64-encoded proof for ZK voting mode.
@@ -679,14 +679,13 @@ mod tests {
 
     #[test]
     fn public_inputs_reject_compressed_owner() {
-        let owner = ALICE_ID.clone();
-        let compressed = owner
-            .to_account_address()
-            .expect("address")
-            .to_i105()
-            .expect("compressed");
         let mut map = json::Map::new();
-        map.insert("owner".to_string(), json::Value::String(compressed));
+        map.insert(
+            "owner".to_string(),
+            json::Value::String(
+                "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+            ),
+        );
         let err = normalize_public_input_owner(&mut map).expect_err("compressed owner");
         assert!(err.to_string().contains("canonical I105 account id"));
     }

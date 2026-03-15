@@ -25,9 +25,14 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
-            let _ = client.submit_blocking(Register::asset_definition(AssetDefinition::numeric(
-                "txfilter#wonderland".parse().unwrap(),
-            )));
+            let _ = client.submit_blocking(Register::asset_definition({
+                let __asset_definition_id = AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "txfilter".parse().unwrap(),
+                );
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }));
         }
     })
     .await?;
@@ -97,7 +102,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     // POST to the endpoint
     let url = client
         .torii_url
-        .join(&format!("/v1/accounts/{alice_id_str}/transactions/query"))
+        .join(&format!("/v2/accounts/{alice_id_str}/transactions/query"))
         .unwrap();
     let http = reqwest::Client::new();
     let resp = http

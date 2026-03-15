@@ -74,13 +74,13 @@ Mise en scène du playbook Déploiement Torii Profil de chunker ratifié par le 
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. Requête de point de terminaison de découverte pour confirmer les alias canoniques de l'annonce et confirmer les noms :
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    یقینی بنائیں کہ `profile_aliases` میں `"sorafs.sf1@1.0.0"` پہلی entrée کے طور پر شامل ہو۔

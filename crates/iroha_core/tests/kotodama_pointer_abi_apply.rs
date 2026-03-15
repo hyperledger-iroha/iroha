@@ -22,9 +22,15 @@ fn fixture_account(hex_public_key: &str) -> AccountId {
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
-    let src = include_str!("../../kotodama_lang/src/samples/asset_ops.ko");
+    let asset_def_seed: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
+    let sample_asset_literal = asset_def_seed.canonical_literal();
+    let src = include_str!("../../kotodama_lang/src/samples/asset_ops.ko")
+        .replace("coin#wonder", &sample_asset_literal);
     let compiler = KotodamaCompiler::new();
-    let program = compiler.compile_source(src).expect("compile kotodama");
+    let program = compiler.compile_source(&src).expect("compile kotodama");
 
     // Prepare VM with CoreHost
     let from =
@@ -63,9 +69,11 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let mut tx = block.transaction();
     // Setup: register domains required by account ids and asset definition.
     let account_domain_id: DomainId = "wonderland".parse().unwrap();
+    let asset_def =
+        AssetDefinitionId::parse_aid_literal(&sample_asset_literal).expect("canonical aid literal");
     let reg_account_domain =
         RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
-    let asset_domain_id: DomainId = "wonder".parse().unwrap();
+    let asset_domain_id = asset_def.domain().clone();
     let reg_asset_domain = RegisterBox::from(Register::domain(Domain::new(asset_domain_id)));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new_in_domain(
         from.clone(),
@@ -75,10 +83,9 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         to.clone(),
         account_domain_id.clone(),
     )));
-    let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
-    let reg_asset_def = RegisterBox::from(Register::asset_definition(AssetDefinition::numeric(
-        asset_def.clone(),
-    )));
+    let reg_asset_def = RegisterBox::from(Register::asset_definition(
+        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
+    ));
     let executor = tx.world.executor().clone();
     for instr in [
         InstructionBox::from(reg_account_domain),

@@ -6575,7 +6575,7 @@ impl Telemetry {
         }
     }
 
-    /// Record a Taikai alias rotation accepted via `/v1/da/ingest`.
+    /// Record a Taikai alias rotation accepted via `/v2/da/ingest`.
     #[allow(clippy::too_many_arguments)]
     pub fn record_taikai_alias_rotation(
         &self,
@@ -10618,7 +10618,10 @@ mod tests {
     fn confidential_tree_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        let asset_id: AssetDefinitionId = "rose#sora".parse().expect("asset id");
+        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "sora".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let label = asset_id.to_string();
 
         let initial = ConfidentialTreeStats {
@@ -10767,7 +10770,10 @@ mod tests {
     fn confidential_tree_metrics_skip_when_disabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
-        let asset_id: AssetDefinitionId = "rose#sora".parse().expect("asset id");
+        let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "sora".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let label = asset_id.to_string();
         let stats = ConfidentialTreeStats {
             commitments: 5,
@@ -10890,7 +10896,7 @@ mod tests {
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::telemetry"));
         let manifest = AssetPermissionManifest {
-            version: ManifestVersion::V1,
+            version: ManifestVersion::default(),
             uaid,
             dataspace,
             issued_ms: 1,
@@ -12921,7 +12927,10 @@ mod tests {
         let sut = SystemUnderTest::new();
 
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
-        let missing_def: AssetDefinitionId = "ghost#ghost".parse().expect("asset definition id");
+        let missing_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "ghost".parse().unwrap(),
+            "ghost".parse().unwrap(),
+        );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
         let action = Action::new(
             [Transfer::asset_numeric(
@@ -14130,7 +14139,7 @@ mod tests {
         let telemetry = Telemetry::new(metrics.clone(), true);
 
         telemetry.record_torii_explorer_request(
-            "/v1/explorer/transactions",
+            "/v2/explorer/transactions",
             "ok",
             Duration::from_millis(25),
         );
@@ -14138,7 +14147,7 @@ mod tests {
         assert_eq!(
             metrics
                 .torii_explorer_requests_total
-                .with_label_values(&["/v1/explorer/transactions", "ok"])
+                .with_label_values(&["/v2/explorer/transactions", "ok"])
                 .get(),
             1,
             "explorer request counter should increment for each wrapper call"
@@ -14146,7 +14155,7 @@ mod tests {
         assert_eq!(
             metrics
                 .torii_explorer_request_duration_seconds
-                .with_label_values(&["/v1/explorer/transactions", "ok"])
+                .with_label_values(&["/v2/explorer/transactions", "ok"])
                 .get_sample_count(),
             1,
             "explorer request latency histogram should record wrapper observations"

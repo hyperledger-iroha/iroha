@@ -423,7 +423,7 @@ mod tests {
         let mut fingerprint = [0u8; 32];
         fingerprint[..4].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
-        let sidecar = PipelineRecoverySidecar::new_v1(
+        let sidecar = PipelineRecoverySidecar::new(
             7,
             block_hash,
             PipelineDagSnapshot {
@@ -447,7 +447,7 @@ mod tests {
         args.run(&mut sink).expect("sidecar ok");
 
         let read = std::fs::read_to_string(out_path).unwrap();
-        assert!(read.contains("\"pipeline.recovery.v1\""));
+        assert!(read.contains("\"pipeline.recovery\""));
         assert!(read.contains("\"height\": 7"));
         assert!(read.contains(&block_hash.to_string()));
     }

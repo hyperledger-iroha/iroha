@@ -248,7 +248,7 @@ pub fn build_finality_proof(
 /// Build a commitment + justification bundle for the block at `height`.
 ///
 /// The bundle relies on the commit certificate aggregate signature for
-/// justification; the legacy signature list is left empty.
+/// justification; the historical signature list is left empty.
 ///
 /// # Errors
 ///

@@ -24,12 +24,12 @@ As submissoes de provas de bridge seguem o caminho padrao de instrucao (`SubmitB
 
 ## Superficie de API Torii
 
-- `GET /v1/zk/proofs` e `GET /v1/zk/proofs/count` aceitam filtros conscientes de bridge:
+- `GET /v2/zk/proofs` e `GET /v2/zk/proofs/count` aceitam filtros conscientes de bridge:
   - `bridge_only=true` retorna apenas provas de bridge.
   - `bridge_pinned_only=true` restringe a provas de bridge fixadas.
   - `bridge_start_from_height` / `bridge_end_until_height` limitam a janela de intervalo do bridge.
-- `GET /v1/zk/proof/{backend}/{hash}` retorna metadados de bridge (intervalo, hash do manifest, resumo do payload) junto com o id/status da prova e os vinculos de VK.
-- O registro completo de provas Norito (incluindo bytes do payload) permanece disponivel via `GET /v1/proofs/{proof_id}` para verificadores fora do nodo.
+- `GET /v2/zk/proof/{backend}/{hash}` retorna metadados de bridge (intervalo, hash do manifest, resumo do payload) junto com o id/status da prova e os vinculos de VK.
+- O registro completo de provas Norito (incluindo bytes do payload) permanece disponivel via `GET /v2/proofs/{proof_id}` para verificadores fora do nodo.
 
 ## Eventos de recibo de bridge
 

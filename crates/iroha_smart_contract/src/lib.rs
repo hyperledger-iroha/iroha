@@ -76,6 +76,7 @@ impl Iroha {
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
+    #[allow(clippy::result_large_err)]
     pub fn submit<I: BuiltInInstruction + NoritoSerialize>(
         &self,
         isi: &I,
@@ -88,6 +89,7 @@ impl Iroha {
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
     #[expect(clippy::unused_self)]
+    #[allow(clippy::result_large_err)]
     pub fn submit_all<'isi, I: BuiltInInstruction + NoritoSerialize + 'isi>(
         &self,
         instructions: impl IntoIterator<Item = &'isi I>,
@@ -123,6 +125,7 @@ impl Iroha {
     /// # Errors
     ///
     /// Returns an error if the query execution fails.
+    #[allow(clippy::result_large_err)]
     pub fn query_single<Q>(&self, query: Q) -> Result<Q::Output, ValidationFail>
     where
         Q: SingularQuery,
@@ -139,6 +142,7 @@ impl Iroha {
             .expect("BUG: iroha returned unexpected type in singular query"))
     }
 
+    #[allow(clippy::result_large_err)]
     fn execute_query(query: &QueryRequest) -> Result<QueryResponse, ValidationFail> {
         #[cfg(not(test))]
         use host::execute_query as host_execute_query;

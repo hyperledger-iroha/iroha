@@ -73,13 +73,13 @@ slug: /sorafs/staging-manifest-playbook-ru
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v1/sorafs/provider/advert
+     http://staging-torii:8080/v2/sorafs/provider/advert
    ```
 
 2. Запросите конечную точку обнаружения и подтвердите, что реклама отображается с каноническими псевдонимами:
 
    ```bash
-   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
    ```
 
    Убедитесь, что `profile_aliases` включает `"sorafs.sf1@1.0.0"` в качестве первой записи.

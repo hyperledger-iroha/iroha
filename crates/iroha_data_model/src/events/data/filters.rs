@@ -1611,7 +1611,11 @@ mod tests {
     fn entity_scope() {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let account_id = AccountId::new(KeyPair::random().into_parts().0);
-        let definition_id: crate::asset::AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let definition_id: crate::asset::AssetDefinitionId =
+            iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
         let asset_id = AssetId::new(definition_id, account_id.clone());
         let domain_owner_id = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -1696,8 +1700,6 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn offline_filter_matches_platform_policy() {
-        use core::str::FromStr;
-
         use crate::{
             account::AccountId,
             asset::AssetDefinitionId,
@@ -1721,7 +1723,8 @@ mod tests {
                 .parse()
                 .expect("public key"),
         );
-        let asset_definition = AssetDefinitionId::from_str("xor#wonderland").unwrap();
+        let asset_definition =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
         let platform_snapshot = OfflinePlatformTokenSnapshot {
             policy: AndroidIntegrityPolicy::PlayIntegrity.as_str().to_string(),
             attestation_jws_b64: "token".into(),
@@ -1750,7 +1753,10 @@ mod tests {
             controller,
             receiver,
             deposit_account: deposit_account.clone(),
-            asset_definition: AssetDefinitionId::from_str("usd#wonderland").unwrap(),
+            asset_definition: AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "usd".parse().unwrap(),
+            ),
             amount: Numeric::new(25, 0),
             receipt_count: 2,
             recorded_at_ms: 1_700_000_100,

@@ -135,7 +135,7 @@ pub struct BundleArgs {
     /// Optional path for a JSON file containing the time/CID index keys.
     #[arg(long, value_name = "PATH")]
     pub indexes_out: Option<PathBuf>,
-    /// Optional path for the ingest metadata JSON map consumed by `/v1/da/ingest`.
+    /// Optional path for the ingest metadata JSON map consumed by `/v2/da/ingest`.
     #[arg(long, value_name = "PATH")]
     pub ingest_metadata_out: Option<PathBuf>,
     /// Identifier of the Taikai event.
@@ -476,10 +476,10 @@ pub struct IngestWatchArgs {
     /// Governance tag recorded in the retention policy (default `da.taikai.live`).
     #[arg(long = "da-governance-tag", default_value = "da.taikai.live")]
     pub da_governance_tag: String,
-    /// Toggle automatic publishing to `/v1/da/ingest` using the CLI config.
+    /// Toggle automatic publishing to `/v2/da/ingest` using the CLI config.
     #[arg(long = "publish-da")]
     pub publish_da: bool,
-    /// Override the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`).
+    /// Override the Torii DA ingest endpoint (defaults to `$TORII/v2/da/ingest`).
     #[arg(long = "da-endpoint", value_name = "URL")]
     pub da_endpoint: Option<String>,
 }

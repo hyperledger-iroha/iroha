@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - မူဝါဒ မက်တာဒေတာနှင့် ဆိုင်းငံ့ထားသော အကူးအပြောင်းများမှတဆင့် ရရှိနိုင်ပါသည်။
-  `GET /v1/confidential/assets/{definition_id}/transitions`
+  `GET /v2/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`)၊ Swift SDK မှ ရောင်ပြန်ဟပ်သည်။
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) နဲ့ မှတ်တမ်းတင်ထားပါတယ်။
   လျှို့ဝှက်ပိုင်ဆိုင်မှုဒီဇိုင်းနှင့် SDK လမ်းညွှန်များ နှစ်ခုလုံး

@@ -221,7 +221,10 @@ fn host_rejects_insufficient_asset_transfer() {
     // Setup accounts and asset def
     let from = seeded_account(3);
     let to = seeded_account(4);
-    let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
 
     // Build program: TRANSFER_ASSET(&from, &to, &asset_def, 1000) -> expect rejection when applying queued ISIs
     let from_tlv = tlv_blob(&from, PointerType::AccountId as u16);
@@ -269,7 +272,8 @@ fn host_rejects_insufficient_asset_transfer() {
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(new_account_in_domain(&from, &domain_id)));
     let reg_to = RegisterBox::from(Register::account(new_account_in_domain(&to, &domain_id)));
-    let new_asset_def = AssetDefinition::numeric(asset_def.clone());
+    let new_asset_def =
+        AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_numeric(
         100u64,
@@ -298,7 +302,10 @@ fn host_batches_transfer_v1_calls() {
     let to_a = seeded_account(6);
     let to_b = seeded_account(7);
     let domain_id: DomainId = "wonder".parse().unwrap();
-    let asset_def_id: AssetDefinitionId = "rose#wonder".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let domain = Domain::new(domain_id.clone()).build(&from);
     let from_account = built_account_in_domain(&from, &domain_id);
     let first_recipient_account = built_account_in_domain(&to_a, &domain_id);
@@ -555,7 +562,10 @@ fn host_bridges_set_account_detail() {
 fn host_bridges_mint_asset() {
     // Build program: mint_asset(authority(), asset_definition("coin#wonder"), 123); HALT
     let authority = seeded_account(12);
-    let asset_def: AssetDefinitionId = "coin#wonder".parse().unwrap();
+    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "coin".parse().unwrap(),
+    );
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
     let amount_tlv = norito_bytes_tlv(&Numeric::from(123_u64));
@@ -597,7 +607,8 @@ fn host_bridges_mint_asset() {
         let reg_acc = RegisterBox::from(Register::account(new_account_in_domain(
             &authority, &domain_id,
         )));
-        let new_asset_def = AssetDefinition::numeric(asset_def.clone());
+        let new_asset_def =
+            AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
         let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
         let executor = tx.world.executor().clone();
         for instr in [
@@ -709,7 +720,10 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
     let from = seeded_account(14);
     let to_a = seeded_account(15);
     let to_b = seeded_account(16);
-    let asset_def_id: AssetDefinitionId = "rose#wonder".parse().unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonder".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     let batch = TransferAssetBatch::new(vec![
         TransferAssetBatchEntry::new(

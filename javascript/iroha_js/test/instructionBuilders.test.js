@@ -119,9 +119,9 @@ function canonicalizeClone(value) {
   return canonicalizeValue(JSON.parse(JSON.stringify(value)));
 }
 
-function canonicalizeAccountIdUsingNorito(accountId) {
+function canonicalizeAccountIdUsingNorito(accountId, domainId = DOMAIN_ID) {
   const encoded = noritoEncodeInstruction({
-    Register: { Account: { id: accountId, metadata: {} } },
+    Register: { Account: { id: accountId, domain: domainId, metadata: {} } },
   });
   const decoded = noritoDecodeInstruction(encoded);
   return canonicalizeValue(decoded).Register.Account.id;
@@ -533,20 +533,33 @@ test("buildRegisterDomainInstruction accepts custom logo strings", () => {
 });
 
 test("buildRegisterAccountInstruction defaults metadata and validates", () => {
-  const instruction = buildRegisterAccountInstruction({ accountId: ACCOUNT_ID });
+  const instruction = buildRegisterAccountInstruction({
+    accountId: ACCOUNT_ID,
+    domainId: DOMAIN_ID,
+  });
   const account = instruction.Register.Account;
   assert.equal(account.id, ACCOUNT_ID_CANONICAL);
+  assert.equal(account.domain, DOMAIN_ID);
   assert.deepEqual(account.metadata, {});
   assert.equal(account.label ?? null, null);
   const decoded = encodeAndDecode(instruction);
   const decodedAccount = decoded.Register.Account;
   assert.equal(decodedAccount.id, ACCOUNT_ID_CANONICAL);
+  assert.equal(decodedAccount.domain, DOMAIN_ID);
   assert.deepEqual(decodedAccount.metadata, {});
   assert.equal(decodedAccount.label ?? null, null);
   assert.throws(
     () =>
       buildRegisterAccountInstruction({
         accountId: ACCOUNT_ID,
+      }),
+    /domainId must be a non-empty string/i,
+  );
+  assert.throws(
+    () =>
+      buildRegisterAccountInstruction({
+        accountId: ACCOUNT_ID,
+        domainId: DOMAIN_ID,
         metadata: ["invalid"],
       }),
     /plain object/i,

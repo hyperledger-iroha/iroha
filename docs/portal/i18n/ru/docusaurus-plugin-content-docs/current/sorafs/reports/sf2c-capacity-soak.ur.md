@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 
 Torii — снимки кредитов поставщика, книги комиссий, а также информационные панели, балансы и штрафные удары, а также ворота:
 
-- REST: `GET /v1/sorafs/capacity/state` `credit_ledger[*]` записи для проверки или проверки на выдержку.
+- REST: `GET /v2/sorafs/capacity/state` `credit_ledger[*]` записи для проверки или проверки на выдержку.
   Поля бухгалтерской книги دیکھیں
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Grafana импорт: `dashboards/grafana/sorafs_capacity_penalties.json` экспортировали счетчики ударов, суммы штрафов,

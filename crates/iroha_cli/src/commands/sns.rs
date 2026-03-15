@@ -1,6 +1,6 @@
 //! Sora Name Service (SNS) registrar helpers.
 //!
-//! Provides convenience wrappers around the Torii `/v1/sns/*` endpoints so
+//! Provides convenience wrappers around the Torii `/v2/sns/*` endpoints so
 //! operators can register and inspect names during the N0 closed beta without
 //! crafting raw JSON payloads.
 
@@ -45,9 +45,9 @@ static SUFFIX_CATALOG: LazyLock<SuffixCatalog> = LazyLock::new(|| {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Register a SNS name via `/v1/sns/registrations`.
+    /// Register a SNS name via `/v2/sns/registrations`.
     Register(RegisterArgs),
-    /// Renew a SNS name via `/v1/sns/registrations/{selector}/renew`.
+    /// Renew a SNS name via `/v2/sns/registrations/{selector}/renew`.
     Renew(RenewArgs),
     /// Transfer ownership of a SNS name.
     Transfer(TransferArgs),
@@ -1195,8 +1195,14 @@ fn validate_array(schema: &Value, candidate: &Value, path: &str) -> Result<()> {
 #[cfg(test)]
 mod schema_tests {
     use super::*;
+    use iroha_test_samples::ALICE_ID;
+
+    fn sample_account_literal() -> String {
+        ALICE_ID.canonical_i105().expect("canonical i105")
+    }
 
     fn sample_case() -> Value {
+        let account_id = sample_account_literal();
         norito::json!({
             "case_id": "SNS-2026-00001",
             "selector": {
@@ -1213,7 +1219,7 @@ mod schema_tests {
                 "contact": "ops@sora.net"
             },
             "respondents": [
-                {"role": "registrant", "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"}
+                {"role": "registrant", "account_id": account_id}
             ],
             "allegations": [
                 {"code": "REG-1", "summary": "Ownership conflict"}
@@ -1281,6 +1287,10 @@ mod tests {
         (*ALICE_ID).clone()
     }
 
+    fn sample_account_literal() -> String {
+        ALICE_ID.canonical_i105().expect("canonical i105")
+    }
+
     fn resolve_account_literal(literal: &str) -> Result<AccountId> {
         AccountId::parse_encoded(literal)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -1312,13 +1322,13 @@ mod tests {
     }
 
     fn sample_catalog_entry() -> SuffixCatalogEntry {
+        let account_id = sample_account_literal();
         SuffixCatalogEntry {
             suffix: "sora".to_string(),
             suffix_id: 1,
             status: "active".to_string(),
-            steward_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
-            fund_splitter_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
-                .to_string(),
+            steward_account: account_id.clone(),
+            fund_splitter_account: account_id,
             payment_asset_id: "xor#sora".to_string(),
             referral_cap_bps: 0,
             min_term_years: 1,

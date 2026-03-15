@@ -47,7 +47,7 @@ Os testes completam em menos de um segundo em um laptop padrao e nao exigem
 Torii תצלומי מצב של agora expoe de credito de providers junto a fee books para que os dashboards
 possam fazer gate em saldos baixos e penalty strikes:
 
-- מנוחה: `GET /v1/sorafs/capacity/state` retorna entradas `credit_ledger[*]` que
+- מנוחה: `GET /v2/sorafs/capacity/state` retorna entradas `credit_ledger[*]` que
   refletem os campos do book en verificados no teste de soak. Veja
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importacao Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` plota os

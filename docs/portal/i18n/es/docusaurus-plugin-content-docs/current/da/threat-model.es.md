@@ -229,7 +229,7 @@ whitelistea proveedores maliciosos o suprime alertas.
 **Donde mirar después:**- El caché de reproducción y la persistencia de cursores aterrizaron en DA-2. Ver la
   implementación en `crates/iroha_core/src/da/replay_cache.rs` (lógica de caché)
   y la integracion Torii en `crates/iroha_torii/src/da/ingest.rs`, que enhebra las
-  Comprobaciones de huellas dactilares a través de `/v1/da/ingest`.
+  Comprobaciones de huellas dactilares a través de `/v2/da/ingest`.
 - Las simulaciones de streaming PDP/PoTR se ejercitan a través del arnésproof-stream
   en `crates/sorafs_car/tests/sorafs_cli.rs`, cubriendo flujos de solicitud
   PoR/PDP/PoTR y escenarios de fallas animadas en el modelo de amenazas.

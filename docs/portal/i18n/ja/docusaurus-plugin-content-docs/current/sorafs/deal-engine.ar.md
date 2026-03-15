@@ -58,12 +58,12 @@ SLO。 وتركّز العناصر اللاحقة على أتمتة スラッシ
 تعرض Torii نقاط نهاية مخصصة كي يتمكن المزوّدون من الإبلاغ عن الاستخدام وتحريك
 配線手順:
 
-- `POST /v1/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
+- `POST /v2/sorafs/deal/usage` يقبل تليمترية `DealUsageReport` ويعيد
   (`UsageOutcome`)。
-- `POST /v1/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
+- `POST /v2/sorafs/deal/settle` ينهى النافذة الحالية، ويبث
   `DealSettlementRecord` セキュリティ `DealSettlementV1` セキュリティ Base64
   DAG は、次のことを意味します。
-- يغذي `/v1/events/sse` في Torii الآن سجلات `SorafsGatewayEvent::DealUsage`
+- يغذي `/v2/events/sse` في Torii الآن سجلات `SorafsGatewayEvent::DealUsage`
   التي تلخص كل إرسال استخدام (epoch، ساعات GiB المقاسة، عدّادات التذاكر،
   (`SorafsGatewayEvent::DealSettlement`)
   台帳のダイジェスト/ベース64 BLAKE3

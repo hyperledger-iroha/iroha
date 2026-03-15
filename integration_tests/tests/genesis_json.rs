@@ -72,7 +72,10 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
 
     let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
     let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
-    let rose_definition_id: AssetDefinitionId = "rose#wonderland".parse().expect("rose asset");
+    let rose_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("rose asset"),
+        "rose".parse().expect("rose asset"),
+    );
 
     builder = builder.append_instruction(Transfer::domain(
         genesis_account,
@@ -124,7 +127,10 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
                 .map_err(|_| eyre!("timed out waiting for genesis block 1"))?;
         }
 
-        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset_id = AssetId::new(
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+            ALICE_ID.clone(),
+        );
         for peer in network.peers() {
             let assets = peer
                 .client()

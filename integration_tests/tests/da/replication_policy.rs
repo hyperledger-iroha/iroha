@@ -145,7 +145,7 @@ async fn da_manifest_sampling_plan_matches_assignment_hash() -> Result<()> {
     let ingest_url = network
         .client()
         .torii_url
-        .join("/v1/da/ingest")
+        .join("/v2/da/ingest")
         .expect("compose DA ingest URL");
     let response = http
         .post(ingest_url)
@@ -171,7 +171,7 @@ async fn da_manifest_sampling_plan_matches_assignment_hash() -> Result<()> {
         .client()
         .torii_url
         .join(&format!(
-            "/v1/da/manifests/{manifest_ticket_hex}?block_hash={}",
+            "/v2/da/manifests/{manifest_ticket_hex}?block_hash={}",
             hex_encode(Hash::new(b"sample-seed").as_ref())
         ))
         .expect("compose manifest fetch URL");
@@ -247,7 +247,7 @@ async fn ingest_and_fetch_manifest(
     let ingest_url = network
         .client()
         .torii_url
-        .join("/v1/da/ingest")
+        .join("/v2/da/ingest")
         .expect("compose DA ingest URL");
     let response = http
         .post(ingest_url)
@@ -273,7 +273,7 @@ async fn ingest_and_fetch_manifest(
     let manifest_url = network
         .client()
         .torii_url
-        .join(&format!("/v1/da/manifests/{manifest_ticket_hex}"))
+        .join(&format!("/v2/da/manifests/{manifest_ticket_hex}"))
         .expect("compose manifest fetch URL");
     let manifest_response = http
         .get(manifest_url)

@@ -73,13 +73,13 @@ fn halo2_curve_mismatch_rejected_as_curve_not_allowed() {
     let chain: ChainId = "test-chain".parse().unwrap();
     let authority = ALICE_ID.clone();
     let private_key = iroha_test_samples::ALICE_KEYPAIR.private_key().clone();
-    let halo2_fixture = halo2_fixture_envelope("halo2/pasta/ipa-v1/tiny-add-v1", [0u8; 32]);
+    let halo2_fixture = halo2_fixture_envelope("halo2/pasta/ipa/tiny-add", [0u8; 32]);
     let vk_box = halo2_fixture
-        .vk_box("halo2/pasta/ipa-v1")
+        .vk_box("halo2/pasta/ipa")
         .expect("fixture verifying key");
     let attach = iroha_data_model::proof::ProofAttachment::new_inline(
-        "halo2/pasta/ipa-v1".into(),
-        halo2_fixture.proof_box("halo2/pasta/ipa-v1"),
+        "halo2/pasta/ipa".into(),
+        halo2_fixture.proof_box("halo2/pasta/ipa"),
         vk_box,
     );
     let tx: SignedTransaction = TransactionBuilder::new(chain, authority.clone())

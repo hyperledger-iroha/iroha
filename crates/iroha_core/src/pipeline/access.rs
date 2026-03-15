@@ -496,8 +496,15 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset_def:") {
-            let id: AssetDefinitionId = rest.parse().ok()?;
-            canonical.push(CanonicalStateKey::AssetDefinition(id));
+            if let Ok(id) = rest.parse::<AssetDefinitionId>() {
+                canonical.push(CanonicalStateKey::AssetDefinition(id));
+            } else if !rest.is_empty() {
+                // Compatibility: accept historical alias-shaped asset definition hints
+                // (e.g. `asset_def:name#domain`) and preserve them verbatim.
+                state_keys.insert(raw.to_owned());
+            } else {
+                return None;
+            }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset:") {
@@ -882,7 +889,6 @@ where
                 add_account_rw(&mut set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
-                add_domain_r(&mut set, r.object.id().domain());
                 add_asset_def_rw(&mut set, &r.object.id().clone());
             }
             RegisterBox::Nft(r) => add_nft_rw(&mut set, r.object.id()),
@@ -1338,7 +1344,10 @@ mod tests {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
-        let ad: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+        let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        );
         let src = AssetId::of(ad.clone(), alice.clone());
 
         let isis: Vec<iroha_data_model::isi::InstructionBox> = vec![
@@ -1394,7 +1403,10 @@ mod tests {
         let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
         let account = new_wonderland_account(&alice);
-        let asset_def_id: AssetDefinitionId = "coin#wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "coin".parse().unwrap(),
+        );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone());
 
         let isis: Vec<iroha_data_model::isi::InstructionBox> = vec![
@@ -1640,7 +1652,7 @@ mod tests {
 
     #[test]
     fn access_set_hints_reject_unknown_keys() {
-        let reads = vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()];
+        let reads = vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()];
         assert!(access_set_from_hint_keys(&reads, &[]).is_none());
     }
 
@@ -1677,7 +1689,10 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         // Insert manifest with access-set hints into WSV
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def, alice.clone());
         let hints = AccessSetHints {
             read_keys: vec![format!("account:{alice}")],
@@ -1746,7 +1761,10 @@ mod tests {
         let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition");
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def, alice.clone());
         let hints = AccessSetHints {
             read_keys: vec![format!("account:{alice}")],
@@ -1879,7 +1897,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let hints = AccessSetHints {
-            read_keys: vec!["perm.account:legacy-scoped-literal:can_transfer".to_owned()],
+            read_keys: vec!["perm.account:historical-scoped-literal:can_transfer".to_owned()],
             write_keys: Vec::new(),
         };
         let manifest = ContractManifest {
@@ -2100,7 +2118,10 @@ mod tests {
         let parsed = ivm::ProgramMetadata::parse(&prog).expect("header parse");
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def, alice.clone());
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
@@ -2234,10 +2255,17 @@ mod tests {
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
-            let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-            Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()))
-                .execute(&alice, &mut stx)
-                .unwrap();
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&alice, &mut stx)
+            .unwrap();
             let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
             let trigger_id: TriggerId = "mint_asset_trigger".parse().unwrap();
             let trigger = Trigger::new(
@@ -2272,7 +2300,10 @@ mod tests {
             IvmStrategy::Conservative,
         );
 
-        let asset_def_id: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
         let asset_key = key_asset(&asset_id);
         let asset_def_key = key_asset_def(&asset_def_id);

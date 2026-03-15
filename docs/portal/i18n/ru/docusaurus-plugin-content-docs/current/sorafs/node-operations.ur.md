@@ -46,7 +46,7 @@ Sidebar_label: Нажмите здесь
   ```
 
 - Доступ к Torii для чтения/записи `data_dir`.
-- декларация ریکارڈ ہونے کے بعد `GET /v1/sorafs/capacity/state` کے ذریعے تصدیق
+- декларация ریکارڈ ہونے کے بعد `GET /v2/sorafs/capacity/state` کے ذریعے تصدیق
   کریں کہ نوڈ متوقع کپیسٹی اعلان کرتا ہے۔
 - Сглаживание в режиме RAW или сглаживание GiB·hour/PoR в режиме реального времени.
   Возможность использования без джиттера Возможность выбора точечных значений
@@ -98,8 +98,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 Torii Для создания артефактов HTTP можно использовать следующие функции:
 
 ```bash
-curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Доступ к конечным точкам и проверка дымовых тестов CLI.
@@ -112,7 +112,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифест с кодировкой base64 или кодировкой:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII/v2/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -122,7 +122,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. закрепленный вариант выбора:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -137,7 +137,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Torii پروسس (یا پورا نوڈ) ری اسٹارٹ کریں۔
 3. принести ریکوئسٹ دوبارہ جمع کریں۔ полезная нагрузка
    дайджест ری اسٹارٹ سے پہلے والی قدر کے مطابق ہو۔
-4. `GET /v1/sorafs/storage/state` چیک کریں تاکہ تصدیق کہ `bytes_used` ری کے
+4. `GET /v2/sorafs/storage/state` چیک کریں تاکہ تصدیق کہ `bytes_used` ری کے
    بعد устойчивые проявления کو ظاہر کرتا ہے۔
 
 ## 4. کوٹا ریجیکشن ٹیسٹ
@@ -156,7 +156,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Образец PoR:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -181,7 +181,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - Если вы хотите, чтобы это произошло:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` или `torii_sorafs_storage_fetch_inflight`
-  - `/v1/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
+  - `/v2/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے попытки публикации урегулирования
 
 В упражнениях можно использовать различные упражнения, которые можно использовать для приема внутрь.

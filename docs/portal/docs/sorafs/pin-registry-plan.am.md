@@ -78,7 +78,7 @@ Rust Norito እቅዶች እና የማረጋገጫ ረዳቶች እነዚህን 
 
 | አካል | ተግባር | ባለቤት(ዎች) |
 |--------|------|------|
-| Torii አገልግሎት | `/v1/sorafs/pin` (አስገባ)፣ `/v1/sorafs/pin/{cid}` (መፈለግ)፣ `/v1/sorafs/aliases` (ዝርዝር/ማሰር)፣ `/v1/sorafs/replication` (ትዕዛዞች/ደረሰኞች) አጋልጥ። ፔጅኔሽን + ማጣሪያ ያቅርቡ። | አውታረ መረብ TL / ኮር ኢንፍራ |
+| Torii አገልግሎት | `/v2/sorafs/pin` (አስገባ)፣ `/v2/sorafs/pin/{cid}` (መፈለግ)፣ `/v2/sorafs/aliases` (ዝርዝር/ማሰር)፣ `/v2/sorafs/replication` (ትዕዛዞች/ደረሰኞች) አጋልጥ። ፔጅኔሽን + ማጣሪያ ያቅርቡ። | አውታረ መረብ TL / ኮር ኢንፍራ |
 | ምስክርነት | በምላሾች ውስጥ የመመዝገቢያ ቁመት / hash ያካትቱ; በኤስዲኬዎች የሚበላ የNorito ማረጋገጫ መዋቅር ያክሉ። | ኮር ኢንፍራ |
 | CLI | `sorafs_manifest_stub` ወይም አዲስ I18NI0000079X CLI በ I18NI0000080X፣ `alias bind`፣ `order issue`፣ `registry export` ያራዝም። | Tooling WG |
 | ኤስዲኬ | የደንበኛ ማሰሪያዎችን (Rust/Go/TS) ከ Norito schema መፍጠር; የውህደት ሙከራዎችን ይጨምሩ. | የኤስዲኬ ቡድኖች |
@@ -135,10 +135,10 @@ Rust Norito እቅዶች እና የማረጋገጫ ረዳቶች እነዚህን 
 በSF-4 ስር ያለው እያንዳንዱ የፍኖተ ካርታ ማረጋገጫ ዝርዝር ይህ እቅድ መሻሻል ሲደረግ ማጣቀስ አለበት።
 የREST የፊት ገጽታ አሁን የተረጋገጡ የዝርዝር የመጨረሻ ነጥቦችን ይላካል፡
 
-- `GET /v1/sorafs/pin` እና `GET /v1/sorafs/pin/{digest}` መመለስ በ
+- `GET /v2/sorafs/pin` እና `GET /v2/sorafs/pin/{digest}` መመለስ በ
   ተለዋጭ ስም ማሰር፣ የማባዛት ትዕዛዞች እና ከ የተገኘ የማረጋገጫ ነገር
   የቅርብ ጊዜ እገዳ ሃሽ.
-- `GET /v1/sorafs/aliases` እና `GET /v1/sorafs/replication` ንቁውን ያጋልጣሉ
+- `GET /v2/sorafs/aliases` እና `GET /v2/sorafs/replication` ንቁውን ያጋልጣሉ
   ቅጽል ካታሎግ እና የማባዛት ቅደም ተከተል የኋላ ሎግ ወጥነት ባለው ገጽ እና
   የሁኔታ ማጣሪያዎች.
 

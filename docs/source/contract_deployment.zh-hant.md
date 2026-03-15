@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   反對已頒布的 `DeployContract` 提案；如果不存在匹配的提案
   交易被拒絕，代碼為 `NotPermitted`。
 
-## Torii 端點（功能 `app_api`）- `POST /v1/contracts/deploy`
+## Torii 端點（功能 `app_api`）- `POST /v2/contracts/deploy`
   - 請求正文：`DeployContractDto`（有關字段詳細信息，請參閱 `docs/source/torii_contracts_api.md`）。
   - Torii 解碼 Base64 有效負載，計算兩個哈希值，構建清單，
     並提交 `RegisterSmartContractCode` plus
@@ -64,19 +64,19 @@ translator: machine-google-reviewed
   - 響應：`{ ok, code_hash_hex, abi_hash_hex }`。
   - 錯誤：base64 無效、ABI 版本不受支持、缺少權限
     (`CanRegisterSmartContractCode`)，超出尺寸上限，治理門控。
-- `POST /v1/contracts/code`
+- `POST /v2/contracts/code`
   - 接受 `RegisterContractCodeDto`（權限、私鑰、清單）並僅提交
     `RegisterSmartContractCode`。當清單單獨暫存時使用
     字節碼。
-- `POST /v1/contracts/instance`
+- `POST /v2/contracts/instance`
   - 接受 `DeployAndActivateInstanceDto`（權限、私鑰、命名空間/contract_id、`code_b64`、可選清單覆蓋）並以原子方式部署+激活。
-- `POST /v1/contracts/instance/activate`
+- `POST /v2/contracts/instance/activate`
   - 接受 `ActivateInstanceDto`（權限、私鑰、命名空間、contract_id、`code_hash`）並僅提交激活指令。
-- `GET /v1/contracts/code/{code_hash}`
+- `GET /v2/contracts/code/{code_hash}`
   - 返回 `{ manifest: { code_hash, abi_hash } }`。
     其他清單字段在內部保留，但此處省略
     穩定的API。
-- `GET /v1/contracts/code-bytes/{code_hash}`
+- `GET /v2/contracts/code-bytes/{code_hash}`
   - 返回 `{ code_b64 }`，其中存儲的 `.to` 圖像編碼為 base64。
 
 所有合約生命週期端點共享一個通過配置的專用部署限制器
@@ -91,10 +91,10 @@ translator: machine-google-reviewed
 
 ## 治理集成和受保護的命名空間- 設置自定義參數`gov_protected_namespaces`（命名空間的JSON數組
   字符串）以啟用准入門控。 Torii 暴露助手
-  `/v1/gov/protected-namespaces` 和 CLI 通過以下方式鏡像它們
+  `/v2/gov/protected-namespaces` 和 CLI 通過以下方式鏡像它們
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`。
 - 使用 `ProposeDeployContract`（或 Torii）創建的提案
-  `/v1/gov/proposals/deploy-contract` 端點）捕獲
+  `/v2/gov/proposals/deploy-contract` 端點）捕獲
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`。
 - 一旦公投通過，`EnactReferendum` 標記提案已頒布並且
   准入將接受攜帶匹配元數據和代碼的部署。

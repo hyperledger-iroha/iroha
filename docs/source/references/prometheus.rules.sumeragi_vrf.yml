@@ -38,4 +38,4 @@ groups:
         annotations:
           summary: "Epoch commitments stalled while blocks continue"
           description: |
-            No VRF commitments observed during an active epoch. Verify validators are online and check `/v1/sumeragi/status.vrf_penalty_epoch`.
+            No VRF commitments observed during an active epoch. Verify validators are online and check `/v2/sumeragi/status.vrf_penalty_epoch`.

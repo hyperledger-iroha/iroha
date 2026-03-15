@@ -41,7 +41,7 @@ checksums as Rust services.
      "telemetry": {
        "enabled": true,
        "exporter_name": "android-main",
-       "sink": "https://otel.nexus.sora.org/v1/traces",
+       "sink": "https://otel.nexus.sora.org/v2/traces",
        "redaction": {
          "salt_b64": "mX5Z…==",
          "salt_version": "2026-03-05T00:00Z",

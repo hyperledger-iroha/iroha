@@ -283,7 +283,10 @@ mod tests {
             HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
         let record = PendingSettlement {
             source_id: [0x22; 32],
-            asset_definition_id: "xor#sora".parse().expect("valid asset definition id"),
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
+                "sora".parse().unwrap(),
+                "xor".parse().unwrap(),
+            ),
             local_amount_micro: 10,
             xor_due_micro: 7,
             xor_after_haircut_micro: 6,

@@ -220,7 +220,7 @@ chunks и проходят PDP/PoTR через תגובות מזויפות או 
 
 - מטמון הפעלה חוזר и סמני התמדה נחתו ב-DA-2. Реализация в
   `crates/iroha_core/src/da/replay_cache.rs` (לוגיקת מטמון) и интеграция Torii в
-  `crates/iroha_torii/src/da/ingest.rs`, בדיקת טביעות אצבע проходят через `/v1/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs`, בדיקת טביעות אצבע проходят через `/v2/da/ingest`.
 - סימולציות זרימת PDP/PoTR упражняются через רתמת proof-stream в
   `crates/sorafs_car/tests/sorafs_cli.rs`, זרימת בקשת PoR/PDP/PoTR покрывая и
   תרחישי כשל из модели угроз.

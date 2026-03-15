@@ -36,7 +36,7 @@ ao validar fluxos de ativos confidenciais. Complementa o manual de rotação
   ```
 
 - Metadados de políticas e transições pendentes estão disponíveis através
-  `GET /v1/confidential/assets/{definition_id}/transitions`
+  `GET /v2/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`), espelhado pelo Swift SDK
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) e documentado em
   tanto o design de ativos confidenciais quanto os guias do SDK

@@ -41,8 +41,14 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
     let alice = Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
 
-    let delivery_def_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
-    let payment_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
+    let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "bond".parse().unwrap(),
+    );
+    let payment_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "usd".parse().unwrap(),
+    );
 
     let delivery_def = AssetDefinition::numeric(delivery_def_id.clone()).build(&ALICE_ID);
     let payment_def = AssetDefinition::numeric(payment_def_id.clone()).build(&ALICE_ID);
@@ -80,8 +86,14 @@ fn settlement_state_with_payment_spec(
     let alice = Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
 
-    let delivery_def_id: AssetDefinitionId = "bond#wonderland".parse().unwrap();
-    let payment_def_id: AssetDefinitionId = "usd#wonderland".parse().unwrap();
+    let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "bond".parse().unwrap(),
+    );
+    let payment_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "usd".parse().unwrap(),
+    );
 
     let delivery_def =
         AssetDefinition::new(delivery_def_id.clone(), NumericSpec::integer()).build(&ALICE_ID);

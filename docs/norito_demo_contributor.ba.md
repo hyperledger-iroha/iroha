@@ -27,7 +27,7 @@ I18NT000000003Х күпер/Тоташыу өйөмө Xcode проекттары
    ҡиммәттәре һеҙҙең мөхиткә тап килһен өсөн. Ҡушымта был үҙгәртеүселәрҙе стартта уҡый:
    - `TORII_NODE_URL` — база REST URL (WebSocket URL-адрестары унан алынған).
    - `CONNECT_SESSION_ID` — 32 байт сеанс идентификаторы (база64/база64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — токендар `/v1/connect/session`-ҡа ҡайтарыла.
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — токендар `/v2/connect/session`-ҡа ҡайтарыла.
    - `CONNECT_CHAIN_ID` — сылбырлы идентификатор контроль ҡул ҡыҫышы ваҡытында иғлан итте.
    - `CONNECT_ROLE` — UI-ла алдан һайланған (I18NI000000300X йәки I18NI0000000031X) ғәҙәттәге роле).
    - Ҡул менән һынау өсөн ярҙамсы ярҙамсылар: I18NI000000032X, `CONNECT_SHARED_KEY_B64`,

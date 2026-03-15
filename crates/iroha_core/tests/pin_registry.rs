@@ -1,7 +1,7 @@
 //! Integration tests covering the `SoraFS` pin registry flows.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{convert::TryInto, fs, num::NonZeroU64, path::PathBuf};
+use std::{convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
@@ -110,6 +110,17 @@ fn pin_registry_snapshot_matches_fixture() {
 
     let snapshot = snapshot_json(manifest, alias_record, order_record);
     let fixture = load_fixture();
+
+    if env::var_os("UPDATE_FIXTURES").is_some() {
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH);
+        let mut payload = norito::json::to_vec_pretty(&snapshot).expect("serialize fixture");
+        payload.push(b'\n');
+        fs::write(&fixture_path, payload).expect("write fixture");
+        panic!(
+            "fixture updated: {}. Re-run tests without UPDATE_FIXTURES to verify.",
+            fixture_path.display()
+        );
+    }
 
     assert_eq!(
         snapshot, fixture,
@@ -822,6 +833,23 @@ fn default_policy() -> PinPolicy {
 
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let alice = alice();
+    let default_domain: DomainId = iroha_data_model::account::address::default_domain_name()
+        .parse()
+        .expect("default account domain label");
+    if tx.world().domains().get(&default_domain).is_none() {
+        Register::domain(Domain::new(default_domain.clone()))
+            .execute(&alice, tx)
+            .expect("register default domain");
+    }
+    if tx.world().account(&alice).is_err() {
+        Register::account(NewAccount::new_in_domain(
+            alice.clone(),
+            default_domain.clone(),
+        ))
+        .execute(&alice, tx)
+        .expect("register sorafs authority");
+    }
+
     {
         let world = &mut tx.world;
         for perm in [

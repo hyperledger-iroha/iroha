@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - [ ] Получены последние результаты детерминированных испытаний:
       `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm` и
       Norito светильники туда и обратно.
-- [ ] Записано объявление Torii `/v1/node/capabilities` (через `iroha runtime capabilities`), проверяются поля манифеста `crypto.sm` и снимок политики ускорения.
+- [ ] Записано объявление Torii `/v2/node/capabilities` (через `iroha runtime capabilities`), проверяются поля манифеста `crypto.sm` и снимок политики ускорения.
 
 # Выполнение задания
 

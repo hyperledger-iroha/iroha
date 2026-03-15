@@ -210,7 +210,7 @@ fn main() {
             } else {
                 guess_defaults(n)
             };
-            // Transform gas string: tokens like G_name → asset:gas/G_name@ivm.core/v1
+            // Transform gas string: tokens like G_name → asset:gas/G_name@ivm.core/v2
             let mut out_gas = String::new();
             for (i, part) in gas_raw.split('+').map(|s| s.trim()).enumerate() {
                 if i > 0 {
@@ -220,7 +220,7 @@ fn main() {
                     && tok.starts_with('G')
                 {
                     gas_keys.insert(tok.to_string());
-                    out_gas.push_str(&format!("asset:gas/{tok}@ivm.core/v1"));
+                    out_gas.push_str(&format!("asset:gas/{tok}@ivm.core/v2"));
                     // Append trailing qualifier
                     let tail = part.strip_prefix(tok).unwrap_or("").trim();
                     if !tail.is_empty() {
@@ -246,7 +246,7 @@ fn main() {
         gbuf.push_str("pub struct GasAsset { pub key: &'static str, pub asset_id: &'static str, pub unit: &'static str, pub version: &'static str, pub group: &'static str }\n");
         gbuf.push_str("pub static GAS_ASSETS: &[GasAsset] = &[\n");
         for k in gas_keys.iter() {
-            let asset_id = format!("asset:gas/{k}@ivm.core/v1");
+            let asset_id = format!("asset:gas/{k}@ivm.core/v2");
             gbuf.push_str(&format!(
                 "    GasAsset {{ key: \"{k}\", asset_id: \"{asset_id}\", unit: \"gas\", version: \"v1\", group: \"syscall\" }},\n"
             ));

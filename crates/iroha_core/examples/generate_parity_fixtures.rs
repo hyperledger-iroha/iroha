@@ -59,9 +59,14 @@ fn run_block_and_events(
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let ad: AssetDefinition =
-        AssetDefinition::new("rose#wonderland".parse().unwrap(), NumericSpec::default())
-            .build(&alice_id);
+    let ad: AssetDefinition = AssetDefinition::new(
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ),
+        NumericSpec::default(),
+    )
+    .build(&alice_id);
     let acc_a = Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
     let acc_b = Account::new(bob_id.to_account_id(domain_id)).build(&alice_id);
     // Seed initial balances: Alice 60, Bob 10
@@ -115,7 +120,10 @@ fn main() {
     let chain_id = ChainId::from("chain");
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let rose: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
     let tx_mint = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
@@ -208,7 +216,10 @@ fn main() {
     write_fixture("kv_and_nft_lifecycle", &events_json_filtered(&events_par));
 
     // 3) Asset definition KV set/remove
-    let ad: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+    let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        "wonderland".parse().unwrap(),
+        "rose".parse().unwrap(),
+    );
     let tx_set = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
         .with_instructions([SetKeyValue::asset_definition(
             ad.clone(),

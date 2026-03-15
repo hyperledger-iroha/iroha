@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
    `torii.sorafs.discovery.admission.envelopes_dir` 引用的目录。
 3. 验证提供商广告是否通过发现 API 传播：
    ```bash
-   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
    ```
 4. 使用治理标头练习清单/计划端点：
    ```bash

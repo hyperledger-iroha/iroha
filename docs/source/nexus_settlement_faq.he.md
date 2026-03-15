@@ -64,7 +64,7 @@ translator: LLM (Codex)
 ### האם ה‑SDK זקוקים לטיפול מיוחד?
 
 - כן:
-  - חשיפת עוזרים לקריאת `/v1/settlement/records` ופענוח `SettlementApplied`.
+  - חשיפת עוזרים לקריאת `/v2/settlement/records` ופענוח `SettlementApplied`.
   - פרסום מזהי נתיב ו־handle בקונפיגורציה כך שמפעילים ינתבו נכון.
   - מימוש payload‑י Norito (`SettlementInstructionV1` וכו') ובדיקות E2E.
 - עיינו ב־Nexus SDK Quickstart עבור דוגמאות פר־שפה.

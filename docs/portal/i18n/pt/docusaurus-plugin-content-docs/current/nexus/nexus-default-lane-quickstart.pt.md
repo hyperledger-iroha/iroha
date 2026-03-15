@@ -164,7 +164,7 @@ Isso confirma que o snapshot do TEU, os metadados de alias e os flags de manifes
 
 ## 6. Exercício dos padrões do cliente- **Rust/CLI.** `iroha_cli` e o crate cliente Rust omitem o campo `lane_id` quando você não passa `--lane-id` / `LaneSelector`. O roteador de filas, portanto, cai em `default_lane`. Use flags explícitas `--lane-id`/`--dataspace-id` apenas ao mirar um lane não padrão.
 - **JS/Swift/Android.** As últimas versões do SDK tratam `laneId`/`lane_id` como demonstração e fazem fallback para o valor anunciado por `/status`. Mantenha uma política de roteamento sincronizado entre encenação e produção para que os aplicativos se movam e não precisem de reconfigurações de emergência.
-- **Testes de pipeline/SSE.** Os filtros de eventos de transação aceitaram os predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v1/pipeline/events/transactions` com filtro esse para provar que escritas enviadas sem pista explícita chegam sob o id de pista de fallback.
+- **Testes de pipeline/SSE.** Os filtros de eventos de transação aceitaram os predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v2/pipeline/events/transactions` com filtro esse para provar que escritas enviadas sem pista explícita chegam sob o id de pista de fallback.
 
 ## 7. Observabilidade e ganchos de governança
 

@@ -24,12 +24,12 @@ translation_last_reviewed: 2026-01-01
 
 ## Поверхность Torii API
 
-- `GET /v1/zk/proofs` и `GET /v1/zk/proofs/count` принимают фильтры, учитывающие bridge:
+- `GET /v2/zk/proofs` и `GET /v2/zk/proofs/count` принимают фильтры, учитывающие bridge:
   - `bridge_only=true` возвращает только bridge proofs.
   - `bridge_pinned_only=true` ограничивает pinned bridge proofs.
   - `bridge_start_from_height` / `bridge_end_until_height` ограничивают окно диапазона bridge.
-- `GET /v1/zk/proof/{backend}/{hash}` возвращает метаданные bridge (диапазон, manifest hash, summary payload) вместе с id/статусом proof и VK bindings.
-- Полная запись Norito proof (включая bytes payload) остается доступной через `GET /v1/proofs/{proof_id}` для проверяющих вне узла.
+- `GET /v2/zk/proof/{backend}/{hash}` возвращает метаданные bridge (диапазон, manifest hash, summary payload) вместе с id/статусом proof и VK bindings.
+- Полная запись Norito proof (включая bytes payload) остается доступной через `GET /v2/proofs/{proof_id}` для проверяющих вне узла.
 
 ## События bridge receipt
 

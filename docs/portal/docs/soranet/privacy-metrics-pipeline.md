@@ -110,14 +110,14 @@ visible without leaving stale accumulators in memory.
 Torii now exposes two telemetry-gated HTTP endpoints so relays and collectors
 can forward observations without embedding a bespoke transport:
 
-- `POST /v1/soranet/privacy/event` accepts a
+- `POST /v2/soranet/privacy/event` accepts a
   `RecordSoranetPrivacyEventDto` payload. The body wraps a
   `SoranetPrivacyEventV1` plus an optional `source` label. Torii validates the
   request against the active telemetry profile, records the event, and responds
   with HTTP `202 Accepted` alongside a Norito JSON envelope containing the
   computed bucket window (`bucket_start_unix`, `bucket_duration_secs`) and the
   relay mode.
-- `POST /v1/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
+- `POST /v2/soranet/privacy/share` accepts a `RecordSoranetPrivacyShareDto`
   payload. The body carries a `SoranetPrivacyPrioShareV1` and an optional
   `forwarded_by` hint so operators can audit collector flows. Successful
   submissions return HTTP `202 Accepted` with a Norito JSON envelope summarising
@@ -249,7 +249,7 @@ CI or operators can fail fast whenever suppressed buckets exceed the allowed
 window (default 10%) or when no buckets are present yet. Recommended flow:
 
 1. Export NDJSON from the relay admin endpoint(s) plus the orchestrator’s
-   `/v1/soranet/privacy/event|share` stream into
+   `/v2/soranet/privacy/event|share` stream into
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Run the helper with the policy budget:
 
