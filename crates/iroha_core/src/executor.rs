@@ -3565,7 +3565,9 @@ fn can_transfer_asset(
         return Ok(true);
     }
 
-    if authority_owns_domain(world, authority, transfer.source().definition().domain())? {
+    if !transfer.source().definition().is_opaque_canonical()
+        && authority_owns_domain(world, authority, transfer.source().definition().domain())?
+    {
         return Ok(true);
     }
 
@@ -3720,6 +3722,10 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
             .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
             .is_ok();
     if is_genesis_context {
+        return Ok(());
+    }
+
+    if reg_asset_definition.object().id().is_opaque_canonical() {
         return Ok(());
     }
 
@@ -4371,6 +4377,40 @@ mod tests {
         assert!(
             matches!(res, Err(ValidationFail::NotPermitted(_))),
             "initial executor should deny registering asset definition without permission"
+        );
+    }
+
+    #[test]
+    fn initial_executor_allows_registering_opaque_asset_definition_without_domain_projection() {
+        let alice_id = ALICE_ID.clone();
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
+
+        let world = World::with([domain], [alice_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let asset_definition_id: AssetDefinitionId = "aid:2e3d34beb8a84239b3d9590770f1189e"
+            .parse()
+            .expect("opaque aid id");
+        let instruction = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone()).with_name("pkr".to_owned()),
+        ));
+
+        let mut stx = block.transaction();
+        executor
+            .execute_instruction(&mut stx, &alice_id, instruction)
+            .expect("opaque aid asset definition should not require a domain projection");
+        assert!(
+            stx.world.asset_definition(&asset_definition_id).is_ok(),
+            "opaque asset definition must be inserted into world state"
         );
     }
 

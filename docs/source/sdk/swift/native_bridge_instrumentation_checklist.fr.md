@@ -25,7 +25,7 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
 
 | Signal | Source | Sink / Evidence | Notes |
 |--------|--------|-----------------|-------|
-| Bridge load status & version | `NoritoNativeBridge.shared` loader (`NativeBridge.swift:13`, env probes `NORITO_BRIDGE_*`) | `connect.error` events emitted via `ConnectError.telemetryAttributes` (`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`) and `status.md` excerpts | Emit a `connect.error` event tagged `category=internal code=norito_bridge.load_failure` when the loader falls back to JSON; record version/build metadata when the handle resolves successfully. |
+| Bridge load status & version | `NoritoNativeBridge.shared` loader (`NativeBridge.swift:13`, path-based candidate probing) | `connect.error` events emitted via `ConnectError.telemetryAttributes` (`IrohaSwift/Sources/IrohaSwift/ConnectError.swift`) and `status.md` excerpts | Emit a `connect.error` event tagged `category=internal code=norito_bridge.load_failure` when the loader falls back to JSON; record version/build metadata when the handle resolves successfully. |
 | Connect codec bridge enforcement | `ConnectCodec.encode/decode` (`IrohaSwift/Sources/IrohaSwift/ConnectCodec.swift`) | `connect.error` telemetry + parity feeds | Alert whenever `ConnectCodecError.bridgeUnavailable` is raised so dashboards can confirm the XCFramework ships with every release and fail closed when the bridge is missing. |
 | Sorafs orchestrator reports | `sorafsLocalFetch` (`NativeBridge.swift:1982`) and fixtures (`fixtures/sorafs_orchestrator/README.md`) | CI/SDK parity harness (`ci/sdk_sorafs_orchestrator.sh`) and `docs/source/sorafs/reports/orchestrator_ga.md` | Persist `reportJSON` produced by the bridge, include it in the fixture bundle, and ensure it flows into the shared parity tests. |
 | XCFramework smoke lanes & device tags | `scripts/ci/run_xcframework_smoke.sh` → `dashboards/mobile_ci.swift` | `artifacts/xcframework_smoke_result.json`, `artifacts/xcframework_smoke_anomalies.json`, `dashboards/data/mobile_ci*.json`, Buildkite metadata `ci/xcframework-smoke:<lane>:device_tag` | Required so dashboards expose StrongBox coverage and macOS fallbacks; validated via `scripts/check_swift_dashboard_data.py`. |
@@ -45,12 +45,12 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
 1. **Build and point the bridge.**
    ```bash
    ./scripts/build_norito_xcframework.sh
-   export NORITO_BRIDGE_FRAMEWORK="$PWD/dist/NoritoBridge.xcframework/ios-arm64/NoritoBridge.framework"
+   # Loader discovers dist/NoritoBridge.xcframework automatically.
    ```
 2. **Verify availability telemetry.**
    - Run `swift test --filter TxBuilderTests --package-path IrohaSwift`.
    - Ensure the tests that skip on `!NoritoNativeBridge.shared.isAvailable` now run.
-   - Confirm the logger/telemetry hooks emit a `connect.error` with `code=norito_bridge.available` when the bridge loads and `code=norito_bridge.load_failure` when the env variable is pointed at a dummy path.
+   - Confirm the logger/telemetry hooks emit a `connect.error` with `code=norito_bridge.available` when the bridge loads and `code=norito_bridge.load_failure` when the xcframework is missing or malformed.
 3. **Record version info.**
    - Capture the SHA + build date from `dist/NoritoBridge.xcframework/Info.plist` and attach it to the `status.md` update or release note.
 
@@ -62,7 +62,7 @@ changes, the XCFramework harness is updated, or new telemetry sinks are added.
    swift test --filter ConnectSessionTests --package-path IrohaSwift
    ```
 2. **Check fail-closed telemetry.**
-   - Temporarily unset `NORITO_BRIDGE_FRAMEWORK` (or call `NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(false)`) so `ConnectCodec` raises `ConnectCodecError.bridgeUnavailable`.
+   - Call `NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(false)` so `ConnectCodec` raises `ConnectCodecError.bridgeUnavailable`.
    - Confirm that the telemetry exporter records a `connect.error` with the new bridge-unavailable code and that dashboards alarm when the XCFramework is missing.
 3. **Validate taxonomy alignment.**
    - Run `swift test --filter ConnectErrorTests --package-path IrohaSwift` to ensure the error taxonomy feeding telemetry stays stable (`docs/source/connect_error_taxonomy.md`).

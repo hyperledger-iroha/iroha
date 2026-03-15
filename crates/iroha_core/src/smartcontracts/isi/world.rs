@@ -10099,6 +10099,9 @@ pub mod isi {
     }
 
     fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
+        let asset_definition_matches_domain = |asset_definition: &AssetDefinitionId| -> bool {
+            !asset_definition.is_opaque_canonical() && asset_definition.domain() == domain_id
+        };
         if let Ok(permission) = CanUnregisterDomain::try_from(permission) {
             return &permission.domain == domain_id;
         }
@@ -10109,34 +10112,34 @@ pub mod isi {
             return &permission.domain == domain_id;
         }
         if let Ok(permission) = CanUnregisterAssetDefinition::try_from(permission) {
-            return permission.asset_definition.domain() == domain_id;
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanModifyAssetDefinitionMetadata::try_from(permission) {
-            return permission.asset_definition.domain() == domain_id;
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanMintAssetWithDefinition::try_from(permission) {
-            return permission.asset_definition.domain() == domain_id;
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanBurnAssetWithDefinition::try_from(permission) {
-            return permission.asset_definition.domain() == domain_id;
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanTransferAssetWithDefinition::try_from(permission) {
-            return permission.asset_definition.domain() == domain_id;
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanModifyAssetMetadataWithDefinition::try_from(permission) {
-            return permission.asset_definition.domain() == domain_id;
+            return asset_definition_matches_domain(&permission.asset_definition);
         }
         if let Ok(permission) = CanMintAsset::try_from(permission) {
-            return permission.asset.definition().domain() == domain_id;
+            return asset_definition_matches_domain(permission.asset.definition());
         }
         if let Ok(permission) = CanBurnAsset::try_from(permission) {
-            return permission.asset.definition().domain() == domain_id;
+            return asset_definition_matches_domain(permission.asset.definition());
         }
         if let Ok(permission) = CanTransferAsset::try_from(permission) {
-            return permission.asset.definition().domain() == domain_id;
+            return asset_definition_matches_domain(permission.asset.definition());
         }
         if let Ok(permission) = CanModifyAssetMetadata::try_from(permission) {
-            return permission.asset.definition().domain() == domain_id;
+            return asset_definition_matches_domain(permission.asset.definition());
         }
         if let Ok(permission) = CanRegisterNft::try_from(permission) {
             return &permission.domain == domain_id;
@@ -10542,7 +10545,10 @@ pub mod isi {
                 .world
                 .assets
                 .iter()
-                .filter(|(asset_id, _)| asset_id.definition().domain() == &domain_id)
+                .filter(|(asset_id, _)| {
+                    let definition = asset_id.definition();
+                    !definition.is_opaque_canonical() && definition.domain() == &domain_id
+                })
                 .map(|(asset_id, _)| asset_id.clone())
                 .collect();
             for asset_id in remove_assets {

@@ -230,13 +230,6 @@ private enum SorafsBridgeBootstrap {
     private static func candidateLibraryURLs(fileManager: FileManager) throws -> [URL] {
         var urls: [URL] = []
 
-        if let envPath = ProcessInfo.processInfo.environment["NORITO_BRIDGE_LIBRARY"] {
-            let envURL = URL(fileURLWithPath: envPath)
-            if fileManager.fileExists(atPath: envURL.path) {
-                urls.append(envURL)
-            }
-        }
-
         let distRoot = SorafsFixturePaths.repoRoot.appendingPathComponent("dist", isDirectory: true)
         let prebuilt = prebuiltCandidates(in: distRoot)
         var hasPrebuilt = appendExisting(prebuilt, fileManager: fileManager, into: &urls)

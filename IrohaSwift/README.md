@@ -7,7 +7,7 @@ Features:
 - Offline allowance top-up helpers (`ToriiClient.topUpOfflineAllowance`, `ToriiClient.topUpOfflineAllowanceRenewal`, `OfflineWallet.topUpAllowance`, `OfflineWallet.topUpAllowanceRenewal`) plus registration/renewal endpoints for `/v1/offline/allowances`; top-up/renew helpers accept optional `attestationNonce` for iOS App Attest challenge-hash forwarding, direct build-claim issuance via `ToriiClient.issueOfflineBuildClaim` (`/v1/offline/build-claims/issue`), typed claim decoding via `ToriiOfflineBuildClaimIssueResponse.buildClaimObject()`, and settlement submit+poll convenience (`ToriiClient.submitOfflineSettlementAndWait`)
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
-- Native NoritoBridge integration (required by default; set `IROHASWIFT_USE_BRIDGE=optional` for the Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
+- Native NoritoBridge integration (auto-enabled when `dist/NoritoBridge.xcframework` is present, otherwise Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
 - Ed25519 key management & signing via CryptoKit (iOS 15+)
@@ -51,9 +51,9 @@ instead of the Git URL so Xcode consumes the local sources.
 
 #### NoritoBridge policy (SwiftPM)
 
-`Package.swift` expects `dist/NoritoBridge.xcframework` to live next to the repository root and keeps the native bridge on by default. Set `IROHASWIFT_USE_BRIDGE=optional` to continue when the xcframework is missing (a warning is emitted with the expected path), or `IROHASWIFT_USE_BRIDGE=0` to force Swift-only builds even when the xcframework is present (useful for CI stubs). Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` echo the same hint so operators can re-enable the bridge quickly.
+`Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root. If present, the native bridge is linked; if missing, the package builds with Swift-only fallback and emits a warning with the expected path. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint.
 
-CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to assert the manifest fails when the bridge is required but missing and that Swift-only builds still succeed when the bridge is disabled.
+CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging and fallback build coverage.
 
 ### CocoaPods
 
@@ -501,6 +501,31 @@ SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries unto
 apps can decide how to remediate.
 
 ### Offline receipts and bundles
+
+When you need a full `norito:<hex>` asset id from textual parts, use the new builders:
+
+```swift
+let canonicalAssetId = try ToriiClient.buildCanonicalAssetIdLiteralOffline(
+    assetDefinitionId: "usd#wonderland",
+    accountId: "<account_i105>"
+)
+```
+
+For alias inputs, resolve online and encode in one call:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let assetId = try await torii.buildAssetIdLiteralResolvingAliases(
+        assetDefinitionIdOrAlias: "usd#issuer@main",
+        accountIdOrAlias: "alice"
+    )
+    print(assetId) // norito:<hex>
+}
+```
+
+Offline-only encoding is canonical-only. Alias-shaped inputs are rejected unless you call the async resolver path above.
+The async resolver path also falls back to `/v1/assets/aliases/resolve` when a non-alias asset definition is invalid.
+Component-based asset-id building requires the native bridge symbol `connect_norito_encode_asset_id_literal`.
 
 Use `OfflineReceiptBuilder` to validate offline spend receipts and bundle submissions (spend-key
 signature verification, policy enforcement, platform snapshot binding, and aggregate proof root
@@ -1329,19 +1354,16 @@ as the `norito` Rust crate.
 bridge version plus per-platform SHA-256 hashes.
 
 ### NoritoBridge policy and troubleshooting
-- Default builds link `dist/NoritoBridge.xcframework`. The manifest fails fast when the
-  xcframework is missing; set `IROHASWIFT_USE_BRIDGE=optional` to build the Swift-only
-  fallback or `IROHASWIFT_USE_BRIDGE=0` to disable bridge loading entirely (useful for CI
-  or when the binary is unavailable).
+- Builds link `dist/NoritoBridge.xcframework` when it is present. When it is missing, the
+  package falls back to Swift-only paths and prints a warning with the expected location.
 - When the bridge is disabled or missing, SDK surfaces return
-  `bridgeUnavailable`/`nativeBridgeUnavailable` errors that include the env hint
-  (`IROHASWIFT_USE_BRIDGE`) and the expected xcframework location.
+  `bridgeUnavailable`/`nativeBridgeUnavailable` errors that include the expected
+  xcframework location.
 - Running without the bridge will skip native Norito encoding and Connect crypto helpers;
   use the Swift-only encoder paths and expect Connect codec calls to throw
   `ConnectCodecError.bridgeUnavailable`.
-- Example: `IROHASWIFT_USE_BRIDGE=optional swift test --package-path IrohaSwift` builds
-  with the fallback; restore the env var or place the xcframework to re-enable native
-  helpers.
+- Example: `swift test --package-path IrohaSwift` will automatically use fallback on
+  machines where the xcframework is not present.
 
 ## SwiftUI demo and CI
 

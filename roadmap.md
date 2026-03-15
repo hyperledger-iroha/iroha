@@ -2,6 +2,10 @@
 
 Last updated: 2026-03-15
 
+## Mobile SDK Follow-up
+1. Stabilize bridge-enabled Swift test runs for the new asset-id-literal-from-parts path and add bridge-on coverage in CI.
+2. Extend Android native-available test coverage to run in an environment where `connect_norito_bridge` is loaded, so `AssetIdLiteral.encodeFromParts(...)` success-path assertions are always exercised in automation.
+
 ## Multilane Genesis Pre-exec Follow-up
 1. Investigate and fix `RegisterPublicLaneValidator` pre-exec failures that reference synthetic `aid:*` asset-definition IDs (currently pre-exec falls back to synthetic success in cross-dataspace localnet startup).
 2. Ensure staking asset-definition lookup stays deterministic across pre-exec and runtime paths without relying on fallback behavior, and add a regression integration test for the corrected path.

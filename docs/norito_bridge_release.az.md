@@ -52,7 +52,7 @@ proqram daxilində artefaktlar (Xcode layihə kabelləri, ChaChaPoly istifadəsi
    Skript iOS və macOS hədəfləri üçün Rust körpüsü kitabxanasını tərtib edir və onları birləşdirir
    nəticədə vahid XCFramework kataloqu altında statik kitabxanalar.
    O, həmçinin körpü versiyasını tutan və `dist/NoritoBridge.artifacts.json` yayır
-   platforma başına SHA-256 hashları (əgər `NORITO_BRIDGE_VERSION` ilə versiyanı ləğv edin
+   platforma başına SHA-256 hashları (əgər `--bridge-version <version>` ilə versiyanı ləğv edin
    lazımdır).
 
 2. Paylanma üçün XCFramework-i sıxın:
