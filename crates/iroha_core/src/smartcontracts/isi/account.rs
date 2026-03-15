@@ -78,6 +78,12 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(&key) {
+                return Err(Error::InvariantViolation(
+                    format!("account metadata key `{key}` is reserved for native multisig state")
+                        .into(),
+                ));
+            }
             // Enforce metadata value size limit (custom parameter or default)
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
@@ -114,6 +120,15 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(self.key()) {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "account metadata key `{}` is reserved for native multisig state",
+                        self.key()
+                    )
+                    .into(),
+                ));
+            }
 
             let value = state_transaction
                 .world

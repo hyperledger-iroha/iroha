@@ -2947,6 +2947,12 @@ export class ToriiClient {
           this._dataModelCompatibility = { status: "incompatible", actual: null };
           throw new ToriiDataModelCompatibilityError(expected, null, error);
         }
+        if (error instanceof ToriiHttpError && error.status === 404) {
+          // Some deployments do not expose the capability advert yet. In that
+          // case, proceed with the client-side expected model version.
+          this._dataModelCompatibility = { status: "compatible", actual: expected };
+          return;
+        }
         throw error;
       }
       const actual = capabilities.dataModelVersion;

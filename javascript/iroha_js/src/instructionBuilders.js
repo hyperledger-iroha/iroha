@@ -1887,16 +1887,23 @@ export function buildRegisterDomainInstruction({ domainId, logo = null, metadata
 
 /**
  * Build a `Register::Account` instruction payload.
- * @param {{ accountId: string, metadata?: object | null }} options
- * @returns {{Register: {Account: {id: string, metadata: object}}}}
+ * @param {{ accountId: string, domainId?: string, domain?: string, metadata?: object | null }} options
+ * @returns {{Register: {Account: {id: string, domain: string, metadata: object}}}}
  */
-export function buildRegisterAccountInstruction({ accountId, metadata }) {
+export function buildRegisterAccountInstruction({
+  accountId,
+  domainId,
+  domain,
+  metadata,
+}) {
   const id = normalizeAccountId(accountId, "accountId");
+  const resolvedDomainId = assertString(domainId ?? domain, "domainId");
   const normalizedMetadata = normalizeMetadata(metadata);
   return {
     Register: {
       Account: {
         id,
+        domain: resolvedDomainId,
         metadata: normalizedMetadata,
       },
     },

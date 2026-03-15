@@ -1091,6 +1091,7 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId,
+          domainId,
           metadata: {
             suite: "js-integration",
             step: "account-asset",
@@ -1286,6 +1287,7 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: senderAccountId,
+          domainId,
           metadata: {
             suite: "js-integration",
             step: "asset-transfer",
@@ -1307,6 +1309,7 @@ test(
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: receiverAccountId,
+          domainId,
           metadata: {
             suite: "js-integration",
             step: "asset-transfer",
