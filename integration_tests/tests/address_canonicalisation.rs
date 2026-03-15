@@ -3,7 +3,7 @@
 
 use std::{
     collections::BTreeSet,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     str::FromStr,
     sync::OnceLock,
@@ -36,11 +36,42 @@ use reqwest::Client;
 
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 
+const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
+
+fn env_flag_enabled(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn effective_file_permit_parallelism_limit() -> usize {
+    if let Ok(raw) = env::var("IROHA_TEST_SERIALIZE_NETWORKS")
+        && env_flag_enabled(&raw)
+    {
+        return 1;
+    }
+    if let Ok(raw) = env::var("IROHA_TEST_NETWORK_PARALLELISM")
+        && let Ok(parsed) = raw.trim().parse::<usize>()
+        && parsed > 0
+    {
+        return parsed;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    cores
+        .saturating_div(DEFAULT_NETWORK_PARALLELISM_PEERS.max(1))
+        .max(1)
+}
+
 fn install_network_parallelism_override() {
     static NETWORK_PARALLELISM_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLock::new();
-    // Keep this suite bounded to avoid startup stampedes while still allowing overlap so the
-    // binary does not exceed external watchdog time limits.
-    NETWORK_PARALLELISM_GUARD.get_or_init(|| sandbox::override_network_parallelism(None, Some(2)));
+    // Keep this suite bounded and avoid over-admitting network starts when the underlying
+    // file-permit lock only allows a single concurrent network.
+    let suite_parallelism = effective_file_permit_parallelism_limit().min(2).max(1);
+    NETWORK_PARALLELISM_GUARD
+        .get_or_init(|| sandbox::override_network_parallelism(None, Some(suite_parallelism)));
 }
 
 async fn start_network_async_or_skip(
