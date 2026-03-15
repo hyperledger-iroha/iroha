@@ -7,8 +7,24 @@ import java.util.Objects;
 public final class AssetIdLiteral {
 
   private static final String PREFIX = "norito:";
+  private static final boolean NATIVE_AVAILABLE;
+
+  static {
+    boolean available;
+    try {
+      System.loadLibrary("connect_norito_bridge");
+      available = true;
+    } catch (UnsatisfiedLinkError error) {
+      available = false;
+    }
+    NATIVE_AVAILABLE = available;
+  }
 
   private AssetIdLiteral() {}
+
+  public static boolean isNativeAvailable() {
+    return NATIVE_AVAILABLE;
+  }
 
   /**
    * Normalizes an encoded asset identifier.
@@ -45,6 +61,31 @@ public final class AssetIdLiteral {
     return PREFIX + hex.toLowerCase(Locale.ROOT);
   }
 
+  /**
+   * Builds a canonical encoded asset identifier from textual parts.
+   *
+   * <p>This method accepts canonical asset-definition literals (`aid:...`) and textual
+   * definitions (`name#domain`). Alias-shaped definitions (`...@...`) are rejected because alias
+   * resolution requires online access.
+   *
+   * @param assetDefinitionId asset definition literal
+   * @param accountId canonical account identifier (I105)
+   * @return canonical encoded asset identifier (`norito:<hex>`)
+   */
+  public static String encodeFromParts(
+      final String assetDefinitionId, final String accountId) {
+    final String normalizedDefinition = normalizeAssetDefinitionLiteral(assetDefinitionId);
+    final String normalizedAccount = AccountIdLiteral.extractI105Address(accountId);
+    if (!NATIVE_AVAILABLE) {
+      throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
+    }
+    final String encoded = nativeEncodeFromParts(normalizedDefinition, normalizedAccount);
+    if (encoded == null) {
+      throw new IllegalStateException("nativeEncodeFromParts returned null");
+    }
+    return normalizeEncoded(encoded, "assetId");
+  }
+
   private static boolean isHex(final String value) {
     for (int i = 0; i < value.length(); i++) {
       final char ch = value.charAt(i);
@@ -57,4 +98,21 @@ public final class AssetIdLiteral {
     }
     return true;
   }
+
+  private static String normalizeAssetDefinitionLiteral(final String assetDefinitionId) {
+    final String trimmed = Objects.requireNonNull(assetDefinitionId, "assetDefinitionId").trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException("assetDefinitionId must not be blank");
+    }
+    if (trimmed.indexOf('@') >= 0) {
+      throw new IllegalArgumentException(
+          "assetDefinitionId aliases require online resolution; provide canonical definition id");
+    }
+    if (trimmed.indexOf(' ') >= 0 || trimmed.indexOf('\t') >= 0 || trimmed.indexOf('\n') >= 0) {
+      throw new IllegalArgumentException("assetDefinitionId must not contain whitespace");
+    }
+    return trimmed;
+  }
+
+  private static native String nativeEncodeFromParts(String assetDefinitionId, String accountId);
 }

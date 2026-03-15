@@ -902,7 +902,9 @@ pub mod query {
                     if let Ok(asset_id) = raw.parse::<AssetId>() {
                         self.subjects.insert(asset_id.account().subject_id());
                         self.definitions.insert(asset_id.definition().clone());
-                        self.domains.insert(asset_id.definition().domain().clone());
+                        if !asset_id.definition().is_opaque_canonical() {
+                            self.domains.insert(asset_id.definition().domain().clone());
+                        }
                     }
                 }
                 _ => {}
@@ -965,7 +967,9 @@ pub mod query {
             if !self.definitions.is_empty() && !self.definitions.contains(asset.id().definition()) {
                 return false;
             }
-            if !self.domains.is_empty() && !self.domains.contains(asset.id().definition().domain())
+            if !self.domains.is_empty()
+                && (asset.id().definition().is_opaque_canonical()
+                    || !self.domains.contains(asset.id().definition().domain()))
             {
                 return false;
             }
@@ -1003,7 +1007,8 @@ pub mod query {
             | "definition_id"
             | "id.definition" => Some(asset.id().definition().to_string()),
             "domain" | "definition.domain" | "id.definition.domain" => {
-                Some(asset.id().definition().domain().to_string())
+                (!asset.id().definition().is_opaque_canonical())
+                    .then(|| asset.id().definition().domain().to_string())
             }
             _ => None,
         }
@@ -1285,7 +1290,9 @@ pub mod query {
                                 world
                                     .assets_iter()
                                     .filter(move |entry| {
-                                        domains.contains(entry.id().definition().domain())
+                                        let definition = entry.id().definition();
+                                        !definition.is_opaque_canonical()
+                                            && domains.contains(definition.domain())
                                     })
                                     .map(entry_to_asset),
                             )
@@ -1344,7 +1351,10 @@ pub mod query {
                             Arc::new(
                                 definitions
                                     .iter()
-                                    .filter(|definition| domains.contains(definition.domain()))
+                                    .filter(|definition| {
+                                        !definition.is_opaque_canonical()
+                                            && domains.contains(definition.domain())
+                                    })
                                     .cloned()
                                     .collect::<BTreeSet<_>>(),
                             )
@@ -1368,8 +1378,10 @@ pub mod query {
                             world
                                 .assets_in_account_iter(&subject)
                                 .filter(move |entry| {
+                                    let definition = entry.id().definition();
                                     domains.as_ref().is_none_or(|domains| {
-                                        domains.contains(entry.id().definition().domain())
+                                        !definition.is_opaque_canonical()
+                                            && domains.contains(definition.domain())
                                     })
                                 })
                                 .map(entry_to_asset)
@@ -1385,7 +1397,10 @@ pub mod query {
                     let definitions: BTreeSet<_> = match definitions {
                         Some(definitions) => definitions
                             .into_iter()
-                            .filter(|definition| domains.contains(definition.domain()))
+                            .filter(|definition| {
+                                !definition.is_opaque_canonical()
+                                    && domains.contains(definition.domain())
+                            })
                             .collect(),
                         None => {
                             let mut definitions = BTreeSet::<AssetDefinitionId>::new();

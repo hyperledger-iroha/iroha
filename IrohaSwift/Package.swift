@@ -13,19 +13,6 @@ if !hasBridgeArtifact {
 enum BridgePolicy {
     case required
     case optional
-    case disabled
-
-    static func parse(_ raw: String?) -> Self {
-        guard let raw else { return .required }
-        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if ["0", "false", "off", "disabled", "disable", "no"].contains(normalized) {
-            return .disabled
-        }
-        if normalized == "optional" {
-            return .optional
-        }
-        return .required
-    }
 
     var swiftDefine: String {
         switch self {
@@ -33,30 +20,19 @@ enum BridgePolicy {
             return "IROHASWIFT_BRIDGE_REQUIRED"
         case .optional:
             return "IROHASWIFT_BRIDGE_OPTIONAL"
-        case .disabled:
-            return "IROHASWIFT_BRIDGE_DISABLED"
         }
     }
 }
 
-let bridgePolicy = BridgePolicy.parse(ProcessInfo.processInfo.environment["IROHASWIFT_USE_BRIDGE"])
-let useBridge = bridgePolicy != .disabled
-
-if bridgePolicy == .required && !hasBridgeArtifact {
-    fatalError("""
-    NoritoBridge.xcframework not found at \(bridgeAbsolutePath.path).
-    The Swift SDK requires the bridge by default. Place the xcframework under \(bridgeRelativePath) \
-    or set IROHASWIFT_USE_BRIDGE=optional (or IROHASWIFT_USE_BRIDGE=0) to build with the Swift-only fallback.
-    """)
-}
-if bridgePolicy == .optional && !hasBridgeArtifact {
+let bridgePolicy: BridgePolicy = hasBridgeArtifact ? .required : .optional
+if !hasBridgeArtifact {
     print("""
     warning: NoritoBridge.xcframework missing at \(bridgeAbsolutePath.path); \
-    continuing with Swift-only fallback because IROHASWIFT_USE_BRIDGE=optional (set IROHASWIFT_USE_BRIDGE=0 to suppress).
+    continuing with Swift-only fallback.
     """)
 }
 
-let shouldLinkBridge = hasBridgeArtifact && useBridge
+let shouldLinkBridge = hasBridgeArtifact
 var targets: [Target] = []
 var irohaSwiftDependencies: [Target.Dependency] = []
 var testDependencies: [Target.Dependency] = ["IrohaSwift"]

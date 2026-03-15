@@ -2,6 +2,57 @@
 
 Last updated: 2026-03-15
 
+## 2026-03-15 Follow-up: mobile offline asset-id literal builders (`norito:<hex>`)
+- Implemented SDK-facing support for building canonical encoded asset IDs from textual parts
+  (`assetDefinitionId` + `accountId`) via `OfflineNorito.encodeAssetId` paths and bridge/native hooks.
+- `connect_norito_bridge`:
+  - added literal encoder helper and exported C ABI surface
+    `connect_norito_encode_asset_id_literal(...)`.
+  - added Android JNI export for asset-id literal encoding from parts.
+  - added bridge tests that assert canonical output and alias rejection in offline mode.
+- Swift SDK (`IrohaSwift`):
+  - added native bridge binding + wrapper for asset-id literal-from-parts encoding.
+  - added offline canonical-only helper and online alias-resolving helper on `ToriiClient`.
+  - added tests for component-based encoding parity and alias resolution behavior.
+- Android SDK (`java/iroha_android`):
+  - added `AssetIdLiteral.encodeFromParts(...)` (offline canonical-only; alias-shaped definition rejected).
+  - added alias resolution DTOs and transport helpers:
+    - `resolveAccountAlias(...)`
+    - `resolveAssetAlias(...)`
+    - `buildAssetIdLiteralResolvingAliases(...)` (online alias resolution + canonical encoding).
+  - added coverage in `AssetIdLiteralTests` and `HttpClientTransportTests`.
+  - hardened tests to generate valid I105 account IDs dynamically instead of stale hardcoded literals
+    to avoid checksum failures in strict account parsing.
+  - added explicit API guardrails:
+    - Swift now exposes explicit names for canonical-only vs alias-resolving flows and removes ambiguous legacy method names.
+    - Swift component-based asset-id encoding now fails fast when the native bridge symbol is unavailable in non-test runtimes.
+    - Android now exposes `buildAssetIdLiteralResolvingAliases(...)` and removes the ambiguous alias method.
+  - first-release hard-cut cleanup:
+    - removed remaining compatibility wording in the new asset-id bridge/mobile surfaces
+      (`name#domain` is documented as a supported textual form).
+    - removed `IROHA_NATIVE_REQUIRED` toggles from Android offline JNI harness tests; they now
+      deterministically skip when native bridge is unavailable.
+    - removed Swift bridge env toggles from package/runtime loading and switched to automatic
+      bridge policy based on `dist/NoritoBridge.xcframework` presence.
+    - updated Swift packaging validation tooling/docs for the new auto policy:
+      `scripts/check_swift_spm_validation.sh` now expects fallback-with-warning when the bridge
+      is missing; removed obsolete mode checks from `ci/README.md` and Swift docs.
+    - aligned Android alias-resolution helper behavior with Swift by adding fallback
+      `/v1/assets/aliases/resolve` lookup when non-alias asset-definition input fails canonical
+      offline encoding.
+- Validation (this follow-up):
+  - `cargo test -p connect_norito_bridge encode_asset_id_literal_builds_canonical_from_textual_parts -- --nocapture` (pass)
+  - `cargo test -p connect_norito_bridge encode_asset_id_literal_rejects_alias_input_offline -- --nocapture` (pass)
+  - `cargo test -p connect_norito_bridge parse_asset_definition_accepts_textual_literal -- --nocapture` (pass)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.address.AssetIdLiteralTests,org.hyperledger.iroha.android.client.HttpClientTransportTests JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineBuildClaimPayloadEncoderTest,org.hyperledger.iroha.android.offline.OfflineSpendReceiptPayloadEncoderTest,org.hyperledger.iroha.android.address.AssetIdLiteralTests,org.hyperledger.iroha.android.client.HttpClientTransportTests JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+  - `cd IrohaSwift && swift test --filter BridgePolicyHintTests` (pass)
+  - `cd IrohaSwift && swift test --filter BridgeAvailabilitySurfaceTests` (pass)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testBuildAssetIdLiteralResolvingAliases` (pass)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testAssetIdAliasFallbackForInvalidNonAliasDefinition` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` from `java/iroha_android` (pass)
+  - `bash scripts/check_swift_spm_validation.sh` (pass)
+
 ## 2026-03-15 Follow-up: first-release API version normalization (`v1` only)
 - Standardized Torii/API path references from `v2` to `v1` across code and
   integration tests in this repository slice (`crates/` + `integration_tests/`):
@@ -190,15 +241,15 @@ Last updated: 2026-03-15
   - `cargo fmt --all` (pass)
   - `cargo test -p fastpq_prover --bin fastpq_row_bench` (pass)
 
-## 2026-03-13 Follow-up: `connect_norito_bridge` asset-definition parsing compatibility
-- Restored bridge compatibility for asset-definition literals in
+## 2026-03-13 Follow-up: `connect_norito_bridge` asset-definition textual parsing support
+- Added bridge support for textual asset-definition literals in
   `crates/connect_norito_bridge/src/lib.rs`:
   - `parse_asset_definition(...)` now accepts both canonical
-    `aid:<32-lower-hex>` and legacy `<name>#<domain>` forms.
+    `aid:<32-lower-hex>` and textual `<name>#<domain>` forms.
   - this unblocked transfer/mint/burn/zk-transfer encoder paths that were
     failing with `ERR_ASSET_DEFINITION_PARSE` (`-5`) before quantity/nonce checks.
 - Extended regression coverage in bridge unit tests:
-  - `accel_tests::parse_asset_definition_accepts_legacy_literal`
+  - `accel_tests::parse_asset_definition_accepts_textual_literal`
   - `accel_tests::parse_asset_definition_accepts_canonical_aid_literal`
 - Synced the fixture generator parser in
   `crates/connect_norito_bridge/src/bin/swift_parity_regen.rs`:

@@ -52,7 +52,7 @@ Iroha 的 Norito 编解码器。有关使用已发布的内容的端到端说明
    该脚本为 iOS 和 macOS 目标编译 Rust 桥接库并捆绑
    在单个 XCFramework 目录下生成静态库。
    它还发出 `dist/NoritoBridge.artifacts.json`，捕获桥接版本并
-   每个平台的 SHA-256 哈希值（如果存在，则使用 `NORITO_BRIDGE_VERSION` 覆盖版本
+   每个平台的 SHA-256 哈希值（如果存在，则使用 `--bridge-version <version>` 覆盖版本
    需要）。
 
 2. 压缩 XCFramework 进行分发：

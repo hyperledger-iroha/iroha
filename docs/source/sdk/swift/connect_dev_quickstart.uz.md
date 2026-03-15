@@ -17,7 +17,7 @@ This guide shows how to wire the Swift SDK into an iOS/macOS app, enable the Nor
 
 ## Prerequisites
 - Platforms: iOS 15+ / macOS 12+ (Swift 5.9 toolchain).
-- Norito bridge: bundle `NoritoBridge.xcframework` alongside the app (SPM binary target or CocoaPods vendored framework). Set `IROHASWIFT_USE_BRIDGE=optional` to keep building when the xcframework is missing (a warning logs the expected path) or `IROHASWIFT_USE_BRIDGE=0` to force a Swift-only build in CI; production must ship the signed bundle. Keep `NORITO_BRIDGE_*` overrides for debug-only loader experiments.
+- Norito bridge: bundle `NoritoBridge.xcframework` alongside the app (SPM binary target or CocoaPods vendored framework). SwiftPM enables the bridge automatically when present and falls back to Swift-only mode with a warning when absent; production should ship the signed bundle.
 
 ## Install the SDK
 **Swift Package Manager**
@@ -27,13 +27,13 @@ This guide shows how to wire the Swift SDK into an iOS/macOS app, enable the Nor
 // target dependencies:
 .product(name: "IrohaSwift", package: "iroha-swift")
 ```
-Ensure the `NoritoBridge` binary target is present under `dist/` or provided by your workspace; the package enables the bridge automatically when found and surfaces the `IROHASWIFT_USE_BRIDGE` hint in build logs when the bundle is missing/disabled.
+Ensure the `NoritoBridge` binary target is present under `dist/` or provided by your workspace; the package enables the bridge automatically when found and surfaces the expected bridge path in build logs when the bundle is missing.
 
 **CocoaPods (Podspec consumer)**
 ```ruby
 pod 'IrohaSwift', :path => '../IrohaSwift' # or your internal mirror
 ```
-Bundle `NoritoBridge.xcframework` under the repository `dist/` directory or add it to your app’s `Frameworks` folder; the pod guard rails fall back to stubs if the bridge is missing and the same `IROHASWIFT_USE_BRIDGE` hint will surface in runtime errors.
+Bundle `NoritoBridge.xcframework` under the repository `dist/` directory or add it to your app’s `Frameworks` folder; the pod guard rails fall back to stubs if the bridge is missing and the same bridge-path hint will surface in runtime errors.
 
 ## Sample projects
 - `examples/ios/ConnectMinimalApp/` — SwiftPM executable harness that opens a Connect session, logs events, and exports diagnostics/bundles. Use it to validate bridge bundling and queue exports locally.
@@ -94,4 +94,4 @@ Oversize/truncated files raise `ConnectQueueError` instead of loading into memor
 ## Troubleshooting
 - `ConnectQueueError.overflow` / `ConnectQueueError.corrupted`: journal exceeded caps or contains truncated frames; clear the queue after exporting evidence.
 - `FilePendingTransactionQueueError.overflow*`: pending queue too large—flush to Torii or raise limits intentionally.
-- Bridge missing: ensure `NoritoBridge.xcframework` is embedded and codesigned; debug-only `NORITO_BRIDGE_*` overrides must not ship in production builds.
+- Bridge missing: ensure `NoritoBridge.xcframework` is embedded and codesigned.

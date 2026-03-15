@@ -415,6 +415,15 @@ fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
     Ok(AssetDefinitionId::new(domain, name))
 }
 
+fn encode_asset_id_literal(
+    asset_definition_literal: String,
+    account_literal: String,
+) -> BridgeResult<String> {
+    let definition = parse_asset_definition(asset_definition_literal)?;
+    let account = parse_account_id(account_literal)?;
+    Ok(AssetId::new(definition, account).canonical_encoded())
+}
+
 fn parse_quantity(value: String) -> BridgeResult<Numeric> {
     Numeric::from_str(&value).map_err(|_| BridgeError::Quantity)
 }
@@ -7346,6 +7355,75 @@ mod accel_tests {
     }
 
     #[test]
+    fn encode_asset_id_literal_builds_canonical_from_textual_parts() {
+        let _guard = chain_guard();
+        let (account_cstr, _) = sample_account("bank", 0);
+        let account_literal = account_cstr.to_str().expect("account literal");
+        let account_id = AccountId::parse_encoded(account_literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .expect("parse account");
+        let expected_asset = AssetId::new(
+            AssetDefinitionId::new(
+                "bank".parse().expect("domain"),
+                "usd".parse().expect("asset name"),
+            ),
+            account_id,
+        );
+        let asset_definition = cstring("usd#bank");
+
+        let mut out_asset_ptr: *mut u8 = ptr::null_mut();
+        let mut out_asset_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_encode_asset_id_literal(
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                account_cstr.as_ptr(),
+                account_cstr.as_bytes().len() as c_ulong,
+                &mut out_asset_ptr,
+                &mut out_asset_len,
+            )
+        };
+        assert_eq!(status, 0, "expected successful asset id encode");
+        assert!(
+            !out_asset_ptr.is_null(),
+            "encoder should return encoded asset literal bytes"
+        );
+
+        let output = unsafe { slice::from_raw_parts(out_asset_ptr, out_asset_len as usize) };
+        let encoded_literal = std::str::from_utf8(output).expect("utf-8 asset id literal");
+        assert_eq!(encoded_literal, expected_asset.canonical_encoded());
+        connect_norito_free(out_asset_ptr);
+    }
+
+    #[test]
+    fn encode_asset_id_literal_rejects_alias_input_offline() {
+        let _guard = chain_guard();
+        let (account_cstr, _) = sample_account("bank", 1);
+        let asset_alias = cstring("usd#issuer@main");
+        let mut out_asset_ptr: *mut u8 = ptr::null_mut();
+        let mut out_asset_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_encode_asset_id_literal(
+                asset_alias.as_ptr(),
+                asset_alias.as_bytes().len() as c_ulong,
+                account_cstr.as_ptr(),
+                account_cstr.as_bytes().len() as c_ulong,
+                &mut out_asset_ptr,
+                &mut out_asset_len,
+            )
+        };
+        assert_eq!(
+            status, ERR_ASSET_DEFINITION_PARSE,
+            "expected alias-shaped asset definitions to fail without online resolution"
+        );
+        assert!(
+            out_asset_ptr.is_null(),
+            "no output should be allocated on failure"
+        );
+        assert_eq!(out_asset_len, 0, "no output length expected on failure");
+    }
+
+    #[test]
     fn decode_asset_id_json_returns_canonical_fields() {
         let _guard = chain_guard();
         let (account_cstr, _) = sample_account("bank", 0);
@@ -7576,9 +7654,9 @@ mod accel_tests {
     }
 
     #[test]
-    fn parse_asset_definition_accepts_legacy_literal() {
+    fn parse_asset_definition_accepts_textual_literal() {
         let parsed = parse_asset_definition("usd#bank".to_owned())
-            .expect("legacy asset definition should parse");
+            .expect("textual asset definition should parse");
         let expected = AssetDefinitionId::new(
             DomainId::from_str("bank").expect("domain"),
             Name::from_str("usd").expect("name"),
@@ -9226,6 +9304,40 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
     }
 }
 
+/// Build a canonical encoded `AssetId` literal (`norito:<hex>`) from textual parts.
+///
+/// Inputs:
+/// - `asset_definition`: canonical `aid:<32-lower-hex>` or textual `name#domain`
+/// - `account_id`: canonical account id (I105 literal)
+///
+/// Output bytes are UTF-8 text for the resulting `norito:<hex>` literal.
+///
+/// # Safety
+/// All pointer arguments must be valid and non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_asset_id_literal(
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    account_ptr: *const c_char,
+    account_len: c_ulong,
+    out_asset_ptr: *mut *mut c_uchar,
+    out_asset_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| -> BridgeResult<()> {
+        if out_asset_ptr.is_null() || out_asset_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let asset_definition =
+            unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
+        let account = unsafe { read_string_bridge(account_ptr, account_len) }?;
+        let literal = encode_asset_id_literal(asset_definition, account)?;
+        unsafe { write_bytes_bridge(out_asset_ptr, out_asset_len, literal.as_bytes()) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
 /// Decode an encoded `AssetId` (`norito:<hex>`) into canonical readable JSON fields.
 ///
 /// Response JSON object fields:
@@ -9851,6 +9963,38 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
         Ok(array) => array,
         Err(msg) => {
             throw_java_illegal_argument(&mut env, msg);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_address_AssetIdLiteral_nativeEncodeFromParts(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    asset_definition: jni::objects::JString<'_>,
+    account_id: jni::objects::JString<'_>,
+) -> jni::sys::jstring {
+    let result = (|| -> Result<jni::sys::jstring, String> {
+        let definition = jstring_to_string(&mut env, asset_definition)?;
+        let account = jstring_to_string(&mut env, account_id)?;
+        let literal = encode_asset_id_literal(definition, account)
+            .map_err(|err| format!("encode asset id error: {}", err.code()))?;
+        let output = env.new_string(literal).map_err(|err| err.to_string())?;
+        Ok(output.into_raw())
+    })();
+
+    match result {
+        Ok(encoded) => encoded,
+        Err(message) => {
+            throw_java_illegal_argument(&mut env, message);
             std::ptr::null_mut()
         }
     }

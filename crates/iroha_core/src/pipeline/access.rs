@@ -1145,7 +1145,9 @@ fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
     set.add_write(k);
     // Asset operations rely on the owning account/domain and definition state.
     add_account_r(set, id.account());
-    add_domain_r(set, id.definition().domain());
+    if !id.definition().is_opaque_canonical() {
+        add_domain_r(set, id.definition().domain());
+    }
     add_asset_def_r(set, id.definition());
 }
 fn add_nft_rw(set: &mut AccessSet, id: &NftId) {

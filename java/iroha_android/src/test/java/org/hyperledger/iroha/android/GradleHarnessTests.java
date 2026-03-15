@@ -24,6 +24,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.IrohaKeyManagerMetadataTests",
         "org.hyperledger.iroha.android.IrohaKeyManagerTests",
         "org.hyperledger.iroha.android.address.AccountAddressTests",
+        "org.hyperledger.iroha.android.address.AssetIdLiteralTests",
         "org.hyperledger.iroha.android.client.CanonicalRequestSignerTests",
         "org.hyperledger.iroha.android.client.ClientConfigKeystoreTelemetryTests",
         "org.hyperledger.iroha.android.client.ClientConfigManifestLoaderTests",
