@@ -1,6 +1,28 @@
 # Status
 
-Last updated: 2026-03-14
+Last updated: 2026-03-15
+
+## 2026-03-15 Follow-up: pagination integration test canonical asset-definition IDs
+- Fixed `integration_tests/tests/pagination.rs` setup to stop parsing legacy
+  `<name>#<domain>` literals for asset definitions.
+  - `register_assets(...)` now constructs IDs via
+    `AssetDefinitionId::new("wonderland".parse()?, name.parse()?)`, which
+    produces canonical `aid:<32-lower-hex>` IDs expected by current parsing.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test pagination -- --nocapture` (pass; includes new canonical-ID regression test; network startup path is skipped in sandbox due loopback bind restrictions)
+
+## 2026-03-14 Follow-up: address canonicalisation permit-timeout stabilization
+- Fixed `integration_tests/tests/address_canonicalisation.rs` suite-local network startup
+  throttling to align with the effective `iroha_test_network` file-permit ceiling:
+  - `install_network_parallelism_override()` now computes the effective permit limit from
+    `IROHA_TEST_SERIALIZE_NETWORKS`, `IROHA_TEST_NETWORK_PARALLELISM`, or the default
+    core-scaled cap, then applies `min(limit, 2)` for the suite override.
+  - This prevents over-admitting local starts when the global permit lock only allows one
+    network, which previously could starve queued tests and trigger 300s permit wait timeouts.
+- Validation (this follow-up):
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation accounts_listing_filter_rejects_legacy_dotted_i105_literals -- --nocapture` (pass in sandbox; network startup skipped due loopback bind restrictions)
 
 ## 2026-03-14 Follow-up: Norito burn/mint fixture parity re-sync
 - Fixed stale Norito instruction fixtures under `fixtures/norito_instructions` that no
