@@ -70,7 +70,7 @@ jobs:
             --summary-out artifacts/site.submit.json
       - name: Stream PoR proofs
         env:
-          GATEWAY_URL: https://gateway.example/v2/sorafs/proof/stream
+          GATEWAY_URL: https://gateway.example/v1/sorafs/proof/stream
           STREAM_TOKEN: ${{ secrets.SORAFS_STREAM_TOKEN }}
         run: |
           sorafs_cli proof stream \

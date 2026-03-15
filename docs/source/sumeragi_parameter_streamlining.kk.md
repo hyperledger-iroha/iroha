@@ -167,7 +167,7 @@ Adaptive observability remains off by default:
 - `cooldown_ms`: 5_000
 
 ## Observability
-Expose effective values in `/v2/sumeragi/status`:
+Expose effective values in `/v1/sumeragi/status`:
 - `effective_block_time_ms`
 - `effective_commit_time_ms`
 - `effective_pacing_factor_bps`

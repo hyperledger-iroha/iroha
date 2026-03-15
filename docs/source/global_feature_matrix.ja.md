@@ -23,7 +23,7 @@ translator: manual
 | 信頼できるブロードキャスト（DA ペイロード輸送） | ◉ | `da_enabled=true` で RBC (Init/Chunk/Ready/Deliver) が有効化され、ペイロード配布/欠落回復に利用。コミットは availability evidence でゲート（ローカルの `DELIVER` は条件ではありません）。 | status.md:283-284 |
 | Commit QC 状態ルート束縛 | ◉ | Commit QC が parent/post state roots を保持し、execution QC ゲートは廃止。 | status.md:latest |
 | エビデンス伝搬 & 監査エンドポイント | ◉ | `ControlFlow::Evidence`、Torii エビデンス API、ネガティブテストを実装。 | status.md:176; status.md:760-761 |
-| RBC テレメトリ、準備／DELIVER メトリクス | ◉ | `/v2/sumeragi/rbc*` エンドポイントとテレメトリカウンタ／ヒストグラムを提供。 | status.md:283-284; status.md:772 |
+| RBC テレメトリ、準備／DELIVER メトリクス | ◉ | `/v1/sumeragi/rbc*` エンドポイントとテレメトリカウンタ／ヒストグラムを提供。 | status.md:283-284; status.md:772 |
 | コンセンサスパラメータ広告 & トポロジ検証 | ◉ | ノードが `(collectors_k, redundant_send_r)` をブロードキャストし、ピア間の一致を検証。 | status.md:255 |
 | Permissioned の PRF ローテーション | ◉ | Permissioned のリーダー/コレクター選出は PRF seed と height/view を用いたカノニカルロスター上の順序を使用し、前ブロックハッシュローテーションはレガシー補助として残る。 | status.md:latest |
 
@@ -57,7 +57,7 @@ translator: manual
 |------|------|------|-------------|
 | ランタイムアップグレード受理（ABI ゲート） | ◉ | 有効 ABI 集合を受理時に強制し、構造化エラーとテストが整備済み。 | status.md:196 |
 | 保護ネームスペースでのデプロイ制御 | ▲ | デプロイメタデータ要件とゲートを実装済み。ポリシー／UX は継続中。 | status.md:171 |
-| Torii ガバナンス読み取りエンドポイント | ◉ | `/v2/gov/*` 読み取り API を実装し、ルーターテストで検証。 | status.md:212 |
+| Torii ガバナンス読み取りエンドポイント | ◉ | `/v1/gov/*` 読み取り API を実装し、ルーターテストで検証。 | status.md:212 |
 | 検証鍵レジストリライフサイクル & イベント | ◉ | VK 登録／更新／廃止、イベント、CLI フィルタ、保持セマンティクスを実装。 | status.md:236-239; status.md:595; status.md:603 |
 
 ## ゼロ知識基盤
@@ -71,7 +71,7 @@ translator: manual
 | ZK 投票実行 & ガバナンスロック | ○ | ヌリファイア導出、ロック更新、検証トグルを実装。完全な証明ライフサイクルは進行中。 | status.md:126-128; status.md:194-195 |
 | 証明添付の事前検証 & 重複排除 | ◉ | バックエンドタグ、重複排除、実行前の証明レコード永続化を実装。 | status.md:348; status.md:602 |
 | ZK CLI ヘルパー & Base64 デコード刷新 | ◉ | CLI を非推奨 API から更新し、テストを追加。 | status.md:174 |
-| ZK Torii 証明取得エンドポイント | ◉ | `/v2/zk/proof/{backend}/{hash}` が証明レコード（ステータス、高さ、vk_ref/コミットメント）を公開。 | status.md:94 |
+| ZK Torii 証明取得エンドポイント | ◉ | `/v1/zk/proof/{backend}/{hash}` が証明レコード（ステータス、高さ、vk_ref/コミットメント）を公開。 | status.md:94 |
 
 ## IVM & Kotodama 連携
 
@@ -82,7 +82,7 @@ translator: manual
 | ポインター ABI の厳格検証 & ドキュメント同期 | ◉ | TLV ポリシーをホスト／IVM の両方で強制し、ゴールデンテストと生成ドキュメントを整備。 | status.md:227; status.md:317; status.md:344; status.md:366; status.md:527 |
 | ZK システムコールの CoreHost ゲーティング | ◉ | オペレーション毎のキューが証明とハッシュ一致を確認し、ISI 実行前にゲート。 | crates/iroha_core/src/smartcontracts/ivm/host.rs:213;同:279 |
 | Kotodama ポインター ABI ドキュメント & 文法 | ◉ | Grammar / Docs を実装と同期。 | status.md:299-301 |
-| ISO 20022 スキーマ駆動エンジン & Torii ブリッジ | ◉ | 正規の ISO 20022 スキーマを組み込み、決定論的 XML 解析と `/v2/iso20022/status/{MsgId}` を公開。 | status.md:65-70 |
+| ISO 20022 スキーマ駆動エンジン & Torii ブリッジ | ◉ | 正規の ISO 20022 スキーマを組み込み、決定論的 XML 解析と `/v1/iso20022/status/{MsgId}` を公開。 | status.md:65-70 |
 
 ## ハードウェアアクセラレーション
 

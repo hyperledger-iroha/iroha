@@ -215,7 +215,7 @@ whitelist لمزودين خبيثين, او يخفي التنبيهات.
 
 **Isso é:**- cache de repetição واستمرار المؤشرات تم انجازهما em DA-2. راجع التنفيذ في
   `crates/iroha_core/src/da/replay_cache.rs` (cache de cache) e Torii em
-  `crates/iroha_torii/src/da/ingest.rs` O número verifica a impressão digital em `/v2/da/ingest`.
+  `crates/iroha_torii/src/da/ingest.rs` O número verifica a impressão digital em `/v1/da/ingest`.
 - Transmitir streaming PDP/PoTR تمارس عبر aproveitar fluxo de prova aqui
   `crates/sorafs_car/tests/sorafs_cli.rs`, um dispositivo de teste para PoR/PDP/PoTR e um dispositivo PoR/PDP/PoTR
   O código de barras está disponível para download.

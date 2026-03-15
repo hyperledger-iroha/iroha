@@ -76,10 +76,10 @@ async function openEnvelope(k: Uint8Array, sid: Uint8Array, dir: 'A2W'|'W2A', se
   const nonce = sodium.randombytes_buf(16);
   const sid = sodium.crypto_generichash(32, concatBytes(new TextEncoder().encode('iroha-connect|sid|'), chainId, app.publicKey, nonce));
 
-  // Create session: POST /v2/connect/session with client-computed sid
+  // Create session: POST /v1/connect/session with client-computed sid
   const sidB64 = sodium.to_base64(sid, sodium.base64_variants.URLSAFE_NO_PADDING);
   const node = 'http://localhost:8080';
-  const resp = await fetch(`${node}/v2/connect/session`, {
+  const resp = await fetch(`${node}/v1/connect/session`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ sid: sidB64, node })
@@ -169,13 +169,13 @@ fun main() {
   val appKp = kpg.generateKeyPair()
   val chainId = "testnet".toByteArray(); val nonce = SecureRandom().generateSeed(16)
   val sid = blake2b256("iroha-connect|sid|".toByteArray(), chainId, appKp.public.encoded, nonce)
-  // Create session: POST /v2/connect/session with client-computed sid
+  // Create session: POST /v1/connect/session with client-computed sid
   val sidB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(sid)
   val node = "http://localhost:8080"
   val client = HttpClient.newHttpClient()
   val json = "{" + "\"sid\":\"" + sidB64 + "\",\"node\":\"" + node + "\"}"
   val req = HttpRequest.newBuilder()
-      .uri(URI.create("$node/v2/connect/session"))
+      .uri(URI.create("$node/v1/connect/session"))
       .header("Content-Type", "application/json")
       .POST(HttpRequest.BodyPublishers.ofString(json))
       .build()
@@ -199,6 +199,6 @@ fun main() {
 ```
 
 備考:
-- クライアントが `sid`（32 バイト; base64url/16 進）を計算し、`/v2/connect/session` に POST してワンタイムトークンを取得します。サーバーは `sid` をエコーし、WS は `Authorization: Bearer <token>` または `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>` で接続します。
+- クライアントが `sid`（32 バイト; base64url/16 進）を計算し、`/v1/connect/session` に POST してワンタイムトークンを取得します。サーバーは `sid` をエコーし、WS は `Authorization: Bearer <token>` または `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>` で接続します。
 - キーが確立された（Approve）後は Close/Reject を暗号化ペイロードで送信してください。
 - デデュープキーと `seq` は方向ごとに単調増加である必要があります。`Envelope.seq == frame.seq` を維持してください。サーバーイベントは別のシーケンスを使い、AEAD/dedupe から除外されます。

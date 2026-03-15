@@ -78,7 +78,7 @@ Teste:
 
 | Componente | Bem | Exibição |
 |-----------|--------|---------------|
-| Serviço Torii | Экспонировать `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (pesquisa), `/v2/sorafs/aliases` (listar/vincular), `/v2/sorafs/replication` (pedidos/recebimentos). Selecione a página + filtro. | Rede TL / Core Infra |
+| Serviço Torii | Экспонировать `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (pesquisa), `/v1/sorafs/aliases` (listar/vincular), `/v1/sorafs/replication` (pedidos/recebimentos). Selecione a página + filtro. | Rede TL / Core Infra |
 | Atestado | Включать высоту/хэш registro em ответы; Obtenha a estrutura de referência Norito, SDK fornecido. | Infra principal |
 | CLI | Selecione `sorafs_manifest_stub` ou novo CLI `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Ferramentaria |
 | SDK | Сгенерировать клиентские bindings (Rust/Go/TS) do esquema Norito; Faça testes de integração. | Equipes SDK |
@@ -133,10 +133,10 @@ Dашборды:
 O ponto de conexão SF-4 está ajustado neste plano de progresso dinâmico.
 REST é o momento em que a configuração de endpoints é especificada:
 
-- `GET /v2/sorafs/pin` e `GET /v2/sorafs/pin/{digest}` manifestam-se
+- `GET /v1/sorafs/pin` e `GET /v1/sorafs/pin/{digest}` manifestam-se
   ligações de alias, replicações de pedidos e certificados de obtenção, proизводным от
   хэша последнего блока.
-- `GET /v2/sorafs/aliases` e `GET /v2/sorafs/replication` publicados ativos
+- `GET /v1/sorafs/aliases` e `GET /v1/sorafs/replication` publicados ativos
   alias de catálogo e backlog cria replicações com página de consistência e
   estado do filtro.
 

@@ -82,7 +82,7 @@ SRE が即座に状況を把握できる。
 | `sorafs_node_por_failure_total` | カウンタ | `provider_id` | PoR 失敗サンプルの単調カウンタ。 |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | ゲージ | `provider` | 既存の Prometheus ゲージ（使用バイト数、キュー深度、PoR in-flight 数）。 |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | ゲージ | `provider` | 容量/uptime 成功データを容量ダッシュボードに反映。 |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | ゲージ | `provider`, `manifest` | `/v2/sorafs/por/ingestion/{manifest}` のポーリング時にバックログ深度と累積失敗カウンタをエクスポートし、"PoR Stalls" パネル/アラートに供給する。 |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | ゲージ | `provider`, `manifest` | `/v1/sorafs/por/ingestion/{manifest}` のポーリング時にバックログ深度と累積失敗カウンタをエクスポートし、"PoR Stalls" パネル/アラートに供給する。 |
 
 ### 修復 & SLA
 

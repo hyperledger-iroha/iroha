@@ -15,7 +15,7 @@ translator: machine-google-reviewed
 _Status: Elaboração — Proprietários: GT de Economia / Tesouraria / Equipe de Armazenamento_
 
 O item do roteiro **DA-7** introduz um aluguel explícito denominado XOR para cada blob
-enviado para `/v2/da/ingest`, além de bônus que recompensam a execução de PDP/PoTR e
+enviado para `/v1/da/ingest`, além de bônus que recompensam a execução de PDP/PoTR e
 saída serviu para buscar clientes. Este documento define os parâmetros iniciais,
 sua representação do modelo de dados e o fluxo de trabalho de cálculo usado por Torii,
 SDKs e painéis de tesouraria.
@@ -161,7 +161,7 @@ auditorias para comprovar quais parâmetros estavam em vigor para um determinado
 
 ## Fluxo operacional
 
-1. **Ingestão:** `/v2/da/ingest` carrega o `DaRentPolicyV1` ativo, cita aluguel
+1. **Ingestão:** `/v1/da/ingest` carrega o `DaRentPolicyV1` ativo, cita aluguel
    com base no tamanho e na retenção do blob e incorpora a cotação no Norito
    manifestar. O remetente assina uma declaração que faz referência ao hash do aluguel e
    o ID do tíquete de armazenamento.
@@ -179,7 +179,7 @@ auditorias para comprovar quais parâmetros estavam em vigor para um determinado
 ## TelemetriaOs nós Torii expõem o uso de aluguel por meio das seguintes métricas Prometheus (rótulos:
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` — GiB-meses cotados por `/v2/da/ingest`.
+- `torii_da_rent_gib_months_total` — GiB-meses cotados por `/v1/da/ingest`.
 - `torii_da_rent_base_micro_total` — aluguel base (micro XOR) acumulado no ingest.
 - `torii_da_protocol_reserve_micro_total` — contribuições de reserva de protocolo.
 - `torii_da_provider_reward_micro_total` — pagamentos de aluguel do fornecedor.
@@ -196,7 +196,7 @@ volume e pagamentos.
 
 ##Próximas etapas
 
-- ✅ Os recibos `/v2/da/ingest` agora incorporam `rent_quote` e as superfícies CLI/SDK exibem a cotação
+- ✅ Os recibos `/v1/da/ingest` agora incorporam `rent_quote` e as superfícies CLI/SDK exibem a cotação
   aluguel base, participação de reserva e bônus PDP/PoTR para que os remetentes possam revisar as obrigações XOR antes
   comprometendo cargas úteis.
 - Integrar o livro-razão de aluguel com os próximos feeds de reputação/livro de pedidos do DA

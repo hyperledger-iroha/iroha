@@ -167,9 +167,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > የTorii መግቢያ በር አሁን በተመሳሳይ የሚደገፉ ተነባቢ-ብቻ ረዳቶችን ያጋልጣል
 > `NodeHandle`፡
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - የተከማቸውን ይመልሳል
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - የተከማቸውን ይመልሳል
 > Norito አንጸባራቂ (base64) ከመፍጨት/ሜታዳታ ጋር።【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - ወሳኙን ይመልሳል
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - ወሳኙን ይመልሳል
 > ቸንክ ፕላን JSON (`chunk_fetch_specs`) ለታችኛው ተፋሰስ መገልገያ።【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > የቧንቧ መስመሮች ከአካባቢው መቀየር እንዲችሉ እነዚህ የመጨረሻ ነጥቦች የ CLI ውፅዓት ያንፀባርቃሉ
@@ -217,14 +217,14 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   ቁርጠኛ chunker እና ሌይን ምደባዎች. አስተዳዳሪው ተነባቢ-ብቻ ቅጽበተ-ፎቶዎችን ያጋልጣል
   ለቴሌሜትሪ (I18NI0000077X) እና በየመገለጫ ወይም በሌይን ያስገድዳል
   ከአዳዲስ ትዕዛዞች በፊት የተያዙ ቦታዎች ይቀበላሉ።【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- የ `/v2/sorafs/capacity/schedule` የመጨረሻ ነጥብ በአስተዳደር የተሰጠ `ReplicationOrderV1` ይቀበላል
+- የ `/v1/sorafs/capacity/schedule` የመጨረሻ ነጥብ በአስተዳደር የተሰጠ `ReplicationOrderV1` ይቀበላል
   ሸክሞች. ትዕዛዙ የአካባቢያዊ አቅራቢውን ሲያነጣጥር አስተዳዳሪው ያጣራል።
   የተባዛ መርሐግብር፣ ቸንከር/የሌይን አቅም ያረጋግጣል፣ ቁርጥራጩን ያስቀምጣል፣ እና
   የቀረውን አቅም የሚገልጽ `ReplicationPlan` ይመልሳል የኦርኬስትራ መሳሪያዎች
   ወደ ውስጥ በማስገባት መቀጠል ይችላል. ለሌሎች አቅራቢዎች ትእዛዝ እውቅና ተሰጥቶታል።
   የባለብዙ ኦፕሬተር የስራ ፍሰቶችን ለማቃለል `ignored` ምላሽ።【crates/iroha_torii/src/routing.rs:4845】
 - የማጠናቀቂያ መንጠቆዎች (ለምሳሌ ፣ ከተመገቡ በኋላ የሚቀሰቀሱ) ይምቱ
-  በ በኩል የተያዙ ቦታዎችን ለመልቀቅ `POST /v2/sorafs/capacity/complete`
+  በ በኩል የተያዙ ቦታዎችን ለመልቀቅ `POST /v1/sorafs/capacity/complete`
   `CapacityManager::complete_order`. ምላሹ `ReplicationRelease` ያካትታል
   ቅጽበታዊ ገጽ እይታ (የቀሪ ድምር፣ ቸንከር/ሌይን ቀሪዎች) የኦርኬስትራ መሳሪያ ማድረግ እንዲቻል
   ያለ ድምጽ የሚቀጥለውን ትዕዛዝ ወረፋ. የክትትል ሥራ ይህንን ወደ ክፈፉ ውስጥ ሽቦ ያደርገዋል

@@ -162,7 +162,7 @@ fn reject_public_input_key(map: &json::Map, key: &str, canonical: &str) -> Resul
 pub struct VoteArgs {
     #[arg(long, value_name = "REFERENDUM_ID")]
     pub referendum_id: String,
-    /// Voting mode override. Defaults to auto-detect via GET /v2/gov/referenda/{id}.
+    /// Voting mode override. Defaults to auto-detect via GET /v1/gov/referenda/{id}.
     #[arg(long, value_enum, default_value_t = VoteMode::Auto)]
     pub mode: VoteMode,
     /// Base64-encoded proof for ZK voting mode.

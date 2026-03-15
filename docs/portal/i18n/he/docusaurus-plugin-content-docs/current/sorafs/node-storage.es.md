@@ -169,9 +169,9 @@ manifests y payloads se reconstituyen correctamente antes de que lleguen las
 > שער אל Torii ahora expone helpers de solo lecture respaldados por el mismo
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — devuelve el manifest
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — devuelve el manifest
 > Norito almacenado (base64) junto con digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — devuelve el plan de chunk
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — devuelve el plan de chunk
 > determinista JSON (`chunk_fetch_specs`) עבור כלי עבודה במורד הזרם.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > נקודות הקצה של Estos relejan la salida del CLI para que los pipelines puedan
@@ -218,12 +218,12 @@ manifests y payloads se reconstituyen correctamente antes de que lleguen las
      אל מפעיל.### הצהרת תזמון ושילוב תזמון
 
 - Torii ahora retransmite actualizaciones de `CapacityDeclarationRecord` desde
-  `/v2/sorafs/capacity/declare` hacia el `CapacityManager` embebido, de modo que
+  `/v1/sorafs/capacity/declare` hacia el `CapacityManager` embebido, de modo que
   cada nodo construye una vista en memoria de sus asignaciones comprometidas de
   chunker y lane. המנהל חושף את צילומי ההרצאה הסולו עבור טלמטריה
-  (`GET /v2/sorafs/capacity/state`) y aplica reservas por perfil o lane antes de
+  (`GET /v1/sorafs/capacity/state`) y aplica reservas por perfil o lane antes de
   aceptar nuevos pedidos.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- נקודת קצה El `/v2/sorafs/capacity/schedule` מטענים מטעמים `ReplicationOrderV1`
+- נקודת קצה El `/v1/sorafs/capacity/schedule` מטענים מטעמים `ReplicationOrderV1`
   emitidos por gobernanza. Cuando la orden apunta al proveeor המנהל המקומי
   revisa scheduling duplicado, verifica capacidad de chunker/lane, reserva la
   franja y devuelve un `ReplicationPlan` תיאור ל-capacidad restante para
@@ -231,7 +231,7 @@ manifests y payloads se reconstituyen correctamente antes de que lleguen las
   otros proveedores se reconocen con una respuesta `ignored` para facilitar flujos
   multi-operador.【crates/iroha_torii/src/routing.rs:4845】
 - Hooks de completitud (לפי אימפלו, דיסparados tras el éxito de la ingestión)
-  llaman a `POST /v2/sorafs/capacity/complete` para liberar reservas vía
+  llaman a `POST /v1/sorafs/capacity/complete` para liberar reservas vía
   `CapacityManager::complete_order`. התשובות כוללות תמונת מצב
   `ReplicationRelease` (כולל restantes, residuales de chunker/lane) para que
   las herramientas de orquestación puedan encolar la siguiente orden sin polling.

@@ -44,7 +44,7 @@ no [política de admisión del proveedor](./provider-admission-policy) ja esta a
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` con `max_span` definido
      - `allow_unknown_capabilities=<true|false>` cuando houver TLVs GRASA
-   - Validar vía `/v2/sorafs/providers` e `sorafs_fetch`; advertencias sobre capacidades
+   - Validar vía `/v1/sorafs/providers` e `sorafs_fetch`; advertencias sobre capacidades
      desconhecidas devem ser triageadas.
 3. **Validación de preparación de múltiples fuentes.**
    - Ejecute `sorafs_fetch` con `--provider-advert=<path>`; o CLI ahora falta cuando
@@ -179,9 +179,9 @@ arquivo e o ledger no mesmo PR.
 ## Comunicación y tratamiento de incidentes- **Mensaje publicitario de estado semanal.** DevRel comparte un resumen de métricas de admisión,
   avisos pendientes y plazos próximos.
 - **Respuesta a incidentes.** Se alertas `reject` dispararem, ingenieros de guardia:
-  1. Buscamos un anuncio ofensivo a través del descubrimiento Torii (`/v2/sorafs/providers`).
+  1. Buscamos un anuncio ofensivo a través del descubrimiento Torii (`/v1/sorafs/providers`).
   2. Vuelva a ejecutar la validación del anuncio sin canalización del proveedor y compare con
-     `/v2/sorafs/providers` para reproducir o producir un error.
+     `/v1/sorafs/providers` para reproducir o producir un error.
   3. Coordenam con el proveedor a rotacao do anuncio antes de la próxima fecha límite de actualización.
 - **El cambio se congela.** Nenhuma mudanca no esquema de capacidades durante R1/R2 a
   menos que o comite de rollout aprove; ensayos GRASA devem ser agendados na

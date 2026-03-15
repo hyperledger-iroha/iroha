@@ -1551,15 +1551,15 @@ pub mod torii {
     }
     /// Maximum number of concurrent ZK IVM prove jobs handled by Torii.
     ///
-    /// This limit applies to `POST /v2/zk/ivm/prove` (non-consensus helper).
+    /// This limit applies to `POST /v1/zk/ivm/prove` (non-consensus helper).
     pub const ZK_IVM_PROVE_MAX_INFLIGHT: usize = 1;
     /// Maximum number of queued ZK IVM prove jobs accepted while inflight is saturated.
     ///
-    /// This limit applies to `POST /v2/zk/ivm/prove` (non-consensus helper).
+    /// This limit applies to `POST /v1/zk/ivm/prove` (non-consensus helper).
     pub const ZK_IVM_PROVE_MAX_QUEUE: usize = 16;
-    /// TTL (seconds) for `/v2/zk/ivm/prove` job status entries.
+    /// TTL (seconds) for `/v1/zk/ivm/prove` job status entries.
     pub const ZK_IVM_PROVE_JOB_TTL_SECS: u64 = 30 * 60; // 30 minutes
-    /// Maximum number of `/v2/zk/ivm/prove` job status entries retained in memory.
+    /// Maximum number of `/v1/zk/ivm/prove` job status entries retained in memory.
     pub const ZK_IVM_PROVE_JOB_MAX_ENTRIES: usize = 1_024;
     /// Allowlisted backend prefixes for the background prover worker.
     #[must_use]

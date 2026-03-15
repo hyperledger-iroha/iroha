@@ -43,7 +43,7 @@ Iroha שומרת רישום של תוצאות אימות הוכחות (backend +
 
 ## חשיפה וכלי עבודה
 
-- נקודת סטטוס: `GET /v2/proofs/retention` מחזירה caps, grace, prune_batch,
+- נקודת סטטוס: `GET /v1/proofs/retention` מחזירה caps, grace, prune_batch,
   סך רשומות, סך ניתנות לגיזום, וספירות לכל backend.
 - CLI: `iroha app zk proofs retention` (סטטוס) ו‑`iroha app zk proofs prune` (אכיפה ידנית).
 - אירועים: הירשמו ל‑`DataEvent::Proof(ProofEvent::Pruned)` דרך מסנני SSE/WS כדי לעקוב אחרי פעילות גיזום.

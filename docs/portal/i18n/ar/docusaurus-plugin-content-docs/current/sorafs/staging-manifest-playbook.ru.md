@@ -74,11 +74,11 @@ Sidebar_label: بيان مسرحي للتدريج
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```2. قم بدعم اكتشاف نقطة النهاية والتحقق من أن الإعلان يتم الإعلان عنه باستخدام الأسماء المستعارة الأساسية:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    يرجى ملاحظة أن `profile_aliases` يربط `"sorafs.sf1@1.0.0"` بالعنصر الأول.

@@ -75,7 +75,7 @@ Sidebar_label: إمكانية الملاحظة وSLOs
 | `sorafs_node_por_failure_total` | عداد | `provider_id` | عينات PoR الفاشلة هي عداد رتيب. |
 | `torii_sorafs_storage_bytes_*`، `torii_sorafs_storage_por_*` | مقياس | `provider` | البايتات المستخدمة وعمق قائمة الانتظار وأعداد PoR على متن الطائرة هي أجهزة قياس Prometheus الموجودة. |
 | `torii_sorafs_capacity_*`، `torii_sorafs_uptime_bps`، `torii_sorafs_por_bps` | مقياس | `provider` | قدرة الموفر/بيانات النجاح في وقت التشغيل. |
-| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | يتم عرض عمق الأعمال المتراكمة وعدادات الفشل التراكمي في استطلاع `/v2/sorafs/por/ingestion/{manifest}` للتصدير، وتغذية لوحة/تنبيه "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`، `torii_sorafs_por_ingest_failures_total` | مقياس | `provider`، `manifest` | يتم عرض عمق الأعمال المتراكمة وعدادات الفشل التراكمي في استطلاع `/v1/sorafs/por/ingestion/{manifest}` للتصدير، وتغذية لوحة/تنبيه "PoR Stalls". |
 
 ### إثبات الاسترجاع في الوقت المناسب (PoTR) واتفاقية مستوى الخدمة (SLA).| متري | اكتب | التسميات | منتج | ملاحظات |
 |--------|------|--------|----------|-------|

@@ -64,9 +64,9 @@ let filter = SpaceDirectoryEventFilter::new()
 |-------|----------|-------|----------|
 | Draft | בעל dataspace | לשכפל fixture, לערוך הרשאות/ממשל, להריץ `cargo test -p iroha_data_model nexus::manifest`. | diff ב-git, לוג בדיקות. |
 | Review | Governance WG | לאמת JSON של manifest + Norito bytes, לחתום על יומן החלטות. | פרוטוקולים חתומים, hash של manifest (BLAKE3 + Norito `.to`). |
-| Publish | מפעילי lane | לפרסם באמצעות CLI (`iroha app space-directory manifest publish`) תוך שימוש ב-Norito `.to` או JSON גולמי **או** POST `/v2/space-directory/manifests` עם JSON של manifest + סיבה אופציונלית, לאמת תגובת Torii, וללכוד `SpaceDirectoryEvent`. | קבלה מ-CLI/Torii, לוג אירועים. |
+| Publish | מפעילי lane | לפרסם באמצעות CLI (`iroha app space-directory manifest publish`) תוך שימוש ב-Norito `.to` או JSON גולמי **או** POST `/v1/space-directory/manifests` עם JSON של manifest + סיבה אופציונלית, לאמת תגובת Torii, וללכוד `SpaceDirectoryEvent`. | קבלה מ-CLI/Torii, לוג אירועים. |
 | Expire | מפעילי lane / Governance | להריץ `iroha app space-directory manifest expire` (UAID, dataspace, epoch) כאשר manifest מגיע לסוף החיים המתוכנן, לוודא `SpaceDirectoryEvent::ManifestExpired`, ולארכב ראיות ניקוי binding. | פלט CLI, לוג אירועים. |
-| Revoke | Governance + מפעילי lane | להריץ `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **או** POST `/v2/space-directory/manifests/revoke` עם אותו payload ל-Torii, לוודא `SpaceDirectoryEvent::ManifestRevoked`, ולעדכן חבילת ראיות. | קבלה מ-CLI/Torii, לוג אירועים, הערת כרטיס. |
+| Revoke | Governance + מפעילי lane | להריץ `iroha app space-directory manifest revoke` (UAID, dataspace, epoch, reason) **או** POST `/v1/space-directory/manifests/revoke` עם אותו payload ל-Torii, לוודא `SpaceDirectoryEvent::ManifestRevoked`, ולעדכן חבילת ראיות. | קבלה מ-CLI/Torii, לוג אירועים, הערת כרטיס. |
 | Monitor | SRE/Compliance | לנטר טלמטריה ולוגים של ביקורת, להגדיר התראות ל-revocation/expiry. | צילום Grafana, לוגים מאוחסנים. |
 | Rotate/Revoke | מפעילי lane + Governance | להכין manifest חלופי (epoch חדש), לבצע tabletop, לתעד incident (אם בוטל). | כרטיס רוטציה, פוסטמורטם. |
 

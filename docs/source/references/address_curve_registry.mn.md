@@ -64,7 +64,7 @@ fixtures.
 
 ## Capability Bitmask Advert
 
-`GET /v2/node/capabilities` now exposes both the `allowed_curve_ids` list and
+`GET /v1/node/capabilities` now exposes both the `allowed_curve_ids` list and
 the packed `allowed_curve_bitmap` array under `crypto.curves`. The bitmap is
 little-endian across 64-bit lanes (up to four values to cover the 0–255 `u8`
 identifier space). Bit `i` being set means curve identifier `i` is permitted by

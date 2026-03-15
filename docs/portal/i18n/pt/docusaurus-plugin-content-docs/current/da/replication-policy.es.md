@@ -32,7 +32,7 @@ o número necessário de épocas e réplicas não depende da intenção do emiss
 | _Default (todas as primeiras aulas)_ | 6 horas | 30 dias | 3 | `warm` | `da.default` |
 
 Esses valores são incrustados em `torii.da_ingest.replication_policy` e aplicados a
-todas as solicitações `/v2/da/ingest`. Torii reescrever manifestos com o perfil de
+todas as solicitações `/v1/da/ingest`. Torii reescrever manifestos com o perfil de
 retenção imposta e emissão de uma advertência quando os chamadores entregam valores
 não há coincidência para que os operadores detectem SDKs desactualizados.
 
@@ -155,5 +155,5 @@ fora de cumprimento de forma automática.1. **Vigile el drift.** Torii emite
 
 A cobertura de regressão vive em
 `integration_tests/tests/da/replication_policy.rs`; la suite envia uma política de
-retenção não coincidente com `/v2/da/ingest` e verifica se o manifesto foi obtido
+retenção não coincidente com `/v1/da/ingest` e verifica se o manifesto foi obtido
 exponha o perfil imposto no lugar da intenção do chamador.

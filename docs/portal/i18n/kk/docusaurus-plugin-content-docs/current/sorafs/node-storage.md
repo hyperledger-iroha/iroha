@@ -165,9 +165,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > Torii шлюзі енді тек оқуға арналған көмекшілерді көрсетеді.
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — сақталғанды қайтарады
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — сақталғанды қайтарады
 > Norito манифесті (base64) дайджест/метадеректермен бірге.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — детерминистикалық мәнді қайтарады
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — детерминистикалық мәнді қайтарады
 > төменгі ағындық құралдарға арналған JSON (`chunk_fetch_specs`) бөліктік жоспары.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Бұл соңғы нүктелер CLI шығысын көрсетеді, осылайша құбырлар жергілікті жерден ауыса алады
@@ -210,19 +210,19 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      басқару моделі келісілді; Әзірге дизайн қатаң квоталарды болжайды және
      оператор бастаған босату операциялары.
 
-### Сыйымдылық туралы декларация және жоспарлау интеграциясы- Torii енді `CapacityDeclarationRecord` жаңартуларын `/v2/sorafs/capacity/declare` бастап жібереді
+### Сыйымдылық туралы декларация және жоспарлау интеграциясы- Torii енді `CapacityDeclarationRecord` жаңартуларын `/v1/sorafs/capacity/declare` бастап жібереді
   ендірілген `CapacityManager` нұсқасына, сондықтан әрбір түйін өзінің жадтағы көрінісін жасайды
   chunker және жолақ бөлуді жасады. Менеджер тек оқуға арналған суреттерді көрсетеді
-  телеметрия үшін (`GET /v2/sorafs/capacity/state`) және әр профильге немесе жолға мәжбүрлейді
+  телеметрия үшін (`GET /v1/sorafs/capacity/state`) және әр профильге немесе жолға мәжбүрлейді
   жаңа тапсырыстар қабылданғанға дейінгі брондаулар.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v2/sorafs/capacity/schedule` соңғы нүктесі басқару шығарған `ReplicationOrderV1` қабылдайды
+- `/v1/sorafs/capacity/schedule` соңғы нүктесі басқару шығарған `ReplicationOrderV1` қабылдайды
   пайдалы жүктемелер. Тапсырыс жергілікті провайдерге бағытталған кезде менеджер тексереді
   қайталанатын жоспарлау, chunker/жолақ сыйымдылығын тексереді, бөлікті сақтайды және
   қалған сыйымдылықты сипаттайтын `ReplicationPlan` қайтарады, осылайша оркестрлік құралдар
   қабылдауды жалғастыра алады. Басқа жеткізушілерге тапсырыстар расталады
   `ignored` мультиоператорлық жұмыс процестерін жеңілдету үшін жауап.【crates/iroha_torii/src/routing.rs:4845】
 - Аяқтау ілмектері (мысалы, жұту сәтті болғаннан кейін іске қосылған) соғылады
-  `POST /v2/sorafs/capacity/complete` арқылы брондауларды шығару
+  `POST /v1/sorafs/capacity/complete` арқылы брондауларды шығару
   `CapacityManager::complete_order`. Жауап `ReplicationRelease` қамтиды
   сурет (қалған жиынтықтар, chunker/жол қалдықтары), сондықтан оркестрлік құралдар
   келесі тапсырысты сұраусыз кезекке қою. Кейінгі жұмыс мұны бөлікке қосады

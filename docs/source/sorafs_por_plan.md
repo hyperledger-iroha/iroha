@@ -189,7 +189,7 @@ CREATE TABLE sorafs_vrf_history (
   `sorafs_por_forced_challenges_total` metrics into the existing dashboards. Alert when backlog
   exceeds 3 epochs or forced challenges persist for >2 epochs.
 
-Implementation status: Torii exposes `/v2/sorafs/por/ingestion/{manifest_digest_hex}`, which
+Implementation status: Torii exposes `/v1/sorafs/por/ingestion/{manifest_digest_hex}`, which
 delegates to `sorafs_node::NodeHandle::por_ingestion_status` for backlog depth, oldest epoch/deadline,
 and last verdict timestamps. A dedicated sampler (`SharedAppState::spawn_por_ingestion_metrics_worker`)
 collects `por_ingestion_overview` snapshots every 30 seconds and drives the

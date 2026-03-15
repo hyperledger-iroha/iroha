@@ -47,7 +47,7 @@ async fn persist_vrf_council_and_get_current_matches() {
     // Routes: persist, derive-vrf, current
     let app = Router::new()
         .route(
-            "/v2/gov/council/persist",
+            "/v1/gov/council/persist",
             post({
                 let state = state.clone();
                 let queue = queue.clone();
@@ -66,7 +66,7 @@ async fn persist_vrf_council_and_get_current_matches() {
             }),
         )
         .route(
-            "/v2/gov/council/derive-vrf",
+            "/v1/gov/council/derive-vrf",
             post({
                 let state = state.clone();
                 move |body: iroha_torii::NoritoJson<iroha_torii::CouncilDeriveVrfRequest>| async move {
@@ -75,7 +75,7 @@ async fn persist_vrf_council_and_get_current_matches() {
             }),
         )
         .route(
-            "/v2/gov/council/current",
+            "/v1/gov/council/current",
             get({
                 let state = state.clone();
                 move || async move { iroha_torii::handle_gov_council_current(state).await }
@@ -133,7 +133,7 @@ async fn persist_vrf_council_and_get_current_matches() {
     .expect("serialize persist request body");
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v2/gov/council/persist")
+        .uri("/v1/gov/council/persist")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -143,7 +143,7 @@ async fn persist_vrf_council_and_get_current_matches() {
     // Now GET current and compare with derive-vrf result
     let req2 = http::Request::builder()
         .method("GET")
-        .uri("/v2/gov/council/current")
+        .uri("/v1/gov/council/current")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp2 = app.clone().oneshot(req2).await.unwrap();
@@ -166,7 +166,7 @@ async fn persist_vrf_council_and_get_current_matches() {
     // Derive again via handler to produce a comparable ordering
     let req3 = http::Request::builder()
         .method("POST")
-        .uri("/v2/gov/council/derive-vrf")
+        .uri("/v1/gov/council/derive-vrf")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body({
             let body = iroha_torii::json_object(vec![

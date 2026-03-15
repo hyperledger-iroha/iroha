@@ -69,8 +69,8 @@ Sidebar_label: مسار معايير الخصوصية
 
 ## نقاط إدخال Torii
 
-يعرض Torii الآن نقطتي HTTP محميتين بالـ القياس عن بعد بحيث يمكن للمرحلات والمجمعات تسارع إلى ملاحظة دون مشاركة نقل مخصص:- `POST /v2/soranet/privacy/event` يقبل بصمة `RecordSoranetPrivacyEventDto`. يلف الجسم `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. صحيح أن Torii من طلب مقابل ملف القياس عن بعد لتحقيق الحدث، ويرد بـ HTTP `202 Accepted` مع مغلف Norito JSON يحتوي على حساب النافذة (`bucket_start_unix`, `bucket_duration_secs`) Relay.
-- `POST /v2/soranet/privacy/share` يقبل بصمة `RecordSoranetPrivacyShareDto`. عصر الجسم `SoranetPrivacyPrioShareV1` وتلميح `forwarded_by` اختياري حتى يتمكن من البدء من تدقيق تدفقات المجمعات. الطلبات الناجحة HTTP `202 Accepted` مع المغلف Norito JSON يلخص جامع ونافذة الجرافة وتلميح القمع؛ بينما يتم ربط اخفاقات التحقق من الاستجابة للقياس عن بعد من النوع `Conversion` ضد اخطاء حتمية عبر المجمعات. تقوم الآن بإصدار هذه المشاركات عند استطلاع Relays، لتحافظ على تزامن مجمع Prio في Torii مع دلاء على التتابع.
+يعرض Torii الآن نقطتي HTTP محميتين بالـ القياس عن بعد بحيث يمكن للمرحلات والمجمعات تسارع إلى ملاحظة دون مشاركة نقل مخصص:- `POST /v1/soranet/privacy/event` يقبل بصمة `RecordSoranetPrivacyEventDto`. يلف الجسم `SoranetPrivacyEventV1` مع تسمية `source` اختيارية. صحيح أن Torii من طلب مقابل ملف القياس عن بعد لتحقيق الحدث، ويرد بـ HTTP `202 Accepted` مع مغلف Norito JSON يحتوي على حساب النافذة (`bucket_start_unix`, `bucket_duration_secs`) Relay.
+- `POST /v1/soranet/privacy/share` يقبل بصمة `RecordSoranetPrivacyShareDto`. عصر الجسم `SoranetPrivacyPrioShareV1` وتلميح `forwarded_by` اختياري حتى يتمكن من البدء من تدقيق تدفقات المجمعات. الطلبات الناجحة HTTP `202 Accepted` مع المغلف Norito JSON يلخص جامع ونافذة الجرافة وتلميح القمع؛ بينما يتم ربط اخفاقات التحقق من الاستجابة للقياس عن بعد من النوع `Conversion` ضد اخطاء حتمية عبر المجمعات. تقوم الآن بإصدار هذه المشاركات عند استطلاع Relays، لتحافظ على تزامن مجمع Prio في Torii مع دلاء على التتابع.
 
 تحترم النقطتان ملف القياس عن بعد: `503 Service Unavailable` عندما تكون المقاييس معطلة. يمكن إرسال اجسام Norito إلى (`application/x.norito`) أو Norito JSON (`application/x.norito+json`)، ويتعين علينا التفاوض بشأن التعليمات البرمجية لتوجيهات Torii القياسية.
 
@@ -145,7 +145,7 @@ cargo xtask soranet-privacy-report \
 
 ### قائمة تدقيق التشغيل الاوللا يزال لا يتطلب الأمر اثبات ان أولا آلي لى القمع. تقبل الااداة الآن `--max-suppression-ratio <0-1>` بحيث يمكن لـ CI او يبدأون بسرعة عندما تتجاوز الدلاء المقموعة النافذة المخصصة لها (الافتراضي 10%) او عندما لا توجد دلاء بعد. راكب به:
 
-1. صدّر NDJSON من نقاط المشرف للـ Relay بالإضافة إلى التدفق `/v2/soranet/privacy/event|share` للـ Orchestrator إلى `artifacts/sorafs_privacy/<relay>.ndjson`.
+1. صدّر NDJSON من نقاط المشرف للـ Relay بالإضافة إلى التدفق `/v1/soranet/privacy/event|share` للـ Orchestrator إلى `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. مهمة المساعدة في التكاليف السياسية:
 
    ```bash

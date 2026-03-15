@@ -177,7 +177,7 @@ NRPC 规范中描述的预编码 Norito 有效负载
 1. 选择一个夹具，例如 `fixtures/norito_rpc/transfer_asset.norito`。这些
    文件是原始 Norito 信封； **不要**对它们进行 base64 编码。
 2. 在 Swagger 或 RapiDoc 中，找到 NRPC 端点（例如
-   `POST /v2/pipeline/submit`）并将 **Content-Type** 选择器切换为
+   `POST /v1/pipeline/submit`）并将 **Content-Type** 选择器切换为
    `application/x-norito`。
 3. 将请求正文编辑器切换为 **binary**（Swagger 的“文件”模式或
    RapiDoc 的“二进制/文件”选择器）并上传 `.norito` 文件。小部件
@@ -205,13 +205,13 @@ curl \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: ${TOKEN}" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v2/pipeline/submit"
+  "${TORII}/v1/pipeline/submit"
 ```
 
 将夹具替换为 `transaction_fixtures.manifest.json` 中列出的任何条目
 或者使用 `cargo xtask norito-rpc-fixtures` 编码您自己的有效负载。当 Torii
 处于金丝雀模式，您可以将 `curl` 指向 try-it 代理
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) 进行同样的练习
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) 进行同样的练习
 门户小部件使用的基础设施。
 
 ## 可观察性和操作每个请求都会记录一次，其中包括方法、路径、来源、上游状态和
@@ -227,7 +227,7 @@ curl \
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 

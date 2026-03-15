@@ -70,7 +70,7 @@ Taikai anchor runbook တွင်။ အစုအဝေးဖြစ်ရန်
    မည်သည့်လမ်းကြောင်းဖော်ပြချက် (TRM) နှင့် မျိုးရိုးလိုက်သည့်ဝင်းဒိုးသည် အသက်ဝင်ခဲ့သည်။ အထောက်အမ
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
    spool ဖိုင်များကို ကူးယူမည်ဖြစ်ပြီး hashe များကို ထုတ်လွှတ်ကာ အနှစ်ချုပ်ကို ရွေးချယ်နိုင်မည်ဖြစ်သည်။
-2. Record `/v2/status` အထွက်အား စစ်ထုတ်ထားပါသည်။
+2. Record `/v1/status` အထွက်အား စစ်ထုတ်ထားပါသည်။
    `.telemetry.taikai_alias_rotations[]` ကို spool ဖိုင်များဘေးတွင် သိမ်းဆည်းပါ။
    သုံးသပ်သူများသည် အစီရင်ခံထားသော `manifest_digest_hex` နှင့် window bounds တို့ကို နှိုင်းယှဉ်ပါသည်။
    ကူးယူထားသော spool အခြေအနေ။

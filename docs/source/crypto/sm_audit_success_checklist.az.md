@@ -36,7 +36,7 @@ istehsal validatorları üçün SM imzalamasını işə salmadan əvvəl şərtl
 - [ ] Ən son deterministik test nəticələri alındı:
       `scripts/sm_openssl_smoke.sh`, `cargo test -p iroha_crypto sm` və
       Norito gediş-dönüş qurğuları.
-- [ ] Torii `/v2/node/capabilities` reklamı (`iroha runtime capabilities` vasitəsilə) qeydə alınıb, `crypto.sm` manifest sahələrini və sürətləndirmə siyasətinin snapşotunu yoxlayır.
+- [ ] Torii `/v1/node/capabilities` reklamı (`iroha runtime capabilities` vasitəsilə) qeydə alınıb, `crypto.sm` manifest sahələrini və sürətləndirmə siyasətinin snapşotunu yoxlayır.
 
 # Nişan icrası
 

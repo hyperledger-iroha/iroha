@@ -29,7 +29,7 @@ hoc.
   estado de disponibilidad sin consultar almacenamiento fuera del libro mayor.
 - Proveer pruebas de membresia deterministas para que clientes ligeros verifiquen
   que un hash manifiesto fue finalizado en un bloque dado.
-- Exponer consultas Torii (`/v2/da/commitments/*`) y pruebas que permitieron a
+- Exponer consultas Torii (`/v1/da/commitments/*`) y pruebas que permitieron a
   relés, SDKs y automatización de gobernanza auditar disponibilidad sin reproducir
   cada bloque.
 - Mantener el sobre `SignedBlockWire` canonico al enhebrar las nuevas
@@ -45,7 +45,7 @@ hoc.
 3. **Persistencia/indexes** para que el WSV responda consultas de compromisos
    rápido (`iroha_core/src/wsv/mod.rs`).
 4. **Adiciones RPC en Torii** para endpoints de lista/consulta/prueba bajo
-   `/v2/da/commitments`.
+   `/v1/da/commitments`.
 5. **Pruebas de integración + accesorios** validando el cableado y el flujo de
    prueba en `integration_tests/tests/da/commitments.rs`.
 
@@ -133,9 +133,9 @@ Torii exponen tres puntos finales:
 
 | Ruta | Método | Carga útil | Notas |
 |------|--------|---------|-------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (filtro por rango de carril/época/secuencia, paginación) | Devuelve `DaCommitmentPage` con total, compromisos y hash de bloque. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto o tupla `(epoch, sequence)`). | Responde con `DaCommitmentProof` (record + ruta Merkle + hash de bloque). |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Helper stateless que reejecuta el cálculo del hash de bloque y valida la inclusión; usados ​​por SDK que no pueden enlazar directamente a `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtro por rango de carril/época/secuencia, paginación) | Devuelve `DaCommitmentPage` con total, compromisos y hash de bloque. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (carril + hash de manifiesto o tupla `(epoch, sequence)`). | Responde con `DaCommitmentProof` (record + ruta Merkle + hash de bloque). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Helper stateless que reejecuta el cálculo del hash de bloque y valida la inclusión; usados ​​por SDK que no pueden enlazar directamente a `iroha_crypto`. |
 
 Todas las cargas útiles viven bajo `iroha_data_model::da::commitment`. Los enrutadores de
 Torii montan los handlers junto a los endpoints de ingesta DA existentes para

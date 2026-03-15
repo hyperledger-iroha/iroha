@@ -29,7 +29,7 @@ impl Platform {
     }
 }
 
-/// Request payload for `/v2/notify/devices`.
+/// Request payload for `/v1/notify/devices`.
 #[derive(
     Debug,
     Clone,

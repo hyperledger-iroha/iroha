@@ -239,7 +239,7 @@ DA、顧客の矛盾をフェッチするための約束。
 **あなたは次のように行動します:**- DA-2 でキャッシュを再生し、カーソルを永続化します。ヴェジャ
   実装acao em `crates/iroha_core/src/da/replay_cache.rs` (ロジックキャッシュ)
   Torii と `crates/iroha_torii/src/da/ingest.rs` を統合し、エンカディア チェックを実行します。
-  `/v2/da/ingest` 経由の指紋。
+  `/v1/da/ingest` 経由の指紋。
 - ストリーミング PDP/PoTR のシミュレーションとして、プルーフ ストリームを利用して実行
   em `crates/sorafs_car/tests/sorafs_cli.rs`、コブリンド・フラクソス・デ・レクイシカオ
   PoR/PDP/PoTR は、ファルハ動物のシナリオではなく、アメリカのモデルでもありません。

@@ -32,7 +32,7 @@ translation_last_reviewed: 2025-11-14
    - `TORII_NODE_URL` — عنوان REST الأساسي (يُشتق منه عنوان WebSocket).
    - `CONNECT_SESSION_ID` — معرّف جلسة بطول 32 بايت (base64/base64url).
    - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — الرموز (tokens) التي يعيدها
-     `/v2/connect/session`.
+     `/v1/connect/session`.
    - `CONNECT_CHAIN_ID` — معرّف السلسلة (chain) المُعلن أثناء control handshake.
    - `CONNECT_ROLE` — الدور الافتراضي المحدد مسبقًا في واجهة المستخدم (`app` أو
      `wallet`).
@@ -81,7 +81,7 @@ snapshot لحالة الاستعداد (ready state) في `artifacts/ios_demo_st
 2. افتح مشروع `NoritoDemoXcode` من Xcode.
 3. اختر الـ scheme `NoritoDemo` وحدد جهاز iOS أو محاكيًا (Simulator) كهدف للتشغيل.
 4. تأكد من أن ملف `.env` مُعرّف ضمن متغيرات البيئة الخاصة بالـ scheme. املأ قيم
-   `CONNECT_*` التي يعيدها `/v2/connect/session` بحيث تُملأ واجهة المستخدم مسبقًا عند
+   `CONNECT_*` التي يعيدها `/v1/connect/session` بحيث تُملأ واجهة المستخدم مسبقًا عند
    إطلاق التطبيق.
 5. تحقق من قيم تسريع العتاد الافتراضية: يستدعي ملف `App.swift`‎ الدالة
    `DemoAccelerationConfig.load().apply()` حتى تلتقط الديمو إعدادات البيئة

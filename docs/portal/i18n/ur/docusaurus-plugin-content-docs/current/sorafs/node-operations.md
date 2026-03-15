@@ -38,7 +38,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
   ```
 
 - یقینی بنائیں کہ Torii پروسس کے پاس `data_dir` تک read/write رسائی ہو۔
-- declaration ریکارڈ ہونے کے بعد `GET /v2/sorafs/capacity/state` کے ذریعے تصدیق
+- declaration ریکارڈ ہونے کے بعد `GET /v1/sorafs/capacity/state` کے ذریعے تصدیق
   کریں کہ نوڈ متوقع کپیسٹی اعلان کرتا ہے۔
 - جب smoothing فعال ہو، ڈیش بورڈز raw اور smoothed GiB·hour/PoR کاؤنٹرز دونوں
   دکھاتے ہیں تاکہ jitter-free رجحانات کو spot values کے ساتھ نمایاں کیا جا سکے۔
@@ -90,8 +90,8 @@ sample count، اور optional verdict outcome)۔ `--manifest-id=<hex>` فراہ
 Torii لائیو ہونے کے بعد آپ وہی artifacts HTTP کے ذریعے حاصل کر سکتے ہیں:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 دونوں endpoints ایمبیڈڈ اسٹوریج ورکر فراہم کرتا ہے، اس لیے CLI smoke tests اور
@@ -104,7 +104,7 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
 2. manifest کو base64 encoding کے ساتھ جمع کریں:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -114,7 +114,7 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
 3. pinned ڈیٹا fetch کریں:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -131,7 +131,7 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
 2. Torii پروسس (یا پورا نوڈ) ری اسٹارٹ کریں۔
 3. fetch ریکوئسٹ دوبارہ جمع کریں۔ payload بدستور دستیاب رہے اور واپس آنے والا
    digest ری اسٹارٹ سے پہلے والی قدر کے مطابق ہو۔
-4. `GET /v2/sorafs/storage/state` چیک کریں تاکہ تصدیق ہو کہ `bytes_used` ری بوٹ کے
+4. `GET /v1/sorafs/storage/state` چیک کریں تاکہ تصدیق ہو کہ `bytes_used` ری بوٹ کے
    بعد persisted manifests کو ظاہر کرتا ہے۔
 
 ## 4. کوٹا ریجیکشن ٹیسٹ
@@ -150,7 +150,7 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
 2. PoR sample ریکوئسٹ کریں:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -175,7 +175,7 @@ gateway probes ہم آہنگ رہتے ہیں۔【crates/iroha_torii/src/sorafs/a
 - ڈیش بورڈز کو یہ ٹریک کرنا چاہیے:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` اور `torii_sorafs_storage_fetch_inflight`
-  - `/v2/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
+  - `/v1/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے settlement publish attempts
 
 ان drills کی پیروی سے یہ یقینی ہوتا ہے کہ ایمبیڈڈ اسٹوریج ورکر ڈیٹا ingest کر

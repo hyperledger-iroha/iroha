@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-30
 
 ---
 title: Data Availability Ingestion Rollback Plan
-summary: Playbook for pausing or reversing the DA ingest surface (`/v2/da/ingest`) when Torii, rent, or replication policy regressions threaten DA-2/DA-7 readiness.
+summary: Playbook for pausing or reversing the DA ingest surface (`/v1/da/ingest`) when Torii, rent, or replication policy regressions threaten DA-2/DA-7 readiness.
 ---
 
 # Data Availability Ingestion Rollback Plan
@@ -27,7 +27,7 @@ an incident.
 
 ## 1. Metadata
 
-- **Feature / rollout name:** DA-2/DA-7 — Torii `/v2/da/ingest` GA (rent quote +
+- **Feature / rollout name:** DA-2/DA-7 — Torii `/v1/da/ingest` GA (rent quote +
   manifest spooler shipping manifests to SoraFS orchestrators).
 - **Owner / DRI:** DA program TL (Storage Team) with Torii duty engineer and
   Release/SRE on-call handling Alertmanager and governance comms.
@@ -103,7 +103,7 @@ Before disabling or reverting the endpoint gather the following artefacts:
 | Step | Command / Action | Owner | Notes |
 |------|------------------|-------|-------|
 | 1 | Announce freeze in `#da-ops` and tag Governance/Treasury. Open incident doc in `docs/source/ops/archive/<id>/`. | SRE duty | Include reason + ticket ID. |
-| 2 | Block `/v2/da/ingest` at the ingress layer. Example Istio patch: <br>`cat <<'YAML' > artifacts/da_rollback/$ts/da_ingest_block.yaml`<br>`apiVersion: networking.istio.io/v1beta1`<br>`kind: VirtualService`<br>`metadata: { name: torii-da-ingest-block, namespace: torii }`<br>`spec:`<br>`  hosts: ["torii.svc.cluster.local"]`<br>`  http:`<br>`    - match:`<br>`        - uri: { prefix: "/v2/da/ingest" }`<br>`      fault: { abort: { httpStatus: 503, percentage: { value: 100 } } }`<br>`      route:`<br>`        - destination: { host: torii.svc.cluster.local }`<br>`YAML`<br>`kubectl apply -f artifacts/da_rollback/$ts/da_ingest_block.yaml` | Networking TL / Platform Ops | Any traffic receives 503 so clients fall back to offline packaging. Remove the resource once rollback completes. |
+| 2 | Block `/v1/da/ingest` at the ingress layer. Example Istio patch: <br>`cat <<'YAML' > artifacts/da_rollback/$ts/da_ingest_block.yaml`<br>`apiVersion: networking.istio.io/v1beta1`<br>`kind: VirtualService`<br>`metadata: { name: torii-da-ingest-block, namespace: torii }`<br>`spec:`<br>`  hosts: ["torii.svc.cluster.local"]`<br>`  http:`<br>`    - match:`<br>`        - uri: { prefix: "/v1/da/ingest" }`<br>`      fault: { abort: { httpStatus: 503, percentage: { value: 100 } } }`<br>`      route:`<br>`        - destination: { host: torii.svc.cluster.local }`<br>`YAML`<br>`kubectl apply -f artifacts/da_rollback/$ts/da_ingest_block.yaml` | Networking TL / Platform Ops | Any traffic receives 503 so clients fall back to offline packaging. Remove the resource once rollback completes. |
 | 3 | Scale DA-specific workers to zero (if deployed separately) or disable the `da_ingest` HTTP handler by redeploying Torii with `DA_INGEST_DISABLED=true` in the Helm values. | Release Engineering | Prevents pods from writing new manifests mid-rollback. |
 | 4 | Drain in-flight submissions by notifying SDK teams to run `iroha app da submit --no-submit` (offline packager) and queue manifests locally until the incident closes. Update docs/portal banner via `docs/portal/scripts/publish_banner.sh --message "...DA ingest paused..."`. | SDK Program Lead | Ensures no new payloads reach Torii while policies are inconsistent. |
 | 5 | Repoint SoraFS orchestration to the preserved spool (if needed) and verify chunk stores with `sorafs_car da_reconstruct --manifest artifacts/da_rollback/$ts/.../manifest.encoded`. | Storage TL | Guarantees no manifest is lost before resubmission. |
@@ -113,7 +113,7 @@ Before disabling or reverting the endpoint gather the following artefacts:
 ## 5. Verification Checklist
 
 - `kubectl get virtualservice torii-da-ingest-block -n torii` shows the abort rule,
-  and `/v2/da/ingest` responds with `503 Service Unavailable`.
+  and `/v1/da/ingest` responds with `503 Service Unavailable`.
 - `torii_da_rent_*` counters stop increasing while the endpoint is blocked.
 - `manifest_store_dir` reports no new files after the patch timestamp.
 - At least one `iroha app da prove-availability` run succeeds using the preserved
@@ -138,7 +138,7 @@ the incident log:
 2. `scripts/taikai_ingest_smoke.sh` green on staging.
 3. `torii_da_manifest_enqueue_fail_total` flat for 30 minutes after test traffic.
 4. Governance sign-off recorded with link to evidence bundle.
-5. SDK teams confirm they can resume calling `/v2/da/ingest`.
+5. SDK teams confirm they can resume calling `/v1/da/ingest`.
 
 To restore service, delete the VirtualService override and redeploy Torii with
 the corrected configuration:

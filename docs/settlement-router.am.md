@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## ማስረጃዎች እና ማጣቀሻዎች
 - NX-3 የሰፈራ ራውተር ተቀባይነት ማስታወሻዎች: `status.md` (NX-3 ክፍል).
 - ኦፕሬተር ወለሎች፡ `dashboards/grafana/settlement_router_overview.json`፣ `ops/runbooks/settlement-buffers.md`።
-- የመቀበያ ንድፍ እና የኤፒአይ ወለል፡ `docs/source/nexus_fee_model.md`፣ `/v2/sumeragi/status` -> `lane_settlement_commitments`።
+- የመቀበያ ንድፍ እና የኤፒአይ ወለል፡ `docs/source/nexus_fee_model.md`፣ `/v1/sumeragi/status` -> `lane_settlement_commitments`።

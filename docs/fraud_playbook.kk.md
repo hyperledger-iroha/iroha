@@ -83,7 +83,7 @@ translator: machine-google-reviewed
 Шлюз енді бір-бірін салыстыратын нақты JSON конверттерін көрсетеді
 `crates/iroha_data_model::fraud` жүйесінде енгізілген Norito түрлері:
 
-- **Тәуекелді қабылдау** – `POST /v2/fraud/query` `RiskQuery` схемасын қабылдайды:
+- **Тәуекелді қабылдау** – `POST /v1/fraud/query` `RiskQuery` схемасын қабылдайды:
   - `query_id` (`[u8; 32]`, он алтылық кодталған)
   - `subject` (`AccountId`, канондық I105 литералы; қосымша `@<domain>` анықтамасы немесе бүркеншік ат)
   - `operation` (`RiskOperation` сәйкес таңбаланған нөмір; JSON `type`
@@ -94,14 +94,14 @@ translator: machine-google-reviewed
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; `tenant_id` тасымалдайды, қосымша `session_id`,
     қосымша `reason`)
-- **Тәуекел туралы шешім** – `POST /v2/fraud/assessment` тұтынады
+- **Тәуекел туралы шешім** – `POST /v1/fraud/assessment` тұтынады
   `FraudAssessment` пайдалы жүктеме (басқару экспортында да көрсетіледі):
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (`AssessmentDecision` нөмірі), `rule_outcomes`
     (`{ rule_id, score_delta_bps, rationale? }` массиві)
   - `generated_at_ms`
   - `signature` (Norito кодталған бағалауды орау үшін қосымша base64)
-- **Басқару экспорты** – `GET /v2/fraud/governance/export` қайтарады
+- **Басқару экспорты** – `GET /v1/fraud/governance/export` қайтарады
   `governance` мүмкіндігі қосылған кезде `GovernanceExport` құрылымы, жинақтау
   белсенді параметрлер, соңғы заң актісі, үлгі нұсқасы, саясат дайджесті және
   `DecisionAggregate` гистограммасы.

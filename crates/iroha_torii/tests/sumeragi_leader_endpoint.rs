@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v2/sumeragi/leader
+//! Router-level test for GET /v1/sumeragi/leader
 #![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "telemetry")]
 
@@ -14,14 +14,14 @@ async fn sumeragi_leader_endpoint_shape() {
     status::set_prf_context([7u8; 32], 123, 4);
 
     let app = Router::new().route(
-        "/v2/sumeragi/leader",
+        "/v1/sumeragi/leader",
         get(|| async move { iroha_torii::handle_v1_sumeragi_leader(None).await }),
     );
 
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v2/sumeragi/leader")
+                .uri("/v1/sumeragi/leader")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

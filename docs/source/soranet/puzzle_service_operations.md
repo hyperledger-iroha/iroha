@@ -6,19 +6,19 @@ and, when configured, brokers ML-DSA admission tokens on behalf of edge relays.
 It exposes five HTTP endpoints:
 
 - `GET /healthz` – liveness probe.
-- `GET /v2/puzzle/config` – returns the effective PoW/puzzle parameters pulled
+- `GET /v1/puzzle/config` – returns the effective PoW/puzzle parameters pulled
   from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
   The response also echoes the PoW revocation store capacity/TTL so operators
   can validate the shared replay cache settings.
-- `POST /v2/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
+- `POST /v1/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   requests a shorter TTL (clamped to the policy window), binds the ticket to a
   transcript hash, and returns a relay-signed ticket + signature fingerprint
   when signing keys are configured.
-- `GET /v2/token/config` – when `pow.token.enabled = true`, returns the active
+- `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
   admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
   and the merged revocation set).
-- `POST /v2/token/mint` – mints an ML-DSA admission token bound to the supplied
+- `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
   resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 Tickets produced by the service are verified in the
@@ -80,7 +80,7 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` is also available when the secret is managed by an out-of-band
-tooling pipeline. The revocation file watcher keeps `/v2/token/config` current;
+tooling pipeline. The revocation file watcher keeps `/v1/token/config` current;
 coordinate updates with the `soranet-admission-token revoke` command to avoid lagging
 revocation state.
 
@@ -111,14 +111,14 @@ Tickets that exceed `revocation_max_ttl_secs` are rejected with the same `store_
 label; keep the TTL cap aligned with `pow.ticket_ttl` (or lower it only when you
 intentionally want shorter replay retention windows).
 Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
-key used to verify signed PoW tickets; the `/v2/puzzle/config` endpoint now echoes both the
+key used to verify signed PoW tickets; the `/v1/puzzle/config` endpoint now echoes both the
 public key and its BLAKE3 fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients
 can pin the verifier key. Signed tickets are validated against the relay ID and transcript
 bindings and still share the same revocation store; raw 74-byte PoW tickets remain valid when
 presented to relays that have a signed-ticket key configured.
 Pass the signer secret via `--signed-ticket-secret-hex` or `--signed-ticket-secret-path` when
 launching the puzzle service; startup rejects mismatched keypairs if the secret does not
-validate against `pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` accepts
+validate against `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` accepts
 `"signed": true` (and optional `"transcript_hash_hex"`) to return a Norito-encoded signed
 ticket alongside the raw ticket bytes; responses include `signed_ticket_b64` and
 `signed_ticket_fingerprint_hex` so clients can pin the replay fingerprint. Requests with
@@ -142,10 +142,10 @@ deterministic purge without deleting the snapshot on disk.
 3. **Stage the restart.** Reload the systemd unit or container once governance
    announces the rotation cutover. The service has no hot-reload support; a
    restart is required to pick up the new descriptor commit.
-4. **Validate.** Issue a ticket via `POST /v2/puzzle/mint` and confirm the
+4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` and confirm the
    returned `difficulty` and `expires_at` match the new policy. The soak report
    (`docs/source/soranet/reports/pow_resilience.md`) captures expected latency
-   bounds for reference. When tokens are enabled, fetch `/v2/token/config` to
+   bounds for reference. When tokens are enabled, fetch `/v1/token/config` to
    ensure the advertised issuer fingerprint and revocation count match the
    expected values.
 
@@ -157,7 +157,7 @@ deterministic purge without deleting the snapshot on disk.
    the Argon2 gate is offline.
 3. Restart both the relay and the puzzle service to apply the change.
 4. Monitor `soranet_handshake_pow_difficulty` to ensure the difficulty drops to
-   the expected hashcash value, and verify `/v2/puzzle/config` reports
+   the expected hashcash value, and verify `/v1/puzzle/config` reports
    `puzzle = null`.
 
 ## Monitoring and alerting
@@ -169,9 +169,9 @@ deterministic purge without deleting the snapshot on disk.
   to tune `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Puzzle alignment:** `soranet_handshake_pow_difficulty` should match the
-  difficulty returned by `/v2/puzzle/config`. Divergence indicates stale relay
+  difficulty returned by `/v1/puzzle/config`. Divergence indicates stale relay
   config or a failed restart.
-- **Token readiness:** Alert if `/v2/token/config` drops to `enabled = false`
+- **Token readiness:** Alert if `/v1/token/config` drops to `enabled = false`
   unexpectedly or if `revocation_source` reports stale timestamps. Operators
   should rotate the Norito revocation file via the CLI whenever a token is
   retired to keep this endpoint accurate.
@@ -180,9 +180,9 @@ deterministic purge without deleting the snapshot on disk.
   indicate token reuse, clock skew, or misconfiguration; page when replay/error
   counts exceed baseline.
 - **Service health:** Probe `/healthz` in the usual liveness cadence and alert
-  if `/v2/puzzle/mint` returns HTTP 500 responses (indicates Argon2 parameter
+  if `/v1/puzzle/mint` returns HTTP 500 responses (indicates Argon2 parameter
   mismatch or RNG failures). Token minting errors surface through HTTP 4xx/5xx
-  responses on `/v2/token/mint`; treat repeated failures as a paging condition.
+  responses on `/v1/token/mint`; treat repeated failures as a paging condition.
 
 ## Compliance and audit logging
 

@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-01-01
 
 ## سطح واجهة Torii API
 
-- `GET /v2/zk/proofs` و `GET /v2/zk/proofs/count` يقبلان مرشحات واعية بالـ bridge:
+- `GET /v1/zk/proofs` و `GET /v1/zk/proofs/count` يقبلان مرشحات واعية بالـ bridge:
   - `bridge_only=true` يعيد اثباتات Bridge فقط.
   - `bridge_pinned_only=true` يضيق الى اثباتات Bridge المثبتة فقط.
   - `bridge_start_from_height` / `bridge_end_until_height` يحدان نافذة نطاق bridge.
-- `GET /v2/zk/proof/{backend}/{hash}` يعيد بيانات bridge (النطاق، hash الخاص بالـ manifest، ملخص الـ payload) بجانب معرف/حالة الاثبات وروابط VK.
-- سجل Norito الكامل (بما في ذلك bytes الخاصة بالـ payload) يبقى متاحا عبر `GET /v2/proofs/{proof_id}` للمتحققين خارج العقدة.
+- `GET /v1/zk/proof/{backend}/{hash}` يعيد بيانات bridge (النطاق، hash الخاص بالـ manifest، ملخص الـ payload) بجانب معرف/حالة الاثبات وروابط VK.
+- سجل Norito الكامل (بما في ذلك bytes الخاصة بالـ payload) يبقى متاحا عبر `GET /v1/proofs/{proof_id}` للمتحققين خارج العقدة.
 
 ## احداث ايصالات Bridge
 

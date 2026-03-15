@@ -30,7 +30,7 @@ política nacional, garantía, что каждый validador/узел хране
 | `nexus_lane_sidecar` | 6 horas | 7 días | 4 | `warm` | `da.sidecar` |
 | `governance_artifact` | 12 horas | 180 días | 3 | `cold` | `da.governance` |
 | _Predeterminado (все остальные классы)_ | 6 horas | 30 días | 3 | `warm` | `da.default` |Estas son las versiones en `torii.da_ingest.replication_policy` y las primeras
-всем `/v2/da/ingest` отправкам. Torii переписывает se manifiesta с примененным
+всем `/v1/da/ingest` отправкам. Torii переписывает se manifiesta с примененным
 retención de perfiles y выдает предупреждение, если personas que llaman передают несоответствующие
 значения, чтобы операторы могли выявлять устаревшие SDK.
 
@@ -144,5 +144,5 @@ manifiestos y órdenes de replicación остаются согласованны
    на тот же digest y evidencia del PDP.
 
 Cobertura de regresión incluida en `integration_tests/tests/da/replication_policy.rs`;
-suite отправляет несовпадающую политику retención en `/v2/da/ingest` y проверяет,
+suite отправляет несовпадающую политику retención en `/v1/da/ingest` y проверяет,
 что полученный manifest показывает принудительный профиль, una persona que llama sin intención.

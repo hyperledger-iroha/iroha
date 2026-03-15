@@ -57,12 +57,12 @@ le verrouillage de Bonds, les micropaiements вероятност и les enregis
 ## Интеграция Torii
 
 Torii раскрывает конечные точки, которые сигнализируют об использовании и пилотировании
-Цикл жизни аккордов без специальной проводки:- `POST /v2/sorafs/deal/usage` принять телеметрию `DealUsageReport` и отправить
+Цикл жизни аккордов без специальной проводки:- `POST /v1/sorafs/deal/usage` принять телеметрию `DealUsageReport` и отправить
   детерминированные результаты совместимости (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` завершить курантский фенетр в потоковом режиме
+- `POST /v1/sorafs/deal/settle` завершить курантский фенетр в потоковом режиме
   `DealSettlementRecord` — результат `DealSettlementV1`, закодированный в base64
   прет для публикации в DAG de gouvernance.
-- Подача `/v2/events/sse` от Torii диффузное нарушение регистрации
+- Подача `/v1/events/sse` от Torii диффузное нарушение регистрации
   `SorafsGatewayEvent::DealUsage` резюме chaque soumission d'usage (эпоха, GiB-часы,
   контролеры билетов, детерминированные сборы), регистрация
   `SorafsGatewayEvent::DealSettlement`, который включает в себя снимок канонического реестра правил

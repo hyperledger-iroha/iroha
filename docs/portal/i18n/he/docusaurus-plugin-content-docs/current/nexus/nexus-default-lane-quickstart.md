@@ -161,7 +161,7 @@ curl -s http://127.0.0.1:8080/status \
 
 - **Rust/CLI.** `iroha_cli` ו-crate הלקוח של Rust משמיטים את השדה `lane_id` כאשר לא מעבירים `--lane-id` / `LaneSelector`. לכן ה-queue router נופל ל-`default_lane`. השתמשו בדגלים מפורשים `--lane-id`/`--dataspace-id` רק כאשר מכוונים ל-lane שאינו ברירת מחדל.
 - **JS/Swift/Android.** הגרסאות האחרונות של ה-SDK מתייחסות ל-`laneId`/`lane_id` כאופציונליות ונופלות לערך שמפורסם ב-`/status`. שמרו על מדיניות הניתוב מסונכרנת בין staging ל-production כדי שאפליקציות מובייל לא יזדקקו לשינויים דחופים.
-- **Pipeline/SSE tests.** מסנני אירועי טרנזקציות מקבלים predicates של `tx_lane_id == <u32>` (ראו `docs/source/pipeline.md`). הירשמו ל-`/v2/pipeline/events/transactions` עם המסנן כדי להוכיח שכתיבות שנשלחו ללא lane מפורש מגיעות תחת ה-fallback lane id.
+- **Pipeline/SSE tests.** מסנני אירועי טרנזקציות מקבלים predicates של `tx_lane_id == <u32>` (ראו `docs/source/pipeline.md`). הירשמו ל-`/v1/pipeline/events/transactions` עם המסנן כדי להוכיח שכתיבות שנשלחו ללא lane מפורש מגיעות תחת ה-fallback lane id.
 
 ## 7. תצפיתיות וחיבורי governance
 

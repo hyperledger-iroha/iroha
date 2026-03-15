@@ -30,7 +30,7 @@ Noritoスケールと JSON のサイズ。
   ありがとうございます。
 - マニフェスト ハッシュのマニフェスト ハッシュ
   そうです。
-- Torii (`/v2/da/commitments/*`) リレーと SDK
+- Torii (`/v1/da/commitments/*`) リレーと SDK
   空き状況を確認してください。
 - حفاظ على ظرف `SignedBlockWire` القياسي عبر تمرير البنى الجديدة من خلال
   Norito ハッシュ値。
@@ -44,7 +44,7 @@ Noritoスケールと JSON のサイズ。
    `crates/iroha_core/src/block.rs`)。
 3. **永続化/インデックス** WSV の保存と保存
    (`iroha_core/src/wsv/mod.rs`)。
-4. **RPC 番号 Torii** リスト/クエリ/証明 `/v2/da/commitments`。
+4. **RPC 番号 Torii** リスト/クエリ/証明 `/v1/da/commitments`。
 5. **セキュリティ + フィクスチャ** ワイヤ レイアウトの証明
    `integration_tests/tests/da/commitments.rs`。
 
@@ -131,9 +131,9 @@ Torii エンドポイント:
 
 |名前: और देखेंああ |重要 |
 |----------|-----------|----------|-----------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンス、ページネーション) | يعيد `DaCommitmentPage` は、ハッシュ الكتلة を意味します。 |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ タプル `(epoch, sequence)`)。 | يعيد `DaCommitmentProof` (レコード + メルクル + ハッシュ)。 |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` |ステートレス يعيد حساب ハッシュ الكتلة ويتحقق من الاشتمال؛ SDK は `iroha_crypto` に対応しています。 |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンス、ページネーション) | يعيد `DaCommitmentPage` は、ハッシュ الكتلة を意味します。 |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ タプル `(epoch, sequence)`)。 | يعيد `DaCommitmentProof` (レコード + メルクル + ハッシュ)。 |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |ステートレス يعيد حساب ハッシュ الكتلة ويتحقق من الاشتمال؛ SDK は `iroha_crypto` に対応しています。 |
 
 كل الحمولات تعيش تحت `iroha_data_model::da::commitment`. Torii 認証済み
 ハンドラーは、エンドポイントでトークン/mTLS を取り込みます。

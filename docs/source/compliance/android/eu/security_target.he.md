@@ -55,7 +55,7 @@ translator: machine-google-reviewed
 | מניפסטים של תצורה משותפת | `ClientConfig` מאמת מניפסטים (hash + סכימה) לפני היישום ויומן דחיית טעינות מחדש באמצעות `android.telemetry.config.reload`. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`; `docs/source/android_runbook.md` §1–2. |
 | פשרה של חתימה על מפתחות | מדיניות נדרשת של StrongBox, רתמות אישורים וביקורות מטריצות מכשיר מזהות סחיפה; עוקפים מתועדים לכל אירוע. | `docs/source/sdk/android/key_management.md`; `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; `scripts/android_strongbox_attestation_ci.sh`. |
 | דליפת PII בטלמטריה | רשויות גיבוב של Blake2b, פרופילי מכשירים עם דליים, השמטת ספק, ביטול רישום. | `docs/source/sdk/android/telemetry_redaction.md`; תמיכה ב-Playbook §8. |
-| הפעל מחדש או שדרוג לאחור ב-Torii RPC | בונה הבקשות `/v2/pipeline` אוכף הצמדת TLS, מדיניות ערוצי רעש ונסה שוב תקציבים עם הקשר סמכות גיבוב. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (מתוכנן). |
+| הפעל מחדש או שדרוג לאחור ב-Torii RPC | בונה הבקשות `/v1/pipeline` אוכף הצמדת TLS, מדיניות ערוצי רעש ונסה שוב תקציבים עם הקשר סמכות גיבוב. | `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ToriiRequestBuilder.java`; `docs/source/sdk/android/networking.md` (מתוכנן). |
 | מהדורות לא חתומות או לא ניתנות לשחזור | CycloneDX SBOM + Sigstore אישורים מסודרים על ידי רשימת AND6; RFCs לשחרור דורשים ראיות ב-`docs/source/release/provenance/android/`. | `docs/source/sdk/android/developer_experience_plan.md`; `docs/source/compliance/android/eu/sbom_attestation.md`. |
 | טיפול לא שלם באירוע | ספר הפעלה + ספר הפעלה מגדירים דרישות, תרגילי כאוס ועץ הסלמה; עקיפות טלמטריה דורשות בקשות חתומות של Norito. | `docs/source/android_runbook.md`; `docs/source/android_support_playbook.md`. |
 
@@ -76,7 +76,7 @@ translator: machine-google-reviewed
 | 7.4 בקרת גישה | מדיניות StrongBox + עקיפה של זרימת עבודה המחייבת חפצי Norito חתומים. |
 | 7.5 בקרות קריפטוגרפיות | דרישות יצירת מפתחות, אחסון ואישור מ-AND2 (מדריך לניהול מפתחות). |
 | 7.6 אבטחת תפעול | גיבוב טלמטריה, חזרות כאוס, תגובה לאירועים ושחרור עדויות. |
-| 7.7 אבטחת תקשורת | `/v2/pipeline` מדיניות TLS + רשויות גיבוב (מסמך עריכת טלמטריה). |
+| 7.7 אבטחת תקשורת | `/v1/pipeline` מדיניות TLS + רשויות גיבוב (מסמך עריכת טלמטריה). |
 | 7.8 רכישת / פיתוח מערכת | בניית Gradle, SBOM ושערי מוצא ניתנים לשחזור בתוכניות AND5/AND6. |
 | 7.9 קשרי ספקים | אישורי Buildkite + Sigstore נרשמו לצד SBOM של צד שלישי. |
 | 7.10 ניהול אירועים | הסלמה של ספר הפעלה/Playbook, עקיפת רישום, מוני כישלון טלמטריה. |

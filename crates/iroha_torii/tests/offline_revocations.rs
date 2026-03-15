@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for the `/v2/offline/revocations{,/query}` endpoints.
+//! Integration tests for the `/v1/offline/revocations{,/query}` endpoints.
 #![cfg(feature = "app_api")]
 
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
@@ -58,7 +58,7 @@ async fn offline_revocations_list_supports_filtering_and_sorting() {
         .expect("fixture with note");
     let filter_json = json::to_string(&exists_filter("note")).expect("serialize filter");
     let uri = format!(
-        "/v2/offline/revocations?sort=issuer_id:asc&filter={}",
+        "/v1/offline/revocations?sort=issuer_id:asc&filter={}",
         encode(&filter_json)
     );
 
@@ -133,7 +133,7 @@ async fn offline_revocations_query_respects_sorting() {
         .oneshot(
             Request::builder()
                 .method(axum::http::Method::POST)
-                .uri("/v2/offline/revocations/query")
+                .uri("/v1/offline/revocations/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     json::to_vec(&envelope).expect("serialize envelope"),

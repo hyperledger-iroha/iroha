@@ -21,7 +21,7 @@ bütün faydalı yükün alınması.
 ## Son nöqtə
 
 ```
-POST /v2/sumeragi/rbc/sample
+POST /v1/sumeragi/rbc/sample
 ```
 
 The endpoint requires an `X-API-Token` header matching one of the configured

@@ -202,7 +202,7 @@ gözlənilən layout və birbaşa nümunə gateway inkar siyahısına qidalanır
   - HTTP/gRPC API-ni ifşa edən `run_moderation.py` (və ya Rust ekvivalenti) giriş nöqtəsi.
 - Artefaktları `registry.sora.net/ministry/ai-moderation/<model>@sha256:<digest>`-də dərc edin.
 - `sorafs_ai_runner` qutusunun bir hissəsi kimi qaçışçı ikili gəmilər. Tikinti boru kəməri
-  manifest hash-i binar sistemə daxil edir (`/v2/info` vasitəsilə ifşa olunur).
+  manifest hash-i binar sistemə daxil edir (`/v1/info` vasitəsilə ifşa olunur).
 
 ## 8. Telemetriya və Müşahidə Edilə bilənlik
 - Prometheus ölçüləri:

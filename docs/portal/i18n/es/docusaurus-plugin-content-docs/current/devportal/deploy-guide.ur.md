@@ -24,7 +24,7 @@ exportaciones de conchas سے لوڈ کر سکتے ہیں۔
 
 ## پیشگی شرائط- Nodo 18.18+ کے ساتھ `npm` یا `pnpm`.
 - `sorafs_cli` o `cargo run -p sorafs_car --features cli --bin sorafs_cli`, todos ellos
-- Torii URL y `/v2/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
+- Torii URL y `/v1/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
   مینی فیسٹس اور alias جمع کر سکے۔
 - Emisor OIDC (GitHub Actions, GitLab, identidad de carga de trabajo y otros)
   `SIGSTORE_ID_TOKEN` منٹ کیا جا سکے۔
@@ -821,7 +821,7 @@ trabajo چلانے سے پہلے درج ذیل secretos/variables del repositori
 
 | Nombre | Propósito |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | Torii host y `/v2/sorafs/pin/register` son hosts ہے۔ |
+| `DOCS_SORAFS_TORII_URL` | Torii host y `/v1/sorafs/pin/register` son hosts ہے۔ |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | envíos کے ساتھ ریکارڈ ہونے والا identificador de época۔ |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | presentación de manifiesto کے لئے autoridad de firma۔ |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | alias tupla جو `perform_submit` true ہونے پر manifest سے bind ہوتا ہے۔ |

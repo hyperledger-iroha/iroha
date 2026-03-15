@@ -181,7 +181,7 @@ async fn fetch_sumeragi_snapshot(
     client: reqwest::Client,
     torii_base: &str,
 ) -> Result<SumeragiSnapshot> {
-    let url = reqwest::Url::parse(&format!("{torii_base}/v2/sumeragi/status"))
+    let url = reqwest::Url::parse(&format!("{torii_base}/v1/sumeragi/status"))
         .wrap_err("compose sumeragi status URL")?;
     let response = client
         .get(url)
@@ -192,7 +192,7 @@ async fn fetch_sumeragi_snapshot(
     let status = response.status();
     ensure!(
         status.is_success(),
-        "GET {torii_base}/v2/sumeragi/status returned {status}"
+        "GET {torii_base}/v1/sumeragi/status returned {status}"
     );
     let body = response
         .text()
@@ -868,10 +868,10 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
             .join("status")
             .wrap_err("compose status URL")?;
         let sessions_url_primary = torii_primary
-            .join("v2/sumeragi/rbc/sessions")
+            .join("v1/sumeragi/rbc/sessions")
             .wrap_err("compose sessions URL")?;
         let restart_sessions_url = reqwest::Url::parse(&format!(
-            "{}/v2/sumeragi/rbc/sessions",
+            "{}/v1/sumeragi/rbc/sessions",
             restart_peer.torii_url()
         ))
         .wrap_err("compose restart peer sessions URL")?;
@@ -1051,7 +1051,7 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
             .join("status")
             .wrap_err("compose status URL")?;
         let restart_sessions_url = reqwest::Url::parse(&format!(
-            "{}/v2/sumeragi/rbc/sessions",
+            "{}/v1/sumeragi/rbc/sessions",
             restart_peer.torii_url()
         ))
         .wrap_err("compose restart peer sessions URL")?;
@@ -1267,7 +1267,7 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
 
         let sessions_url = client
             .torii_url
-            .join("v2/sumeragi/rbc/sessions")
+            .join("v1/sumeragi/rbc/sessions")
             .wrap_err("compose sessions URL")?;
         if let Err(err) =
             wait_for_rbc_session(&http, sessions_url.clone(), da_rbc_session_timeout()).await
@@ -1452,7 +1452,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
         let peer_sumeragi_urls: Vec<reqwest::Url> = peers
             .iter()
             .map(|peer| {
-                reqwest::Url::parse(&format!("{}/v2/sumeragi/status", peer.torii_url()))
+                reqwest::Url::parse(&format!("{}/v1/sumeragi/status", peer.torii_url()))
             })
             .collect::<Result<_, _>>()
             .wrap_err("compose peer sumeragi status URLs")?;
@@ -1992,7 +1992,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             let sessions_url = peer
                 .client()
                 .torii_url
-                .join("v2/sumeragi/rbc/sessions")
+                .join("v1/sumeragi/rbc/sessions")
                 .wrap_err("compose sessions URL")?;
             let baseline_hashes = fetch_rbc_session_hashes(&http, &sessions_url).await?;
             probes.push(RbcSessionsProbe {
@@ -2028,7 +2028,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             .position(|peer| {
                 peer.client()
                     .torii_url
-                    .join("v2/sumeragi/rbc/sessions")
+                    .join("v1/sumeragi/rbc/sessions")
                     .ok()
                     .as_ref()
                     == Some(&inflight.sessions_url)
@@ -2126,7 +2126,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         let restarted_client = peers[observed_peer_index].client();
         let resumed_torii = observed_torii.clone();
         let restart_sessions_url = resumed_torii
-            .join("v2/sumeragi/rbc/sessions")
+            .join("v1/sumeragi/rbc/sessions")
             .wrap_err("compose restart sessions URL")?;
         let recovery_start = Instant::now();
         wait_for_recovered_flag(
@@ -2395,7 +2395,7 @@ where
         .wrap_err("compose status URL")?;
     let sessions_url = client
         .torii_url
-        .join("v2/sumeragi/rbc/sessions")
+        .join("v1/sumeragi/rbc/sessions")
         .wrap_err("compose RBC sessions URL")?;
 
     let http = http_client_with_client_auth(&client)?;
@@ -3140,7 +3140,7 @@ async fn wait_for_commit_certificates(
         let base =
             reqwest::Url::parse(torii).wrap_err_with(|| format!("parse torii url {torii}"))?;
         let mut url = base
-            .join("v2/sumeragi/commit-certificates")
+            .join("v1/sumeragi/commit-certificates")
             .wrap_err_with(|| format!("compose commit certificates URL for {torii}"))?;
         {
             let mut pairs = url.query_pairs_mut();

@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -128,9 +128,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- المساعدة في الحصول على `POST /v2/sns/registrations` حسب الطلب والانتظار أولاً
+```- المساعدة في الحصول على `POST /v1/sns/registrations` حسب الطلب والانتظار أولاً
   خطأ HTTP. تم إضافة الردود إلى السجل كتسجيل NDJSON.
-- `--poll-status` إعادة الاستجواب `/v2/sns/registrations/{selector}` بعد كل مرة
+- `--poll-status` إعادة الاستجواب `/v1/sns/registrations/{selector}` بعد كل مرة
   soumission (jusqu'a `--poll-attempts`، الافتراضي 5) لتأكيد ذلك
   أصبح التسجيل مرئيًا. فورنيسيز `--suffix-map` (JSON de `suffix_id`
   Vers des valeurs "suffix") لكي تشتق الأداة النصوص

@@ -131,7 +131,7 @@ from `nexus_lanes.json`, Alertmanager state, and `nexus_lane_rules.yml`).
 ### Do SDKs need special handling for settlement?
 
 - SDKs must:
-  - Provide helpers for querying settlement events (`/v2/settlement/records`)
+  - Provide helpers for querying settlement events (`/v1/settlement/records`)
     and interpreting `SettlementApplied` logs.
   - Surface lane IDs + settlement handles in client configuration so operators
     can route transactions correctly.

@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -143,7 +143,7 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- གྲོགས་རམ་འབད་མི་གིས་ ཞུ་བ་རེ་ལུ་ `POST /v2/sns/registrations` གཅིག་དང་ མངལ་སྟོངམ་བཏོན་མི་ཚུ་ལུ་ བཀོདཔ་ཨིན།
+- གྲོགས་རམ་འབད་མི་གིས་ ཞུ་བ་རེ་ལུ་ `POST /v1/sns/registrations` གཅིག་དང་ མངལ་སྟོངམ་བཏོན་མི་ཚུ་ལུ་ བཀོདཔ་ཨིན།
   ཨེཆ་ཊི་ཊི་པི་འཛོལ་བ་འགོ་དང་པ་འདི་ཨིན། ལན་ཚུ་ དྲན་ཐོ་འགྲུལ་ལམ་ལུ་ NDJSON སྦེ་ མཐུད་ཡོདཔ་ཨིན།
   དྲན་ཐོ་ཚུ།
 - I18NI000000064X འདི་གི་ཤུལ་ལས་ I18NI0000000065X འདི་ རེ་རེ་ལུ་འདྲི་དཔྱད་འབདཝ་ཨིན།

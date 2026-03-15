@@ -85,7 +85,7 @@ asboblar holat hujjatlarini qirib tashlamasdan bir xil parametrlarni yuklashi mu
 
 1. Operatorlarga tarqatishdan oldin JSON snapshotini yuklang va uni hashlang/imzolang.
 2. Registrator asboblari `suffix_id`, muddat chegaralari va narxlarni ko'rsatishi kerak
-   Agar so'rov `/v2/sns/*` bo'lsa, katalogdan.
+   Agar so'rov `/v1/sns/*` bo'lsa, katalogdan.
 3. DNS/Gateway yordamchilari GAR yaratishda zahiradagi yorliqli metamaʼlumotlarni oʻqiydi
    shablonlari, shuning uchun DNS javoblari boshqaruv elementlari bilan mos keladi.
 4. KPI ilovasi ish yorliqlari yorlig'i boshqaruv panelidagi qo'shimcha metama'lumotlar bilan eksport qilinadi, shuning uchun ogohlantirishlar mos keladi

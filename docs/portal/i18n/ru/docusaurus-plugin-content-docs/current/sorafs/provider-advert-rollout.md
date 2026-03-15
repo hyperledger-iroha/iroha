@@ -41,7 +41,7 @@ Rollout согласован с вехами SF-2b/2c в
      - `profile_id=sorafs.sf1@1.0.0`
      - `capability=chunk_range_fetch` с определенным `max_span`
      - `allow_unknown_capabilities=<true|false>` при наличии GREASE TLV
-   - Проверьте через `/v2/sorafs/providers` и `sorafs_fetch`; предупреждения о
+   - Проверьте через `/v1/sorafs/providers` и `sorafs_fetch`; предупреждения о
      неизвестных capabilities нужно триажить.
 3. **Проверка multi-source readiness.**
    - Выполните `sorafs_fetch` с `--provider-advert=<path>`; CLI теперь падает,
@@ -188,9 +188,9 @@ groups:
 - **Еженедельная рассылка статуса.** DevRel рассылает краткое резюме метрик
   admission, текущих warnings и предстоящих deadlines.
 - **Incident response.** Если срабатывают alerts `reject`, on-call инженеры:
-  1. Забирают проблемный advert через discovery Torii (`/v2/sorafs/providers`).
+  1. Забирают проблемный advert через discovery Torii (`/v1/sorafs/providers`).
   2. Повторяют валидацию advert в provider pipeline и сравнивают с
-     `/v2/sorafs/providers`, чтобы воспроизвести ошибку.
+     `/v1/sorafs/providers`, чтобы воспроизвести ошибку.
   3. Координируют с провайдером ротацию advert до следующего refresh deadline.
 - **Заморозка изменений.** Никаких изменений schema capabilities в R1/R2, если
   комитет rollout не одобрит; GREASE испытания проводите только в еженедельное

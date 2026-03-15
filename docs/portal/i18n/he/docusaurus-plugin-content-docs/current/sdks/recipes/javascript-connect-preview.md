@@ -6,12 +6,12 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 slug: /sdks/recipes/javascript-connect-preview
 title: מתכון תצוגה מקדימה של Connect ב-JavaScript
-description: הכינו סשנים לתצוגה מקדימה של Connect, הפיקו טלמטריית תור וחייגו את `/v2/connect/ws` עם `@iroha/iroha-js`.
+description: הכינו סשנים לתצוגה מקדימה של Connect, הפיקו טלמטריית תור וחייגו את `/v1/connect/ws` עם `@iroha/iroha-js`.
 ---
 
 import SampleDownload from '@site/src/components/SampleDownload';
 
-המתכון הזה מראה כיצד לשלב `bootstrapConnectPreviewSession` עם ה-dialer של WebSocket שמסופק על ידי `ToriiClient.openConnectWebSocket()`. הסקריפט משקף את חלק ה-Connect ב-roadmap של SDK ה-JS: הוא מייצר URI תצוגה מקדימה דטרמיניסטיים, רושם טלמטריית עומק תור ופותח את נקודת הקצה הקנונית `/v2/connect/ws` באמצעות החבילה `ws` כדי שאפליקציות Node.js יפעילו את אותו הזרם כמו הדפדפנים.
+המתכון הזה מראה כיצד לשלב `bootstrapConnectPreviewSession` עם ה-dialer של WebSocket שמסופק על ידי `ToriiClient.openConnectWebSocket()`. הסקריפט משקף את חלק ה-Connect ב-roadmap של SDK ה-JS: הוא מייצר URI תצוגה מקדימה דטרמיניסטיים, רושם טלמטריית עומק תור ופותח את נקודת הקצה הקנונית `/v1/connect/ws` באמצעות החבילה `ws` כדי שאפליקציות Node.js יפעילו את אותו הזרם כמו הדפדפנים.
 
 <SampleDownload
   href="/sdk-recipes/javascript/connect-preview.mjs"

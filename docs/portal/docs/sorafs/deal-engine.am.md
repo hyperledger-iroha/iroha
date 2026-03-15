@@ -58,12 +58,12 @@ translator: machine-google-reviewed
 Torii አቅራቢዎች አጠቃቀሙን ሪፖርት ማድረግ እና መንዳት እንዲችሉ የተወሰኑ የመጨረሻ ነጥቦችን ያጋልጣል
 የህይወት ኡደትን ያለአንዳች ሽቦ ሽቦ ማስተናገድ፡-
 
-- `POST /v2/sorafs/deal/usage` `DealUsageReport` ቴሌሜትሪ ተቀብሎ ይመለሳል።
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` ቴሌሜትሪ ተቀብሎ ይመለሳል።
   የሚወስኑ የሂሳብ ውጤቶች (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` የአሁኑን መስኮት ያጠናቅቃል, በዥረት ይለቀቃል
+- `POST /v1/sorafs/deal/settle` የአሁኑን መስኮት ያጠናቅቃል, በዥረት ይለቀቃል
   ውጤቱ `DealSettlementRecord` ከ ቤዝ64 ኮድ `DealSettlementV1` ጋር
   ለአስተዳደር DAG ህትመት ዝግጁ.
-- Torii's `/v2/events/sse` ምግብ አሁን `SorafsGatewayEvent::DealUsage` ያሰራጫል
+- Torii's `/v1/events/sse` ምግብ አሁን `SorafsGatewayEvent::DealUsage` ያሰራጫል
   እያንዳንዱን የአጠቃቀም ግቤት (epoch፣ metered GiB-hours፣ ቲኬት) የሚያጠቃልሉ መዝገቦች
   ቆጣሪዎች፣ የሚወስኑ ክፍያዎች)፣ `SorafsGatewayEvent::DealSettlement`
   ቀኖናዊ የሰፈራ መዝገብ ቅጽበታዊ ገጽ እይታ እና ን ያካተቱ መዝገቦች

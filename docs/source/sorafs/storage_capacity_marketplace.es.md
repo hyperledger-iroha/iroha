@@ -71,7 +71,7 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
   de lane/asignación/SLA) proporcionan validación determinista de claves y
   reportes de errores que CI y tooling downstream pueden reutilizar.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` ahora expone el snapshot on-chain vía
-  `/v2/sorafs/capacity/state`, combinando declaraciones de proveedores y
+  `/v1/sorafs/capacity/state`, combinando declaraciones de proveedores y
   entradas del fee ledger detrás de JSON Norito determinista.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - La cobertura de validación ejercita la aplicación de handles canónicos, la
   detección de duplicados, límites por lane, guardas de asignación de
@@ -80,7 +80,7 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
 - Tooling de operador: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}`
   convierte especificaciones legibles en payloads Norito canónicos, blobs base64
   y resúmenes JSON para que los operadores preparen
-  `/v2/sorafs/capacity/declare`, `/v2/sorafs/capacity/telemetry` y fixtures de
+  `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` y fixtures de
   órdenes de replicación con validación local.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】
   Los fixtures de referencia viven en `fixtures/sorafs_manifest/replication_order/`
   (`order_v1.json`, `order_v1.to`) y se generan con
@@ -91,7 +91,7 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
 | Tarea | Responsable(s) | Notas |
 |------|----------------|-------|
 | Prototipar contrato de registro (`PinProviderRegistry`) con CRUD para declaraciones de capacidad y órdenes de replicación. | Core Infra / Smart Contract Team | Asegurar hashing determinista y paridad de codificación Norito. |
-| Exponer servicio gRPC/REST (`/v2/sorafs/capacity`) que refleje el estado del contrato para Torii/gateways. | Core Infra | Proveer paginación + atestación (hash de bloque, prueba). |
+| Exponer servicio gRPC/REST (`/v1/sorafs/capacity`) que refleje el estado del contrato para Torii/gateways. | Core Infra | Proveer paginación + atestación (hash de bloque, prueba). |
 | Implementar ledger de acumulación de fees con rate card básico (GiB · hora * precio). | Economics WG / Core Infra | Exportar snapshots del ledger para integración de facturación. |
 | Añadir hooks de disputa/resolución (ventana de challenge, envío de evidencia). | Governance Council | Determinar timeouts y penalizaciones por defecto. |
 
@@ -105,9 +105,9 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
 | Telemetría: publicar `capacity_commitment_bytes`, `capacity_utilisation_percent`, `replication_order_backlog`. | Observability | Alimentar dashboards + alertas. |
 
 - La API de Torii ahora acepta envíos al registro de capacidad mediante endpoints dedicados:
-  - `POST /v2/sorafs/capacity/declare` envuelve un `CapacityDeclarationV1` firmado y encola la
+  - `POST /v1/sorafs/capacity/declare` envuelve un `CapacityDeclarationV1` firmado y encola la
     instrucción `RegisterCapacityDeclaration` correspondiente.【crates/iroha_torii/src/routing.rs:4390】【crates/iroha_torii/src/lib.rs:3175】
-  - `POST /v2/sorafs/capacity/telemetry` registra snapshots de utilización por epoch mediante
+  - `POST /v1/sorafs/capacity/telemetry` registra snapshots de utilización por epoch mediante
     `RecordCapacityTelemetry`, aplicando límites de saneamiento antes del dispatch.【crates/iroha_torii/src/routing.rs:4744】【crates/iroha_torii/src/lib.rs:3248】
 - Los payloads de telemetría ahora incluyen contadores PDP/PoTR para que la
   gobernanza pueda correlacionar fallos de prueba con facturación y
@@ -126,19 +126,19 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
   `norito://sorafs/capacity_telemetry/<provider_hex>/<start_epoch>-<end_epoch>`),
   para que gobernanza, revisores Taikai/CDN y auditores puedan obtener el
   snapshot exacto que disparó el strike sin depender de bundles ad hoc.
-- `POST /v2/sorafs/capacity/schedule` permite a los operadores enviar payloads
+- `POST /v1/sorafs/capacity/schedule` permite a los operadores enviar payloads
   `ReplicationOrderV1` emitidos por gobernanza; el manager embebido en
   `sorafs-node` valida la orden, rastrea asignaciones pendientes y devuelve un
   resumen de scheduling con la capacidad restante para que las herramientas de
-  orquestación actúen sobre el resultado. `POST /v2/sorafs/capacity/complete`
+  orquestación actúen sobre el resultado. `POST /v1/sorafs/capacity/complete`
   libera reservas cuando termina la ingesta, alimentando telemetría de
   liberación en los snapshots locales de capacidad. El nodo inicializa un
   `TelemetryAccumulator` junto al scheduler para que operadores (o workers en
   background) puedan derivar payloads `CapacityTelemetryV1` canónicos que
   capturen GiB·hora, uptime y métricas de éxito PoR antes de publicar vía Torii.【crates/iroha_torii/src/routing.rs:4806】【crates/sorafs_node/src/lib.rs:110】【crates/sorafs_node/src/telemetry.rs:1】
 - La medición local ahora expone endpoints dedicados de observación.
-  `POST /v2/sorafs/capacity/uptime`, `POST /v2/sorafs/capacity/por` y
-  `POST /v2/sorafs/capacity/failure` actualizan el `CapacityMeter` embebido, el
+  `POST /v1/sorafs/capacity/uptime`, `POST /v1/sorafs/capacity/por` y
+  `POST /v1/sorafs/capacity/failure` actualizan el `CapacityMeter` embebido, el
   acumulador de telemetría y los gauges Prometheus sin emitir transacciones,
   garantizando que los datos de sonda y fallos de replicación alimenten
   dashboards y lógica de acumulación de fees de inmediato.【crates/iroha_torii/src/routing.rs:5023】【crates/iroha_torii/src/lib.rs:5301】
@@ -147,7 +147,7 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
   los gateways deben cumplir antes de entrar en la suite de conformidad SF-5.
   Consulte `docs/source/sorafs_gateway_profile.md` para la especificación
   normativa.
-- `GET /v2/sorafs/capacity/state` ahora incluye una proyección `local_usage`
+- `GET /v1/sorafs/capacity/state` ahora incluye una proyección `local_usage`
   que reporta GiB comprometidos/asignados, reservas por chunker, utilización por
   lane, órdenes pendientes y contadores de medición en vivo (GiB·hora, muestras
   de uptime/PoR, conteos de replicación) provenientes del medidor embebido. Un
@@ -160,9 +160,9 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
   automatización de tesorería y los dashboards puedan bloquear pagos antes de que
   cierren las ventanas de settlement.【crates/iroha_torii/src/sorafs/registry.rs:123】【crates/iroha_torii/src/sorafs/api.rs:5096】
 - Las disputas de capacidad son de primera clase en el registro de capacidad:
-  `/v2/sorafs/capacity/state` ahora emite un arreglo `disputes` (con payloads
+  `/v1/sorafs/capacity/state` ahora emite un arreglo `disputes` (con payloads
   base64, digests de evidencia y metadatos de estado), mientras
-  `/v2/sorafs/capacity/dispute` acepta envíos firmados por gobernanza. Use el
+  `/v1/sorafs/capacity/dispute` acepta envíos firmados por gobernanza. Use el
   helper de CLI para fabricar solicitudes y anote el `dispute_id_hex` de la
   respuesta para revocaciones y trazabilidad de auditoría.【crates/iroha_torii/src/sorafs/api.rs:520】【crates/iroha_torii/src/routing.rs:4889】【docs/source/sorafs/dispute_revocation_runbook.md:45】
 - `sorafs_manifest_stub capacity dispute` acepta una especificación declarativa
@@ -195,7 +195,7 @@ orden.【crates/sorafs_manifest/src/capacity.rs:301】
   programadas/completadas, GiB declarados y porciones pendientes para que las
   ventanas de telemetría se llenen directamente desde el worker embebido sin
   re-derivar utilización off-chain.【crates/sorafs_node/src/metering.rs:1】【crates/sorafs_node/src/lib.rs:27】
-- `/v2/sorafs/capacity/state` ahora emite un payload determinista
+- `/v1/sorafs/capacity/state` ahora emite un payload determinista
   `fee_projection` junto al snapshot `metering` en vivo, y las exportaciones
   Prometheus alimentan el tablero Grafana listo para importar en
   `docs/source/grafana_sorafs_metering.json` para que los equipos de facturación
@@ -255,7 +255,7 @@ implementación.
 ### Contabilidad nocturna y reconciliación XOR
 
 1. Exporte las transferencias XOR que ejecutó tesorería durante la ventana
-   anterior y el snapshot `/v2/sorafs/capacity/state` correspondiente. Concílie
+   anterior y el snapshot `/v1/sorafs/capacity/state` correspondiente. Concílie
    los datos con el nuevo helper:
    ```bash
    python3 scripts/telemetry/capacity_reconcile.py \
@@ -308,8 +308,8 @@ implementación.
    y reproduzca la regresión de CLI (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)
    antes de entregar los envíos a Torii. El helper emite `.to` Norito, JSON y
    salidas Base64 más los metadatos de plan de chunk descritos antes en esta guía.
-2. Verifique el comportamiento de Torii llamando a `POST /v2/sorafs/capacity/declare`
-   y `GET /v2/sorafs/capacity/state`—los registros deben coincidir con los
+2. Verifique el comportamiento de Torii llamando a `POST /v1/sorafs/capacity/declare`
+   y `GET /v1/sorafs/capacity/state`—los registros deben coincidir con los
    defaults de gobernanza capturados en
    `docs/source/sorafs/provider_admission_policy.md` y el runbook en
    `docs/source/sorafs/runbooks/multi_source_rollout.md`.

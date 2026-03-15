@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## მტკიცებულებები და ცნობები
 - NX-3 ანგარიშსწორების როუტერის მიღების შენიშვნები: `status.md` (NX-3 განყოფილება).
 - ოპერატორის ზედაპირები: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- ქვითრების სქემა და API ზედაპირები: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.
+- ქვითრების სქემა და API ზედაპირები: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.

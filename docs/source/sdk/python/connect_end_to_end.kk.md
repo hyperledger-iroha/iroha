@@ -57,7 +57,7 @@ python -m iroha_python.examples.connect_flow --help
 If you prefer to consume a published wheel, install `pip install iroha-python`
 and keep the repo checkout handy for notebooks/fixtures.
 
-## 2. Submit transactions through `/v2/pipeline`
+## 2. Submit transactions through `/v1/pipeline`
 
 Use the high-level `ToriiClient` helpers to build transactions with Norito
 builders and post them to the pipeline endpoint. The example below mirrors the
@@ -87,9 +87,9 @@ envelope, status = client.submit_pipeline_transaction(tx, wait=True)
 print("Pipeline status:", status)
 ```
 
-- `submit_pipeline_transaction` posts directly to `/v2/pipeline/transactions`
+- `submit_pipeline_transaction` posts directly to `/v1/pipeline/transactions`
   and returns the canonical envelope plus the latest status.
-- A `404` from `/v2/pipeline/transactions/status` means Torii has no cached status yet
+- A `404` from `/v1/pipeline/transactions/status` means Torii has no cached status yet
   (for example after a restart), so the client treats it as pending and continues polling.
 - Stream the resulting events with `client.stream_pipeline_transactions` or
   fetch the recovery sidecar via `client.get_pipeline_recovery(height)` to
@@ -127,7 +127,7 @@ is set. Outputs:
 - `connect-open.hex` — hex-encoded envelope suitable for regressions or manual
   relay.
 - `connect-open.json` — base64 representation for dashboards/telemetry.
-- `connect-status.json` — typed snapshot of `/v2/connect/status` (mirrors the
+- `connect-status.json` — typed snapshot of `/v1/connect/status` (mirrors the
   dataclasses in `iroha_python.connect`).
 
 Use `--write-app-metadata-template <path>` to generate the JSON metadata stub
@@ -204,7 +204,7 @@ python -m iroha_python.examples.connect_flow \
   --auth-token "${IROHA_TORII_AUTH_TOKEN}"
 ```
 
-- `--preview-register` hits Torii’s `/v2/connect/session` API and prints the
+- `--preview-register` hits Torii’s `/v1/connect/session` API and prints the
   issued wallet/app tokens so QA and dashboards can store the evidence bundle.
 - `--preview-output` writes the preview metadata, keypair, URIs, tokens, and
   raw Torii session payload into a deterministic JSON file.
@@ -235,7 +235,7 @@ locally:
 pytest -m nb python/iroha_python/tests/test_connect_notebook.py
 ```
 
-The test asserts that `/v2/connect/session`, `/v2/connect/status`, and the
+The test asserts that `/v1/connect/session`, `/v1/connect/status`, and the
 control endpoints are exercised, and it inspects the decoded frame contents to
 catch drift before fixtures update. Attach the generated artefacts to roadmap
 evidence when closing PY6-P2 items.
@@ -246,7 +246,7 @@ evidence when closing PY6-P2 items.
   wrapper) to stand up the docker-compose Torii topology and execute the
   integration marker before publishing notebooks or docs.
 - Use `python/iroha_python/scripts/run_norito_rpc_smoke.sh` to validate the
-  Norito RPC helpers that power `/v2/pipeline` submissions.
+  Norito RPC helpers that power `/v1/pipeline` submissions.
 - `python3 scripts/python_fixture_regen.sh` keeps the SDK’s copy of the Norito
   fixtures in sync with Android; `python3 scripts/check_python_fixtures.py`
   enforces the parity gate referenced in `roadmap.md`.
@@ -265,9 +265,9 @@ Connect workflow expected by the PY6 roadmap milestones.
 
 Roadmap item **PY6-P5** also calls for parity across the core admin endpoints so SDK
 operators can triage peers, network time, and Sumeragi health without switching to curl
-or bespoke scripts. The Python client now exposes typed wrappers for `/v2/peers`,
-`/v2/time/{now,status}`, and the Sumeragi inspection endpoints
-(`/v2/sumeragi/{qc,pacemaker,phases,leader,collectors,params,bls_keys,evidence/count}`);
+or bespoke scripts. The Python client now exposes typed wrappers for `/v1/peers`,
+`/v1/time/{now,status}`, and the Sumeragi inspection endpoints
+(`/v1/sumeragi/{qc,pacemaker,phases,leader,collectors,params,bls_keys,evidence/count}`);
 include them in integration tests and runbooks so the resulting artefacts satisfy the
 telemetry-readiness portion of PY6.
 
@@ -312,9 +312,9 @@ print("DA enabled:", params.da_enabled, "chain height:", params.chain_height)
 ### Capture admin evidence with one helper
 
 For readiness reports that need a single JSON blob, call
-`client.capture_node_admin_snapshot()` to fetch the `/v2/configuration`,
-`/v2/peers`, `/v2/time/{now,status}`, `/v2/telemetry/peers-info`, and
-`/v2/node/capabilities` payloads in one go. This is especially useful when
+`client.capture_node_admin_snapshot()` to fetch the `/v1/configuration`,
+`/v1/peers`, `/v1/time/{now,status}`, `/v1/telemetry/peers-info`, and
+`/v1/node/capabilities` payloads in one go. This is especially useful when
 filling the PY6-P5 telemetry templates:
 
 ```python
@@ -332,7 +332,7 @@ else:
 ```
 
 Pass ``include_peer_telemetry=False`` when the fleet omits
-`/v2/telemetry/peers-info`; the helper still records the remaining endpoints so
+`/v1/telemetry/peers-info`; the helper still records the remaining endpoints so
 dashboards and auditors can rely on one deterministic structure.
 The SDK refuses to submit transactions when `data_model_version` differs from
 its built-in value, so mismatched nodes are rejected before submission.
@@ -380,15 +380,15 @@ gaps.
 
 - `list_peers_typed()` returns a list of `PeerInfo` records (address, peer ID, metadata)
   so dashboards or operator tooling can diff the online set deterministically.
-- `get_time_now_typed()` mirrors `/v2/time/now` and raises if the endpoint is disabled,
+- `get_time_now_typed()` mirrors `/v1/time/now` and raises if the endpoint is disabled,
   matching the deterministic behaviour expected by the runbooks.
 - `get_time_status_typed()` parses the per-peer samples and RTT histogram produced by
-  `/v2/time/status`; use it to confirm clock skew alerts before filing readiness reports.
+  `/v1/time/status`; use it to confirm clock skew alerts before filing readiness reports.
 
 Configuration surfaces now follow the same pattern: `get_configuration_typed()`
 returns a `ConfigurationSnapshot` (logger, gossip windows, queue capacity, and
 confidential gas schedule), while `set_confidential_gas_schedule()` reuses the
-current logger section and posts the new limits through `/v2/configuration`.
+current logger section and posts the new limits through `/v1/configuration`.
 
 ```python
 config = client.get_configuration_typed()
@@ -406,7 +406,7 @@ time samples alongside the Connect evidence.
 ## 8. Render Explorer account QR payloads
 
 Roadmap item **ADDR-6b** calls for parity across SDKs when surfacing the new
-`/v2/explorer/accounts/{account_id}/qr` endpoint. Python now ships the typed
+`/v1/explorer/accounts/{account_id}/qr` endpoint. Python now ships the typed
 `ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred I105 or
 canonical I105 literal plus the ready-to-embed SVG payload:
 
@@ -447,7 +447,7 @@ submission = client.submit_iso_pacs008_typed(iso_xml)
 if submission is None:
     raise RuntimeError("bridge did not return a message id")
 
-# Poll `/v2/iso20022/status/{id}` until the message leaves Pending/Accepted.
+# Poll `/v1/iso20022/status/{id}` until the message leaves Pending/Accepted.
 status = client.wait_for_iso_message_status(
     submission.message_id,
     poll_interval=0.5,

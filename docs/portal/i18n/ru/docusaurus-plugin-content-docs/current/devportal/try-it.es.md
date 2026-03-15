@@ -158,7 +158,7 @@ forzar a los рецензенты a pegar un token temporal ellos mismos, o Expo
 ### Отправьте полезную нагрузку Norito из консоли. Попробуйте1. Используйте приспособление как `fixtures/norito_rpc/transfer_asset.norito`. Эстос
    архивные конверты сына Norito en bruto; **нет** кодировок в base64.
 2. В Swagger или RapiDoc локализуйте конечную точку NRPC (например,
-   `POST /v2/pipeline/submit`) и выберите селектор **Content-Type** a
+   `POST /v1/pipeline/submit`) и выберите селектор **Content-Type** a
    `application/x-norito`.
 3. Откройте редактор запроса в **двоичном формате** (режим «Файл» Swagger или
    селектор «Бинарный/Файл» RapiDoc) и загрузите архив `.norito`. Эль виджет
@@ -182,13 +182,13 @@ La console mantiene el archive mas reciente en memoria, чтобы можно б
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
 Установите приспособление для входа в список `transaction_fixtures.manifest.json`
 o кодификация собственной полезной нагрузки с `cargo xtask norito-rpc-fixtures`. Cuando Torii находится в
 modo canary puedes apuntar `curl` al proxy попробуйте
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) для чтения ошибок
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) для чтения ошибок
 Инфраструктура, которая использует виджеты портала.
 
 ## Наблюдение и операции
@@ -204,7 +204,7 @@ Cada solicitud se registra una vez con metodo, path, origin, estado upstream y l
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
 Ручки входа:

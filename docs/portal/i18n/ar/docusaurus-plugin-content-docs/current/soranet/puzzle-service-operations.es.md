@@ -25,17 +25,17 @@ Sidebar_label: عمليات خدمة الألغاز
 تذاكر الدخول مطلوبة من قبل Argon2 والتي تحدد السياسة `pow.puzzle.*`
 التتابع، عند تكوينه، رموز الوسائط المميزة للدخول ML-DSA en
 حافة عدد المرحلات. كشف نقاط نهاية cinco HTTP:- `GET /healthz` - مسبار الحياة.
-- `GET /v2/puzzle/config` - تحويل المعلمات الفعالة لـ PoW/puzzle
+- `GET /v1/puzzle/config` - تحويل المعلمات الفعالة لـ PoW/puzzle
   Tomados del JSON del Relay (`handshake.descriptor_commit_hex`، `pow.*`).
-- `POST /v2/puzzle/mint` - احصل على تذكرة Argon2; هيئة الأمم المتحدة JSON اختيارية
+- `POST /v1/puzzle/mint` - احصل على تذكرة Argon2; هيئة الأمم المتحدة JSON اختيارية
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   اطلب TTL mas corto (قم بإغلاق نافذة السياسة)، ثم قم بإدراج تذكرة واحدة
   قم بتجزئة النص وقم بإعادة تذكرة ثابتة من خلال التتابع + La huella de
   الشركة عندما تحتوي على مفاتيح ثابتة تم تكوينها.
-- `GET /v2/token/config` - عندما `pow.token.enabled = true`، devuelve la
+- `GET /v1/token/config` - عندما `pow.token.enabled = true`، devuelve la
   رمز تفعيل سياسة القبول (بصمة المُصدر، حدود TTL/انحراف الساعة،
   معرف التتابع ومجموعة الإلغاء المجمعة).
-- `POST /v2/token/mint` - احصل على رمز دخول ML-DSA مرتبط بالسيرة الذاتية
+- `POST /v1/token/mint` - احصل على رمز دخول ML-DSA مرتبط بالسيرة الذاتية
   شرط التجزئة؛ الجسم أسيبتا `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 يتم التحقق من التذاكر التي يتم إنتاجها من خلال الخدمة من خلال اختبار التكامل
@@ -77,9 +77,9 @@ cargo run -p soranet-puzzle-service -- \
 
 `--token-secret-hex` متاح أيضًا عند إدارة السر
 خط أنابيب للأدوات خارج النطاق. مراقب ملف الإلغاء
-تم تحديث mantiene `/v2/token/config`; تحديث التنسيق مع القائد
+تم تحديث mantiene `/v1/token/config`; تحديث التنسيق مع القائد
 `soranet-admission-token revoke` لتجنب الإلغاء في حالة الإلغاء.تكوين `pow.signed_ticket_public_key_hex` وتتابع JSON للإعلان
-تم استخدام المفتاح الرئيسي ML-DSA-44 للتحقق من تذاكر شركات PoW؛ `/v2/puzzle/config`
+تم استخدام المفتاح الرئيسي ML-DSA-44 للتحقق من تذاكر شركات PoW؛ `/v1/puzzle/config`
 نسخة طبق الأصل من المفتاح y su huella BLAKE3 (`signed_ticket_public_key_fingerprint_hex`)
 حتى يتمكن العملاء من العثور على أداة التحقق. التذاكر المؤكدة صالحة
 مقابل معرف التتابع وروابط النسخ ومشاركة نفس مخزن الإلغاء؛
@@ -87,7 +87,7 @@ cargo run -p soranet-puzzle-service -- \
 تم تكوين التذكرة الموقعة. قم بتمرير سر الشركة عبر `--signed-ticket-secret-hex`
 o `--signed-ticket-secret-path` لبدء خدمة اللغز؛ El arranque rechaza
 Pares de claves que noصدفة إذا كان السر غير صالح ضد `pow.signed_ticket_public_key_hex`.
-`POST /v2/puzzle/mint` يقبل `"signed": true` (واختياري `"transcript_hash_hex"`) للفقرة
+`POST /v1/puzzle/mint` يقبل `"signed": true` (واختياري `"transcript_hash_hex"`) للفقرة
 تحويل تذكرة ثابتة Norito جنبًا إلى جنب مع بايتات التذكرة بشكل مباشر؛ لاس
 تتضمن الردود `signed_ticket_b64` و`signed_ticket_fingerprint_hex` للمساعدة
 إعادة تشغيل بصمات الأصابع النقطية. تم تقديم الطلبات مع `signed = true`
@@ -104,11 +104,11 @@ Pares de claves que noصدفة إذا كان السر غير صالح ضد `pow.
 3. **تحضير التجديد.** إعادة شحن وحدة النظام أو الحاوية مرة واحدة
    أعلنت الحكومة عن قطع التناوب. الخدمة لا تدعم إعادة التحميل السريع؛
    إذا كانت هناك حاجة إلى تجديد لارتكاب الواصف الجديد.
-4. **صالح.** قم بإصدار تذكرة عبر `POST /v2/puzzle/mint` وقم بتأكيد ذلك
+4. **صالح.** قم بإصدار تذكرة عبر `POST /v1/puzzle/mint` وقم بتأكيد ذلك
    تتزامن القيم `difficulty` و`expires_at` مع السياسة الجديدة. المعلومات
    نقع (`docs/source/soranet/reports/pow_resilience.md`) يلتقط الحدود
    دي لاتنسيا إسبيرادوس كمرجع. عندما تكون الرموز المميزة مؤهلة،
-   راجع `/v2/token/config` للتأكد من إعلان مُصدر بصمة الإصبع
+   راجع `/v1/token/config` للتأكد من إعلان مُصدر بصمة الإصبع
    ويتزامن حساب الإلغاءات مع القيم المستهلكة.
 
 ## إجراءات إزالة التأهيل في حالات الطوارئ1. قم بتكوين `pow.puzzle.enabled = false` في قسم تكوين المرحل.
@@ -118,7 +118,7 @@ Pares de claves que noصدفة إذا كان السر غير صالح ضد `pow.
    عفا عليها الزمن منذ أن تم إغلاق بوابة Argon2 دون اتصال بالإنترنت.
 3. قم بتحديث التتابع وخدمة اللغز لتطبيق التغيير.
 4. قم بمراقبة `soranet_handshake_pow_difficulty` للتأكد من الصعوبة
-   في انتظار التحقق من قيمة hashcash، والتحقق من الإبلاغ `/v2/puzzle/config`
+   في انتظار التحقق من قيمة hashcash، والتحقق من الإبلاغ `/v1/puzzle/config`
    `puzzle = null`.
 
 ## مراقبة وتنبيهات- **زمن الوصول SLO:** عنوان `soranet_handshake_latency_seconds` والحفاظ على P95
@@ -128,16 +128,16 @@ Pares de claves que noصدفة إذا كان السر غير صالح ضد `pow.
   لضبط فترات التهدئة `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).[docs/source/soranet/relay_audit_pipeline.md:68]
 - **محاذاة اللغز:** `soranet_handshake_pow_difficulty` يجب أن تتزامن مع ذلك
-  تم تطويره بصعوبة بواسطة `/v2/puzzle/config`. يشير الاختلاف إلى التكوين
+  تم تطويره بصعوبة بواسطة `/v1/puzzle/config`. يشير الاختلاف إلى التكوين
   تتابع التتابع أو فشل إعادة التشغيل.
-- **جاهزية الرمز المميز:** تنبيه si `/v2/token/config` cae a `enabled = false`
+- **جاهزية الرمز المميز:** تنبيه si `/v1/token/config` cae a `enabled = false`
   بشكل منفصل إذا كان `revocation_source` يُبلغ عن الطوابع الزمنية التي لا معنى لها. المشغلون
   قم بتدوير ملف الإلغاءات Norito عبر CLI عند سحب رمز مميز
   للحفاظ على نقطة النهاية هذه دقيقة.
 - **صحة الخدمة:** Sondea `/healthz` في الإيقاع المعتاد للحياة والتنبيه
-  si `/v2/puzzle/mint` إعادة الرد على HTTP 500 (يشير إلى عدم تطابق المعلمات
+  si `/v1/puzzle/mint` إعادة الرد على HTTP 500 (يشير إلى عدم تطابق المعلمات
   Argon2 أو فشل RNG). تظهر أخطاء سك العملات الرقمية كإجابة
-  HTTP 4xx/5xx en `/v2/token/mint`; القيام بخطوات متكررة مثل حالة الترحيل.
+  HTTP 4xx/5xx en `/v1/token/mint`; القيام بخطوات متكررة مثل حالة الترحيل.
 
 ## تسجيل الامتثال والتدقيقتصدر المرحلات أحداثًا مبنية على `handshake` تتضمن أسبابًا
 دواسة الوقود ومدة التهدئة. تأكد من وصف خط أنابيب الامتثال

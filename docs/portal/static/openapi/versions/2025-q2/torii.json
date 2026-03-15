@@ -303,7 +303,7 @@
         ]
       }
     },
-    "/v2/aliases/resolve": {
+    "/v1/aliases/resolve": {
       "post": {
         "description": "Returns the canonical alias spelling, the bound account identifier, and (if known) the deterministic alias index.",
         "operationId": "aliasResolve",
@@ -365,7 +365,7 @@
         ]
       }
     },
-    "/v2/aliases/resolve_index": {
+    "/v1/aliases/resolve_index": {
       "post": {
         "description": "Returns the alias string and account identifier registered under the provided index.",
         "operationId": "aliasResolveIndex",
@@ -417,7 +417,7 @@
         ]
       }
     },
-    "/v2/aliases/voprf/evaluate": {
+    "/v1/aliases/voprf/evaluate": {
       "post": {
         "description": "Takes a blinded alias element (hex) and returns the deterministically evaluated mock response used by tooling.",
         "operationId": "aliasVoprfEvaluate",
@@ -469,7 +469,7 @@
         ]
       }
     },
-    "/v2/time/now": {
+    "/v1/time/now": {
       "get": {
         "description": "Returns the best-effort network time with offset/confidence relative to UTC.",
         "operationId": "timeNow",
@@ -491,7 +491,7 @@
         ]
       }
     },
-    "/v2/time/status": {
+    "/v1/time/status": {
       "get": {
         "description": "Provides peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service.",
         "operationId": "timeStatus",
@@ -522,7 +522,7 @@
   ],
   "tags": [
     {
-      "description": "Alias helper endpoints exposed under `/v2/aliases/*`.",
+      "description": "Alias helper endpoints exposed under `/v1/aliases/*`.",
       "name": "Aliases"
     },
     {

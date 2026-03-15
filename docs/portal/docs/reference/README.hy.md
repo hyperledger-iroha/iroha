@@ -20,7 +20,7 @@ translator: machine-google-reviewed
 - **Norito կոդեկի ակնարկ** – `reference/norito-codec.md` հղումներ ուղղակիորեն դեպի հեղինակավոր
   `norito.md` ճշգրտում, մինչ պորտալի աղյուսակը համալրվում է:
 - **Torii OpenAPI** – `/reference/torii-openapi`-ը ներկայացնում է վերջին Torii REST հատկորոշումը` օգտագործելով
-- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v2/mcp`.
+- **Torii MCP API** - `/reference/torii-mcp` documents MCP JSON-RPC usage (`initialize`, `tools/list`, `tools/call`) and async job polling for `/v1/mcp`.
   Վերագր. Վերականգնեք բնութագրերը `npm run sync-openapi -- --version=current --latest`-ով (ավել
   `--mirror=<label>` պատկերը պատճենելու լրացուցիչ պատմական տարբերակներում):
 - **Կազմաձևման աղյուսակներ** – Պարամետրերի ամբողջական կատալոգը պահվում է

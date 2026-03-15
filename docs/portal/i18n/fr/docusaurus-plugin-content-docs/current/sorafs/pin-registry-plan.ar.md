@@ -77,7 +77,7 @@ Il s'agit d'invariants.
 
 | المكون | المهمة | المالك/المالكون |
 |--------|--------|--------|
-| خدمة Torii | كشف `/v2/sorafs/pin` (soumettre) ، `/v2/sorafs/pin/{cid}` (recherche) ، `/v2/sorafs/aliases` (liste/liaison) ، `/v2/sorafs/replication` (commandes/reçus). توفير ترقيم + ترشيح. | Mise en réseau TL / Core Infra |
+| خدمة Torii | كشف `/v1/sorafs/pin` (soumettre) ، `/v1/sorafs/pin/{cid}` (recherche) ، `/v1/sorafs/aliases` (liste/liaison) ، `/v1/sorafs/replication` (commandes/reçus). توفير ترقيم + ترشيح. | Mise en réseau TL / Core Infra |
 | الاتستاشن | تضمين ارتفاع/هاش registre في الاستجابات؛ Utilisez Norito pour les SDK. | Infrastructure de base |
 | CLI | Utilisez `sorafs_manifest_stub` et CLI pour `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
 | SDK | Reliures disponibles (Rust/Go/TS) pour Norito؛ اضافة اختبارات تكامل. | Équipes SDK |
@@ -132,9 +132,9 @@ Nom (Prometheus):
 Il s'agit d'un SF-4 qui est en train de fonctionner.
 واجهة REST توفر الان نقاط نهاية قائمة مع اتستاشن:
 
-- `GET /v2/sorafs/pin` et `GET /v2/sorafs/pin/{digest}` تعيدان manifestes مع
+- `GET /v1/sorafs/pin` et `GET /v1/sorafs/pin/{digest}` تعيدان manifestes مع
   ربط alias واوامر التكرار وكائن اتستاشن مشتق من هاش اخر كتلة.
-- `GET /v2/sorafs/aliases` et `GET /v2/sorafs/replication` sont un alias
+- `GET /v1/sorafs/aliases` et `GET /v1/sorafs/replication` sont un alias
   النشط وتراكم اوامر التكرار بترقيم ثابت ومرشحات حالة.
 
 Utilisez la CLI pour les fonctions (`iroha app sorafs pin list`, `pin show`, `alias list`,

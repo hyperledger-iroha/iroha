@@ -156,7 +156,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot`-ը արտացոլում է `/v2/explorer/accounts/{id}/qr` JSON-ը
+`ExplorerAccountQrSnapshot`-ը արտացոլում է `/v1/explorer/accounts/{id}/qr` JSON-ը
 մակերես. այն ներառում է կանոնական հաշվի id-ն, բառացի թարգմանվածը
 կանոնական I105 literal, ցանցի նախածանցը/սխալների ուղղման մետատվյալները, QR չափերը և
 ներկառուցված SVG ծանրաբեռնվածությունը, որը դրամապանակները/հետախույզները կարող են ուղղակիորեն տեղադրել: Բաց թողնել

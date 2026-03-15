@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
   XOR ချက်ခြင်းကျသင့်သည်၊ ဆံပင်ညှပ်ပြီးနောက်မျှော်လင့်ထားသည့် XOR သည်သဘောပေါက်သည်။
   ကွဲပြားမှု (`xor_variance_micro`) နှင့် ပိတ်ဆို့အချိန်တံဆိပ်ကို မီလီစက္ကန့်များအတွင်း။
 - လမ်းသွား/ဒေတာနေရာလွတ်အလိုက် လက်ခံဖြတ်ပိုင်းများကို စုစည်းပြီး ၎င်းတို့ကို ထုတ်ဝေပါ။
-  `lane_settlement_commitments` မှတဆင့် `/v2/sumeragi/status`။  စုစုပေါင်း
+  `lane_settlement_commitments` မှတဆင့် `/v1/sumeragi/status`။  စုစုပေါင်း
   `total_local_micro`၊ `total_xor_due_micro`၊ နှင့်
   `total_xor_after_haircut_micro` သည် ညတိုင်းအတွက် ဘလောက်ကို ခြုံငုံထားသည်။
   ပြန်လည်သင့်မြတ်ရေး တင်ပို့မှု။

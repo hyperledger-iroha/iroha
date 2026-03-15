@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## བདེན་དཔང་དང་ དཔྱད་གཞི།
 - NX-3 གཞིས་ཆགས་རའུ་ཊར་ངོས་ལེན་དྲན་ཐོ་: `status.md` (NX-3 དབྱེ་ཚད།).
 - བཀོལ་སྤྱོད་པའི་ཕྱི་ངོས་: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- ཐོབ་ཐངས་འཆར་གཞི་དང་ ཨེ་པི་ཨའི་ ཁ་ཐོག་ཚུ་: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.
+- ཐོབ་ཐངས་འཆར་གཞི་དང་ ཨེ་པི་ཨའི་ ཁ་ཐོག་ཚུ་: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.

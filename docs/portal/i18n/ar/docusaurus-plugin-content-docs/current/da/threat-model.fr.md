@@ -253,7 +253,7 @@ pour les taches DA suivantes (DA-2 a DA-10).
 - إعادة تشغيل ذاكرة التخزين المؤقت واستمرارية اللعنات على DA-2. إستفتاء
   يتم التنفيذ في `crates/iroha_core/src/da/replay_cache.rs` (المنطق
   ذاكرة التخزين المؤقت) والتكامل Torii في `crates/iroha_torii/src/da/ingest.rs`، هذا الموضوع
-  les checks de بصمة الإصبع عبر `/v2/da/ingest`.
+  les checks de بصمة الإصبع عبر `/v1/da/ingest`.
 - يتم إجراء عمليات محاكاة دفق PDP/PoTR عبر دفق إثبات التسخير
   في `crates/sorafs_car/tests/sorafs_cli.rs`، يغطي تدفق الطلب
   PoR/PDP/PoTR وسيناريوهات فشل الرسوم المتحركة في نموذج التهديدات.

@@ -50,7 +50,7 @@ listadas en `roadmap.md`, vinculando cada flujo de trabajo con la evidencia,
 |コンセホ・デ・ゴベルナンサ |批准文書の編集、スーフィホの政治、係争中の評決、管理委員会の回転の裁定。 | `docs/source/sns/governance_addenda/`、`artifacts/sns/governance/*`、`sns governance charter submit` 経由の投票。 |コンセホ大統領 + ゴベルナンサの議題追跡。 |
 |ガーディアネスフンタ |ソフト/ハードのコンゲラミエント、緊急時および 72 時間の改訂を発行します。 | `sns governance freeze` によるガーディアンのチケット、`artifacts/sns/guardian/*` のオーバーライドのマニフェスト。 | Guardia オンコール (<=15 分の ACK)。 |
 |スフィホ審査員 |オペラン・コーラ・デル・レジストラドール、サブバス、ニベレス・デ・プレシオ・コンクライアント・コミュニケーション。レコノセン・クムプリミエントス。 | `SuffixPolicyV1` のスチュワードの政治、優先事項の参照、メモ規制に関するスチュワードの告発。 |スチュワード + PagerDuty のプログラムのライダー。 |
-|登録と機能の操作 |オペランドポイント `/v2/sns/*`、調整パゴス、CLI でのテレメトリと複数のスナップショットの発行。 | API 登録者 ([`registrar-api.md`](./registrar-api.md))、メトリック `sns_registrar_status_total`、`artifacts/sns/payments/*` の登録。 |レジストラドールとテソレリアの管理責任者。 |
+|登録と機能の操作 |オペランドポイント `/v1/sns/*`、調整パゴス、CLI でのテレメトリと複数のスナップショットの発行。 | API 登録者 ([`registrar-api.md`](./registrar-api.md))、メトリック `sns_registrar_status_total`、`artifacts/sns/payments/*` の登録。 |レジストラドールとテソレリアの管理責任者。 |
 |リゾルバーとゲートウェイのオペランド | Mantienen SoraDNS、GAR およびレジストラドールのイベントに関するゲートウェイの設定。透明性のある指標を送信します。 | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)、`dashboards/alerts/soradns_transparency_rules.yml`。 | SRE デル リゾルバー オンコール + ゲートウェイの操作。 |
 |テソレリアとフィナンザス |アプリケーション レポート 70/30、カーブアウト デ レファリド、宣言会計/テゾレリアおよびアテスタシオン SLA。 | `docs/source/sns/regulatory/` の KPI トリメストラレスの付録、ストライプ/テソレリアのエクスポート、蓄積のマニフェスト。 |財務管理者 + 最高責任者。 |
 | Enlace de Cumplimiento y Regulacion | Rastrea obligaciones globales (EU DSA など)、実際の契約 KPI および presenta divulgaciones。 | `docs/source/sns/regulatory/` の規制に関するメモ、参照用のデッキ、テーブルトップに関するエントリ `ops/drill-log.md`。 |最高のプログラムのライダー。 |
@@ -173,7 +173,7 @@ Los canones de emencia (congelamientos activados por Guardes <=72 時間) シグ
 |セナル |フエンテ |説明 / アクシオン |
 |--------|--------|-----------|
 | `sns_registrar_status_total{result,suffix}` | Torii レジストラー ハンドラー | Contador de exito/error para registers、renovaciones、congelamientos、transferencias;アラート クアンド `result="error"` スベ ポル スフィジョ。 |
-| `torii_request_duration_seconds{route="/v2/sns/*"}` | Torii のメトリクス |ハンドラー API のレイテンシアの SLO。 alimenta ダッシュボード basados en `torii_norito_rpc_observability.json`。 |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii のメトリクス |ハンドラー API のレイテンシアの SLO。 alimenta ダッシュボード basados en `torii_norito_rpc_observability.json`。 |
 | `soradns_bundle_proof_age_seconds` y `soradns_bundle_cid_drift_total` |リゾルバーの透明化のテーラー | GAR のドリフトの古い情報を検出します。ガードレールは `dashboards/alerts/soradns_transparency_rules.yml` で定義されています。 |
 | `sns_governance_activation_total` |ガバナンス CLI | Contador は、認可/追加の活動を開始します。米国パラ和解決定デルコンセホ対追加公開。 |
 | `guardian_freeze_active` ゲージ |ガーディアンCLI | Rastrea ventanas de フリーズソフト/ハードポートセレクター; SRE SI EL VALOR QUEDA en `1` mas alla del SLA declarado を参照してください。 |

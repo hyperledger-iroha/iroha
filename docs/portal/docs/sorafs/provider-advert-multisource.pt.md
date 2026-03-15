@@ -67,7 +67,7 @@ A cobertura de regressao vive em
 ## Tooling e fixtures
 
 - Payloads de adverts de provedor devem incluir metadata `range_capability`,
-  `stream_budget` e `transport_hints`. Valide via respostas de `/v2/sorafs/providers`
+  `stream_budget` e `transport_hints`. Valide via respostas de `/v1/sorafs/providers`
   e admission fixtures; resumos JSON devem incluir a capability parseada, o stream
   budget e arrays de hints para ingestao de telemetria.
 - `cargo xtask sorafs-admission-fixtures` mostra stream budgets e transport hints dentro
@@ -79,7 +79,7 @@ A cobertura de regressao vive em
 
 ## Integracao com orchestrator e Torii
 
-- Torii `/v2/sorafs/providers` retorna metadata de range parseada junto com
+- Torii `/v1/sorafs/providers` retorna metadata de range parseada junto com
   `stream_budget` e `transport_hints`. Avisos de downgrade disparam quando
   provedores omitem a nova metadata, e endpoints de range do gateway aplicam as
   mesmas restricoes para clientes diretos.

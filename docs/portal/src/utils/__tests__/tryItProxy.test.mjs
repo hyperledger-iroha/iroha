@@ -15,30 +15,30 @@ test('normaliseProxyBase trims whitespace and trailing slash', () => {
 });
 
 test('buildProxiedUrl handles absolute URLs', () => {
-  const result = buildProxiedUrl('https://proxy.example', 'https://torii.example/v2/status');
-  assert.equal(result, 'https://proxy.example/proxy/v2/status');
+  const result = buildProxiedUrl('https://proxy.example', 'https://torii.example/v1/status');
+  assert.equal(result, 'https://proxy.example/proxy/v1/status');
 });
 
 test('buildProxiedUrl accepts relative paths', () => {
   assert.equal(
-    buildProxiedUrl('http://localhost:8787', '/v2/blocks?limit=1'),
-    'http://localhost:8787/proxy/v2/blocks?limit=1',
+    buildProxiedUrl('http://localhost:8787', '/v1/blocks?limit=1'),
+    'http://localhost:8787/proxy/v1/blocks?limit=1',
   );
   assert.equal(
     buildProxiedUrl('http://localhost:8787/', 'v1/accounts'),
-    'http://localhost:8787/proxy/v2/accounts',
+    'http://localhost:8787/proxy/v1/accounts',
   );
 });
 
 test('buildProxiedUrl returns null when proxy disabled', () => {
-  assert.equal(buildProxiedUrl('', '/v2/status'), null);
-  assert.equal(buildProxiedUrl('', 'https://torii.example/v2/status'), null);
+  assert.equal(buildProxiedUrl('', '/v1/status'), null);
+  assert.equal(buildProxiedUrl('', 'https://torii.example/v1/status'), null);
 });
 
 test('buildProxiedUrl avoids double proxy prefix', () => {
   assert.equal(
-    buildProxiedUrl('https://proxy.example', '/proxy/v2/status'),
-    'https://proxy.example/proxy/v2/status',
+    buildProxiedUrl('https://proxy.example', '/proxy/v1/status'),
+    'https://proxy.example/proxy/v1/status',
   );
 });
 

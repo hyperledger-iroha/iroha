@@ -94,7 +94,7 @@ lorsque l'application PoR/PoTR s'intensifie.
 | `sorafs_node_por_failure_total` | Counter | `provider_id` | Compteur monotone des échantillons PoR échoués. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Gauges Prometheus existants pour octets utilisés, profondeur de file, comptes PoR en vol. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Données de capacité/uptime réussies du fournisseur exposées dans le dashboard de capacité. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Profondeur du backlog plus compteurs cumulés d'échecs exportés à chaque interrogation de `/v2/sorafs/por/ingestion/{manifest}`, alimentant le panel/alerte "PoR Stalls". |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Profondeur du backlog plus compteurs cumulés d'échecs exportés à chaque interrogation de `/v1/sorafs/por/ingestion/{manifest}`, alimentant le panel/alerte "PoR Stalls". |
 
 ### Réparation & SLA
 

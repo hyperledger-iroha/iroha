@@ -1,6 +1,6 @@
 # SoraFS staging telemetry scrape
 # Timestamp: 2025-03-02T15:10:00Z
-# Source: https://prom-stage.soranet.internal/api/v2/query
+# Source: https://prom-stage.soranet.internal/api/v1/query
 
 torii_sorafs_gar_violations_total{gateway="gw-stage-1",reason="manifest_not_admitted",detail="manifest_digest_mismatch"} 0
 torii_sorafs_gar_violations_total{gateway="gw-stage-1",reason="rate_limited",detail="stream_token_quota_exceeded"} 1

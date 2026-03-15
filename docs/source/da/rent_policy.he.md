@@ -15,7 +15,7 @@ translator: machine-google-reviewed
 _סטטוס: שרטוט — בעלים: WG Economics / Treasury / Storage Team_
 
 פריט מפת הדרכים **DA-7** מציג שכר דירה מפורש הנקוב ב-XOR עבור כל גוש
-הוגש ל-`/v2/da/ingest`, בתוספת בונוסים המתגמלים ביצוע PDP/PoTR ו
+הוגש ל-`/v1/da/ingest`, בתוספת בונוסים המתגמלים ביצוע PDP/PoTR ו
 יציאה מוגשת כדי להביא לקוחות. מסמך זה מגדיר את הפרמטרים הראשוניים,
 ייצוג מודל הנתונים שלהם, וזרימת העבודה בחישוב המשמשת את Torii,
 ערכות SDK ולוחות מחוונים של משרד האוצר.
@@ -161,7 +161,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 
 ## זרימה תפעולית
 
-1. **הטמעה:** `/v2/da/ingest` טוען את `DaRentPolicyV1` הפעיל, מצטט שכר דירה
+1. **הטמעה:** `/v1/da/ingest` טוען את `DaRentPolicyV1` הפעיל, מצטט שכר דירה
    מבוסס על גודל כתמים ושימור, ומטמיע את הציטוט ב-Norito
    מתגלה. המגיש חותם על הצהרה המתייחסת לחשב השכירות ו
    מזהה כרטיס האחסון.
@@ -179,7 +179,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 ## טלמטריהצמתי Torii חושפים את השימוש בשכר דירה באמצעות מדדי Prometheus הבאים (תוויות:
 `cluster`, `storage_class`):
 
-- `torii_da_rent_gib_months_total` - חודשי GiB שצוטטו על ידי `/v2/da/ingest`.
+- `torii_da_rent_gib_months_total` - חודשי GiB שצוטטו על ידי `/v1/da/ingest`.
 - `torii_da_rent_base_micro_total` - שכר דירה בסיס (מיקרו XOR) שנצבר בעת הצריכה.
 - `torii_da_protocol_reserve_micro_total` - תרומות עתודות פרוטוקול.
 - `torii_da_provider_reward_micro_total` - תשלומי שכר דירה בצד הספק.
@@ -196,7 +196,7 @@ assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
 
 ## השלבים הבאים
 
-- ✅ קבלות `/v2/da/ingest` מוטמעות כעת `rent_quote` ומשטחי CLI/SDK מציגים את המצוטט
+- ✅ קבלות `/v1/da/ingest` מוטמעות כעת `rent_quote` ומשטחי CLI/SDK מציגים את המצוטט
   שכר דירה בסיס, נתח מילואים ובונוסים של PDP/PoTR כך שהשולחים יוכלו לעיין בהתחייבויות XOR לפני כן
   ביצוע מטענים.
 - שלב את ספר שכר הדירה עם עדכוני המוניטין/פנקסי ההזמנות הקרובים של DA

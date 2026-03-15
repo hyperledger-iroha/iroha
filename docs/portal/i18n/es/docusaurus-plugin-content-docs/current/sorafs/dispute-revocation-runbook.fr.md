@@ -26,7 +26,7 @@ Este runbook guía a los operadores de gobierno en la creación de litigios de c
 ## 1. Evaluar el incidente
 
 - **Condiciones de cancelación:** detección de una violación del SLA (disponibilité/échec PoR), déficit de réplica o incumplimiento de facturación.
-- **Confirme la télémétrie:** capture las instantáneas `/v2/sorafs/capacity/state` y `/v2/sorafs/capacity/telemetry` para el proveedor.
+- **Confirme la télémétrie:** capture las instantáneas `/v1/sorafs/capacity/state` y `/v1/sorafs/capacity/telemetry` para el proveedor.
 - **Notificador de las partes embarazadas:** Equipo de almacenamiento (operaciones del proveedor), Consejo de gobernanza (organe décisionnel), Observabilidad (mises à jour des Dashboards).
 
 ## 2. Preparar el paquete de preuves1. Recopilador de artefactos brutos (telemetría JSON, registros CLI, notas de auditoría).
@@ -72,7 +72,7 @@ Este runbook guía a los operadores de gobierno en la creación de litigios de c
    ```
 
 3. Verifique `dispute_summary.json` (confirme el tipo, el resumen de las etiquetas anteriores y las marcas de tiempo).
-4. Soumettez le JSON de requête à Torii `/v2/sorafs/capacity/dispute` a través del archivo de transacciones de gobierno. Capture el valor de respuesta `dispute_id_hex`; elle ancre les actiones de révocation suivantes et les rapports d’audit.
+4. Soumettez le JSON de requête à Torii `/v1/sorafs/capacity/dispute` a través del archivo de transacciones de gobierno. Capture el valor de respuesta `dispute_id_hex`; elle ancre les actiones de révocation suivantes et les rapports d’audit.
 
 ## 4. Evacuación y revocación1. **Fenêtre de grâce :** avertissez le fournisseur de la révocation imminente ; autorisez l’évacuation des données épinglées lorsque la politique le permet.
 2. **Générez `ProviderAdmissionRevocationV1` :**

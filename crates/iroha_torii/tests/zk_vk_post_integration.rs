@@ -42,7 +42,7 @@ async fn vk_register_update_return_202() {
     // Build routes that capture the chain_id/queue/state
     let app = Router::new()
         .route(
-            "/v2/zk/vk/register",
+            "/v1/zk/vk/register",
             post({
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
@@ -61,7 +61,7 @@ async fn vk_register_update_return_202() {
             }),
         )
         .route(
-            "/v2/zk/vk/update",
+            "/v1/zk/vk/update",
             post({
                 let chain_id = chain_id.clone();
                 let queue = queue.clone();
@@ -117,7 +117,7 @@ async fn vk_register_update_return_202() {
     let body_reg = json::to_json(&body_reg_value).unwrap();
     let req_reg = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/vk/register")
+        .uri("/v1/zk/vk/register")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body_reg))
         .unwrap();
@@ -146,7 +146,7 @@ async fn vk_register_update_return_202() {
     let body_upd = json::to_json(&body_upd_value).unwrap();
     let req_upd = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/vk/update")
+        .uri("/v1/zk/vk/update")
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body_upd))
         .unwrap();

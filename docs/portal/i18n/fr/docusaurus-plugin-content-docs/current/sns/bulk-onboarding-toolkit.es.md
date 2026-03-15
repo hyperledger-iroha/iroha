@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -127,10 +127,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- L'assistant émet un `POST /v2/sns/registrations` pour solliciter et abandonner avant le
+```- L'assistant émet un `POST /v1/sns/registrations` pour solliciter et abandonner avant le
   erreur d'amorce HTTP. Les réponses sont liées à la route du journal comme les registres
   NDJSON.
-- `--poll-status` voir consulter `/v2/sns/registrations/{selector}` après
+- `--poll-status` voir consulter `/v1/sns/registrations/{selector}` après
   chaque envoi (jusqu'à `--poll-attempts`, par défaut 5) pour confirmer l'enregistrement
   est visible. Proporcione `--suffix-map` (JSON de `suffix_id` a valeurs "suffixe")
   pour que les outils dérivent les littéraux `{label}.{suffix}` pour effectuer un sondage.

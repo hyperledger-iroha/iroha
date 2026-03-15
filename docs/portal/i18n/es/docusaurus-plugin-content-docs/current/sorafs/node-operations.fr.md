@@ -44,7 +44,7 @@ Este runbook guía a los operadores para validar un despliegue `sorafs-node` emb
   ```
 
 - Asegúrese de que el proceso Torii disponga de una lectura/escritura de acceso a `data_dir`.
-- Confirme que le nœud annonce la capacidad de asistencia a través de `GET /v2/sorafs/capacity/state` una vez que haya declarado registrada.
+- Confirme que le nœud annonce la capacidad de asistencia a través de `GET /v1/sorafs/capacity/state` una vez que haya declarado registrada.
 - Cuando el sonido está activo, los paneles de control se exponen a las computadoras GiB·hour/PoR brutas y suaves para detectar tendencias sin fluctuaciones en el valor instantáneo.
 
 ### Ejecución en blanco de la CLI (opcional)
@@ -81,8 +81,8 @@ El comando contiene un currículum JSON (resumen de manifiesto, identificación 
 Una vez Torii en línea, puedes recuperar los mismos artefactos a través de HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Los dos puntos finales son servidos por el trabajador de almacenamiento embarcado, después de que las pruebas de humo CLI y las sondas de puerta de enlace permanecen alineadas.## 2. Boucle Pin → Recuperar
@@ -91,7 +91,7 @@ Los dos puntos finales son servidos por el trabajador de almacenamiento embarcad
 2. Soumettez le manifest en base64:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -100,7 +100,7 @@ Los dos puntos finales son servidos por el trabajador de almacenamiento embarcad
 3. Recupérez les données épinglées :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -116,7 +116,7 @@ Los dos puntos finales son servidos por el trabajador de almacenamiento embarcad
 1. Épinglez au moins un manifest comme ci-dessus.
 2. Redémarrez le processus Torii (ou le nœud complet).
 3. Renvoyez la requête fetch. La carga útil debe permanecer recuperable y el resumen renovado debe corresponderse con el valor de antes de volver a casarse.
-4. Inspeccione `GET /v2/sorafs/storage/state` para confirmar que `bytes_used` refleja los manifiestos persistentes después del reinicio.
+4. Inspeccione `GET /v1/sorafs/storage/state` para confirmar que `bytes_used` refleja los manifiestos persistentes después del reinicio.
 
 ## 4. Prueba de rechazo de cuota
 
@@ -131,7 +131,7 @@ Los dos puntos finales son servidos por el trabajador de almacenamiento embarcad
 2. Demandez un échantillon PoR :
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -152,7 +152,7 @@ Los dos puntos finales son servidos por el trabajador de almacenamiento embarcad
 - Los paneles de control deben seguir:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` y `torii_sorafs_storage_fetch_inflight`
-  - les compteurs de succès/échec PoR exposés vía `/v2/sorafs/capacity/state`
+  - les compteurs de succès/échec PoR exposés vía `/v1/sorafs/capacity/state`
   - les tentatives de publicación de liquidación vía `sorafs_node_deal_publish_total{result=success|failure}`
 
 Suivre ces Drills garantiza que el trabajador de almacenamiento embarqué puede recibir los données, sobrevivir a los redémarrages, respetar las cuotas configuradas y generar preuves PoR determinados antes de que le nœud n'annonce sa capacidad au reste du réseau.

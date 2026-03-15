@@ -38,7 +38,7 @@ códigos Norito; El respaldo en serde/JSON no está disponible.
 ## Superficie API (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -210,7 +210,7 @@ Manifiestos de fragmentación y проверкой опциональных.
   который уже питает `iroha app sorafs fetch`. Los operadores pueden utilizar artefactos
   manifiesto + plan de fragmentos (`--manifest`, `--plan`, `--manifest-id`) **или** передать
   Boleto de almacenamiento Torii через `--storage-ticket`. При использовании ticket CLI
-  загружает manifest из `/v2/da/manifests/<ticket>`, сохраняет paquete в`artifacts/da/fetch_<timestamp>/` (anulación de `--manifest-cache-dir`), выводит
+  загружает manifest из `/v1/da/manifests/<ticket>`, сохраняет paquete в`artifacts/da/fetch_<timestamp>/` (anulación de `--manifest-cache-dir`), выводит
   blob hash para `--manifest-id` y descarga el orquestador con el tiempo
   `--gateway-provider` списком. Otros productos de perillas del buscador SoraFS
   сохраняются (sobres de manifiesto, etiquetas de cliente, cachés de guardia, anónimos
@@ -219,7 +219,7 @@ Manifiestos de fragmentación y проверкой опциональных.
   Esta es la disponibilidad de un extremo a otro que se encuentra en el espacio de nombres `da` без
   дублирования orquestador логики.
 - `iroha app da get-blob` забирает канонические manifiestos напрямую из Torii через
-  `GET /v2/da/manifests/{storage_ticket}`. Команда пишет
+  `GET /v1/da/manifests/{storage_ticket}`. Команда пишет
   `manifest_{ticket}.norito`, `manifest_{ticket}.json` y `chunk_plan_{ticket}.json`
   en `artifacts/da/fetch_<timestamp>/` (или пользовательский `--output-dir`), при
   Este es el comando `iroha app da get` (включая `--manifest-id`), no disponible

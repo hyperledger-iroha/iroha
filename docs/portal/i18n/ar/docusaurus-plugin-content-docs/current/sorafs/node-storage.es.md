@@ -163,9 +163,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > البوابة Torii الآن تعرض مساعدين للقراءة فقط بنفس الطريقة
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — تحويل البيان
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — تحويل البيان
 > Norito almacenado (base64) جنبًا إلى جنب مع الملخص/البيانات الوصفية.[crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — تحويل مخطط القطعة
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — تحويل مخطط القطعة
 > تحديد JSON (`chunk_fetch_specs`) للأدوات في اتجاه مجرى النهر.
 >
 > تحدد نقاط النهاية هذه خروج CLI حتى تتمكن خطوط الأنابيب من العمل
@@ -209,12 +209,12 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      المشغل.
 
 ### إعلان القدرة وتكامل الجدولة- Torii الآن قم بإعادة إرسال التحديثات لـ `CapacityDeclarationRecord` من
-  `/v2/sorafs/capacity/declare` يحتوي على `CapacityManager`، بطريقة ما
+  `/v1/sorafs/capacity/declare` يحتوي على `CapacityManager`، بطريقة ما
   كل عقدة تنشئ مشهدًا وذاكرة لتخصيصاتك المتفق عليها
   مقسم و حارة. يعرض المدير لقطات للقراءة فقط للقياس عن بعد
-  (`GET /v2/sorafs/capacity/state`) ويتم حجز الملف الشخصي أو المسار السابق
+  (`GET /v1/sorafs/capacity/state`) ويتم حجز الملف الشخصي أو المسار السابق
   aceptar nuevos pedidos.[crates/sorafs_node/src/capacity.rs:1] 【crates/sorafs_node/src/lib.rs:60】
-- El نقطة النهاية `/v2/sorafs/capacity/schedule` الحمولات الصافية `ReplicationOrderV1`
+- El نقطة النهاية `/v1/sorafs/capacity/schedule` الحمولات الصافية `ReplicationOrderV1`
   emitidos por gobernanza. عند الطلب من المدير المحلي
   مراجعة الجدولة المكررة والتحقق من سعة المقطع/المسار وحجزه
   فرنسية وتطور `ReplicationPlan` لوصف السعة المتبقية
@@ -222,7 +222,7 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   سيتعرف الموردون الآخرون على الرد `ignored` لتسهيل التدفق
   مشغل متعدد.[صناديق/iroha_torii/src/routing.rs:4845]
 - خطافات كاملة (على سبيل المثال، تنقطع عن نجاح الابتلاع)
-  اتصل بـ `POST /v2/sorafs/capacity/complete` لتحرير الحجوزات عبر
+  اتصل بـ `POST /v1/sorafs/capacity/complete` لتحرير الحجوزات عبر
   `CapacityManager::complete_order`. يتضمن الرد لقطة
   `ReplicationRelease` (الإجمالي المتبقي، بقايا القطع/الخط) لذلك
   يمكن لأدوات الطلب تضمين الترتيب التالي بدون الاقتراع.

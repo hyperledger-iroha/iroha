@@ -55,7 +55,7 @@ translator: machine-google-reviewed
   ამოქმედებული `DeployContract` წინადადებების წინააღმდეგ; თუ შესატყვისი წინადადება არ არსებობს
   ტრანზაქცია უარყოფილია `NotPermitted`-ით.
 
-## Torii საბოლოო წერტილები (მახასიათებელი `app_api`)- `POST /v2/contracts/deploy`
+## Torii საბოლოო წერტილები (მახასიათებელი `app_api`)- `POST /v1/contracts/deploy`
   - მოთხოვნის ტექსტი: `DeployContractDto` (იხილეთ `docs/source/torii_contracts_api.md` ველის დეტალებისთვის).
   - Torii დეკოდირებს base64 დატვირთვას, ითვლის ორივე ჰეშს, აშენებს მანიფესტს,
     და წარუდგენს `RegisterSmartContractCode` პლუსს
@@ -64,19 +64,19 @@ translator: machine-google-reviewed
   - პასუხი: `{ ok, code_hash_hex, abi_hash_hex }`.
   - შეცდომები: არასწორი base64, მხარდაჭერილი ABI ვერსია, აკლია ნებართვა
     (`CanRegisterSmartContractCode`), ზომის ლიმიტის გადაჭარბება, მართვის კარიბჭე.
-- `POST /v2/contracts/code`
+- `POST /v1/contracts/code`
   - იღებს `RegisterContractCodeDto` (ავტორიტეტი, პირადი გასაღები, მანიფესტი) და წარადგენს მხოლოდ
     `RegisterSmartContractCode`. გამოიყენეთ, როდესაც მანიფესტები დადგმულია ცალკე
     ბაიტიკოდი.
-- `POST /v2/contracts/instance`
+- `POST /v1/contracts/instance`
   - იღებს `DeployAndActivateInstanceDto` (ავტორიტეტი, პირადი გასაღები, სახელთა სივრცე/contract_id, `code_b64`, არჩევითი მანიფესტის უგულებელყოფა) და ავრცელებს + ააქტიურებს ატომურად.
-- `POST /v2/contracts/instance/activate`
+- `POST /v1/contracts/instance/activate`
   - იღებს `ActivateInstanceDto` (ავტორიტეტი, პირადი გასაღები, სახელების სივრცე, contract_id, `code_hash`) და წარუდგენს მხოლოდ აქტივაციის ინსტრუქციას.
-- `GET /v2/contracts/code/{code_hash}`
+- `GET /v1/contracts/code/{code_hash}`
   - აბრუნებს `{ manifest: { code_hash, abi_hash } }`.
     დამატებითი მანიფესტის ველები შენახულია შინაგანად, მაგრამ აქ გამოტოვებული a
     სტაბილური API.
-- `GET /v2/contracts/code-bytes/{code_hash}`
+- `GET /v1/contracts/code-bytes/{code_hash}`
   - აბრუნებს `{ code_b64 }` შენახული `.to` გამოსახულებით, რომელიც დაშიფრულია როგორც base64.
 
 კონტრაქტის სასიცოცხლო ციკლის ყველა საბოლოო წერტილი იზიარებს სპეციალურ განლაგების შემზღუდველს, რომელიც კონფიგურირებულია მეშვეობით
@@ -91,10 +91,10 @@ translator: machine-google-reviewed
 
 ## მმართველობის ინტეგრაცია და დაცული სახელების სივრცეები- დააყენეთ მორგებული პარამეტრი `gov_protected_namespaces` (სახელთა სივრცის JSON მასივი
   strings) დაშვების კარიბჭის გასააქტიურებლად. Torii ავლენს დამხმარეებს ქვეშ
-  `/v2/gov/protected-namespaces` და CLI ასახავს მათ მეშვეობით
+  `/v1/gov/protected-namespaces` და CLI ასახავს მათ მეშვეობით
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - წინადადებები შექმნილი `ProposeDeployContract`-ით (ან Torii-ით
-  `/v2/gov/proposals/deploy-contract` საბოლოო წერტილი) დაჭერა
+  `/v1/gov/proposals/deploy-contract` საბოლოო წერტილი) დაჭერა
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
 - რეფერენდუმის გავლის შემდეგ, `EnactReferendum` აღნიშნავს წინადადებას ამოქმედდა და
   დაშვება მიიღებს განლაგებას, რომელიც შეიცავს შესაბამის მეტამონაცემებს და კოდს.

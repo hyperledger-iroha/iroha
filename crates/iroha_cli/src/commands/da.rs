@@ -58,7 +58,7 @@ use std::{
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Submit a raw blob to `/v2/da/ingest` and capture the signed receipt.
+    /// Submit a raw blob to `/v1/da/ingest` and capture the signed receipt.
     Submit(SubmitArgs),
     /// Fetch blobs via the multi-source orchestrator (thin wrapper over `sorafs fetch`).
     Get(FetchArgs),
@@ -168,7 +168,7 @@ pub struct SubmitArgs {
     /// Optional pre-generated Norito manifest to embed in the request.
     #[arg(long = "manifest", value_name = "PATH")]
     pub manifest_path: Option<PathBuf>,
-    /// Override for the Torii DA ingest endpoint (defaults to `$TORII/v2/da/ingest`).
+    /// Override for the Torii DA ingest endpoint (defaults to `$TORII/v1/da/ingest`).
     #[arg(long = "endpoint", value_name = "URL")]
     pub endpoint: Option<String>,
     /// Override the caller-supplied blob identifier (hex). Defaults to BLAKE3(payload).
@@ -216,7 +216,7 @@ pub struct GetBlobArgs {
     /// Optional block hash used to seed deterministic sampling in the manifest response.
     #[arg(long = "block-hash", value_name = "HEX")]
     pub block_hash: Option<String>,
-    /// Optional override for the Torii manifest endpoint (defaults to `$TORII/v2/da/manifests/`).
+    /// Optional override for the Torii manifest endpoint (defaults to `$TORII/v1/da/manifests/`).
     #[arg(long = "endpoint", value_name = "URL")]
     pub endpoint: Option<String>,
     /// Directory for storing the fetched manifest + chunk plan artefacts.

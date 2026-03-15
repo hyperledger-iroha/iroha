@@ -19,7 +19,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 # סקירה כללית של Norito-RPC
 
-Norito-RPC הוא תעבורה בינארית עבור ממשקי Torii. הוא משתמש באותם נתיבי HTTP כמו `/v2/pipeline` אבל מחליף מטענים ממוסגרי Norito שכוללים hashes של סכמה ו-checksums. השתמשו בו כאשר נדרשות תשובות דטרמיניסטיות ומאומתות או כאשר תגובות JSON של pipeline הופכות לצוואר בקבוק.
+Norito-RPC הוא תעבורה בינארית עבור ממשקי Torii. הוא משתמש באותם נתיבי HTTP כמו `/v1/pipeline` אבל מחליף מטענים ממוסגרי Norito שכוללים hashes של סכמה ו-checksums. השתמשו בו כאשר נדרשות תשובות דטרמיניסטיות ומאומתות או כאשר תגובות JSON של pipeline הופכות לצוואר בקבוק.
 
 ## למה לעבור?
 - מסגור דטרמיניסטי עם CRC64 ו-hashes של סכמה מפחית שגיאות פענוח.
@@ -29,7 +29,7 @@ Norito-RPC הוא תעבורה בינארית עבור ממשקי Torii. הוא 
 ## ביצוע בקשה
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. בצעו סיריאליזציה של המטען עם codec Norito (`iroha_client`, helpers של ה-SDK או `norito::to_bytes`).
@@ -48,7 +48,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 פורטל המפתחים כולל פרוקסי Try It כדי שריביוורים יוכלו לשחזר מטעני Norito בלי לכתוב סקריפטים ייעודיים.
 
 1. [הפעילו את הפרוקסי](./try-it.md#start-the-proxy-locally) והגדירו `TRYIT_PROXY_PUBLIC_URL` כדי שהווידג'טים ידעו לאן לשלוח תעבורה.
-2. פתחו את כרטיס **Try it** בעמוד זה או את הפאנל `/reference/torii-swagger` ובחרו endpoint כמו `POST /v2/pipeline/submit`.
+2. פתחו את כרטיס **Try it** בעמוד זה או את הפאנל `/reference/torii-swagger` ובחרו endpoint כמו `POST /v1/pipeline/submit`.
 3. החליפו את **Content-Type** ל-`application/x-norito`, בחרו את עורך **Binary**, והעלו `fixtures/norito_rpc/transfer_asset.norito` (או כל payload שמופיע ב-`fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. ספקו bearer token דרך הווידג'ט OAuth device-code או שדה הטוקן הידני (הפרוקסי מקבל overrides של `X-TryIt-Auth` כאשר מוגדר `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. שלחו את הבקשה ואמתו ש-Torii מחזיר את `schema_hash` שמופיע ב-`fixtures/norito_rpc/schema_hashes.json`. hashes תואמים מאשרים שהכותרת Norito שרדה את מעבר הדפדפן/פרוקסי.

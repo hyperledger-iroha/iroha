@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # Сообщение Norito-RPC
 
-Norito-RPC представляет собой двоичный транспортный файл для API Torii. Я повторно использую мемы, полученные по HTTP, которые `/v2/pipeline` могут быть заменены кодами зарядов по Norito, которые включают хэши схемы и контрольные суммы. Используйте поиск ответов, детерминированных и достоверных ответов, или вызов ответов JSON для конвейера, созданного для запутывания.
+Norito-RPC представляет собой двоичный транспортный файл для API Torii. Я повторно использую мемы, полученные по HTTP, которые `/v1/pipeline` могут быть заменены кодами зарядов по Norito, которые включают хэши схемы и контрольные суммы. Используйте поиск ответов, детерминированных и достоверных ответов, или вызов ответов JSON для конвейера, созданного для запутывания.
 
 ## Ченджер Пуркуа?
 - Определенное размещение с CRC64 и хэшами схемы устраняет ошибки декодирования.
@@ -20,7 +20,7 @@ Norito-RPC представляет собой двоичный транспор
 ## Добро пожаловать по запросу
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Сериализация вашей полезной нагрузки с кодеком Norito (`iroha_client`, вспомогательный SDK или `norito::to_bytes`).
@@ -39,7 +39,7 @@ curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application
 Портал разработки работает с прокси-сервером. Попробуйте, чтобы отражатели могли повторно использовать полезные нагрузки Norito без написания сценариев.
 
 1. [Удалить прокси](./try-it.md#start-the-proxy-locally) и определить `TRYIT_PROXY_PUBLIC_URL` для того, чтобы виджеты были сохранены или отправляли трафик.
-2. Откройте меню **Попробуйте** на этой странице или на панели `/reference/torii-swagger` и выберите конечную точку, соответствующую `POST /v2/pipeline/submit`.
+2. Откройте меню **Попробуйте** на этой странице или на панели `/reference/torii-swagger` и выберите конечную точку, соответствующую `POST /v1/pipeline/submit`.
 3. Введите **Content-Type** в `application/x-norito`, выберите редактор **Binary** и зарядите `fixtures/norito_rpc/transfer_asset.norito` (или просмотрите список полезной нагрузки в `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Подключите токен носителя через код устройства OAuth виджета или вручную (прокси-сервер принимает переопределения `X-TryIt-Auth`, чтобы настроить его с помощью `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. Отправьте запрос и проверьте, что Torii отправил `schema_hash` в список `fixtures/norito_rpc/schema_hashes.json`. Идентификаторы хэшей подтверждают, что Norito находится наедине с системой наблюдения или прокси-сервером.

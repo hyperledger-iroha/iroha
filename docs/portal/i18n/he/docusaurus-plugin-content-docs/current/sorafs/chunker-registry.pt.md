@@ -91,7 +91,7 @@ que requer negociacao explicita do cliente (`Accept-Chunker` + `Accept-Digest`).
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ סופורטדו | תקף או לטפל ב-Canonico + כינויים, זרם קשרים דרך `--json-out=-` ושימוש ב-Charter לעשות רישום דרך `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ Retirado | Builder de manifest fora de suporte; השתמש ב-`iroha app sorafs toolkit pack` para empacotamento CAR/manifest e mantenha `--plan=-` para revalidacao deterministica. |
-| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validacao אפנים לא מקוונים; פרסומות ספק devem ser produzidos pelo pipeline de publicacao e validados דרך `/v2/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validacao אפנים לא מקוונים; פרסומות ספק devem ser produzidos pelo pipeline de publicacao e validados דרך `/v1/sorafs/providers`. |
 | `sorafs_fetch` (מתזמר מפתח) | ✅ סופורטדו | Le `chunk_fetch_specs`, מטענים רווחים של capacidade `range` e monta saida CARv2. |
 | Fixtures de SDK (Rust/Go/TS) | ✅ סופורטדו | Regeneradas דרך `export_vectors`; o לטפל canonico aparece primeiro em cada list de aliases e e assinado por envelopes do conselho. |
 | Negociacao de perfil no gateway Torii | ✅ סופורטדו | יישום גרמטית של `Accept-Chunker`, כולל כותרות `Content-Chunker` e expoe o bridge CARv1 apenas em solicitacoes explicitas degrade down. |
@@ -99,7 +99,7 @@ que requer negociacao explicita do cliente (`Accept-Chunker` + `Accept-Digest`).
 השקת טלמטריה:
 
 - **Telemetria de fetch de chunks** - o CLI Iroha `sorafs toolkit pack` emite digests de chunk, metadados CAR e מעלה PoR para ingestao em לוחות מחוונים.
-- **פרסומות של ספקים** - עומסי פרסומות של פרסומות כוללים מטאדוסים וכינויים; valide cobertura via `/v2/sorafs/providers` (לדוגמה, presenca da capacidade `range`).
+- **פרסומות של ספקים** - עומסי פרסומות של פרסומות כוללים מטאדוסים וכינויים; valide cobertura via `/v1/sorafs/providers` (לדוגמה, presenca da capacidade `range`).
 - **Monitormento de gateway** - Operatores devem reportar os pareamentos `Content-Chunker`/`Content-Digest` para detectar משדרג לאחור ב-esperados; espera-se que o uso do bridge tenda a zero antes da deprecacao.
 
 Politica de deprecacao: uma vez que um perfil sucessor seja ratificado, agende uma janela de publicacao dupla

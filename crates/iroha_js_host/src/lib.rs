@@ -772,7 +772,7 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
     })
 }
 
-/// Verify the Norito-encoded relay envelope bytes returned by `/v2/sumeragi/status`.
+/// Verify the Norito-encoded relay envelope bytes returned by `/v1/sumeragi/status`.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn verify_lane_relay_envelope(envelope: Uint8Array) -> napi::Result<()> {

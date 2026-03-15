@@ -89,7 +89,7 @@ SDK CLI-ni əks etdirən ixtisaslaşdırılmış axınları birləşdirir:
 - **İdarəetmə köməkçiləri** – `recipes/governance.mjs` səhnələşdirməni nümayiş etdirir
   `governance` təlimat qurucuları ilə təkliflər və bülletenlər.
 - **ISO körpüsü** – `recipes/iso_bridge.mjs` `pacs.008` və necə təqdim olunacağını göstərir
-  `/v2/iso20022` son nöqtələrindən istifadə edərək sorğu köçürmə statusu.
+  `/v1/iso20022` son nöqtələrindən istifadə edərək sorğu köçürmə statusu.
 - **SoraFS və tetikler** – `src/toriiClient.js` altında səhifələmə köməkçiləri ifşa olunur
   müqavilələr, aktivlər, triggerlər və SoraFS provayderləri üçün yazılmış iteratorlar.
 

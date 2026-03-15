@@ -45,7 +45,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ## إمكانية الملاحظة
 
 Torii يعرض الآن لقطات من موفري الائتمان جنبًا إلى جنب مع دفاتر رسوم الرسوم للوحات المعلومات
-Puedan Gatear sobre Saldos Bajos وضربات الجزاء:- الباقي: `GET /v2/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
+Puedan Gatear sobre Saldos Bajos وضربات الجزاء:- الباقي: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
   قم بإعادة النظر في مجالات دفتر الأستاذ التي تم التحقق منها في اختبار الامتصاص. الاصدار
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - استيراد Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` الرسوم البيانية

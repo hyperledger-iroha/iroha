@@ -78,10 +78,10 @@ python3 scripts/swift_status_export.py \
 
 | Item | Owner | Status | Notes |
 |------|-------|--------|-------|
-| `/v2/pipeline` adoption | Swift SDK Lead | Tracking | `/v2/pipeline` staging runs remain green and the digest now flags the CR-2 dependency so governance can see why Connect queue telemetry still blocks GA. |
+| `/v1/pipeline` adoption | Swift SDK Lead | Tracking | `/v1/pipeline` staging runs remain green and the digest now flags the CR-2 dependency so governance can see why Connect queue telemetry still blocks GA. |
 | Telemetry readiness (`connect.queue_*`) | Observability TL | Attention needed | Queue-depth OTLP exporters still pending; `scripts/swift_status_export.py` reports `swift_telemetry_overrides_open=1` and CR-2 remains high until the Connect queue probes emit real metrics. |
-| Torii spec review (IOS2) | Torii Platform TL | Scheduled | Session locked for 2026-11-21 (agenda/invite in `docs/source/sdk/swift/torii_spec_review.md`) to freeze `/v2/pipeline` + Norito RPC behaviour for IOS2. |
-| Governance vote / readiness review | SDK Program PM | Scheduled | Council review pencilled in for 2026-05-02 to confirm Connect instrumentation + `/v2/pipeline` evidence; see `status.md` for the briefing packet. |
+| Torii spec review (IOS2) | Torii Platform TL | Scheduled | Session locked for 2026-11-21 (agenda/invite in `docs/source/sdk/swift/torii_spec_review.md`) to freeze `/v1/pipeline` + Norito RPC behaviour for IOS2. |
+| Governance vote / readiness review | SDK Program PM | Scheduled | Council review pencilled in for 2026-05-02 to confirm Connect instrumentation + `/v1/pipeline` evidence; see `status.md` for the briefing packet. |
 | Risk owner spotlight | Observability TL | Attention needed | SRE requested weekly confirmation that queue-depth telemetry is still dark; the risks/notes above point to the OTLP work that must land before the vote proceeds. |
 
 ## Upcoming Actions

@@ -78,7 +78,7 @@ esquemas Norito en Rust y los helpers de validacion que respaldan estos registro
 
 |コンポネ |タレア |責任者 |
 |----------|----------|-----|
-|サービスTorii |エクスポナー `/v2/sorafs/pin` (送信)、`/v2/sorafs/pin/{cid}` (検索)、`/v2/sorafs/aliases` (リスト/バインド)、`/v2/sorafs/replication` (注文/受領)。プローバー・パギナシオン+フィルトラード。 |ネットワーキング TL / コア インフラ |
+|サービスTorii |エクスポナー `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領)。プローバー・パギナシオン+フィルトラード。 |ネットワーキング TL / コア インフラ |
 |アテスタシオン | altura/hash del registry en respuestas を含めます。アテスタシオン Norito の SDK を構築します。 |コアインフラ |
 | CLI |エクステンダー `sorafs_manifest_stub` または新しい CLI `sorafs_pin` と `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
 | SDK |クライアントの一般的なバインディング (Rust/Go/TS) の設計 Norito。アグリガーは統合テストを行います。 | SDK チーム |
@@ -135,10 +135,10 @@ esquemas Norito en Rust y los helpers de validacion que respaldan estos registro
 SF-4 のチェックリストは、エステ プランの進捗状況を参照します。
 REST のアホラ エントレガ エンドポイントの一覧表示:
 
-- `GET /v2/sorafs/pin` y `GET /v2/sorafs/pin/{digest}` デブエルベンマニフェストコン
+- `GET /v1/sorafs/pin` y `GET /v1/sorafs/pin/{digest}` デブエルベンマニフェストコン
   エイリアスのバインディング、レプリケーションの順序、およびオブジェクトの作成のデリバティブ
   ハッシュデルアルティモブロック。
-- `GET /v2/sorafs/aliases` y `GET /v2/sorafs/replication` 指数関数カタログ
+- `GET /v1/sorafs/aliases` y `GET /v1/sorafs/replication` 指数関数カタログ
   エイリアス アクティビティ、バックログ、レプリケーションの順序、ページの一貫性
   フィルトロス・デ・エスタド。
 

@@ -59,7 +59,7 @@ lors de la génération des fixtures.
 
 ## Annonce du bitmap de capacités
 
-`GET /v2/node/capabilities` expose désormais la liste `allowed_curve_ids` ainsi
+`GET /v1/node/capabilities` expose désormais la liste `allowed_curve_ids` ainsi
 que le tableau `allowed_curve_bitmap` empaqueté sous `crypto.curves`. Le bitmap
 est little‑endian sur des lanes 64 bits (jusqu’à quatre valeurs pour couvrir
 l’espace d’identifiants `u8` 0–255). Un bit `i` à 1 signifie que l’identifiant de

@@ -18,11 +18,11 @@ translation_last_reviewed: 2026-02-07
 مالكان: منصة Torii، قائد برنامج SDK  
 نظام الحوالة: TORII-APP-1 — `app_api` للتفعيل
 
-تحتوي إحدى صفحات الاندرويد `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) على بطاقة مونو ريبو التي توفر سكيًا عالي الجودة `/v2/*` سطح الأرض، موجود ومثبت. لقد تم إصدار هذه البطاقة الجديدة `Torii::add_app_api_routes` و`add_contracts_and_vk_routes` و`add_connect_routes` والتي تم إصدارها مرة أخرى من Microsoft.
+تحتوي إحدى صفحات الاندرويد `TORII-APP-1` (`docs/source/torii/app_api_parity_audit.md`) على بطاقة مونو ريبو التي توفر سكيًا عالي الجودة `/v1/*` سطح الأرض، موجود ومثبت. لقد تم إصدار هذه البطاقة الجديدة `Torii::add_app_api_routes` و`add_contracts_and_vk_routes` و`add_connect_routes` والتي تم إصدارها مرة أخرى من Microsoft.
 
 ## دائره وطريقه
 
-يحتوي `crates/iroha_torii/src/lib.rs:256-522` على عوائد للرياضات الإلكترونية ويتميز بميزة البوابات والمنافذ التي تفوز بالجائزة الكبرى. لا يوجد درج لتصفح سطح المكتب `/v2/*`:
+يحتوي `crates/iroha_torii/src/lib.rs:256-522` على عوائد للرياضات الإلكترونية ويتميز بميزة البوابات والمنافذ التي تفوز بالجائزة الكبرى. لا يوجد درج لتصفح سطح المكتب `/v1/*`:
 
 - `crates/iroha_torii/src/routing.rs` معالج نفاذ وتعريف DTO.
 - `app_api` أو `connect` مجموعة أدوات تحت جهاز التوجيه.
@@ -38,25 +38,25 @@ translation_last_reviewed: 2026-02-07
 -مثال:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v2/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v2/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
 ```
 ```swift
 let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   method: "get",
-                                                  path: "/v2/accounts/i105.../assets",
+                                                  path: "/v1/accounts/i105.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## اينڈپوائنٹ فيرست
 
-### اجازة (`/v2/accounts/{id}/permissions`) — كورڈ
+### اجازة (`/v1/accounts/{id}/permissions`) — كورڈ
 - المعالج: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
 -DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
 - ربط جهاز التوجيه: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -64,7 +64,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - المالك: منصة Torii.
 - ملاحظات: جواب Norito JSON body ہے جس میں `items`/`total` ہے، مساعدو ترقيم الصفحات من جو SDK يتوافقون مع رکھتا ہے.
 
-### الاسم المستعار OPRF تشخیص (`POST /v2/aliases/voprf/evaluate`) — کورڈ
+### الاسم المستعار OPRF تشخیص (`POST /v1/aliases/voprf/evaluate`) — کورڈ
 - المعالج: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
 -DTOs: `AliasVoprfEvaluateRequestDto`، `AliasVoprfEvaluateResponseDto`، `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
@@ -72,7 +72,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - الاختبارات: المعالج والاختبارات المضمنة (`crates/iroha_torii/src/lib.rs:9945-9986`) ومرفق SDK
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
 - المالك: منصة Torii.
-- ملاحظات: الإجابة عبارة عن معرّفات سداسية حتمية وخلفية نافعة؛ يتم استخدام SDKs كـ DTO.### إثبات SSE ايونٹس (`GET /v2/events/sse`) — كورڈ
+- ملاحظات: الإجابة عبارة عن معرّفات سداسية حتمية وخلفية نافعة؛ يتم استخدام SDKs كـ DTO.### إثبات SSE ايونٹس (`GET /v1/events/sse`) — كورڈ
 - المعالج: `handle_v1_events_sse` فلير سبورت کے ساتھ (`crates/iroha_torii/src/routing.rs:14008-14133`).
 - DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) وأسلاك مرشح الإثبات.
 - ربط جهاز التوجيه: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
@@ -82,7 +82,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - المالك: منصة Torii (وقت التشغيل)، فريق عمل اختبارات التكامل (التركيبات).
 - ملاحظات: تم التحقق من صحة مرشح الإثبات من طرف إلى طرف؛ تم إنشاء دستاويزات `docs/source/zk_app_api.md`.
 
-### انترنت للذواقة (`/v2/contracts/*`) — كورڈ
+### انترنت للذواقة (`/v1/contracts/*`) — كورڈ
 - المعالجات: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`)،
   `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`)،
   `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`)،
@@ -95,7 +95,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
   `contracts_instance_activate_integration.rs`، `contracts_call_integration.rs`،
   `contracts_instances_list_router.rs`.
 - المالك: Smart Contract WG کے ساتھ Torii Platform.
-- ملاحظات: يمكن استخدام القطارات الفضائية وقطارات الأقمار الصناعية (`handle_transaction_with_metrics`) مرة أخرى.### فيرونا للأجنحة الفندقية (`/v2/zk/vk/*`) — كورڈ
+- ملاحظات: يمكن استخدام القطارات الفضائية وقطارات الأقمار الصناعية (`handle_transaction_with_metrics`) مرة أخرى.### فيرونا للأجنحة الفندقية (`/v1/zk/vk/*`) — كورڈ
 - المعالجات: `handle_post_vk_register`، `handle_post_vk_update`، `handle_post_vk_deprecate`
   (`crates/iroha_torii/src/routing.rs:4282-4382`) و`handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
 - DTOs: `ZkVkRegisterDto`، `ZkVkUpdateDto`، `ZkVkDeprecateDto`، `VkListQuery`، `ProofFindByIdQueryDto`
@@ -107,7 +107,7 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v2/accou
 - المالك: ZK Working Group کے ساتھ Torii منصة سپورٹ۔
 - ملاحظات: مخططات DTOs Norito متوافقة مع إصدار SDKs؛ الحد الأقصى للمعدل `limits.rs` هو ذريعة نافعة.
 
-### Nexus Connect (`/v2/connect/*`) — كورڈ (الميزة `connect`)
+### Nexus Connect (`/v1/connect/*`) — كورڈ (الميزة `connect`)
 - المعالجات: `handle_connect_session`، `handler_connect_session_delete`، `handle_connect_ws`،
   `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
 -DTOs: `ConnectSessionRequest`، `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`)،

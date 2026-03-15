@@ -233,7 +233,7 @@ iroha app space-directory manifest audit-bundle \
 
 1. **Лейн күрһәтә:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **График квоталары:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Ҡулланма төтөн:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` асыҡ каталог менән CBDC файлдарына күрһәтеп, һуңынан `/v2/sumeragi/status` һәм раҫлау `lane_governance.manifest_ready=true` өсөн CBDC һыҙаты.
+3. **Ҡулланма төтөн:** `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…` асыҡ каталог менән CBDC файлдарына күрһәтеп, һуңынан `/v1/sumeragi/status` һәм раҫлау `lane_governance.manifest_ready=true` өсөн CBDC һыҙаты.
 4. **White исемлеге эҙмә-эҙлеклелек һынау:** Norito күнекмәләр `integration_tests/tests/nexus/cbdc_whitelist.rs`, анализлау `fixtures/space_directory/profile/cbdc_lane_profile.json` һәм һылтанмалы мөмкинлектәре манифесттарын тәьмин итеү өсөн һәр аҡ исемлеккә инеү’s UAID, мәғлүмәт киңлеге, активация эпохаһы, һәм пособие исемлеге тура килә Norito аҫтында. `fixtures/space_directory/capability/`. Һынау журналын NX-6 дәлилдәренә беркетергә, ҡасан аҡ исемлек йәки үҙгәргән һайын.
 
 ### 2.2 CLI өҙөктәре
@@ -243,7 +243,7 @@ iroha app space-directory manifest audit-bundle \
 - HTTP аша баҫығыҙ, әгәр опс өҫтәле дистанцион автоматлаштырыуҙы эшләй:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ iroha app space-directory manifest audit-bundle \
 - Ғәҙәттән тыш хәлдәрҙе ҡайтарыуҙы Torii тиклем POSTing аша дистанцион рәүештә бирергә мөмкин:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

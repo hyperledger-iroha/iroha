@@ -74,7 +74,7 @@ passo a passo detalhado.
    مرجع التدريج `torii.sorafs.discovery.admission.envelopes_dir`.
 3. التحقق من قيام المزود بالإعلان عن الإعلانات عبر واجهة برمجة التطبيقات للاكتشاف:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. قم بتمرين نقاط النهاية للبيان/الخطة مع رؤوس الحوكمة:
    ```bash

@@ -50,12 +50,12 @@ async fn nfts_endpoints_exist() {
     );
     let app = torii.api_router_for_tests();
 
-    // GET /v2/nfts
+    // GET /v1/nfts
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v2/nfts?offset=0")
+                .uri("/v1/nfts?offset=0")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -66,12 +66,12 @@ async fn nfts_endpoints_exist() {
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
-    // POST /v2/nfts/query
+    // POST /v1/nfts/query
     let resp = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v2/nfts/query")
+                .uri("/v1/nfts/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),

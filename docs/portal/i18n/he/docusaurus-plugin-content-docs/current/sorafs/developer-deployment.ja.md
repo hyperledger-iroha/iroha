@@ -36,7 +36,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## קונפיגורציית סביבה
 
-- Gateways חייבים להפעיל את endpoint של proof streaming (`POST /v2/sorafs/proof/stream`) כדי שה-CLI יוכל לפלוט סיכומי טלמטריה.
+- Gateways חייבים להפעיל את endpoint של proof streaming (`POST /v1/sorafs/proof/stream`) כדי שה-CLI יוכל לפלוט סיכומי טלמטריה.
 - הגדירו מדיניות `sorafs_alias_cache` באמצעות ברירות המחדל ב-`iroha_config` או בעזרת helper של ה-CLI (`sorafs_cli manifest submit --alias-*`).
 - ספקו stream tokens (או אישורי Torii) באמצעות מנהל סודות מאובטח.
 - הפעילו exporters של טלמטריה (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) ושלחו אותם ל-stack של Prometheus/OTel.

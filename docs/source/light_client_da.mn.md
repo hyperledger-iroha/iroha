@@ -21,7 +21,7 @@ Light Client Sampling API нь баталгаажуулсан оператору
 ## Төгсгөлийн цэг
 
 ```
-POST /v2/sumeragi/rbc/sample
+POST /v1/sumeragi/rbc/sample
 ```
 
 Төгсгөлийн цэг нь тохируулагдсан зүйлсийн аль нэгэнд тохирох `X-API-Token` толгойг шаарддаг.

@@ -85,7 +85,7 @@ translation_last_reviewed: 2026-02-07
 | `sorafs_node_por_failure_total` |专柜| `provider_id` |失败 PoR 样本的单调计数器。 |
 | `torii_sorafs_storage_bytes_*`、`torii_sorafs_storage_por_*` |仪表| `provider` |现有 Prometheus 计量器用于显示已用字节数、队列深度、PoR 运行计数。 |
 | `torii_sorafs_capacity_*`、`torii_sorafs_uptime_bps`、`torii_sorafs_por_bps` |仪表| `provider` |提供商容量/正常运行时间成功数据显示在容量仪表板中。 |
-| `torii_sorafs_por_ingest_backlog`、`torii_sorafs_por_ingest_failures_total` |仪表| `provider`、`manifest` |积压深度加上每次轮询 `/v2/sorafs/por/ingestion/{manifest}` 时导出的累积故障计数器，为“PoR Stalls”面板/警报提供数据。 |
+| `torii_sorafs_por_ingest_backlog`、`torii_sorafs_por_ingest_failures_total` |仪表| `provider`、`manifest` |积压深度加上每次轮询 `/v1/sorafs/por/ingestion/{manifest}` 时导出的累积故障计数器，为“PoR Stalls”面板/警报提供数据。 |
 
 ### 维修和 SLA
 

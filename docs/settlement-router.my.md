@@ -78,4 +78,4 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ## အထောက်အထားများနှင့် ကိုးကားချက်များ
 - NX-3 အခြေချရောက်တာ လက်ခံမှတ်စုများ- `status.md` (NX-3 အပိုင်း)။
 - အော်ပရေတာမျက်နှာပြင်များ- `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`။
-- ပြေစာအစီအစဉ်နှင့် API မျက်နှာပြင်များ- `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`။
+- ပြေစာအစီအစဉ်နှင့် API မျက်နှာပြင်များ- `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`။

@@ -32,13 +32,13 @@ Run `python3 scripts/swift_status_export.py --parity <parity-feed.json> --ci <ci
 
 ## Governance Watchers
 
- Summarise the `/v2/pipeline` rollout status, telemetry readiness, and
+ Summarise the `/v1/pipeline` rollout status, telemetry readiness, and
  governance checkpoints that the council tracks each week. Keep entries short
  and link to `status.md` sections or RFCs for deeper context.
 
 | Item | Owner | Status | Notes |
 |------|-------|--------|-------|
-| `/v2/pipeline` adoption | {{ pipeline_owner }} | {{ pipeline_status }} | {{ pipeline_notes }} |
+| `/v1/pipeline` adoption | {{ pipeline_owner }} | {{ pipeline_status }} | {{ pipeline_notes }} |
 | Telemetry readiness (`connect.queue_*`) | {{ telemetry_owner }} | {{ telemetry_status }} | {{ telemetry_notes }} |
 | Governance vote / readiness review | {{ vote_owner }} | {{ vote_status }} | {{ vote_notes }} |
 | Risk owner spotlight | {{ risk_owner }} | {{ risk_status }} | {{ risk_notes }} |

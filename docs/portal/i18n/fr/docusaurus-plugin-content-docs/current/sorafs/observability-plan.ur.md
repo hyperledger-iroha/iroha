@@ -81,7 +81,7 @@ mise en application بڑھنے پر فوری contexte ملے۔
 | `sorafs_node_por_failure_total` | Compteur | `provider_id` | Échantillons PoR ayant échoué et compteur monotone |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Jauge | `provider` | octets utilisés, profondeur de file d'attente et nombre de vols PoR et jauges Prometheus |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Jauge | `provider` | données de réussite sur la capacité/la disponibilité du fournisseur et tableau de bord de capacité |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | profondeur du backlog et compteurs de défaillances cumulées ainsi que `/v2/sorafs/por/ingestion/{manifest}` sondage et exportation et panneau/alerte "PoR Stalls" et flux d'informations |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Jauge | `provider`, `manifest` | profondeur du backlog et compteurs de défaillances cumulées ainsi que `/v1/sorafs/por/ingestion/{manifest}` sondage et exportation et panneau/alerte "PoR Stalls" et flux d'informations |
 
 ### Preuve de récupération en temps opportun (PoTR) et chunk SLA
 

@@ -27,13 +27,13 @@ every new provider admission, renewal, or retirement.
 | Provider | Draft `CapacityDeclarationV1` spec, capture hardware inventory, supply attestation bundles if mandated by `docs/source/sorafs/provider_admission_policy.md`. | `specs/<provider>.json`, hardware affidavit, contact roll. |
 | Storage WG reviewer | Validate schema, run CLI regression, cross-check stake and chunker profile metadata. | CLI logs, `sorafs_manifest_stub` outputs, signed review note. |
 | Governance council | Approve final declaration, record vote ID, and track override/penalty hooks. | Council ballot ID, incident log link. |
-| Treasury/SRE | Confirm dashboards and quota entries, archive reconciliation/export hashes, verify alerts. | Grafana screenshots, `/v2/sorafs/capacity/state` dump, Alertmanager silence log if used. |
+| Treasury/SRE | Confirm dashboards and quota entries, archive reconciliation/export hashes, verify alerts. | Grafana screenshots, `/v1/sorafs/capacity/state` dump, Alertmanager silence log if used. |
 
 Pre-flight checklist:
 
 1. Provider appears on the vetted list from SF-2b admission (else reject).
 2. Required keys exist in the provider registry (`iroha_torii` →
-   `/v2/sorafs/providers`).
+   `/v1/sorafs/providers`).
 3. Provider advertises the chunker profiles referenced in the declaration.
 4. Treasury confirms a reserve account exists for the expected staking tier.
 
@@ -58,7 +58,7 @@ sorafs_manifest_stub capacity declaration \
 ```
 
 This command validates the schema locally and emits every artefact required by
-`/v2/sorafs/capacity/declare`. Store the stdout/stderr in
+`/v1/sorafs/capacity/declare`. Store the stdout/stderr in
 `artifacts/sorafs/providers/acme/manifest_stub.log`.
 
 ### 2. Run admission smoke tests
@@ -80,7 +80,7 @@ Submit the request JSON through Torii’s app API. Either call it manually:
 
 ```bash
 TORII="https://torii.example.net"
-curl -sS -X POST "$TORII/v2/sorafs/capacity/declare" \
+curl -sS -X POST "$TORII/v1/sorafs/capacity/declare" \
   -H 'Content-Type: application/json' \
   --data-binary @artifacts/sorafs/providers/acme/request.json \
   | tee artifacts/sorafs/providers/acme/declare_response.json
@@ -97,7 +97,7 @@ After Torii accepts the declaration, export a state snapshot and the
 governance-friendly JSON by calling:
 
 ```bash
-curl -sS "$TORII/v2/sorafs/capacity/state" \
+curl -sS "$TORII/v1/sorafs/capacity/state" \
   | jq '.providers[] | select(.provider_id_hex=="0xACME...")' \
   > artifacts/sorafs/providers/acme/state_record.json
 ```
@@ -125,8 +125,8 @@ dump so SRE can prove telemetry coverage.
    ballots for any stragglers before approving retirement.
 2. **Publish final telemetry.** Use `sorafs_manifest_stub capacity telemetry` to
    generate the final snapshot and submit it via
-   `POST /v2/sorafs/capacity/telemetry`. Record the response and ensure the
-   provider’s row in `/v2/sorafs/capacity/state` moves to `status="retiring"` or
+   `POST /v1/sorafs/capacity/telemetry`. Record the response and ensure the
+   provider’s row in `/v1/sorafs/capacity/state` moves to `status="retiring"` or
    `"inactive"`.
 3. **Revoke access.** Remove the provider’s credentials from advert
    distribution, revoke OAuth/API tokens, and rotate any shared secret material.
@@ -168,7 +168,7 @@ hashes when approving payouts or slashing requests.
 | Phase | Storage WG | Governance | Treasury/SRE |
 |-------|------------|------------|---------------|
 | Spec validation | Check schema, run CLI test, confirm chunker profiles | — | — |
-| Torii submission | Monitor `/v2/sorafs/capacity/state`, update ops log | Record ballot ID, attach vote artefact | Watch Grafana and alert rules, capture reconciliation logs |
+| Torii submission | Monitor `/v1/sorafs/capacity/state`, update ops log | Record ballot ID, attach vote artefact | Watch Grafana and alert rules, capture reconciliation logs |
 | Exit | Verify reassignment + telemetry, compile packet | Approve retirement & link dispute log | Confirm dashboards drop provider, archive payout audit |
 
 Keep this matrix beside the release checklist; auditors expect to see the owner

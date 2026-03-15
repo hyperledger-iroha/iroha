@@ -225,7 +225,7 @@ Lista blanca de proveedores maliciosos o alertas superiores.
 **Onde olhar a seguir:**- La memoria caché de reproducción y la persistencia de cursores aterrissaram em DA-2. veja a
   Implementación en `crates/iroha_core/src/da/replay_cache.rs` (lógica del caché)
   e a integracao Torii em `crates/iroha_torii/src/da/ingest.rs`, que encadeia cheques de
-  huella digital a través de `/v2/da/ingest`.
+  huella digital a través de `/v1/da/ingest`.
 - Como simulacros de streaming PDP/PoTR también ejercitados a través del arnésproof-stream
   en `crates/sorafs_car/tests/sorafs_cli.rs`, cobrindo flujos de requisicao
   PoR/PDP/PoTR e escenarios de falha animados no modelo de ameacas.

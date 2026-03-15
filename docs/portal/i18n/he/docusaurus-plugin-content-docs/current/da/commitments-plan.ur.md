@@ -30,7 +30,7 @@ Norito בקידוד SCALE یا ad-hoc JSON نہیں۔
   מצב זמינות
 - הוכחות חברות דטרמיניסטיות.
   کہ manifest hash کسی مخصوص بلاک میں finalised ہوا تھا۔
-- שאילתות Torii (`/v2/da/commitments/*`) הוכחות של ממסרים,
+- שאילתות Torii (`/v1/da/commitments/*`) הוכחות של ממסרים,
   SDKs، اور governance automation ہر بلاک replay کئے بغیر availability کا
   audit کر سکیں۔
 - `SignedBlockWire` envelope کو canonical رکھنا، نئی structures کو Norito
@@ -45,7 +45,7 @@ Norito בקידוד SCALE یا ad-hoc JSON نہیں۔
 3. **Persistence/indexes** تاکہ WSV commitments queries تیزی سے handle کرے
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii RPC additions** list/query/prove endpoints کیلئے
-   `/v2/da/commitments` کے تحت۔
+   `/v1/da/commitments` کے تحت۔
 5. **מבחני אינטגרציה + מתקנים** או פריסת חוטים או זרימת הוכחה ואימות
    کریں `integration_tests/tests/da/commitments.rs` میں۔
 
@@ -137,9 +137,9 @@ Torii נקודות קצה אחרות:
 
 | מסלול | שיטה | מטען | הערות |
 |-------|--------|--------|-------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (מסנן טווח נתיב/תקופה/רצף, עימוד) | `DaCommitmentPage` واپس کرتا ہے جس میں total count، commitments، اور block hash شامل ہے۔ |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash یا `(epoch, sequence)` tuple)۔ | `DaCommitmentProof` واپس کرتا ہے (record + Merkle path + block hash)۔ |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper جو block hash calculation دوبارہ کرتا ہے اور inclusion validate کرتا ہے؛ ایسے SDKs کیلئے جو `iroha_crypto` سے براہ راست link نہیں کر سکتے۔ |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (מסנן טווח נתיב/תקופה/רצף, עימוד) | `DaCommitmentPage` واپس کرتا ہے جس میں total count، commitments، اور block hash شامل ہے۔ |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash یا `(epoch, sequence)` tuple)۔ | `DaCommitmentProof` واپس کرتا ہے (record + Merkle path + block hash)۔ |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper جو block hash calculation دوبارہ کرتا ہے اور inclusion validate کرتا ہے؛ ایسے SDKs کیلئے جو `iroha_crypto` سے براہ راست link نہیں کر سکتے۔ |
 
 تمام payloads `iroha_data_model::da::commitment` کے تحت ہیں۔ נתבים Torii
 handlers کو موجودہ DA ingest endpoints کے ساتھ mount کرتے ہیں تاکہ token/mTLS

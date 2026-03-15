@@ -26,7 +26,7 @@ Este runbook orienta os operadores de governança para apresentar disputas de ca
 ## 1. Avaliar o incidente
 
 - **Condições de ativação:** detecção de incumprimento de SLA (tempo de atividade/falha de PoR), déficit de replicação ou cancelamento de faturação.
-- **Confirmar telemetria:** captura snapshots de `/v2/sorafs/capacity/state` e `/v2/sorafs/capacity/telemetry` para o provedor.
+- **Confirmar telemetria:** captura snapshots de `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` para o provedor.
 - **Notificar as partes interessadas:** Equipe de armazenamento (operações do fornecedor), Conselho de governança (órgão decisório), Observabilidade (atualizações de painéis).
 
 ## 2. Preparando o pacote de evidências
@@ -74,7 +74,7 @@ Este runbook orienta os operadores de governança para apresentar disputas de ca
    ```
 
 3. Revisão `dispute_summary.json` (confirma tipo, resumo de evidências e carimbos de data e hora).
-4. Envie o JSON da solicitação para Torii `/v2/sorafs/capacity/dispute` através da cola de transações de governo. Captura o valor da resposta `dispute_id_hex`; anular as ações de revogação posteriores e os relatórios de auditoria.
+4. Envie o JSON da solicitação para Torii `/v1/sorafs/capacity/dispute` através da cola de transações de governo. Captura o valor da resposta `dispute_id_hex`; anular as ações de revogação posteriores e os relatórios de auditoria.
 
 ## 4. Evacuação e revogação
 

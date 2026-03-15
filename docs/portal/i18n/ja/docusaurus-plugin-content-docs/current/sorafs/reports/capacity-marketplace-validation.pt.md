@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-02-07
 
 |チェカジェム |バリダカオ |証拠 |
 |------|-----------|----------|
-| O レジストリ aceita declaracoes canonicas de capacidade |アプリ API 経由で `/v2/sorafs/capacity/declare` を実行し、操作の検証、レジストリ ノードからのメタデータの取得、ハンドオフのキャプチャを実行します。 | `crates/iroha_torii/src/routing.rs:7654` |
+| O レジストリ aceita declaracoes canonicas de capacidade |アプリ API 経由で `/v1/sorafs/capacity/declare` を実行し、操作の検証、レジストリ ノードからのメタデータの取得、ハンドオフのキャプチャを実行します。 | `crates/iroha_torii/src/routing.rs:7654` |
 |スマート コントラクトのペイロードが発散する |プロバイダーの ID を保証するために、GiB との互換性を確認し、継続的な対応を宣言してください。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | O CLI はオンボーディングの正規のアーティファトを発行します。 CLI のハーネスは、Norito/JSON/Base64 の確定性を利用して、オフラインでの操作の準備と宣言の往復を検証します。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 |行政管理のワークフローやガードレールを管理するための操作 |宣言のスキーマの列挙、デフォルトの政策および議会の見直しに関する文書。 | `../storage-capacity-marketplace.md` |

@@ -25,7 +25,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## جائزہ
 
-یہ runbook بیان کرتا ہے کہ SoraFS کے Pin Registry اور replication کے سروس لیول ایگریمنٹس (SLA) کی نگرانی اور ٹرائج کیسے کیا جائے۔ میٹرکس `iroha_torii` سے آتی ہیں اور Prometheus کے ذریعے `torii_sorafs_*` namespace میں ایکسپورٹ ہوتی ہیں۔ Torii پس منظر میں registry اسٹیٹ کو ہر 30 سیکنڈ پر سیمپل کرتا ہے، اس لیے ڈیش بورڈز اپ ٹو ڈیٹ رہتے ہیں چاہے کوئی آپریٹر `/v2/sorafs/pin/*` endpoints کو پول نہ کر رہا ہو۔ تیار شدہ ڈیش بورڈ (`docs/source/grafana_sorafs_pin_registry.json`) امپورٹ کریں تاکہ Grafana کا ایک تیار layout ملے جو نیچے کے حصوں سے براہ راست میپ ہوتا ہے۔
+یہ runbook بیان کرتا ہے کہ SoraFS کے Pin Registry اور replication کے سروس لیول ایگریمنٹس (SLA) کی نگرانی اور ٹرائج کیسے کیا جائے۔ میٹرکس `iroha_torii` سے آتی ہیں اور Prometheus کے ذریعے `torii_sorafs_*` namespace میں ایکسپورٹ ہوتی ہیں۔ Torii پس منظر میں registry اسٹیٹ کو ہر 30 سیکنڈ پر سیمپل کرتا ہے، اس لیے ڈیش بورڈز اپ ٹو ڈیٹ رہتے ہیں چاہے کوئی آپریٹر `/v1/sorafs/pin/*` endpoints کو پول نہ کر رہا ہو۔ تیار شدہ ڈیش بورڈ (`docs/source/grafana_sorafs_pin_registry.json`) امپورٹ کریں تاکہ Grafana کا ایک تیار layout ملے جو نیچے کے حصوں سے براہ راست میپ ہوتا ہے۔
 
 ## میٹرک حوالہ
 
@@ -126,7 +126,7 @@ groups:
 
 1. **وجہ کی شناخت**
    - اگر SLA misses بڑھیں اور backlog کم رہے تو providers کارکردگی پر توجہ دیں (PoR failures، late completions)۔
-   - اگر backlog بڑھے اور misses مستحکم ہوں تو admission (`/v2/sorafs/pin/*`) چیک کریں تاکہ manifests جو کونسل کی منظوری کے منتظر ہیں واضح ہوں۔
+   - اگر backlog بڑھے اور misses مستحکم ہوں تو admission (`/v1/sorafs/pin/*`) چیک کریں تاکہ manifests جو کونسل کی منظوری کے منتظر ہیں واضح ہوں۔
 2. **Providers کی حالت کی توثیق**
    - `iroha app sorafs providers list` چلائیں اور دیکھیں کہ اعلان کردہ صلاحیتیں replication تقاضوں سے میل کھاتی ہیں۔
    - `torii_sorafs_capacity_*` gauges چیک کریں تاکہ provisioned GiB اور PoR success کی تصدیق ہو۔
@@ -147,7 +147,7 @@ groups:
 2. **Staging میں dry-run**
    - config تبدیلی کو staging کلسٹر پر deploy کریں جو production topology کی نقل کرے۔
    - `cargo xtask sorafs-pin-fixtures` چلائیں تاکہ canonical alias fixtures اب بھی decode اور round-trip ہوں؛ کوئی mismatch upstream drift دکھاتا ہے جسے پہلے درست کرنا ہوگا۔
-   - `/v2/sorafs/pin/{digest}` اور `/v2/sorafs/aliases` endpoints کو synthetic proofs کے ساتھ آزمائیں جو fresh، refresh-window، expired اور hard-expired کیسز کور کریں۔ HTTP status codes، headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) اور JSON body fields کو اس runbook کے مطابق validate کریں۔
+   - `/v1/sorafs/pin/{digest}` اور `/v1/sorafs/aliases` endpoints کو synthetic proofs کے ساتھ آزمائیں جو fresh، refresh-window، expired اور hard-expired کیسز کور کریں۔ HTTP status codes، headers (`Sora-Proof-Status`, `Retry-After`, `Warning`) اور JSON body fields کو اس runbook کے مطابق validate کریں۔
 3. **Production میں فعال کریں**
    - standard change window میں نئی config رول آؤٹ کریں۔ پہلے Torii پر لاگو کریں، پھر node لاگز میں نئی پالیسی کی تصدیق کے بعد gateways/SDK services کو restart کریں۔
    - `docs/source/grafana_sorafs_pin_registry.json` کو Grafana میں امپورٹ کریں (یا موجودہ dashboards اپڈیٹ کریں) اور alias cache refresh panels کو NOC workspace میں pin کریں۔

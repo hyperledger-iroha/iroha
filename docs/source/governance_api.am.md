@@ -24,9 +24,9 @@ translator: machine-google-reviewed
 - የኤስዲኬ ሽፋን፡-
 - ፓይዘን (`iroha_python`): `ToriiClient.get_governance_proposal_typed` ይመልሳል `GovernanceProposalResult` (የተለመደ ሁኔታ/አይነት መስኮች)፣ `ToriiClient.get_governance_referendum_typed` `GovernanceReferendumResult` ይመልሳል፣ Norito `ToriiClient.get_governance_locks_typed` ይመልሳል `GovernanceLocksResult`፣ `ToriiClient.get_governance_unlock_stats_typed` ይመልሳል `GovernanceUnlockStats`፣ እና `ToriiClient.list_governance_instances_typed` `ToriiClient.list_governance_instances_typed` ይመልሳል `GovernanceInstancesPage` በመላ ዩኤስ ላይ የተተየበው የአስተዳደር ምሳሌ።
 - የፓይዘን ቀላል ክብደት ያለው ደንበኛ (`iroha_torii_client`)፡ `ToriiClient.finalize_referendum` እና `ToriiClient.enact_proposal` መመለሻ የተተየበው `GovernanceInstructionDraft` ቅርቅቦች (Torii አጽም Prometheus ጥቅል መጠቅለል) ፍሰቶችን ያጠናቅቁ/አጽድቁ።
-ጃቫ ስክሪፕት (`@iroha/iroha-js`)፡ `ToriiClient` ንጣፎች ለፕሮፖዛል፣ ለሪፈረንዳ፣ ለቁልፍ፣ ለመቆለፊያ፣ ለመክፈቻ ስታቲስቲክስ እና አሁን `listGovernanceInstances(namespace, options)` እና የምክር ቤቱ የመጨረሻ ነጥቦችን (`getGovernanceCouncilCurrent`፣00000062X፣0060X `governancePersistCouncil`፣ `getGovernanceCouncilAudit`) ስለዚህ የ Node.js ደንበኞች `/v2/gov/instances/{ns}` ን በማንሳት በVRF የሚደገፉ የስራ ፍሰቶችን ከነባሩ የኮንትራት ምሳሌ ዝርዝር ጋር ማሽከርከር ይችላሉ። `governanceFinalizeReferendumTyped` እና `governanceEnactProposalTyped` የፓይዘን አጋዥ መስተዋት ሁልጊዜ የተዋቀረ ረቂቅ በመመለስ (Torii በ Torii ሲመልስ ባዶውን አፅም በማዋሃድ) ግብይቶች በ I10queu.X ን ከመቀጠል በፊት አውቶማቲክን ይከላከላል። `getGovernanceLocksTyped` አሁን የ`404 Not Found` ምላሾችን ወደ `{found: false, locks: {}, referendum_id: <id>}` መደበኛ ያደርጋል ስለዚህ JS ደዋዮች ሪፈረንደም ምንም መቆለፊያ ከሌለው ከፓይዘን አጋዥ ጋር አንድ አይነት ቅርፅ ያለው ውጤት ያገኛሉ።
+ጃቫ ስክሪፕት (`@iroha/iroha-js`)፡ `ToriiClient` ንጣፎች ለፕሮፖዛል፣ ለሪፈረንዳ፣ ለቁልፍ፣ ለመቆለፊያ፣ ለመክፈቻ ስታቲስቲክስ እና አሁን `listGovernanceInstances(namespace, options)` እና የምክር ቤቱ የመጨረሻ ነጥቦችን (`getGovernanceCouncilCurrent`፣00000062X፣0060X `governancePersistCouncil`፣ `getGovernanceCouncilAudit`) ስለዚህ የ Node.js ደንበኞች `/v1/gov/instances/{ns}` ን በማንሳት በVRF የሚደገፉ የስራ ፍሰቶችን ከነባሩ የኮንትራት ምሳሌ ዝርዝር ጋር ማሽከርከር ይችላሉ። `governanceFinalizeReferendumTyped` እና `governanceEnactProposalTyped` የፓይዘን አጋዥ መስተዋት ሁልጊዜ የተዋቀረ ረቂቅ በመመለስ (Torii በ Torii ሲመልስ ባዶውን አፅም በማዋሃድ) ግብይቶች በ I10queu.X ን ከመቀጠል በፊት አውቶማቲክን ይከላከላል። `getGovernanceLocksTyped` አሁን የ`404 Not Found` ምላሾችን ወደ `{found: false, locks: {}, referendum_id: <id>}` መደበኛ ያደርጋል ስለዚህ JS ደዋዮች ሪፈረንደም ምንም መቆለፊያ ከሌለው ከፓይዘን አጋዥ ጋር አንድ አይነት ቅርፅ ያለው ውጤት ያገኛሉ።
 
-የመጨረሻ ነጥቦች- POST `/v2/gov/proposals/deploy-contract`
+የመጨረሻ ነጥቦች- POST `/v1/gov/proposals/deploy-contract`
   - ጥያቄ (JSON)፡-
     {
       "namespace": "መተግበሪያዎች",
@@ -43,30 +43,30 @@ translator: machine-google-reviewed
   - ማረጋገጫ፡ አንጓዎች `abi_hash` ለቀረበው `abi_version` እና አለመዛመጃዎችን ውድቅ ያድርጉ። ለ `abi_version = "v1"`፣ የሚጠበቀው ዋጋ `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ነው።
 
 ኮንትራቶች ኤፒአይ (ተሰማራ)
-- POST `/v2/contracts/deploy`
+- POST `/v1/contracts/deploy`
   ጥያቄ፡ {"ስልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "..."፣ "code_b64": "..." }
   - ባህሪ፡ `code_hash` ከ IVM ፕሮግራም አካል እና `abi_hash` ከርዕስ `abi_version` ያሰላል፣ከዚያ `RegisterSmartContractCode`(የሚገለጥበት) እና I18040 `.to` ባይት) በ `authority` በኩል።
   ምላሽ፡ {"እሺ"፡ እውነት፡ "code_hash_hex"፡ "..."፣ "አቢ_ሀሽ_ሄክስ"፡ "..." }
   - ተዛማጅ፡
-    - GET `/v2/contracts/code/{code_hash}` → የተከማቸ አንጸባራቂ ይመልሳል
-    - GET `/v2/contracts/code-bytes/{code_hash}` → `{ code_b64 }` ይመልሳል
-- POST `/v2/contracts/instance`
+    - GET `/v1/contracts/code/{code_hash}` → የተከማቸ አንጸባራቂ ይመልሳል
+    - GET `/v1/contracts/code-bytes/{code_hash}` → `{ code_b64 }` ይመልሳል
+- POST `/v1/contracts/instance`
   ጥያቄ፡ {"ስልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "..."፣ "ስም ቦታ": "መተግበሪያዎች"፣ "ኮንትራት_መታወቂያ"፡ "calc.v1"፣ "code_b64": "..." }
   - ባህሪ፡ የቀረበውን ባይትኮድ ያሰማራና ወዲያውኑ የ`(namespace, contract_id)` ካርታውን በ`ActivateContractInstance` ያንቀሳቅሰዋል።
   ምላሽ፡ {"እሺ"፡ እውነት፡ "ስም ቦታ"፡ "መተግበሪያዎች"፡ "ኮንትራት_መታወቂያ"፡ "calc.v1"፣ "code_hash_hex"፡ "…"፣ "abi_hash_hex": "..." }
 
 ተለዋጭ አገልግሎት
-- ፖስት `/v2/aliases/voprf/evaluate`
+- ፖስት `/v1/aliases/voprf/evaluate`
   - ጥያቄ፡ {"blindded_element_hex"፡ "..." }
   ምላሽ፡ {"የተገመገመ_element_hex"፡ "…128hex", "backend": "blake2b512-mock"}}
     - `backend` የግምገማውን አተገባበር ያንፀባርቃል። የአሁኑ ዋጋ፡ `blake2b512-mock`
   - ማስታወሻዎች፡ Blake2b512ን ከጎራ መለያየት `iroha.alias.voprf.mock.v1` ጋር የሚተገበር ቆራጥ የፌዝ ገምጋሚ። የምርት VOPRF የቧንቧ መስመር በIroha እስኪሰካ ድረስ ለሙከራ መሳሪያ ነው።
   - ስህተቶች፡ HTTP `400` በተበላሸ የሄክስ ግቤት ላይ። Torii Norito `ValidationFail::QueryFailed::Conversion` ፖስታ ከዲኮደር ስህተት መልእክት ጋር ይመልሳል።
-- POST `/v2/aliases/resolve`
+- POST `/v1/aliases/resolve`
   - ጥያቄ፡ {"ተለዋጭ ስም"፡ "GB82 WEST 1234 5698 7654 32" }
   ምላሽ፡ {"ተለዋጭ ስም"፡ "GB82WEST12345698765432"፣ "መለያ_መታወቂያ"፡ "i105..."፣ "ኢንዴክስ"፡ 0፣ "ምንጭ"፡ "ኢሶ_ብሪጅ" }
   - ማስታወሻዎች፡ የ ISO ድልድይ አሂድ ጊዜ ዝግጅትን ይፈልጋል (`[iso_bridge.account_aliases]` በ `iroha_config`)። Torii ከመታየቱ በፊት ነጭ ቦታን እና የላይኛውን መያዣ በመንጠቅ ተለዋጭ ስሞችን መደበኛ ያደርገዋል። ተለዋጭ ስም በማይኖርበት ጊዜ 404 እና 503 የ ISO bridge runtime ሲጠፋ ይመልሳል።
-- POST `/v2/aliases/resolve_index`
+- POST `/v1/aliases/resolve_index`
   - ጥያቄ፡ {"ኢንዴክስ"፡ 0}
   ምላሽ፡ {"ኢንዴክስ"፡ 0፣ "ተለዋጭ ስም"፡ "GB82WEST12345698765432"፣ "መለያ_መታወቂያ"፡ "i105..."፣ "ምንጭ"፡ "iso_bridge"}
   - ማስታወሻዎች፡ የአሊያስ ኢንዴክሶች ከውቅረት ቅደም ተከተል (0-ተኮር) በወሰነው ሁኔታ ተመድበዋል። ለተለዋጭ ማረጋገጫ ክስተቶች የኦዲት መንገዶችን ለመገንባት ደንበኞች ከመስመር ውጭ ምላሾችን መሸጎጫ ማድረግ ይችላሉ።የኮድ መጠን ካፕ
@@ -75,7 +75,7 @@ translator: machine-google-reviewed
   - ነባሪ: 16 ሚቢ. የ`.to` ምስል ርዝመት በማይለዋወጥ ጥሰት ስህተት ከካፒታው ሲያልፍ አንጓዎች `RegisterSmartContractBytes`ን አይቀበሉም።
   - ኦፕሬተሮች `SetParameter(Custom)` ከ `id = "max_contract_code_bytes"` እና የቁጥር ጭነት ጋር በማስገባት ማስተካከል ይችላሉ።
 
-- POST `/v2/gov/ballots/zk`
+- POST `/v1/gov/ballots/zk`
   ጥያቄ፡- {"ሥልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "…?"፣ "ቼይን_መታወቂያ"፡ "..."፣ "ምርጫ_መታወቂያ"፡ "e1"፣ "ማስረጃ_b64"፡ "…", "ይፋዊ"፡ {…} }
   ምላሽ፡ {"እሺ"፡ እውነት፡ "ተቀባይነት ያለው"፡ እውነት፡ "tx_instructions"፡ [{…}] }
   - ማስታወሻዎች:
@@ -84,10 +84,10 @@ translator: machine-google-reviewed
     - ZK መጠኑን ለመቀነስ ወይም ጊዜው የሚያበቃበትን ድጋሚ የሰጡት የአገልጋይ ወገን ከ`BallotRejected` መመርመሪያዎች ጋር ውድቅ ተደርገዋል።
     - የኮንትራት አፈጻጸም `ZK_VOTE_VERIFY_BALLOT` መደወል አለበት ከመግባቱ በፊት `SubmitBallot`; አስተናጋጆች የአንድ-ምት መቀርቀሪያን ያስገድዳሉ።
 
-- POST `/v2/gov/ballots/plain`
+- POST `/v1/gov/ballots/plain`
   - ጥያቄ፡ {"ስልጣን"፡ "i105..."፣ "የግል_ቁልፍ"፡ "…?"፣ "ሰንሰለት_መታወቂያ"፡ "…"፣ "ሪፈረንደም_መታወቂያ"፡ "r1"፣ "ባለቤት"፡ "i105..."፣ "መጠን"፡ "1000"፣ "ቆይታ_ብሎኮች"፡ 6000፣ "አቅጣጫ"|አብዬ
   ምላሽ፡ {"እሺ"፡ እውነት፡ "ተቀባይነት ያለው"፡ እውነት፡ "tx_instructions"፡ [{…}] }
-  - ማስታወሻዎች፡ ድጋሚ-ድምጾች የተራዘሙ ብቻ ናቸው - አዲስ የድምጽ መስጫ ወረቀቱ ያለውን የመቆለፊያ መጠን ወይም የአገልግሎት ጊዜው ሊቀንስ አይችልም። `owner` ከግብይቱ ባለስልጣን ጋር እኩል መሆን አለበት። ዝቅተኛው የቆይታ ጊዜ `conviction_step_blocks` ነው።- POST `/v2/gov/finalize`
+  - ማስታወሻዎች፡ ድጋሚ-ድምጾች የተራዘሙ ብቻ ናቸው - አዲስ የድምጽ መስጫ ወረቀቱ ያለውን የመቆለፊያ መጠን ወይም የአገልግሎት ጊዜው ሊቀንስ አይችልም። `owner` ከግብይቱ ባለስልጣን ጋር እኩል መሆን አለበት። ዝቅተኛው የቆይታ ጊዜ `conviction_step_blocks` ነው።- POST `/v1/gov/finalize`
   ጥያቄ፡ {"የህዝበ ውሳኔ"፡ "r1"፣ "ፕሮፖሳል_መታወቂያ"፡ "…64hex"፣ "ስልጣን": "i105...?"፣ "የግል_ቁልፍ"፡ "...?" }
   ምላሽ፡ {"እሺ"፡ እውነት፡ "tx_instructions"፡ [{"wire_id"፡ "…FinalizeReferendum"፣ "payload_hex":"…"}] }
   በሰንሰለት ላይ ተጽእኖ (የአሁኑ ስካፎልድ)፡ የጸደቀ የማሰማራት ፕሮፖዛልን ማፅደቅ በ`code_hash` ከተጠበቀው `abi_hash` ጋር በትንሹ `ContractManifest` ያስገባል እና ፕሮፖዛሉ የፀደቀውን ያመላክታል። ለ`code_hash` የተለየ `abi_hash` ያለው አንጸባራቂ ካለ፣ ህጉ ውድቅ ይሆናል።
@@ -96,24 +96,24 @@ translator: machine-google-reviewed
     - በራስ-ሰር ዝጋ በ `h_end` ልቀቶች ተቀባይነት ያለው/የተከለከለው ለPlain referenda ብቻ; የ ZK ሪፈረንዳ የተጠናቀቀ ድምር እስኪቀርብ እና `FinalizeReferendum` እስኪፈጸም ድረስ ተዘግቷል።
     - የመመለሻ ቼኮች ማጽደቅ+ ውድቅ ብቻ ይጠቀማሉ። መታቀብ ለምርጫ አይቆጠርም።
 
-- ፖስት `/v2/gov/enact`
+- ፖስት `/v1/gov/enact`
   ጥያቄ፡- {"ፕሮፖሳል_መታወቂያ"፡"…64hex"፣ "preimage_hash": "…64hex?"፣ "መስኮት"፡ {"ዝቅተኛ"፡ 0፣ "የላይ"፡ 0}?፣ "ስልጣን"፡ "i105...?"፣ "የግል_ቁልፍ": "…?" }
   ምላሽ፡ {"እሺ"፡ እውነት፡ "tx_instructions"፡ [{"wire_id"፡ "…EnactReferendum"፣ "payload_hex"፡"…"}] }
   - ማስታወሻዎች: Torii `authority`/`private_key` ሲቀርብ የተፈረመውን ግብይት ያቀርባል; አለበለዚያ ደንበኞች እንዲፈርሙ እና እንዲያቀርቡ አጽም ይመልሳል. ቅድመ እይታው አማራጭ እና በአሁኑ ጊዜ መረጃዊ ነው።
 
-- `/v2/gov/proposals/{id}` ያግኙ
+- `/v1/gov/proposals/{id}` ያግኙ
   መንገድ `{id}`፡ ፕሮፖዛል መታወቂያ ሄክስ (64 ቻርልስ)
   ምላሽ፡ {"ተገኝ"፡ ቡል፡ "ፕሮፖዛል"፡ {… }? }
 
-- `/v2/gov/locks/{rid}` ያግኙ
+- `/v1/gov/locks/{rid}` ያግኙ
   - መንገድ `{rid}`: ሪፈረንደም መታወቂያ ሕብረቁምፊ
   ምላሽ፡ {"ተገኝ"፡ ቡል፣ "ሪፈረንደም_መታወቂያ"፡ "ሪድ"፣ "መቆለፊያዎች"፡ { … }? }
 
-- `/v2/gov/council/current` ያግኙ
+- `/v1/gov/council/current` ያግኙ
   - ምላሽ፡ {"epoch": N, "አባላት": [{"መለያ_መታወቂያ": "..." }, …] }
   - ማስታወሻዎች: የጸና ምክር ቤት በሚገኝበት ጊዜ ይመልሳል; ያለበለዚያ የተዋቀረውን የአክሲዮን ንብረት እና ገደቦችን በመጠቀም የሚወስን ውድቀትን ያመጣል (ቀጥታ የቪአርኤፍ ማረጋገጫዎች በሰንሰለት ላይ እስከሚቆዩ ድረስ የVRF ዝርዝርን ያሳያል)።
 
-- POST `/v2/gov/council/derive-vrf` (ባህሪ፡ gov_vrf)
+- POST `/v1/gov/council/derive-vrf` (ባህሪ፡ gov_vrf)
   - ጥያቄ፡ {"የኮሚቴ_መጠን"፡ 21፣ "epoch": 123? , "እጩዎች": [{ "መለያ_መታወቂያ": "…", "ተለዋዋጭ": "መደበኛ|ትንሽ", "pk_b64": "…", "ማስረጃ_b64": "…" }, …] }
   - ባህሪ፡ የእያንዳንዱን እጩ የቪአርኤፍ ማረጋገጫ ከ`chain_id`፣ `epoch` እና የቅርብ ጊዜው የብሎክ ሃሽ ቢኮን በተገኘው ቀኖናዊ ግብአት ላይ ያረጋግጣል። በ ውፅዓት ባይት ዴስክ ከቲኬት ሰሪዎች ጋር መደርደር; ከፍተኛ `committee_size` አባላትን ይመልሳል። አይጸናም።
   - ምላሽ፡ {"epoch": N, "አባላት": [{"መለያ_መታወቂያ": "..." } …]፣ "ጠቅላላ_እጩዎች"፡ M፣ "የተረጋገጠ"፡ K }
@@ -207,14 +207,14 @@ RBAC
 - መንጠቆውን የሚያረኩ ግብይቶች ሜታዳታ `gov_upgrade_id=<value>` (ወይም በአንጸባራቂ የተገለጸውን ቁልፍ) ከማንኛቸውም i105... በማንፀባረቂያ ምልአተ ጉባኤ የሚፈለጉ ማፅደቆችን ማካተት አለባቸው።
 
 ምቹ የመጨረሻ ነጥብ
-- POST `/v2/gov/protected-namespaces` - `gov_protected_namespaces` በቀጥታ በመስቀለኛ መንገድ ላይ ይተገበራል።
+- POST `/v1/gov/protected-namespaces` - `gov_protected_namespaces` በቀጥታ በመስቀለኛ መንገድ ላይ ይተገበራል።
   - ጥያቄ፡ {"ስም ቦታዎች"፡ ["መተግበሪያዎች"፣ "ስርዓት"]}
   ምላሽ፡ {"እሺ"፡ እውነት፡ "ተግባራዊ"፡ 1 }
   - ማስታወሻዎች: ለአስተዳዳሪ / ለሙከራ የታሰበ; ከተዋቀረ የኤፒአይ ማስመሰያ ያስፈልገዋል። ለማምረት፣ በ`SetParameter(Custom)` የተፈረመ ግብይት ማስገባትን ይምረጡ።CLI አጋዦች
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - የስም ቦታውን የኮንትራት ምሳሌዎችን ያመጣል እና ያቋረጡ ቼኮች፡-
     - Torii ለእያንዳንዱ `code_hash` ባይትኮድ ያከማቻል፣ እና የእሱ Blake2b-32 መፍጨት ከ`code_hash` ጋር ይዛመዳል።
-    - በ`/v2/contracts/code/{code_hash}` ስር የተከማቸ አንጸባራቂ ከ `code_hash` እና `abi_hash` እሴቶች ጋር የሚዛመዱ ሪፖርቶች።
+    - በ`/v1/contracts/code/{code_hash}` ስር የተከማቸ አንጸባራቂ ከ `code_hash` እና `abi_hash` እሴቶች ጋር የሚዛመዱ ሪፖርቶች።
     - መስቀለኛ መንገድ በሚጠቀምበት ተመሳሳይ ፕሮፖዛል-መታወቂያ የተገኘ የፀደቀ የአስተዳደር ፕሮፖዛል ለ`(namespace, contract_id, code_hash, abi_hash)` አለ።
   - የJSON ሪፖርት በአንድ ውል ከ`results[]` ጋር ያወጣል (ጉዳዮች፣ የሰነድ መግለጫ/ ኮድ/የፕሮፖዛል ማጠቃለያ) እና የአንድ መስመር ማጠቃለያ እስካልታፈነ ድረስ (`--no-summary`)።
   - የተጠበቁ የስም ቦታዎችን ለመመርመር ወይም በአስተዳደር ቁጥጥር ስር ያሉ የስራ ፍሰቶችን ለማረጋገጥ ጠቃሚ።
@@ -230,7 +230,7 @@ RBAC
   - `--owner` ቀኖናዊ I105 ቃል በቃል ይቀበላል; አማራጭ `@<domain>` ቅጥያዎች የማዞሪያ ፍንጮች ብቻ ናቸው።
   - ተለዋጭ ስሞች `--lock-amount`/`--lock-duration-blocks` ለስክሪፕት እኩልነት የZK ባንዲራ ስሞችን ያንፀባርቃሉ።
   - የማጠቃለያ ውፅዓት መስተዋቶች `vote --mode zk` ኢንኮድ የተደረገ የመመሪያ የጣት አሻራ እና በሰው ሊነበቡ የሚችሉ የድምጽ መስጫ ቦታዎች (`owner`፣ `owner`፣ `amount`፣ `duration_blocks`፣`direction`፣ፈጣን ማረጋገጫን በመስጠት)።የምሳሌዎች ዝርዝር
-- GET `/v2/gov/instances/{ns}` - ለስም ቦታ ንቁ የውል ሁኔታዎችን ይዘረዝራል።
+- GET `/v1/gov/instances/{ns}` - ለስም ቦታ ንቁ የውል ሁኔታዎችን ይዘረዝራል።
   - የጥያቄ መለኪያዎች;
     - `contains`፡ ማጣሪያ በ `contract_id` ንዑስ ሕብረቁምፊ (ጉዳይ-የሚነካ)
     - `hash_prefix`፡ በሄክስ ቅድመ ቅጥያ `code_hash_hex` (አነስተኛ ሆሄ) አጣራ
@@ -240,10 +240,10 @@ RBAC
   - SDK አጋዥ፡ `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (ጃቫስክሪፕት) ወይም `ToriiClient.list_governance_instances_typed("apps", ...)` (Python)።
 
 ክፈት ጠረግ (ኦፕሬተር/ኦዲት)
-- `/v2/gov/unlocks/stats` ያግኙ
+- `/v1/gov/unlocks/stats` ያግኙ
   - ምላሽ፡ {"ቁመት_የአሁኑ"፡ H፣ "ጊዜው_የተጠናቀቀ_መቆለፊያዎች"፡ n፣ "ማጣቀሻ_ጊዜው_ያለፈበት"፡ m፣ "የመጨረሻ_ጠረጋ ቁመት"፡ S }
   - ማስታወሻዎች፡ `last_sweep_height` ጊዜው ያለፈባቸው መቆለፊያዎች ተጠርገው የቆዩበትን የቅርቡን የማገጃ ቁመት ያንጸባርቃል። `expired_locks_now` በ `expiry_height <= height_current` የመቆለፊያ መዝገቦችን በመቃኘት ይሰላል።
-- POST `/v2/gov/ballots/zk-v1`
+- POST `/v1/gov/ballots/zk-v1`
   - ጥያቄ (v1-ቅጥ DTO):
     {
       "ስልጣን": "i105...",
@@ -259,7 +259,7 @@ RBAC
       "አቅጣጫ": "አዬ|አይ | እምቢ?",
       " nullifier": "blake2b32:…64hex?"
     }
-  ምላሽ፡ {"እሺ"፡ እውነት፡ "ተቀባይነት ያለው"፡ እውነት፡ "tx_instructions"፡ [{…}] }- POST `/v2/gov/ballots/zk-v1/ballot-proof` (ባህሪ፡ `zk-ballot`)
+  ምላሽ፡ {"እሺ"፡ እውነት፡ "ተቀባይነት ያለው"፡ እውነት፡ "tx_instructions"፡ [{…}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (ባህሪ፡ `zk-ballot`)
   - `BallotProof` JSON በቀጥታ ይቀበላል እና `CastZkBallot` አጽም ይመልሳል።
   - ጥያቄ፡-
     {
@@ -333,7 +333,7 @@ for (expected, kind) in offences.iter().enumerate() {
 
 ኦፕሬተሮች እና መሳሪያዎች በሚከተለው መንገድ ክፍያ ጭነቶችን መፈተሽ እና እንደገና ማሰራጨት ይችላሉ።
 
-- Torii፡ `GET /v2/sumeragi/evidence` እና `GET /v2/sumeragi/evidence/count`።
+- Torii፡ `GET /v1/sumeragi/evidence` እና `GET /v1/sumeragi/evidence/count`።
 - CLI፡ `iroha ops sumeragi evidence list`፣ `… count`፣ እና `… submit --evidence-hex <payload>`።
 
 አስተዳደር የማስረጃውን ባይት እንደ ቀኖናዊ ማረጋገጫ መያዝ አለበት፡-
@@ -342,7 +342,7 @@ for (expected, kind) in offences.iter().enumerate() {
 2. ** ካስፈለገ ይሰርዙ *** `CancelConsensusEvidencePenalty` ከማስረጃ ጭነት ጋር `slashing_delay_blocks` ከማለፉ በፊት; መዝገቡ `penalty_cancelled` እና `penalty_cancelled_at_height` ምልክት ተደርጎበታል፣ እና ምንም መቆራረጥ አይተገበርም።
 3. ** ቅጣቱን ደረጃ ያድርጉ ** የሚከፈለውን ጭነት በሪፈረንደም ወይም በሱዶ መመሪያ (ለምሳሌ `Unregister::peer`) በማካተት። አፈፃፀም ክፍያውን እንደገና ያረጋግጣል; የተበላሸ ወይም የቆየ ማስረጃ በቆራጥነት ውድቅ ይደረጋል።
 4. ** ተከታዩን ቶፖሎጂን መርሐግብር ያውጡ** ስለዚህ ጥፋተኛው i105... ወዲያውኑ እንደገና መቀላቀል አይችልም። የተለመደው ፍሰቶች ወረፋ `SetParameter(Sumeragi::NextMode)` እና `SetParameter(Sumeragi::ModeActivationHeight)` ከተዘመነው የስም ዝርዝር ጋር።
-5. **የኦዲት ውጤቶች** በ`/v2/sumeragi/evidence` እና `/v2/sumeragi/status` በኩል ማስረጃው የላቀ መሆኑን ለማረጋገጥ እና አስተዳደር መወገድን ማውጣቱን ያረጋግጣል።
+5. **የኦዲት ውጤቶች** በ`/v1/sumeragi/evidence` እና `/v1/sumeragi/status` በኩል ማስረጃው የላቀ መሆኑን ለማረጋገጥ እና አስተዳደር መወገድን ማውጣቱን ያረጋግጣል።
 
 ### የጋራ መግባባት ቅደም ተከተል
 
@@ -355,11 +355,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- የሩጫ ሰዓቱ እና CLI ደረጃቸውን የጠበቁ መለኪያዎችን በ`/v2/sumeragi/params` እና `iroha sumeragi params --summary` በኩል ያጋልጣሉ፣ ስለዚህ ኦፕሬተሮች የማግበሪያ ከፍታዎችን እና i105... ዝርዝሮችን ማረጋገጥ ይችላሉ።
+- የሩጫ ሰዓቱ እና CLI ደረጃቸውን የጠበቁ መለኪያዎችን በ`/v1/sumeragi/params` እና `iroha sumeragi params --summary` በኩል ያጋልጣሉ፣ ስለዚህ ኦፕሬተሮች የማግበሪያ ከፍታዎችን እና i105... ዝርዝሮችን ማረጋገጥ ይችላሉ።
 - የአስተዳደር አውቶማቲክ ሁልጊዜ;
   1. በማስረጃ የተደገፈውን የማስወገድ (ወይም ወደነበረበት መመለስ) ውሳኔ ያጠናቅቁ።
   2. የክትትል መልሶ ማዋቀርን በ`mode_activation_height = h_current + activation_lag_blocks` ያዙ።
-  3. `/v2/sumeragi/status` `effective_consensus_mode` እስኪገለበጥ በሚጠበቀው ከፍታ ላይ ይቆጣጠሩ።
+  3. `/v1/sumeragi/status` `effective_consensus_mode` እስኪገለበጥ በሚጠበቀው ከፍታ ላይ ይቆጣጠሩ።
 
 ማንኛውም ስክሪፕት i105...s የሚሽከረከር ወይም መጨፍጨፍን የሚተገብር **የዜሮ መዘግየትን ማግበር መሞከር የለበትም ወይም የእጅ ማጥፊያ መለኪያዎችን መተው የለበትም። እንደነዚህ ያሉ ግብይቶች ውድቅ ይደረጋሉ እና አውታረ መረቡን በቀድሞው ሁነታ ይተዉታል.
 

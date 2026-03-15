@@ -200,7 +200,7 @@ Sobre común: `InstructionExecutionError` con variantes para errores de evaluaci
 - Accionado por alias + componentes de cuenta:
   -`iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
 - Resolver alias al auxilio canónico:
-  - `POST /v2/assets/aliases/resolve` con JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` con JSON `{ "alias": "pkr#ubl@sbp" }`
 
 Nota de migración:
 - Los ID de definición de activos textuales `name#domain` no se admiten intencionalmente en la primera versión.

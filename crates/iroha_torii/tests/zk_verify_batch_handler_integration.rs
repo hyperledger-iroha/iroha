@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration test for /v2/zk/verify-batch minimal handler.
+//! Integration test for /v1/zk/verify-batch minimal handler.
 #![cfg(all(feature = "app_api", feature = "zk-verify-batch"))]
 
 use axum::{Router, routing::post};
@@ -14,7 +14,7 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
 
     // Router with verify-batch handler
     let app = Router::new().route(
-        "/v2/zk/verify-batch",
+        "/v1/zk/verify-batch",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
                 iroha_torii::handle_v1_zk_verify_batch(headers, body).await
@@ -47,7 +47,7 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
     // Norito request
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/verify-batch")
+        .uri("/v1/zk/verify-batch")
         .header(http::header::CONTENT_TYPE, "application/x-norito")
         .body(axum::body::Body::from(norito_vec))
         .unwrap();
@@ -77,7 +77,7 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
     };
 
     let app = Router::new().route(
-        "/v2/zk/verify-batch",
+        "/v1/zk/verify-batch",
         post(
             |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
                 iroha_torii::handle_v1_zk_verify_batch(headers, body).await
@@ -108,7 +108,7 @@ async fn zk_verify_batch_endpoint_accepts_goldilocks_payload() {
 
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/verify-batch")
+        .uri("/v1/zk/verify-batch")
         .header(http::header::CONTENT_TYPE, "application/x-norito")
         .body(axum::body::Body::from(norito_vec))
         .unwrap();

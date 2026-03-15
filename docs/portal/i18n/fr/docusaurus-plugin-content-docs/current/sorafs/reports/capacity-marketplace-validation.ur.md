@@ -28,7 +28,7 @@ Il y a une liste de contrôle pour les opérateurs de marché et l'activation du
 
 | Vérifier | Validation | Preuve |
 |-------|------------|--------------|
-| Déclarations canoniques de capacité du Registre قبول کرتا ہے | API de l'application de test d'intégration pour `/v2/sorafs/capacity/declare` pour la gestion des signatures, la capture des métadonnées, le registre des nœuds, le transfert et la vérification | `crates/iroha_torii/src/routing.rs:7654` |
+| Déclarations canoniques de capacité du Registre قبول کرتا ہے | API de l'application de test d'intégration pour `/v1/sorafs/capacity/declare` pour la gestion des signatures, la capture des métadonnées, le registre des nœuds, le transfert et la vérification | `crates/iroha_torii/src/routing.rs:7654` |
 | Les charges utiles incompatibles avec les contrats intelligents sont rejetées | Test unitaire pour les ID de fournisseur et les champs GiB validés, déclaration signée et pour la persistance | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | Les artefacts d'intégration canoniques CLI émettent کرتا ہے | CLI exploite les sorties déterministes Norito/JSON/Base64 et les allers-retours valident les déclarations hors ligne des opérateurs et les déclarations hors ligne des opérateurs. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Flux de travail d'admission du guide de l'opérateur et garde-corps de gouvernance et couverture | Schéma de déclaration de documentation, valeurs par défaut de la politique, étapes d'examen du conseil et énumération des éléments | `../storage-capacity-marketplace.md` |

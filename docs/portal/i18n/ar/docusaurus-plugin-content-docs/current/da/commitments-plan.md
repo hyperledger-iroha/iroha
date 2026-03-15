@@ -28,7 +28,7 @@ _مسودة: 2026-03-25 -- المالكون: Core Protocol WG / Smart Contract T
   الى تخزين خارج الدفتر.
 - توفير براهين عضوية حتمية لكي يتحقق العملاء الخفيفون من ان manifest hash تم
   تثبيته في كتلة محددة.
-- كشف استعلامات Torii (`/v2/da/commitments/*`) وبراهين تسمح للـ relays وSDKs
+- كشف استعلامات Torii (`/v1/da/commitments/*`) وبراهين تسمح للـ relays وSDKs
   وادوات الحوكمة بتدقيق availability دون اعادة تشغيل كل كتلة.
 - الحفاظ على ظرف `SignedBlockWire` القياسي عبر تمرير البنى الجديدة من خلال
   ترويسة بيانات Norito الوصفية واشتقاق hash الكتلة.
@@ -42,7 +42,7 @@ _مسودة: 2026-03-25 -- المالكون: Core Protocol WG / Smart Contract T
    `crates/iroha_core/src/block.rs`).
 3. **Persisting/indexes** حتى يتمكن WSV من اجابة استعلامات التعهدات بسرعة
    (`iroha_core/src/wsv/mod.rs`).
-4. **اضافات RPC في Torii** لنقاط list/query/prove تحت `/v2/da/commitments`.
+4. **اضافات RPC في Torii** لنقاط list/query/prove تحت `/v1/da/commitments`.
 5. **اختبارات تكامل + fixtures** للتحقق من wire layout وتدفق proof في
    `integration_tests/tests/da/commitments.rs`.
 
@@ -131,9 +131,9 @@ Torii يوفر ثلاثة endpoints:
 
 | المسار | الطريقة | الحمولة | ملاحظات |
 |--------|---------|---------|---------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (فلترة بنطاق lane/epoch/sequence، مع pagination) | يعيد `DaCommitmentPage` بعدد الاجمالي والتعهدات و hash الكتلة. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash او tuple `(epoch, sequence)`). | يعيد `DaCommitmentProof` (record + مسار Merkle + hash الكتلة). |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ يستخدمه SDKs التي لا يمكنها الربط مباشرة مع `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (فلترة بنطاق lane/epoch/sequence، مع pagination) | يعيد `DaCommitmentPage` بعدد الاجمالي والتعهدات و hash الكتلة. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash او tuple `(epoch, sequence)`). | يعيد `DaCommitmentProof` (record + مسار Merkle + hash الكتلة). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | مساعد stateless يعيد حساب hash الكتلة ويتحقق من الاشتمال؛ يستخدمه SDKs التي لا يمكنها الربط مباشرة مع `iroha_crypto`. |
 
 كل الحمولات تعيش تحت `iroha_data_model::da::commitment`. يقوم Torii بتركيب
 handlers بجانب endpoints ingest الحالية لDA لاعادة استخدام سياسات token/mTLS.

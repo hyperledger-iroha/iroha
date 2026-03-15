@@ -71,7 +71,7 @@ SBOM) を SoraFS の manifest パイプラインに通し、`docs.sora` から `
 ## 2. Manifests と aliases の Pin
 
 `torii` に manifests を送信して aliases を紐付けるために `sorafs_cli manifest submit` を使います。
-`${SUBMITTED_EPOCH}` は最新の合意エポックを設定します (`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` またはダッシュボードから取得)。
+`${SUBMITTED_EPOCH}` は最新の合意エポックを設定します (`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` またはダッシュボードから取得)。
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -79,7 +79,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

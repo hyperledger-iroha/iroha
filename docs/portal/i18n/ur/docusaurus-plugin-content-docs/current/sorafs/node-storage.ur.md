@@ -121,8 +121,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 >
 > Torii gateway اب read-only helpers expose کرتا ہے جو اسی `NodeHandle` پر based ہیں:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — stored Norito manifest (base64) digest/metadata کے ساتھ واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — deterministic chunk plan JSON (`chunk_fetch_specs`) downstream tooling کے لیے واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — stored Norito manifest (base64) digest/metadata کے ساتھ واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — deterministic chunk plan JSON (`chunk_fetch_specs`) downstream tooling کے لیے واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > یہ endpoints CLI output کو mirror کرتے ہیں تاکہ pipelines local scripts سے HTTP probes پر بغیر parser بدلے منتقل ہو سکیں۔【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
@@ -148,9 +148,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 
 ### Capacity declaration & scheduling integration
 
-- Torii اب `/v2/sorafs/capacity/declare` سے `CapacityDeclarationRecord` updates embedded `CapacityManager` تک relay کرتا ہے، تاکہ ہر node اپنی committed chunker/lane allocations کا in-memory view بنائے۔ Manager telemetry کے لیے read-only snapshots (`GET /v2/sorafs/capacity/state`) expose کرتا ہے اور نئے orders قبول کرنے سے پہلے per-profile یا per-lane reservations enforce کرتا ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v2/sorafs/capacity/schedule` endpoint governance-issued `ReplicationOrderV1` payloads قبول کرتا ہے۔ جب order local provider کو target کرے تو manager duplicate scheduling چیک کرتا ہے، chunker/lane capacity verify کرتا ہے، slice reserve کرتا ہے، اور `ReplicationPlan` واپس کرتا ہے جو remaining capacity بیان کرے تاکہ orchestration tooling ingestion جاری رکھ سکے۔ دوسرے providers کے orders کو `ignored` response سے acknowledge کیا جاتا ہے تاکہ multi-operator workflows آسان ہوں۔【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (مثلاً ingestion کامیاب ہونے کے بعد) `POST /v2/sorafs/capacity/complete` کو hit کرتے ہیں تاکہ `CapacityManager::complete_order` کے ذریعے reservations release ہوں۔ Response میں `ReplicationRelease` snapshot (remaining totals, chunker/lane residuals) شامل ہوتا ہے تاکہ orchestration tooling polling کے بغیر اگلا order queue کر سکے۔ یہ بعد میں chunk store pipeline کے ساتھ wire ہوگا جب ingestion logic land ہو جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- Torii اب `/v1/sorafs/capacity/declare` سے `CapacityDeclarationRecord` updates embedded `CapacityManager` تک relay کرتا ہے، تاکہ ہر node اپنی committed chunker/lane allocations کا in-memory view بنائے۔ Manager telemetry کے لیے read-only snapshots (`GET /v1/sorafs/capacity/state`) expose کرتا ہے اور نئے orders قبول کرنے سے پہلے per-profile یا per-lane reservations enforce کرتا ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v1/sorafs/capacity/schedule` endpoint governance-issued `ReplicationOrderV1` payloads قبول کرتا ہے۔ جب order local provider کو target کرے تو manager duplicate scheduling چیک کرتا ہے، chunker/lane capacity verify کرتا ہے، slice reserve کرتا ہے، اور `ReplicationPlan` واپس کرتا ہے جو remaining capacity بیان کرے تاکہ orchestration tooling ingestion جاری رکھ سکے۔ دوسرے providers کے orders کو `ignored` response سے acknowledge کیا جاتا ہے تاکہ multi-operator workflows آسان ہوں۔【crates/iroha_torii/src/routing.rs:4845】
+- Completion hooks (مثلاً ingestion کامیاب ہونے کے بعد) `POST /v1/sorafs/capacity/complete` کو hit کرتے ہیں تاکہ `CapacityManager::complete_order` کے ذریعے reservations release ہوں۔ Response میں `ReplicationRelease` snapshot (remaining totals, chunker/lane residuals) شامل ہوتا ہے تاکہ orchestration tooling polling کے بغیر اگلا order queue کر سکے۔ یہ بعد میں chunk store pipeline کے ساتھ wire ہوگا جب ingestion logic land ہو جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
 - Embedded `TelemetryAccumulator` کو `NodeHandle::update_telemetry` کے ذریعے mutate کیا جا سکتا ہے، جس سے background workers PoR/uptime samples record کرتے ہیں اور مستقبل میں canonical `CapacityTelemetryV1` payloads derive کر سکتے ہیں بغیر scheduler internals چھیڑے۔【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
 ### Integrations & future work

@@ -76,7 +76,7 @@ Sidebar_label: チャンカーのロールアウトのチェックリスト
    `torii.sorafs.discovery.admission.envelopes_dir` のステージング参照。
 3. Verifique キュー プロバイダーは、API de Discovery を介してプロパガムを宣伝します。
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. ガバナンスのマニフェスト/プラン com ヘッダーのエンドポイントを実行します。
    ```bash

@@ -21,8 +21,8 @@ translation_last_reviewed: 2026-01-01
 - ✅ اظهار انواع Norito `Proposal`/`Vote`/`Qc` في `BlockMessage` وتشغيل round-trip encode/decode (`crates/iroha_data_model/tests/consensus_roundtrip.rs`).
 - ✅ تقييد الاطارات السابقة `BlockSigned/BlockCommitted`؛ تم ضبط مفتاح الهجرة على `false` قبل الايقاف.
 - ✅ ازالة مفتاح الهجرة الذي كان يبدل رسائل البلوك القديمة؛ مسار Vote/commit certificate الان هو المسار الوحيد على wire.
-- ✅ تحديث مسارات Torii واوامر CLI ومستلمي telemetria لتفضيل لقطات JSON `/v2/sumeragi/*` على الاطارات القديمة.
-- ✅ تغطية التكامل تختبر endpoints `/v2/sumeragi/*` حصرا عبر مسار Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
+- ✅ تحديث مسارات Torii واوامر CLI ومستلمي telemetria لتفضيل لقطات JSON `/v1/sumeragi/*` على الاطارات القديمة.
+- ✅ تغطية التكامل تختبر endpoints `/v1/sumeragi/*` حصرا عبر مسار Vote/commit certificate (`integration_tests/tests/sumeragi_vote_qc_commit.rs`).
 - ✅ ازالة الاطارات القديمة بعد تحقق التكافؤ الوظيفي واختبارات التشغيل البيني.
 
 ### خطة ازالة الاطارات
@@ -63,7 +63,7 @@ translation_last_reviewed: 2026-01-01
 ### الخطوات التالية الفورية
 1. ✅ harness jitter المحدود يختبر مقاييس jitter للـ pacemaker (`integration_tests/tests/sumeragi_npos_performance.rs::npos_pacemaker_jitter_within_band`).
 2. ✅ ترقية assertions الخاصة بـ deferral في `npos_queue_backpressure_triggers_metrics` عبر تهيئة ضغط حتمي على RBC store (`integration_tests/tests/sumeragi_npos_performance.rs::npos_queue_backpressure_triggers_metrics`).
-3. ✅ توسيع soak لـ `/v2/sumeragi/telemetry` ليغطي epochs طويلة و collectors عدائيين، مع مقارنة snapshots بعدادات Prometheus عبر عدة heights. مغطى بواسطة `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
+3. ✅ توسيع soak لـ `/v1/sumeragi/telemetry` ليغطي epochs طويلة و collectors عدائيين، مع مقارنة snapshots بعدادات Prometheus عبر عدة heights. مغطى بواسطة `integration_tests/tests/sumeragi_telemetry.rs::npos_telemetry_soak_matches_metrics_under_adversarial_collectors`.
 
 تتبع هذه القائمة هنا يبقي `roadmap.md` مركزا على المعالم مع منح الفريق قائمة تحقق حية للانجاز. حدث الادخالات (وضع علامة الاكتمال) عند وصول التغييرات.
 

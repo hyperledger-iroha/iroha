@@ -91,7 +91,7 @@ CLI クエリに関する JSON のフラグ (`--json-out`、`--por-json-out`、`
 |----------|----------|----------|
 | `sorafs_manifest_chunk_store` | ✅ ソポルタド |カノニコ + エイリアスを処理し、`--json-out=-` および登録アプリケーション `ensure_charter_compliance()` 経由でレポートを送信します。 |
 | `sorafs_manifest_stub` | ⚠️レティラード |マニフェスト燃料デソルポートのコンストラクタ。米国 `iroha app sorafs toolkit pack` は、CAR/マニフェストと管理に関する `--plan=-` の再検証の決定版です。 |
-| `sorafs_provider_advert_stub` | ⚠️レティラード |オフライン検証のヘルパー。プロバイダーは、`/v2/sorafs/providers` を介してパイプラインの公開パイプラインを広告します。 |
+| `sorafs_provider_advert_stub` | ⚠️レティラード |オフライン検証のヘルパー。プロバイダーは、`/v1/sorafs/providers` を介してパイプラインの公開パイプラインを広告します。 |
 | `sorafs_fetch` (開発者オーケストレーター) | ✅ ソポルタド | Lee `chunk_fetch_specs`、容量ペイロード `range` と CARv2 のアンサンブル。 |
 | SDK のフィクスチャ (Rust/Go/TS) | ✅ ソポルタド | `export_vectors` 経由のリジェネラーダ。別名リストとコンセホの会社の情報を処理できます。 |
 |ゲートウェイ Torii でのパーファイルのネゴシオン | ✅ ソポルタド | `Accept-Chunker` の完全な文法を実装し、ヘッダー `Content-Chunker` を含めて、ブリッジ CARv1 ソロとダウングレードの説明を説明します。 |
@@ -99,7 +99,7 @@ CLI クエリに関する JSON のフラグ (`--json-out`、`--por-json-out`、`
 テレメトリの解除:
 
 - **チャンクのフェッチのテレメトリ** - CLI で Iroha `sorafs toolkit pack` はチャンクのダイジェスト、メタデータを出力し、CAR がダッシュボードで PoR を取り込みます。
-- **プロバイダー広告** — 広告のペイロードの損失には、容量やエイリアスのメタデータが含まれます。 `/v2/sorafs/providers` 経由の検証 (p. ej.、presencia de la capacidad `range`)。
+- **プロバイダー広告** — 広告のペイロードの損失には、容量やエイリアスのメタデータが含まれます。 `/v1/sorafs/providers` 経由の検証 (p. ej.、presencia de la capacidad `range`)。
 - **ゲートウェイの監視** — ロス オペラドールズ デベン レポーター ロス パレオス `Content-Chunker`/`Content-Digest` パラ検出器が inesperados をダウングレードします。廃止される前に橋を渡ってください。
 
 非推奨の政治: 後継者に対する安全性評価、二重公開プログラムの廃止

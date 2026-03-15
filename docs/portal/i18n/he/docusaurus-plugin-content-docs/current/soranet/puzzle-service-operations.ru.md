@@ -26,17 +26,17 @@ Daemon `soranet-puzzle-service` (`tools/soranet-puzzle-service/`) выпуска
 Он предоставляет пять נקודות קצה HTTP:
 
 - `GET /healthz` - בדיקה חיה.
-- `GET /v2/puzzle/config` - возвращает эффективные параметры PoW/פאזל,
+- `GET /v1/puzzle/config` - возвращает эффективные параметры PoW/פאזל,
   считанные из ממסר JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v2/puzzle/mint` - כרטיס выпускает Argon2; גוף JSON אופציונלי
+- `POST /v1/puzzle/mint` - כרטיס выпускает Argon2; גוף JSON אופציונלי
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   запрашивает более короткий TTL (חלון מדיניות מהודק), привязывает כרטיס
   к תעתיק hash и возвращает כרטיס חתום ממסר + טביעת אצבע חתימה
   при наличии מפתחות חתימה.
-- `GET /v2/token/config` - когда `pow.token.enabled = true`, возвращает активную
+- `GET /v1/token/config` - когда `pow.token.enabled = true`, возвращает активную
   מדיניות אסימון קבלה (טביעת אצבע של מנפיק, גבולות הטיית TTL/שעון, מזהה ממסר,
   и סט ביטולים ממוזגים).
-- `POST /v2/token/mint` - אסימון קבלה выпускает ML-DSA, связанный с מסופק
+- `POST /v1/token/mint` - אסימון קבלה выпускает ML-DSA, связанный с מסופק
   לחדש hash; גוף принимает `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 כרטיסים, выпущенные сервисом, проверяются в интеграционном тесте
@@ -78,17 +78,17 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` דוסטר, כונן סודי управляется חוץ מהפס
-צינור. שומר קבצי ביטול держит `/v2/token/config` актуальным;
+צינור. שומר קבצי ביטול держит `/v1/token/config` актуальным;
 координируйте обновления с командой `soranet-admission-token revoke`, чтобы
 избежать отставания מצב ביטול.Установите `pow.signed_ticket_public_key_hex` в relay JSON, чтобы объявить
-מפתח ציבורי ML-DSA-44 עבור проверки כרטיסי PoW חתומים; `/v2/puzzle/config` эхо
+מפתח ציבורי ML-DSA-44 עבור проверки כרטיסי PoW חתומים; `/v1/puzzle/config` эхо
 возвращает מפתח и его טביעת אצבע BLAKE3 (`signed_ticket_public_key_fingerprint_hex`),
 чтобы clients могли pin-ить מאמת. כרטיסים חתומים проверяются по מזהה ממסר и
 כריכות תמלול и используют тот же חנות ביטול; כרטיסי PoW גולמיים של 74 בתים
 остаются валидными при настроенном מאמת כרטיס חתום. סוד החותם Передайте
 через `--signed-ticket-secret-hex` או `--signed-ticket-secret-path` при запуске
 שירות פאזלים; старт отклонит несоответствующие צמדי מפתחות, если secret не валидируется
-против `pow.signed_ticket_public_key_hex`. `POST /v2/puzzle/mint` принимает
+против `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` принимает
 `"signed": true` (ו `"transcript_hash_hex"` אופציונלי) чтобы вернуть
 כרטיס חתום מקודד Norito вместе с raw ticket bytes; ответы включают
 `signed_ticket_b64` ו-`signed_ticket_fingerprint_hex` להפעלה חוזרת של טביעות אצבע.
@@ -106,10 +106,10 @@ cargo run -p soranet-puzzle-service -- \
 3. **Подготовьте рестарт.** Перезагрузите systemd unit или container после того, как
    ממשל объявит חיתוך סיבוב. Сервис не поддерживает טעינה חוזרת חמה; для
    применения нового descriptor commit требуется הפעלה מחדש.
-4. **Провалидируйте.** Выпустите ticket через `POST /v2/puzzle/mint` и подтвердите,
+4. **Провалидируйте.** Выпустите ticket через `POST /v1/puzzle/mint` и подтвердите,
    что `difficulty` ו-`expires_at` соответствуют новой מדיניות. דוח להשרות
    (`docs/source/soranet/reports/pow_resilience.md`) содержит ожидаемые גבולות האחזור
-   для справки. Когда tokens включены, запросите `/v2/token/config`, чтобы убедиться,
+   для справки. Когда tokens включены, запросите `/v1/token/config`, чтобы убедиться,
    что פרסם טביעת אצבע של מנפיק וספירת ביטולים соответствуют ожидаемым значениям.
 
 ## חירום השבת процедура
@@ -120,7 +120,7 @@ cargo run -p soranet-puzzle-service -- \
    תיאורים пока שער Argon2 במצב לא מקוון.
 3. צור ממסר ושירות פאזלים, чтобы применить изменение.
 4. Мониторьте `soranet_handshake_pow_difficulty`, чтобы убедиться, что сложность
-   упала до ожидаемого hashcash значения, и проверьте, что `/v2/puzzle/config`
+   упала до ожидаемого hashcash значения, и проверьте, что `/v1/puzzle/config`
    сообщает `puzzle = null`.
 
 ## ניטור והתראה- ** SLO חביון:** Отслеживайте `soranet_handshake_latency_seconds` и держите P95
@@ -130,16 +130,16 @@ cargo run -p soranet-puzzle-service -- \
   для настройки `pow.quotas` צינון (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **יישור פאזל:** `soranet_handshake_pow_difficulty` должен совпадать с
-  קושי של `/v2/puzzle/config`. Дивергенция указывает על תצורת ממסר מעופש
+  קושי של `/v1/puzzle/config`. Дивергенция указывает על תצורת ממסר מעופש
   או אתחול מחדש.
-- **מוכנות אסימון:** התראה, если `/v2/token/config` неожиданно падает до
+- **מוכנות אסימון:** התראה, если `/v1/token/config` неожиданно падает до
   `enabled = false` או `revocation_source` חותמות זמן מיושנות. Операторы
   должны ротировать Norito קובץ ביטול через CLI при выводе токена, чтобы
   נקודת קצה оставался точным.
 - **בריאות השירות:** Пробуйте `/healthz` в обычной liveness cadence и alert,
-  если `/v2/puzzle/mint` возвращает HTTP 500 (указывает על חוסר התאמה של פרמטר Argon2
+  если `/v1/puzzle/mint` возвращает HTTP 500 (указывает על חוסר התאמה של פרמטר Argon2
   או כשלים ב-RNG). Ошибки טביעת אסימונים проявляются как HTTP 4xx/5xx на
-  `/v2/token/mint`; повторяющиеся сбои следует считать מצב ההחלפה.
+  `/v1/token/mint`; повторяющиеся сбои следует считать מצב ההחלפה.
 
 ## תאימות и רישום ביקורת
 

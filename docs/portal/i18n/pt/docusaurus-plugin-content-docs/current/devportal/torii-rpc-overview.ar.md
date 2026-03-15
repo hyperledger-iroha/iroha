@@ -10,7 +10,7 @@ translation_last_reviewed: 2026-02-07
 
 # نظرة عامة على Norito-RPC
 
-Norito-RPC é o nome do Torii. Use o protocolo HTTP para `/v2/pipeline` para obter informações sobre o Norito Use hashes para dados e somas de verificação. استخدمه عندما تحتاج الى ردود حتمية ومتحقق منها او عندما تصبح استجابات JSON الخاصة بالـ pipeline é um problema.
+Norito-RPC é o nome do Torii. Use o protocolo HTTP para `/v1/pipeline` para obter informações sobre o Norito Use hashes para dados e somas de verificação. استخدمه عندما تحتاج الى ردود حتمية ومتحقق منها او عندما تصبح استجابات JSON الخاصة بالـ pipeline é um problema.
 
 ## لماذا ننتقل؟
 - Use o CRC64 e os hashes para obter o valor desejado.
@@ -20,7 +20,7 @@ Norito-RPC é o nome do Torii. Use o protocolo HTTP para `/v2/pipeline` para obt
 ## تنفيذ طلب
 
 ```bash
-curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v2/transactions/submit
+curl       -H 'Content-Type: application/x-norito'       -H 'Accept: application/x-norito'       -H "Authorization: Bearer ${TOKEN}"       --data-binary @signed_transaction.norito       https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Use o codec Norito (`iroha_client`, SDK e `norito::to_bytes`).
@@ -39,7 +39,7 @@ Baixe o SDK do SDK:
 Você pode tentar e experimentá-lo no site de teste Norito. Não.
 
 1. [./try-it.md#start-the-proxy-locally] e `TRYIT_PROXY_PUBLIC_URL` são usados ​​para remover o problema.
-2. Verifique **Experimente** no site e no `/reference/torii-swagger` e no `POST /v2/pipeline/submit`.
+2. Verifique **Experimente** no site e no `/reference/torii-swagger` e no `POST /v1/pipeline/submit`.
 3. Selecione **Content-Type** como `application/x-norito`, usando **Binary**, e `fixtures/norito_rpc/transfer_asset.norito` (ou seja, o valor de **Binary** é `fixtures/norito_rpc/transaction_fixtures.manifest.json`).
 4. Crie o token de suporte para o código do dispositivo OAuth e o código do dispositivo OAuth e o código do dispositivo `X-TryIt-Auth`. `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`).
 5. A configuração do Torii é feita pelo `schema_hash` do `fixtures/norito_rpc/schema_hashes.json`. Verifique se o Norito está localizado no local certo.

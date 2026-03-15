@@ -162,7 +162,7 @@ struct SignedAuditorRequestV1 {
 1. **Triggers**  
    - PoR coordinator publishes `PorFailureEventV1`.  
    - PoTR probes emit `PotrDeadlineMissedV1`.  
-   - Auditors call `/v2/sorafs/audit/repair/report`.
+   - Auditors call `/v1/sorafs/audit/repair/report`.
 
 2. **Proof Verification**  
    - `RepairEvidenceV1` is validated via `ProofVerifier::verify(evidence)` which ensures digests match manifests, sample indices are within range, and signatures on receipts are valid.  
@@ -173,9 +173,9 @@ struct SignedAuditorRequestV1 {
    - SLA deadlines: `PoR` tasks must start within 15 minutes, finish within 2 hours; `PoTR` tasks start within 5 minutes, finish within 30 minutes. Manual reports default to 4 hours.
 
 4. **Worker Assignment**  
-   - Workers claim tickets via `/v2/sorafs/audit/repair/claim` and must send `/v2/sorafs/audit/repair/heartbeat` updates before the lease TTL elapses.  
+   - Workers claim tickets via `/v1/sorafs/audit/repair/claim` and must send `/v1/sorafs/audit/repair/heartbeat` updates before the lease TTL elapses.  
    - Tasks enter `in_progress` and the worker performs orchestrator-driven recovery (chunk fetch, re-seed, or manifest re-issuance).  
-   - Workers close tickets with `/v2/sorafs/audit/repair/complete` or `/v2/sorafs/audit/repair/fail`, and Torii rejects stale/out-of-order updates based on lease TTL + heartbeat cadence.
+   - Workers close tickets with `/v1/sorafs/audit/repair/complete` or `/v1/sorafs/audit/repair/fail`, and Torii rejects stale/out-of-order updates based on lease TTL + heartbeat cadence.
 
 5. **Failure & Escalation**  
    - Retries use exponential backoff derived from `sorafs.repair.backoff_initial_secs` and `sorafs.repair.backoff_max_secs`, with `sorafs.repair.max_attempts` enforcing the cap.  
@@ -208,18 +208,18 @@ The escalation policy is sourced from `governance.sorafs_repair_escalation` in `
 ## Auditor API Surface
 | Method & Path | Description | Auth | Success Response |
 |---------------|-------------|------|------------------|
-| `POST /v2/sorafs/audit/repair/report` | Submit `RepairReportV1` to enqueue a repair task. | Required | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v2/sorafs/audit/repair/slash` | Submit `RepairSlashProposalV1` for governance consideration. | Required | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `GET /v2/sorafs/audit/repair/status` | List repair tasks across manifests (filter by provider/status). | Auditor or operator JWT | `200 OK` with records (Norito base64). |
-| `GET /v2/sorafs/audit/repair/status/{manifest_hex}` | Fetch repair tasks for a manifest. | Auditor or operator JWT | `200 OK` with records (Norito base64). |
+| `POST /v1/sorafs/audit/repair/report` | Submit `RepairReportV1` to enqueue a repair task. | Required | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
+| `POST /v1/sorafs/audit/repair/slash` | Submit `RepairSlashProposalV1` for governance consideration. | Required | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
+| `GET /v1/sorafs/audit/repair/status` | List repair tasks across manifests (filter by provider/status). | Auditor or operator JWT | `200 OK` with records (Norito base64). |
+| `GET /v1/sorafs/audit/repair/status/{manifest_hex}` | Fetch repair tasks for a manifest. | Auditor or operator JWT | `200 OK` with records (Norito base64). |
 
 ## Worker API Surface
 | Method & Path | Description | Auth | Success Response |
 |---------------|-------------|------|------------------|
-| `POST /v2/sorafs/audit/repair/claim` | Claim a queued repair ticket (`manifest_digest_hex`, `worker_id`, `claimed_at_unix`, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v2/sorafs/audit/repair/heartbeat` | Renew the active lease (`manifest_digest_hex`, `heartbeat_at_unix`, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v2/sorafs/audit/repair/complete` | Complete a ticket (`manifest_digest_hex`, `completed_at_unix`, optional notes, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v2/sorafs/audit/repair/fail` | Fail a ticket (`manifest_digest_hex`, `failed_at_unix`, reason, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
+| `POST /v1/sorafs/audit/repair/claim` | Claim a queued repair ticket (`manifest_digest_hex`, `worker_id`, `claimed_at_unix`, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
+| `POST /v1/sorafs/audit/repair/heartbeat` | Renew the active lease (`manifest_digest_hex`, `heartbeat_at_unix`, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
+| `POST /v1/sorafs/audit/repair/complete` | Complete a ticket (`manifest_digest_hex`, `completed_at_unix`, optional notes, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
+| `POST /v1/sorafs/audit/repair/fail` | Fail a ticket (`manifest_digest_hex`, `failed_at_unix`, reason, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
 
 ### Repair Lease & Idempotency
 - Claims expire after `sorafs.repair.claim_ttl_secs`; heartbeats extend leases by `sorafs.repair.heartbeat_interval_secs`.

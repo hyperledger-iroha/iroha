@@ -87,7 +87,7 @@ translator: machine-google-reviewed
 | `sorafs_node_por_failure_total` | მრიცხველი | `provider_id` | მონოტონური მრიცხველი წარუმატებელი PoR ნიმუშებისთვის. |
 | `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | ლიანდაგი | `provider` | არსებული Prometheus ლიანდაგები გამოყენებული ბაიტებისთვის, რიგის სიღრმე, PoR ფრენის რაოდენობა. |
 | `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | ლიანდაგი | `provider` | პროვაიდერის სიმძლავრის/ტემპის წარმატების მონაცემები გამოჩნდა სიმძლავრის საინფორმაციო დაფაზე. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | ლიანდაგი | `provider`, `manifest` | ბექლოგის სიღრმე პლუს კუმულაციური წარუმატებლობის მრიცხველები ექსპორტირებულია `/v2/sorafs/por/ingestion/{manifest}`-ის გამოკითხვისას, რაც კვებავს „PoR Stalls“ პანელს/გაფრთხილებას. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | ლიანდაგი | `provider`, `manifest` | ბექლოგის სიღრმე პლუს კუმულაციური წარუმატებლობის მრიცხველები ექსპორტირებულია `/v1/sorafs/por/ingestion/{manifest}`-ის გამოკითხვისას, რაც კვებავს „PoR Stalls“ პანელს/გაფრთხილებას. |
 
 ### შეკეთება და SLA
 

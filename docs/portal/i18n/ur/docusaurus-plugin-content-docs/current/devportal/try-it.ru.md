@@ -130,7 +130,7 @@ Norito-RPC درخواستیں وہی پراکسی اور OAuth پلمبنگ اس
 ### کوشش کریں کہ آئی ٹی کنسول سے Norito پے لوڈ بھیجنا
 
 1. ایک حقیقت منتخب کریں ، مثال کے طور پر `fixtures/norito_rpc/transfer_asset.norito`۔ یہ فائلیں کچی Norito لفافے ہیں۔ ** نہ کریں ** بیس 64 ان کو انکوڈ کریں۔
-2. سویگر یا ریپڈوک میں ، NRPC اختتامی نقطہ (مثال کے طور پر ، `POST /v2/pipeline/submit`) تلاش کریں اور ** مواد کی قسم ** سلیکٹر کو `application/x-norito` پر تبدیل کریں۔
+2. سویگر یا ریپڈوک میں ، NRPC اختتامی نقطہ (مثال کے طور پر ، `POST /v1/pipeline/submit`) تلاش کریں اور ** مواد کی قسم ** سلیکٹر کو `application/x-norito` پر تبدیل کریں۔
 3. درخواست باڈی ایڈیٹر کو ** بائنری ** (Swagger میں فائل موڈ یا ریپڈوک میں بائنری/فائل موڈ میں فائل موڈ) پر سوئچ کریں اور `.norito` فائل کو لوڈ کریں۔ ویجیٹ بغیر کسی تبدیلی کے پراکسی کے ذریعے بائٹس بھیجے گا۔
 4. اپنی درخواست جمع کروائیں۔ اگر Torii `X-Iroha-Error-Code: schema_mismatch` لوٹتا ہے تو ، یقینی بنائیں کہ آپ ایک اختتامی نقطہ پر کال کر رہے ہیں جو بائنری پے لوڈ کو قبول کرتا ہے اور اس بات کی تصدیق کرتا ہے کہ `fixtures/norito_rpc/schema_hashes.json` میں اسکیما ہیش Torii کی تعمیر کرتا ہے۔
 
@@ -143,10 +143,10 @@ Norito-RPC درخواستیں وہی پراکسی اور OAuth پلمبنگ اس
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
-`transaction_fixtures.manifest.json` سے کسی بھی اندراج کے ساتھ حقیقت کو تبدیل کریں یا اپنے پے لوڈ کو `cargo xtask norito-rpc-fixtures` کمانڈ کے ساتھ انکوڈ کریں۔ جب Torii کینری وضع میں چل رہا ہے تو ، آپ `curl` کو پورٹل ویجٹ کی طرح انفراسٹرکچر کی جانچ کرنے کے لئے TRY-IT پراکسی (`https://docs.sora.example/proxy/v2/pipeline/submit`) کی طرف اشارہ کرسکتے ہیں۔## مشاہدہ اور کاروائیاں
+`transaction_fixtures.manifest.json` سے کسی بھی اندراج کے ساتھ حقیقت کو تبدیل کریں یا اپنے پے لوڈ کو `cargo xtask norito-rpc-fixtures` کمانڈ کے ساتھ انکوڈ کریں۔ جب Torii کینری وضع میں چل رہا ہے تو ، آپ `curl` کو پورٹل ویجٹ کی طرح انفراسٹرکچر کی جانچ کرنے کے لئے TRY-IT پراکسی (`https://docs.sora.example/proxy/v1/pipeline/submit`) کی طرف اشارہ کرسکتے ہیں۔## مشاہدہ اور کاروائیاں
 
 ہر درخواست میں ایک بار طریقہ ، راستہ ، اصل ، upstream کی حیثیت اور توثیق کا ماخذ (`override` ، `default` یا `client`) کے ساتھ لاگ ان کیا جاتا ہے۔ ٹوکن کبھی بھی ذخیرہ نہیں ہوتے ہیں - بیئرر ہیڈر اور `X-TryIt-Auth` اقدار لاگنگ سے پہلے ترمیم کی جاتی ہیں ، لہذا آپ STDOUT کو سینٹرل کلکٹر کو راز کے اخراج کے خطرے کے بغیر آگے بھیج سکتے ہیں۔
 
@@ -156,7 +156,7 @@ curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
 ماحولیات نوبس:

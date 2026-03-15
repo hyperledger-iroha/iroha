@@ -21,7 +21,7 @@ translator: manual
 5. `examples/ios/NoritoDemoXcode/Configs/demo.env.example` を `.env` としてコピーし、自分の環境に合わせて値を調整する。アプリは起動時に次の環境変数を読み込みます。
    - `TORII_NODE_URL` — REST のベース URL（WebSocket はここから導出されます）。
    - `CONNECT_SESSION_ID` — 32 バイトのセッション ID（base64 / base64url）。
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v2/connect/session` が返す各ロール用トークン。
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v1/connect/session` が返す各ロール用トークン。
    - `CONNECT_CHAIN_ID` — コントロールハンドシェイクで通知するチェーン ID。
    - `CONNECT_ROLE` — UI で事前選択されるロール（`app` または `wallet`）。
    - 任意のテスト補助: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
@@ -60,7 +60,7 @@ translator: manual
 1. `docs/norito_bridge_release.md` の手順に従って XCFramework をビルドする。
 2. Xcode で `NoritoDemoXcode` プロジェクトを開く。
 3. `NoritoDemo` スキームを選択し、iOS シミュレータをターゲットに設定する。
-4. `.env` ファイルをスキームの環境変数経由で参照させ、`/v2/connect/session` から得た `CONNECT_*` 値を設定しておくと、起動時に UI が自動入力されます。
+4. `.env` ファイルをスキームの環境変数経由で参照させ、`/v1/connect/session` から得た `CONNECT_*` 値を設定しておくと、起動時に UI が自動入力されます。
 5. アプリを実行する。Torii URL が未設定の場合はホーム画面で入力を求められる。
 6. 「Connect」セッションを開始し、アカウント更新のサブスクリプションを開始する。
 7. IRH トランスファーを送信し、画面上のログ出力を確認する。

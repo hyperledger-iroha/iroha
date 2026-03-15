@@ -80,7 +80,7 @@ translator: machine-google-reviewed
 
 ## ኦርኬስትራ እና Torii ውህደት
 
-- Torii `/v2/sorafs/providers` የተተነተነ ክልል አቅም ሜታዳታ አብሮ ይመልሳል
+- Torii `/v1/sorafs/providers` የተተነተነ ክልል አቅም ሜታዳታ አብሮ ይመልሳል
   ከ `stream_budget` እና `transport_hints` ጋር። የማውረድ ማስጠንቀቂያዎች ሲቃጠሉ
   አቅራቢዎች አዲሱን ሜታዳታ ይተዉታል፣ እና የመተላለፊያ መንገዱ የመጨረሻ ነጥቦችም ይህንኑ ያስገድዳሉ
   ለቀጥታ ደንበኞች ገደቦች.

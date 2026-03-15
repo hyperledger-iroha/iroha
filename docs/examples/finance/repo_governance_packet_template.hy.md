@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 Հաստատումից հետո կազմաձևման պատկերներ
 
 Հանրաքվեի կամ կառավարման քվեարկության ավարտից հետո և `[settlement.repo]`
-Փոփոխությունն իրականացվել է, նկարահանեք `/v2/configuration` նկարներ յուրաքանչյուր հասակակից
+Փոփոխությունն իրականացվել է, նկարահանեք `/v1/configuration` նկարներ յուրաքանչյուր հասակակից
 աուդիտորները կարող են ապացուցել, որ հաստատված քաղաքականությունը գործում է ամբողջ կլաստերում (տես
 `docs/source/finance/repo_ops.md` §2.9 ապացույցների աշխատանքային հոսքի համար):
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v2/configuration \
+curl -fsSL https://peer01.example/v1/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

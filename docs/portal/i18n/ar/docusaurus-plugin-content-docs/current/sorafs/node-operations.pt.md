@@ -44,7 +44,7 @@ Sidebar_label: Runbook de Operacoes لا يفعل ذلك
   ```
 
 - يضمن أن العملية Torii ستصل إلى القراءة/الكتابة على `data_dir`.
-- تأكد من عدم الإعلان عن السعة المتوقعة عبر `GET /v2/sorafs/capacity/state` عندما يتم الإعلان عن التسجيل.
+- تأكد من عدم الإعلان عن السعة المتوقعة عبر `GET /v1/sorafs/capacity/state` عندما يتم الإعلان عن التسجيل.
 - عندما يتم تأهيل الصقل، تعرض لوحات المعلومات وحدات تحكم GiB·hour/PoR كبيرة ومساندة للتخلص من الاتجاهات دون الاهتزاز مع وجود قيم لحظية.
 
 ### التشغيل الجاف لـ CLI (اختياري)
@@ -81,8 +81,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 حتى يتمكن Torii من استعادة هذه الملفات الصوتية عبر HTTP:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 جميع نقاط النهاية عبارة عن خوادم عاملة للتخزين مضمنة، واختبارات دخان مضمنة لـ CLI، وأجهزة استشعار للبوابة متزامنة بشكل دائم.
@@ -91,7 +91,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. قم بالحسد على البيان باستخدام codeificacao base64:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -100,7 +100,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. البحث عن الإصلاحات الثابتة:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -116,7 +116,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. أصلح الحد الأدنى من البيان كما هو الحال الآن.
 2. قم بإعادة تشغيل المعالج Torii (أو ليس بالكامل).
 3. قم بمراجعة طلب الجلب. يجب أن تستمر الحمولة في التوفر ويجب أن تتزامن إعادة الخلاصة مع القيمة السابقة للتجديد.
-4. افحص `GET /v2/sorafs/storage/state` للتأكد من أن `bytes_used` يعيد البيانات المستمرة بعد إعادة التشغيل.
+4. افحص `GET /v1/sorafs/storage/state` للتأكد من أن `bytes_used` يعيد البيانات المستمرة بعد إعادة التشغيل.
 
 ## 4. اختبار طلب الحصة
 
@@ -131,7 +131,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. التماس uma amostra PoR:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -152,7 +152,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - لوحات المعلومات مصاحبة:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` و`torii_sorafs_storage_fetch_inflight`
-  - مقاييس النجاح/falha PoR expostos عبر `/v2/sorafs/capacity/state`
+  - مقاييس النجاح/falha PoR expostos عبر `/v1/sorafs/capacity/state`
   - تجارب التسوية العامة عبر `sorafs_node_deal_publish_total{result=success|failure}`
 
 تضمن متابعة هذه التمارين أن يقوم عامل التخزين بإرسال البيانات، والاستمرار في العمل، وتجديد الحصص التي تم تكوينها، واختبار القدرة على التحديد مسبقًا أو عدم الإعلان عن السعة لمزيد من المساحة.

@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Confidential memo envelopes اب `fixtures/confidential/encrypted_payload_v1.json` میں canonical fixture کے ساتھ آتے ہیں۔ یہ dataset ایک مثبت v1 envelope اور منفی malformed samples پکڑتا ہے تاکہ SDKs parsing parity ثابت کر سکیں۔ Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) اور Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) fixture کو براہ راست لوڈ کرتے ہیں، جس سے Norito encoding، error surfaces اور regression coverage codec کے ارتقا کے ساتھ aligned رہتے ہیں۔
 
-Swift SDKs اب bespoke JSON glue کے بغیر shield instructions emit کر سکتے ہیں: 32-byte note commitment، encrypted payload اور debit metadata کے ساتھ `ShieldRequest` بنائیں، پھر `/v2/pipeline/transactions` پر sign اور relay کرنے کے لئے `IrohaSDK.submit(shield:keypair:)` (یا `submitAndWait`) کال کریں۔ Helper commitment lengths validate کرتا ہے، `ConfidentialEncryptedPayload` کو Norito encoder میں thread کرتا ہے، اور نیچے بیان کردہ `zk::Shield` layout کو mirror کرتا ہے تاکہ wallets Rust کے ساتھ lock-step رہیں۔## התחייבויות קונצנזוס ושער יכולת
+Swift SDKs اب bespoke JSON glue کے بغیر shield instructions emit کر سکتے ہیں: 32-byte note commitment، encrypted payload اور debit metadata کے ساتھ `ShieldRequest` بنائیں، پھر `/v1/pipeline/transactions` پر sign اور relay کرنے کے لئے `IrohaSDK.submit(shield:keypair:)` (یا `submitAndWait`) کال کریں۔ Helper commitment lengths validate کرتا ہے، `ConfidentialEncryptedPayload` کو Norito encoder میں thread کرتا ہے، اور نیچے بیان کردہ `zk::Shield` layout کو mirror کرتا ہے تاکہ wallets Rust کے ساتھ lock-step رہیں۔## התחייבויות קונצנזוס ושער יכולת
 - Block headers `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` expose کرتے ہیں؛ digest consensus hash میں حصہ لیتا ہے اور block acceptance کے لئے local registry view سے match ہونا چاہئے۔
 - Governance مستقبل کے `activation_height` کے ساتھ `next_conf_features` پروگرام کر کے upgrades stage کر سکتی ہے؛ اس height تک block producers پچھلا digest emit کرتے رہتے ہیں۔
 - Validator nodes کو `confidential.enabled = true` اور `assume_valid = false` کے ساتھ operate کرنا MUST ہے۔ Startup checks validator set join کرنے سے انکار کرتے ہیں اگر کوئی شرط fail ہو یا local `conf_features` diverge ہو۔
@@ -69,7 +69,7 @@ Swift SDKs اب bespoke JSON glue کے بغیر shield instructions emit کر س
 - Genesis manifests اور CLI flows current اور pending policies expose کرتے ہیں۔ Admission logic execution time پر policy پڑھ کر confirm کرتی ہے کہ ہر confidential instruction authorized ہے۔
 - Migration checklist — نیچے “Migration sequencing” میں Milestone M0 کے مطابق staged upgrade plan دیکھیں۔
 
-#### Torii کے ذریعے transitions کی monitoringWallets اور auditors `GET /v2/confidential/assets/{definition_id}/transitions` کو poll کر کے active `AssetConfidentialPolicy` دیکھتے ہیں۔ JSON payload ہمیشہ canonical asset id، latest observed block height، `current_mode`، اس height پر effective mode (conversion windows عارضی طور پر `Convertible` report کرتے ہیں)، اور expected `vk_set_hash`/Poseidon/Pedersen identifiers شامل کرتا ہے۔ جب governance transition pending ہو تو response میں یہ بھی ہوتا ہے:
+#### Torii کے ذریعے transitions کی monitoringWallets اور auditors `GET /v1/confidential/assets/{definition_id}/transitions` کو poll کر کے active `AssetConfidentialPolicy` دیکھتے ہیں۔ JSON payload ہمیشہ canonical asset id، latest observed block height، `current_mode`، اس height پر effective mode (conversion windows عارضی طور پر `Convertible` report کرتے ہیں)، اور expected `vk_set_hash`/Poseidon/Pedersen identifiers شامل کرتا ہے۔ جب governance transition pending ہو تو response میں یہ بھی ہوتا ہے:
 
 - `transition_id` - `ScheduleConfidentialPolicyTransition` سے واپس ملنے والا audit handle۔
 - `previous_mode`/`new_mode`.
@@ -112,7 +112,7 @@ Swift SDKs اب bespoke JSON glue کے بغیر shield instructions emit کر س
 ### רצף הגירה
 
 2. **Stage the transition:** `policy_transition_delay_blocks` کو respect کرنے والے `effective_height` کے ساتھ `ScheduleConfidentialPolicyTransition` submit کریں۔ `ShieldedOnly` کی طرف جاتے وقت conversion window specify کریں (`window ≥ policy_transition_window_blocks`)۔
-3. **Publish operator guidance:** واپس ملنے والا `transition_id` record کریں اور on/off-ramp runbook circulate کریں۔ Wallets اور auditors `/v2/confidential/assets/{id}/transitions` subscribe کر کے window open height جانتے ہیں۔
+3. **Publish operator guidance:** واپس ملنے والا `transition_id` record کریں اور on/off-ramp runbook circulate کریں۔ Wallets اور auditors `/v1/confidential/assets/{id}/transitions` subscribe کر کے window open height جانتے ہیں۔
 4. **Window enforcement:** window کھلتے ہی runtime policy کو `Convertible` پر switch کرتا ہے، `PolicyTransitionWindowOpened { transition_id }` emit کرتا ہے، اور conflicting governance requests reject کرنا شروع کرتا ہے۔
 5. **Finalize or abort:** `effective_height` پر runtime transition prerequisites verify کرتا ہے (transparent supply صفر، emergency withdrawal نہیں وغیرہ)۔ Success policy کو requested mode پر flip کرتا ہے؛ failure `PolicyTransitionPrerequisiteFailed` emit کر کے pending transition clear کرتا ہے اور policy unchanged رہتی ہے۔
 6. **Schema upgrades:** کامیاب transition کے بعد governance asset schema version bump کرتی ہے (مثلاً `asset_definition.v2`) اور CLI tooling manifest serialize کرتے وقت `confidential_policy` require کرتا ہے۔ Genesis upgrade docs operators کو validators restart سے پہلے policy settings اور registry fingerprints add کرنے کی ہدایت دیتے ہیں۔
@@ -208,7 +208,7 @@ Local overrides کو operations runbook میں document کریں؛ retention win
 - היררכיית גזירת מפתח לכל חשבון:
   - `sk_spend` → `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - Encrypted note payloads AEAD استعمال کرتے ہیں جو ECDH-derived shared keys سے بنے ہوتے ہیں؛ optional auditor view keys asset policy کے مطابق outputs کے ساتھ attach کئے جا سکتے ہیں۔
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha app zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔ Torii `POST /v2/confidential/derive-keyset` גירסת זרימת גזירה או זרימת גזירה גירסת hex/base64 או טפסים ותיקים تاکہ wallets programmatically key hierarchies fetch کر سکیں۔## בקרות גז, מגבלות ו-DoS
+- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha app zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` גירסת זרימת גזירה או זרימת גזירה גירסת hex/base64 או טפסים ותיקים تاکہ wallets programmatically key hierarchies fetch کر سکیں۔## בקרות גז, מגבלות ו-DoS
 - לוח זמנים דטרמיניסטי של גז:
   - Halo2 (Plonkish): גז בסיס `250_000` + גז `2_000` לכל קלט ציבורי.
   - `5` גז לכל בייט הוכחה, בתוספת חיובים לכל מבטל (`300`) או לכל התחייבות (`500`).

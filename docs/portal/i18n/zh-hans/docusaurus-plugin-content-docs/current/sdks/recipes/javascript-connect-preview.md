@@ -6,7 +6,7 @@ source: docs/portal/docs/sdks/recipes/javascript-connect-preview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
-description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v2/connect/ws` socket with `@iroha/iroha-js`.
+description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 translator: machine-google-reviewed
 translation_last_reviewed: 2026-02-07
 ---
@@ -17,7 +17,7 @@ translation_last_reviewed: 2026-02-07
 `ToriiClient.openConnectWebSocket()` 公开的 WebSocket 拨号器。剧本
 反映了 JS SDK 路线图的 Connect 部分：它具有确定性
 预览 URI、记录队列深度遥测并打开规范
-使用 `ws` 包的 `/v2/connect/ws` 端点，以便 Node.js 应用程序可以执行
+使用 `ws` 包的 `/v1/connect/ws` 端点，以便 Node.js 应用程序可以执行
 与浏览器的流程相同。
 
 <样本下载

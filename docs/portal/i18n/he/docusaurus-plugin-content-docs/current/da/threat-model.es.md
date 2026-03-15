@@ -243,7 +243,7 @@ whitelistea proveedores maliciosos o superme alertas.
 **Donde mirar מבזה:**- מטמון השידור החוזר y la persistencia de cursores aterrizaron en DA-2. ור לה
   implementacion en `crates/iroha_core/src/da/replay_cache.rs` (לוגיקה מטמון)
   y la integracion Torii en `crates/iroha_torii/src/da/ingest.rs`, que enhebra las
-  comprobaciones de טביעת אצבע a traves de `/v2/da/ingest`.
+  comprobaciones de טביעת אצבע a traves de `/v1/da/ingest`.
 - סימולציות של סטרימינג של PDP/PoTR הינה הבעלים באמצעות הוכחה-זרם לרתום
   en `crates/sorafs_car/tests/sorafs_cli.rs`, cubriendo flujos de solicitud
   PoR/PDP/PoTR y escenarios de falla animados en el modelo de amenazas.

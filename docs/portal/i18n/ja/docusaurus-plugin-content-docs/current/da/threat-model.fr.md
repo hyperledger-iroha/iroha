@@ -245,7 +245,7 @@ blob surdimensionnes は、epuiser les resources ou injecter une メタデータ
 **バスルームにご注目ください:**- DA-2 のリプレイ キャッシュとカーソルの永続化。ヴォワール
   `crates/iroha_core/src/da/replay_cache.rs` による実装 (ロジック
   キャッシュ) と統合 Torii と `crates/iroha_torii/src/da/ingest.rs`、スレッド
-  `/v2/da/ingest` 経由で指紋をチェックします。
+  `/v1/da/ingest` 経由で指紋をチェックします。
 - ハーネスプルーフストリームを介したストリーミングPDP/PoTRソントのシミュレーション
   `crates/sorafs_car/tests/sorafs_cli.rs`、リクエストに対する要求
   PoR/PDP/PoTR および脅威のモデルの失敗アニメのシナリオ。

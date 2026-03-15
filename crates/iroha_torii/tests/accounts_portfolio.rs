@@ -46,7 +46,7 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/uaid:{uaid_hex}/portfolio"))
+                .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -80,7 +80,7 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/uaid:{uaid_hex}/portfolio"))
+                .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -108,7 +108,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/uaid:{uaid_hex}/portfolio"))
+                .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -126,7 +126,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v2/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
+                    "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
                     urlencoding::encode(&asset_id)
                 ))
                 .body(axum::body::Body::empty())

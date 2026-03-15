@@ -28,7 +28,7 @@ tooling can depend on stable Norito DTOs.
   activation, and the combined deploy+activate workflow, keeping these schemas
   regression-tested.【crates/iroha_torii/tests/contracts_deploy_integration.rs:1】【crates/iroha_torii/tests/contracts_instance_activate_integration.rs:1】【crates/iroha_torii/tests/contracts_activate_integration.rs:1】
 
-## `POST /v2/contracts/code`
+## `POST /v1/contracts/code`
 
 Submits a pre-built `RegisterSmartContractCode` transaction when clients already
 possess the manifest (including hashes) and only need Torii to queue it.【crates/iroha_torii/src/routing.rs:3631】
@@ -66,9 +66,9 @@ Sample JSON request:
   JSON payload, and execution results surface later via pipeline status APIs.
 - Failure: manifest mismatches map to `ValidationFail::Conversion` (HTTP 400);
   queue admission errors bubble up as `PushIntoQueue` failures with the
-  endpoint label `/v2/contracts/code`.
+  endpoint label `/v1/contracts/code`.
 
-## `POST /v2/contracts/deploy`
+## `POST /v1/contracts/deploy`
 
 Accepts compiled `.to` bytecode, derives the manifest and hashes, and queues a
 transaction containing `RegisterSmartContractCode` + `RegisterSmartContractBytes`
@@ -108,11 +108,11 @@ Sample request and response:
 ```
 
 Applying the queued block persists both the manifest and bytecode in `World`,
-after which `/v2/contracts/code-bytes/{hash}` can retrieve the uploaded program.
+after which `/v1/contracts/code-bytes/{hash}` can retrieve the uploaded program.
 The integration test `contracts_deploy_and_fetch_code_bytes` exercises this
 round-trip and asserts the stored base64 matches the uploaded bytes.【crates/iroha_torii/tests/contracts_deploy_integration.rs:45】
 
-## `POST /v2/contracts/instance/activate`
+## `POST /v1/contracts/instance/activate`
 
 Registers a logical contract instance within a namespace, binding it to a
 previously deployed code hash via `ActivateContractInstance`. The route expects
@@ -156,6 +156,6 @@ verify the Norito shapes and resulting registry entries.【crates/iroha_torii/te
 ---
 
 For scenarios where deployment and activation must occur in a single request,
-see `POST /v2/contracts/instance` and the shared DTOs
+see `POST /v1/contracts/instance` and the shared DTOs
 (`DeployAndActivateInstanceDto`) documented inline with the handler for future
 expansion.【crates/iroha_torii/src/routing.rs:3862】【crates/iroha_torii/src/routing.rs:5085】

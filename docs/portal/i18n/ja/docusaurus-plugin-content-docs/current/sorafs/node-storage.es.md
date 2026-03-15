@@ -171,9 +171,9 @@ Torii の API。【crates/sorafs_node/tests/cli.rs:1】
 > ゲートウェイ Torii アホラ expone ヘルパー デ ソロ講義レスパルダードス ポル ミスモ
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` — 開発マニフェスト
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — 開発マニフェスト
 > Norito アルマセナド (base64) ジュント コン ダイジェスト/メタデータ。【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` — チャンクの開発計画
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — チャンクの開発計画
 > determinista JSON (`chunk_fetch_specs`) パラツールのダウンストリーム。【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > Estos エンドポイント reflejan la salida del CLI パラ ケ ロス パイプライン プエダン
@@ -220,12 +220,12 @@ Torii の API。【crates/sorafs_node/tests/cli.rs:1】
 ### 容量の宣言とスケジュールの統合の宣言
 
 - Torii アホラは、`CapacityDeclarationRecord` の実際の再送信を行います
-  `/v2/sorafs/capacity/declare` ハシア エル `CapacityManager` 埋め込み、モード変更
+  `/v1/sorafs/capacity/declare` ハシア エル `CapacityManager` 埋め込み、モード変更
   メモリア デ サス アサインナシオンのコンプロメティダを構築するためのノード
   チャンカーとレーン。マネージャーがテレメトリーでの単独講義のスナップショットを公開
-  (`GET /v2/sorafs/capacity/state`) 事前にレーンを予約する必要があります
+  (`GET /v1/sorafs/capacity/state`) 事前にレーンを予約する必要があります
   aceptar nuevos pedidos.【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- El エンドポイント `/v2/sorafs/capacity/schedule` アセプタ ペイロード `ReplicationOrderV1`
+- El エンドポイント `/v1/sorafs/capacity/schedule` アセプタ ペイロード `ReplicationOrderV1`
   エミディドス・ポル・ゴベルナンザ。クアンド・ラ・オルデン・アプンタ・アル・プロヴェードル・ローカル・エル・マネージャー
   再スケジュールの重複、チャンカー/レーンの容量確認、予約ラ
   フランジャとデブエルブ UN `ReplicationPlan` の容量制限に関する説明
@@ -233,7 +233,7 @@ Torii の API。【crates/sorafs_node/tests/cli.rs:1】
   otros proveedores se reconocen con una respuesta `ignored` para facilitar flujos
   マルチオペレーター.【crates/iroha_torii/src/routing.rs:4845】
 - 完全なフック (完全なフック、摂取時のディスパラドス)
-  ラマン `POST /v2/sorafs/capacity/complete` パラ リベラル リザーバス ヴィア
+  ラマン `POST /v1/sorafs/capacity/complete` パラ リベラル リザーバス ヴィア
   `CapacityManager::complete_order`。スナップショットを含むレスペスタ
   `ReplicationRelease` (チャンカー/レーンの残りの合計、残差) パラメータ
   ラス・ヘルラミエンタス・デ・オルケスタシオン・プエダン・エンコラー・ラ・シギエンテ・オルデン罪世論調査。

@@ -148,7 +148,7 @@ NX-7-ийн байршуулалтын бүртгэл бүрт гарын үсэ
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v2/sumeragi/status \
+  --status-url https://torii.example.com/v1/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \

@@ -42,7 +42,7 @@ replicas sans dependance a l'intention de l'emetteur.
 | _Default (toutes les autres classes)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |
 
 Ces valeurs sont integrees dans `torii.da_ingest.replication_policy` et appliquees
-a toutes les submissions `/v2/da/ingest`. Torii recrit les manifests avec le
+a toutes les submissions `/v1/da/ingest`. Torii recrit les manifests avec le
 profil de retention impose et emet un avertissement quand les callers fournissent
 des valeurs incoherentes afin que les operateurs detectent des SDKs obsoletes.
 
@@ -166,5 +166,5 @@ hors conformite automatiquement.
    les SREs puissent referencer le meme digest et la preuve PDP.
 
 La couverture de regression vit dans `integration_tests/tests/da/replication_policy.rs`;
-la suite soumet une politique de retention non conforme a `/v2/da/ingest` et verifie
+la suite soumet une politique de retention non conforme a `/v1/da/ingest` et verifie
 que le manifest recupere expose le profil impose plutot que l'intention du caller.

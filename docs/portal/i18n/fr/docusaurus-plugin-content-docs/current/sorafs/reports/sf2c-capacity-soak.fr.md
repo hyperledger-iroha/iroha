@@ -46,7 +46,7 @@ nécessaire aucun luminaire externe.
 Torii expose maintenant des instantanés de fournisseurs de crédit aux côtés des ledgers de frais afin que les tableaux de bord
 peut gate sur les faibles soldes et penalty strikes:
 
-- REST : `GET /v2/sorafs/capacity/state` renvoyer des entrées `credit_ledger[*]` qui
+- REST : `GET /v1/sorafs/capacity/state` renvoyer des entrées `credit_ledger[*]` qui
   faire les champs du grand livre vérifiés dans le test de trempage. Voir
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importer Grafana : fichiers de trace `dashboards/grafana/sorafs_capacity_penalties.json`

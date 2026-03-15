@@ -141,7 +141,7 @@ scripts/nexus_lane_registry_bundle.sh \
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v2/sumeragi/status \
+  --status-url https://torii.example.com/v1/sumeragi/status \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -272,7 +272,7 @@ manifest في حزمة واحدة لرفع نتائج الحمل مباشرة ف
 
    ```bash
    scripts/nexus_lane_smoke.py \
-     --status-url https://torii.example.com/v2/sumeragi/status \
+     --status-url https://torii.example.com/v1/sumeragi/status \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --expected-lane-count 3 \
@@ -330,7 +330,7 @@ manifest في حزمة واحدة لرفع نتائج الحمل مباشرة ف
 1. التقط snapshots لِـ Torii status و metrics:
 
    ```bash
-   curl -sS https://torii.example.com/v2/sumeragi/status \
+   curl -sS https://torii.example.com/v1/sumeragi/status \
      > artifacts/nexus/load/payments-2026q2/torii_status.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom

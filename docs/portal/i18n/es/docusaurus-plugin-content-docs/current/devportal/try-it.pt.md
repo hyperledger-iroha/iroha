@@ -152,7 +152,7 @@ portal, los propietarios del SDK y los revisores pueden reproducir los bytes exa
 1. Seleccione un dispositivo como `fixtures/norito_rpc/transfer_asset.norito`. eses
    arquivos sao sobres Norito brutos; **nao** faca base64.
 2. En Swagger o RapiDoc, localice el punto final NRPC (por ejemplo
-   `POST /v2/pipeline/submit`) y altere el selector **Content-Type** para
+   `POST /v1/pipeline/submit`) y altere el selector **Content-Type** para
    `application/x-norito`.
 3. Troque o editor de corpo para **binary** (modo "File" de Swagger o
    selector "Binary/File" de RapiDoc) y envíe el archivo `.norito`. Oh widget
@@ -174,13 +174,13 @@ Cuando la voz valida el proxy o depura las respuestas de la puerta de enlace:
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
 Troque o accesorio por cualquier entrada listada en `transaction_fixtures.manifest.json`
 o codifique su propia carga útil con `cargo xtask norito-rpc-fixtures`. Cuando Torii esta
 En modo canary voice puedes poner el `curl` para el proxy try-it
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) para ejercitar a mesma
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) para ejercitar a mesma
 Infraestrutura usada pelos widgets del portal.
 
 ## Observabilidade e operacoes
@@ -196,7 +196,7 @@ Rode o probe incluido durante los despliegues o en un horario:
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
 Perillas de ambiente:- `TRYIT_PROXY_SAMPLE_PATH` - gira Torii opcional (sem `/proxy`) para ejercitar.

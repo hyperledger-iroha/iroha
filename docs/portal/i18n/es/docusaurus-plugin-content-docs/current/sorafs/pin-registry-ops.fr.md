@@ -21,7 +21,7 @@ Refleje `docs/source/sorafs/runbooks/pin_registry_ops.md`. Guarde las dos versio
 
 ## Vista del conjunto
 
-Este runbook registra comentarios de vigilancia y prueba el Registro de PIN SoraFS y sus acuerdos de nivel de servicio (SLA) de réplica. Las métricas proporcionadas por `iroha_torii` y se exportan a través de Prometheus en el espacio de nombres `torii_sorafs_*`. Torii Enciende el estado del registro durante 30 segundos en el plan de llegada, mientras que los paneles de control permanecen al día incluso cuando el operador no interroga los puntos finales `/v2/sorafs/pin/*`. Importe el panel de control curado (`docs/source/grafana_sorafs_pin_registry.json`) para un diseño Grafana prêt à l'emploi que corresponde directamente a las secciones ci-dessous.
+Este runbook registra comentarios de vigilancia y prueba el Registro de PIN SoraFS y sus acuerdos de nivel de servicio (SLA) de réplica. Las métricas proporcionadas por `iroha_torii` y se exportan a través de Prometheus en el espacio de nombres `torii_sorafs_*`. Torii Enciende el estado del registro durante 30 segundos en el plan de llegada, mientras que los paneles de control permanecen al día incluso cuando el operador no interroga los puntos finales `/v1/sorafs/pin/*`. Importe el panel de control curado (`docs/source/grafana_sorafs_pin_registry.json`) para un diseño Grafana prêt à l'emploi que corresponde directamente a las secciones ci-dessous.
 
 ## Référence des métriques| Métrico | Etiquetas | Descripción |
 | ------- | ------ | ----------- |
@@ -108,7 +108,7 @@ groups:
 
 ## Eliminación del flujo de trabajo1. **Identificador de la causa**
    - Si las pruebas de SLA aumentan cuando el trabajo pendiente sigue siendo deficiente, concentre el análisis en el rendimiento de los proveedores (pruebas PoR, terminaciones tardías).
-   - Si el trabajo pendiente aumenta con los cheques de los establos, inspeccione la admisión (`/v2/sorafs/pin/*`) para confirmar los manifiestos con la ayuda de la aprobación del consejo.
+   - Si el trabajo pendiente aumenta con los cheques de los establos, inspeccione la admisión (`/v1/sorafs/pin/*`) para confirmar los manifiestos con la ayuda de la aprobación del consejo.
 2. **Validar el estado de los proveedores**
    - Exécuter `iroha app sorafs providers list` y verificador de que las capacidades anunciadas corresponden a las exigencias de réplica.
    - Verifique los medidores `torii_sorafs_capacity_*` para confirmar los GiB provisionnés y el éxito PoR.
@@ -127,7 +127,7 @@ Suivez este procedimiento par étapes lors de l'activation ou du durcissement de
 2. **Ejecución en seco y puesta en escena**
    - Implementar el cambio de configuración en un clúster de puesta en escena que refleja la topología de producción.
    - Ejecutador `cargo xtask sorafs-pin-fixtures` para confirmar que los dispositivos canónicos de alias décodent y font siempre son de ida y vuelta; Toda divergencia implica una deriva contracorriente à corregir en primer lugar.
-   - Ejecute los puntos finales `/v2/sorafs/pin/{digest}` e `/v2/sorafs/aliases` con las etiquetas sintéticas que incluyen frescura, ventana de actualización, expiración y expiración permanente. Valide los códigos HTTP, los encabezados (`Sora-Proof-Status`, `Retry-After`, `Warning`) y los campos del cuerpo JSON con este runbook.
+   - Ejecute los puntos finales `/v1/sorafs/pin/{digest}` e `/v1/sorafs/aliases` con las etiquetas sintéticas que incluyen frescura, ventana de actualización, expiración y expiración permanente. Valide los códigos HTTP, los encabezados (`Sora-Proof-Status`, `Retry-After`, `Warning`) y los campos del cuerpo JSON con este runbook.
 3. **Activador en producción**- Implemente la nueva configuración desde la ventana de cambio estándar. Al iniciar sesión en Torii, reemplace los gateways/services SDK una vez que no confirme la nueva política en los registros.
    - Importador `docs/source/grafana_sorafs_pin_registry.json` en Grafana (o actualizar los paneles de control existentes) y activar los paneles de actualización del caché de alias en el espacio de trabajo NOC.
 4. **Verificación post-despliegue**

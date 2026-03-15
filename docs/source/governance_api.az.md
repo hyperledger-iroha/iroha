@@ -24,9 +24,9 @@ Vacibdir: biz daimi şura və ya "defolt" idarəetmə siyahısını göndərmiri
 - SDK əhatə dairəsi:
 - Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` qaytarır `GovernanceProposalResult` (status/növ sahələrini normallaşdırır), `ToriiClient.get_governance_referendum_typed` qaytarır `GovernanceReferendumResult`, `GovernanceReferendumResult`, Prometheus, Prometheus, Sumeragi `ToriiClient.get_governance_locks_typed` `GovernanceLocksResult` qaytarır, `ToriiClient.get_governance_unlock_stats_typed` `GovernanceUnlockStats` qaytarır və `ToriiClient.list_governance_instances_typed` `GovernanceInstancesPage` qaytarır, nümunələr vasitəsilə bizə yazılan girişi təmin edir.
 - Yüngül Python müştərisi (`iroha_torii_client`): `ToriiClient.finalize_referendum` və `ToriiClient.enact_proposal` tipli `GovernanceInstructionDraft` paketlərini qaytarır (Torii skeletini bükərək, Prometheus skeletini tərtib etməkdən qaçınarkən), Axınları yekunlaşdırın/tətbiq edin.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` təkliflər, referendumlar, hesablamalar, kilidlər, kilidlər üçün yazılmış köməkçiləri və indi `listGovernanceInstances(namespace, options)` üstəgəl şuranın son nöqtələrini (Prometheus, Prometheus, Prometheus, Prometheus) təqdim edir. `governancePersistCouncil`, `getGovernanceCouncilAudit`) beləliklə, Node.js müştəriləri `/v2/gov/instances/{ns}` səhifələrini sıralaya və mövcud müqavilə nümunəsi siyahısı ilə yanaşı VRF dəstəkli iş axınlarını idarə edə bilərlər. `governanceFinalizeReferendumTyped` və `governanceEnactProposalTyped` həmişə strukturlaşdırılmış qaralamanı qaytarmaqla Python köməkçilərini əks etdirir (Torii `204 No Content` ilə cavab verdikdə boş skeleti sintez edir), bu da I1800000-dən əvvəl şaxələnmədən avtomatlaşdırmanı saxlayır. ya da tetikler. `getGovernanceLocksTyped` indi `404 Not Found` cavablarını `{found: false, locks: {}, referendum_id: <id>}`-ə normallaşdırır ki, referendumun kilidləri olmadıqda JS zəng edənlər Python köməkçisi ilə eyni formalı nəticə əldə etsinlər.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` təkliflər, referendumlar, hesablamalar, kilidlər, kilidlər üçün yazılmış köməkçiləri və indi `listGovernanceInstances(namespace, options)` üstəgəl şuranın son nöqtələrini (Prometheus, Prometheus, Prometheus, Prometheus) təqdim edir. `governancePersistCouncil`, `getGovernanceCouncilAudit`) beləliklə, Node.js müştəriləri `/v1/gov/instances/{ns}` səhifələrini sıralaya və mövcud müqavilə nümunəsi siyahısı ilə yanaşı VRF dəstəkli iş axınlarını idarə edə bilərlər. `governanceFinalizeReferendumTyped` və `governanceEnactProposalTyped` həmişə strukturlaşdırılmış qaralamanı qaytarmaqla Python köməkçilərini əks etdirir (Torii `204 No Content` ilə cavab verdikdə boş skeleti sintez edir), bu da I1800000-dən əvvəl şaxələnmədən avtomatlaşdırmanı saxlayır. ya da tetikler. `getGovernanceLocksTyped` indi `404 Not Found` cavablarını `{found: false, locks: {}, referendum_id: <id>}`-ə normallaşdırır ki, referendumun kilidləri olmadıqda JS zəng edənlər Python köməkçisi ilə eyni formalı nəticə əldə etsinlər.
 
-Son nöqtələr- POST `/v2/gov/proposals/deploy-contract`
+Son nöqtələr- POST `/v1/gov/proposals/deploy-contract`
   - Sorğu (JSON):
     {
       "namespace": "tətbiqlər",
@@ -43,30 +43,30 @@ Son nöqtələr- POST `/v2/gov/proposals/deploy-contract`
   - Təsdiqləmə: qovşaqlar təmin edilən `abi_version` üçün `abi_hash`-ni kanonikləşdirir və uyğunsuzluqları rədd edir. `abi_version = "v1"` üçün gözlənilən dəyər `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`-dir.
 
 Contracts API (yerləşdirmə)
-- POST `/v2/contracts/deploy`
+- POST `/v1/contracts/deploy`
   - Sorğu: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
   - Davranış: IVM proqram gövdəsindən `code_hash` və `abi_version` başlığından `abi_hash` hesablayır, sonra `RegisterSmartContractCode` (manifest) və I108X (I108XI0l) təqdim edir `.to` bayt) `authority` adından.
   - Cavab: { "ok": doğrudur, "code_hash_hex": "...", "abi_hash_hex": "..." }
   - Əlaqədar:
-    - GET `/v2/contracts/code/{code_hash}` → saxlanılan manifesti qaytarır
-    - GET `/v2/contracts/code-bytes/{code_hash}` → qaytarır `{ code_b64 }`
-- POST `/v2/contracts/instance`
+    - GET `/v1/contracts/code/{code_hash}` → saxlanılan manifesti qaytarır
+    - GET `/v1/contracts/code-bytes/{code_hash}` → qaytarır `{ code_b64 }`
+- POST `/v1/contracts/instance`
   - Sorğu: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
   - Davranış: Təchiz edilmiş bayt kodunu yerləşdirir və dərhal `(namespace, contract_id)` xəritəsini `ActivateContractInstance` vasitəsilə aktivləşdirir.
   - Cavab: { "ok": doğru, "ad sahəsi": "tətbiqlər", "kontrakt_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
 
 Alias Xidməti
-- POST `/v2/aliases/voprf/evaluate`
+- POST `/v1/aliases/voprf/evaluate`
   - Sorğu: { "blinded_element_hex": "..." }
   - Cavab: { "qiymətləndirilmiş_element_hex": "...128hex", "backend": "blake2b512-mock" }
     - `backend` qiymətləndiricinin həyata keçirilməsini əks etdirir. Cari dəyər: `blake2b512-mock`.
   - Qeydlər: `iroha.alias.voprf.mock.v1` domen ayrılması ilə Blake2b512 tətbiq edən deterministik saxta qiymətləndirici. İstehsal VOPRF boru kəməri Iroha vasitəsilə naqil edilənə qədər sınaq alətləri üçün nəzərdə tutulmuşdur.
   - Səhvlər: səhv formalaşdırılmış hex girişində HTTP `400`. Torii dekoder xətası mesajı ilə Norito `ValidationFail::QueryFailed::Conversion` zərfini qaytarır.
-- POST `/v2/aliases/resolve`
+- POST `/v1/aliases/resolve`
   - Sorğu: { "ləqəb": "GB82 WEST 1234 5698 7654 32" }
   - Cavab: { "ləqəb": "GB82WEST12345698765432", "account_id": "i105...", "indeks": 0, "mənbə": "iso_bridge" }
   - Qeydlər: ISO körpüsünün iş vaxtının quruluşunu tələb edir (`[iso_bridge.account_aliases]`, `iroha_config`). Torii axtarışdan əvvəl boşluqları və yuxarı hərfləri silməklə ləqəbləri normallaşdırır. Təxəllüs olmadıqda 404, ISO körpüsünün işləmə müddəti deaktiv olduqda 503 qaytarır.
-- POST `/v2/aliases/resolve_index`
+- POST `/v1/aliases/resolve_index`
   - Sorğu: { "indeks": 0 }
   - Cavab: { "indeks": 0, "ləqəb": "GB82WEST12345698765432", "account_id": "i105...", "mənbə": "iso_bridge" }
   - Qeydlər: Alias indeksləri konfiqurasiya qaydasından (0-asaslı) deterministik olaraq təyin edilir. Müştərilər ləqəbli attestasiya hadisələri üçün audit yollarını yaratmaq üçün cavabları oflayn rejimdə keşləyə bilər.Kod Ölçüsü Cap
@@ -75,7 +75,7 @@ Alias Xidməti
   - Defolt: 16 MiB. `.to` təsvir uzunluğu dəyişməz pozuntu xətası ilə həddi aşdıqda qovşaqlar `RegisterSmartContractBytes`-i rədd edir.
   - Operatorlar `SetParameter(Custom)` təqdim edərək `id = "max_contract_code_bytes"` və rəqəmli faydalı yüklə tənzimləyə bilərlər.
 
-- POST `/v2/gov/ballots/zk`
+- POST `/v1/gov/ballots/zk`
   - Sorğu: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "select_id": "e1", "proof_b64": "...", "public": {…} }
   - Cavab: { "ok": doğru, "qəbul edildi": doğru, "tx_instructions": [{…}] }
   - Qeydlər:
@@ -84,10 +84,10 @@ Alias Xidməti
     - Məbləği azaltmağa və ya müddəti bitməyə cəhd edən ZK təkrar səsləri `BallotRejected` diaqnostikası ilə server tərəfindən rədd edilir.
     - Müqavilənin icrası `SubmitBallot` növbəsinə daxil edilməzdən əvvəl `ZK_VOTE_VERIFY_BALLOT`-ə zəng etməlidir; ev sahibləri bir vuruşlu kilidi tətbiq edir.
 
-- POST `/v2/gov/ballots/plain`
+- POST `/v1/gov/ballots/plain`
   - Sorğu: { "səlahiyyət": "i105...", "özəl_açar": "...?", "zəncir_id": "...", "referendum_id": "r1", "sahibi": "i105...", "məbləğ": "1000", "müddət_bloklar": 6000, "əlamətlər|Naxış"
   - Cavab: { "ok": doğru, "qəbul edildi": doğru, "tx_instructions": [{…}] }
-  - Qeydlər: Təkrar səsvermələr yalnız uzadılır - yeni səsvermə bülleteni mövcud kilidin məbləğini və ya müddətini azalda bilməz. `owner` əməliyyat səlahiyyətinə bərabər olmalıdır. Minimum müddət `conviction_step_blocks`-dir.- POST `/v2/gov/finalize`
+  - Qeydlər: Təkrar səsvermələr yalnız uzadılır - yeni səsvermə bülleteni mövcud kilidin məbləğini və ya müddətini azalda bilməz. `owner` əməliyyat səlahiyyətinə bərabər olmalıdır. Minimum müddət `conviction_step_blocks`-dir.- POST `/v1/gov/finalize`
   - Sorğu: { "referendum_id": "r1", "təklif_id": "...64hex", "authority": "i105...?", "private_key": "...?" }
   - Cavab: { "ok": doğrudur, "tx_instructions": [{ "wire_id": "...Referendumun yekunlaşdırılması", "payload_hex": "..." }] }
   - Zəncirvari effekt (cari iskele): təsdiq edilmiş yerləşdirmə təklifinin qüvvəyə minməsi `code_hash` tərəfindən gözlənilən `abi_hash` ilə əsaslanan minimal `ContractManifest` əlavə edir və təklifin Qəbul edildiyini qeyd edir. Fərqli `abi_hash` ilə `code_hash` üçün manifest artıq mövcuddursa, qüvvəyə minmə rədd edilir.
@@ -96,24 +96,24 @@ Alias Xidməti
     - `h_end`-də avtomatik bağlanma yalnız Düz referendum üçün Təsdiqləndi/Reddedildi; ZK referendumu yekun nəticə təqdim olunana və `FinalizeReferendum` yerinə yetirilənə qədər bağlı qalır.
     - İştirakçıların iştirakının yoxlanılmasında yalnız təsdiq+rədd istifadə olunur; bitərəf qalmaq seçkilərdə iştirak sayılmır.
 
-- POST `/v2/gov/enact`
+- POST `/v1/gov/enact`
   - Sorğu: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "aşağı": 0, "yuxarı": 0 }?, "səlahiyyət": "i105...?", "private_key": "...?" }
   - Cavab: { "ok": doğrudur, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
   - Qeydlər: Torii imzalanmış əməliyyatı `authority`/`private_key` təqdim edildikdə təqdim edir; əks halda müştərilərin imzalaması və təqdim etməsi üçün skelet qaytarır. Ön görüntü isteğe bağlıdır və hazırda məlumat xarakteri daşıyır.
 
-- `/v2/gov/proposals/{id}` ALIN
+- `/v1/gov/proposals/{id}` ALIN
   - `{id}` yolu: təklif id hex (64 simvol)
   - Cavab: { "tapıldı": bool, "təklif": { … }? }
 
-- `/v2/gov/locks/{rid}` ALIN
+- `/v1/gov/locks/{rid}` ALIN
   - `{rid}` yolu: referendum id sətri
   - Cavab: { "tapıldı": bool, "referendum_id": "xilas", "kilidlər": { … }? }
 
-- `/v2/gov/council/current` ALIN
+- `/v1/gov/council/current` ALIN
   - Cavab: { "epox": N, "üzvlər": [{ "account_id": "..." }, …] }
   - Qeydlər: mövcud olduqda israrlı şuranı qaytarır; əks halda konfiqurasiya edilmiş pay aktivi və hədləri istifadə edərək deterministik geri dönüş əldə edir (canlı VRF sübutları zəncirdə davam edənə qədər VRF spesifikasiyasını əks etdirir).
 
-- POST `/v2/gov/council/derive-vrf` (xüsusiyyət: gov_vrf)
+- POST `/v1/gov/council/derive-vrf` (xüsusiyyət: gov_vrf)
   - Sorğu: { "committee_size": 21, "epoch": 123? , "namizədlər": [{ "account_id": "...", "variant": "Normal|Kiçik", "pk_b64": "...", "proof_b64": "..." }, …] }
   - Davranış: Hər bir namizədin VRF sübutunu `chain_id`, `epoch` və ən son blok hash mayakından əldə edilən kanonik girişə qarşı yoxlayır; Çıxış baytlarına görə çeşidləmə taybreykerlərlə azaldılır; üst `committee_size` üzvlərini qaytarır. Davam etmir.
   - Cavab: { "epox": N, "üzvlər": [{ "account_id": "..." } …], "total_candidates": M, "təsdiqlənib": K }
@@ -207,14 +207,14 @@ Runtime Təkmilləşdirmə Qarmaqları
 - Qarmağa cavab verən əməliyyatlar manifest kvorumunun tələb etdiyi hər hansı i105... təsdiqləri ilə yanaşı `gov_upgrade_id=<value>` metadatasını (və ya manifestdə müəyyən edilmiş açarı) əhatə etməlidir.
 
 Rahatlıq son nöqtəsi
-- POST `/v2/gov/protected-namespaces` — `gov_protected_namespaces` birbaşa node üzərində tətbiq edilir.
+- POST `/v1/gov/protected-namespaces` — `gov_protected_namespaces` birbaşa node üzərində tətbiq edilir.
   - Sorğu: { "ad boşluqları": ["tətbiqlər", "sistem"] }
   - Cavab: { "ok": doğrudur, "tətbiq olunur": 1 }
   - Qeydlər: Admin/test üçün nəzərdə tutulub; konfiqurasiya edildiyi təqdirdə API nişanı tələb olunur. İstehsal üçün `SetParameter(Custom)` ilə imzalanmış əməliyyatı təqdim etməyə üstünlük verin.CLI Köməkçiləri
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
   - Ad sahəsi üçün müqavilə nümunələrini gətirir və çarpaz yoxlayır:
     - Torii hər bir `code_hash` üçün bayt kodunu saxlayır və onun Blake2b-32 həzmi `code_hash` ilə uyğun gəlir.
-    - `/v2/contracts/code/{code_hash}` altında saxlanılan manifest `code_hash` və `abi_hash` dəyərlərinə uyğun gəlir.
+    - `/v1/contracts/code/{code_hash}` altında saxlanılan manifest `code_hash` və `abi_hash` dəyərlərinə uyğun gəlir.
     - `(namespace, contract_id, code_hash, abi_hash)` üçün qüvvəyə minmiş idarəetmə təklifi qovşağın istifadə etdiyi eyni təklif-id-dən əldə edildiyi kimi mövcuddur.
   - Müqavilə üzrə `results[]` (məsələlər, manifest/kod/təklif xülasələri) və basdırılmadığı halda bir sətirlik xülasə ilə JSON hesabatı çıxarır (`--no-summary`).
   - Qorunan ad məkanlarını yoxlamaq və ya idarəetmə tərəfindən idarə olunan yerləşdirmə iş axınlarını yoxlamaq üçün faydalıdır.
@@ -230,7 +230,7 @@ Rahatlıq son nöqtəsi
   - `--owner` kanonik I105 literallarını qəbul edir; isteğe bağlı `@<domain>` şəkilçiləri yalnız marşrut göstərişləridir.
   - `--lock-amount`/`--lock-duration-blocks` ləqəbləri skript pariteti üçün ZK bayraq adlarını əks etdirir.
   - Kodlanmış təlimat barmaq izi və insan tərəfindən oxuna bilən seçki bülletenləri (`owner`, `amount`, `duration_blocks`, `direction` imzalanmadan əvvəl) daxil olmaqla xülasə çıxış güzgüləri `vote --mode zk`.Nümunələrin siyahısı
-- GET `/v2/gov/instances/{ns}` — ad məkanı üçün aktiv müqavilə nümunələrini sadalayır.
+- GET `/v1/gov/instances/{ns}` — ad məkanı üçün aktiv müqavilə nümunələrini sadalayır.
   - Sorğu parametrləri:
     - `contains`: `contract_id` alt sətri ilə filtr (həssas hərf)
     - `hash_prefix`: `code_hash_hex` (kiçik hərf) hex prefiksi ilə filtr
@@ -240,10 +240,10 @@ Rahatlıq son nöqtəsi
   - SDK köməkçisi: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) və ya `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
 
 Sweep (Operator/Audit) Kilidini Açın
-- `/v2/gov/unlocks/stats` ALIN
+- `/v1/gov/unlocks/stats` ALIN
   - Cavab: { "height_current": H, "expired_locks_inow": n, "referenda_with_with_expired": m, "son_sweep_height": S }
   - Qeydlər: `last_sweep_height` vaxtı keçmiş kilidlərin süpürüldüyü və davamlı olduğu ən son blok hündürlüyünü əks etdirir. `expired_locks_now`, `expiry_height <= height_current` ilə kilid qeydlərini skan etməklə hesablanır.
-- POST `/v2/gov/ballots/zk-v1`
+- POST `/v1/gov/ballots/zk-v1`
   - Sorğu (v1-stil DTO):
     {
       "authority": "i105...",
@@ -259,7 +259,7 @@ Sweep (Operator/Audit) Kilidini Açın
       "direction": "Bəli|Xeyr|Çəkərən?",
       "nullifier": "blake2b32:...64hex?"
     }
-  - Cavab: { "ok": doğru, "qəbul edildi": doğru, "tx_instructions": [{…}] }- POST `/v2/gov/ballots/zk-v1/ballot-proof` (xüsusiyyət: `zk-ballot`)
+  - Cavab: { "ok": doğru, "qəbul edildi": doğru, "tx_instructions": [{…}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (xüsusiyyət: `zk-ballot`)
   - Birbaşa `BallotProof` JSON qəbul edir və `CastZkBallot` skeletini qaytarır.
   - Sorğu:
     {
@@ -333,7 +333,7 @@ VRF cəzaları `activation_lag_blocks` (cinayətkarlar həbs edilir) sonra avtom
 
 Operatorlar və alətlər aşağıdakılar vasitəsilə faydalı yükləri yoxlaya və yenidən yayımlaya bilər:
 
-- Torii: `GET /v2/sumeragi/evidence` və `GET /v2/sumeragi/evidence/count`.
+- Torii: `GET /v1/sumeragi/evidence` və `GET /v1/sumeragi/evidence/count`.
 - CLI: `iroha ops sumeragi evidence list`, `… count` və `… submit --evidence-hex <payload>`.
 
 İdarəetmə sübut baytlarına kanonik sübut kimi baxmalıdır:
@@ -342,7 +342,7 @@ Operatorlar və alətlər aşağıdakılar vasitəsilə faydalı yükləri yoxla
 2. `slashing_delay_blocks` başa çatmazdan əvvəl sübut yükü ilə birlikdə `CancelConsensusEvidencePenalty` təqdim etməklə **Lazım olduqda ləğv edin**; qeyd `penalty_cancelled` və `penalty_cancelled_at_height` qeyd olunur və heç bir kəsik tətbiq edilmir.
 3. Faydalı yükü referendum və ya sudo təlimatına daxil etməklə (məs., `Unregister::peer`) **Cəzanı təyin edin**. İcra yükü yenidən təsdiq edir; qüsurlu və ya köhnəlmiş sübutlar qəti şəkildə rədd edilir.
 4. **Növbəti topologiyanı planlaşdırın** ki, xəta törədən i105... dərhal yenidən qoşula bilməsin. Tipik axın növbəsi `SetParameter(Sumeragi::NextMode)` və `SetParameter(Sumeragi::ModeActivationHeight)` yenilənmiş siyahı ilə.
-5. Sübutun əksini təmin etmək üçün `/v2/sumeragi/evidence` və `/v2/sumeragi/status` vasitəsilə **Audit nəticələri** və idarəetmənin aradan qaldırılmasını təmin etmək.
+5. Sübutun əksini təmin etmək üçün `/v1/sumeragi/evidence` və `/v1/sumeragi/status` vasitəsilə **Audit nəticələri** və idarəetmənin aradan qaldırılmasını təmin etmək.
 
 ### Birgə Konsensus ardıcıllığı
 
@@ -355,11 +355,11 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- İş vaxtı və CLI `/v2/sumeragi/params` və `iroha sumeragi params --summary` vasitəsilə mərhələli parametrləri ifşa edir, beləliklə operatorlar aktivləşdirmə hündürlüklərini və i105... siyahıları təsdiq edə bilərlər.
+- İş vaxtı və CLI `/v1/sumeragi/params` və `iroha sumeragi params --summary` vasitəsilə mərhələli parametrləri ifşa edir, beləliklə operatorlar aktivləşdirmə hündürlüklərini və i105... siyahıları təsdiq edə bilərlər.
 - İdarəetmənin avtomatlaşdırılması həmişə:
   1. Dəlil əsasında çıxarılma (və ya bərpa) qərarını yekunlaşdırın.
   2. `mode_activation_height = h_current + activation_lag_blocks` ilə təkrar konfiqurasiyanı növbəyə qoyun.
-  3. `effective_consensus_mode` gözlənilən hündürlükdə çevrilənə qədər `/v2/sumeragi/status` monitoru.
+  3. `effective_consensus_mode` gözlənilən hündürlükdə çevrilənə qədər `/v1/sumeragi/status` monitoru.
 
 i105...s fırlanan və ya kəsişmə tətbiq edən hər hansı skript **sıfır gecikmə ilə aktivləşdirməyə cəhd etməməli və ya ötürülmə parametrlərini buraxmamalıdır; belə əməliyyatlar rədd edilir və şəbəkəni əvvəlki rejimdə tərk edir.
 

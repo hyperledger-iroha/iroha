@@ -36,7 +36,7 @@ translator: machine-google-reviewed
   ```
 
 - ポリシーのメタデータと保留中の移行は、以下から入手できます。
-  `GET /v2/confidential/assets/{definition_id}/transitions`
+  `GET /v1/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`)、Swift SDK によってミラーリングされます
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) に文書化されています。
   機密資産設計と SDK ガイドの両方

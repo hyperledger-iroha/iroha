@@ -58,7 +58,7 @@ Gossip conscient des dataspaces
 
 Manifeste de capacites et UAID
 - Comptes universels: Chaque participant recoit un UAID deterministe (`UniversalAccountId` dans `crates/iroha_data_model/src/nexus/manifest.rs`) qui couvre tous les dataspaces. Les manifestes de capacites (`AssetPermissionManifest`) lient un UAID a un dataspace specifique, des epochs d activation/expiration, et une liste ordonnee de regles allow/deny `ManifestEntry` qui bornent `dataspace`, `program_id`, `method`, `asset` et des roles AMX optionnels. Les regles deny gagnent toujours; l evaluateur emet soit `ManifestVerdict::Denied` avec une raison d audit, soit un grant `Allowed` avec la metadata d allocation correspondante.
-- Les snapshots de portefeuille UAID sont exposes via `GET /v2/accounts/{uaid}/portfolio` (voir `docs/source/torii/portfolio_api.md`), appuyes par l agregateur deterministe dans `iroha_core::nexus::portfolio`.
+- Les snapshots de portefeuille UAID sont exposes via `GET /v1/accounts/{uaid}/portfolio` (voir `docs/source/torii/portfolio_api.md`), appuyes par l agregateur deterministe dans `iroha_core::nexus::portfolio`.
 - Allowances: Chaque entree allow porte des buckets `AllowanceWindow` deterministes (`PerSlot`, `PerMinute`, `PerDay`) plus un `max_amount` optionnel. Les hosts et SDKs consomment le meme payload Norito, donc l enforcement reste identique sur tous les hardwares et SDKs.
 - Telemetrie d audit: Le Space Directory emet `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) chaque fois qu un manifeste change d etat. La surface `SpaceDirectoryEventFilter` permet aux abonnes Torii/data-event de surveiller les mises a jour UAID, les revocations et les decisions deny-wins sans plomberie specifique.
 
@@ -135,19 +135,19 @@ Les operateurs et SDKs peuvent effectuer les memes actions via HTTPS. Torii appl
 meme verifications de permission et signe les transactions au nom de l autorite fournie
 (les cles privees ne circulent qu en memoire dans le handler securise de Torii):
 
-- `GET /v2/space-directory/uaids/{uaid}` - resoudre les liaisons de dataspace courantes
+- `GET /v1/space-directory/uaids/{uaid}` - resoudre les liaisons de dataspace courantes
   pour un UAID (adresses normalisees, ids de dataspace, liaisons de programme). Ajouter
   `canonical I105 output` pour la sortie Sora Name Service (I105 prefere; I105 est le second choix Sora-only).
-- `GET /v2/accounts/{uaid}/portfolio` -
+- `GET /v1/accounts/{uaid}/portfolio` -
   agregateur adosse a Norito qui reflete `ToriiClient.getUaidPortfolio` pour que les wallets
   rendent les holdings universels sans scruter l etat par dataspace. Ajouter
   `asset_id=<asset#definition::owner>` pour filtrer l instantane a un seul actif.
-- `GET /v2/space-directory/uaids/{uaid}/manifests?dataspace={id}` - obtenir le JSON du manifeste
+- `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` - obtenir le JSON du manifeste
   canonique, les metadonnees de cycle de vie et le hash du manifeste pour audits.
-- `POST /v2/space-directory/manifests` - soumettre des manifestes nouveaux ou de remplacement
+- `POST /v1/space-directory/manifests` - soumettre des manifestes nouveaux ou de remplacement
   depuis JSON (`authority`, `private_key`, `manifest`, `reason` optionnel). Torii
   renvoie `202 Accepted` une fois la transaction en file.
-- `POST /v2/space-directory/manifests/revoke` - mettre en file des revocations d urgence
+- `POST /v1/space-directory/manifests/revoke` - mettre en file des revocations d urgence
   avec UAID, id de dataspace, epoch effectif et reason optionnel (reflete la disposition
   CLI).
 
@@ -159,7 +159,7 @@ Voir `docs/source/torii/portfolio_api.md` pour les schemas request/response comp
 
 Mises a jour recentes SDK/AMX
 - **NX-11 (verification relay cross-lane):** les helpers SDK valident maintenant les
-  envelopes de relay de lane exposes par `/v2/sumeragi/status`. Le client Rust livre
+  envelopes de relay de lane exposes par `/v1/sumeragi/status`. Le client Rust livre
   des helpers `iroha::nexus` pour construire/verifier des preuves relay et rejeter des tuples
   dupliques `(lane_id, dataspace_id, height)`, le binding Python expose
   `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`, et le SDK JS expose
@@ -359,7 +359,7 @@ Configuration et determinisme
 
 ### Controle du cycle de vie des lanes en runtime
 
-- **Endpoint admin:** `POST /v2/nexus/lifecycle` (Torii) accepte un corps Norito/JSON avec `additions` (objets `LaneConfig` complets) et `retire` (ids de lane) pour ajouter ou retirer des lanes sans redemarrage. Les requetes sont gatees par `nexus.enabled=true` et reutilisent la meme vue configuration/etat Nexus que la queue.
+- **Endpoint admin:** `POST /v1/nexus/lifecycle` (Torii) accepte un corps Norito/JSON avec `additions` (objets `LaneConfig` complets) et `retire` (ids de lane) pour ajouter ou retirer des lanes sans redemarrage. Les requetes sont gatees par `nexus.enabled=true` et reutilisent la meme vue configuration/etat Nexus que la queue.
 - **Comportement:** En succes, le noeud applique le plan de cycle de vie a la metadata WSV/Kura, reconstruit le routage/limites/manifestes de queue, et repond avec `{ ok: true, lane_count: <u32> }`. Les plans qui echouent la validation (ids retire inconnus, aliases/ids dupliques, Nexus desactive) renvoient `400 Bad Request` avec un `lane_lifecycle_error`.
 - **Securite:** Le handler utilise le lock de vue d etat partagee pour eviter les courses avec des lecteurs lors des mises a jour de catalogues; les appelants doivent encore serialiser les mises a jour de cycle de vie en externe pour eviter des plans conflictuels.
 - **Propagation:** Le routage/limites de la queue et les manifests de lane sont reconstruits depuis le catalogue mis a jour, et les workers consensus/DA/RBC lisent la config de lane via des snapshots d etat; le scheduling et la selection des validateurs basculent sans redemarrage (le travail en vol termine avec l ancienne config).

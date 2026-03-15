@@ -33,7 +33,7 @@ portal auditoriyası üçün.
 
 | Komponent | Məqsəd | Sübut |
 |-----------|---------|----------|
-| `sns_settlementd` | Siyasəti tətbiq edir, paketləri işarələyir, `/v2/sns/settlements` səthlərini göstərir. | JSON paketi + hash. |
+| `sns_settlementd` | Siyasəti tətbiq edir, paketləri işarələyir, `/v1/sns/settlements` səthlərini göstərir. | JSON paketi + hash. |
 | Hesablaşma növbəsi və yazıçı | Idempotent növbə + `iroha_cli app sns settlement ledger` tərəfindən idarə olunan kitab təqdim edən. | Paket hash ↔ tx hash manifest. |
 | Barışıq işi | `docs/source/sns/reports/` altında gündəlik fərq + aylıq hesabat. | Markdown + JSON həzmi. |
 | Geri ödəniş masası | `/settlements/{id}/refund` vasitəsilə idarəetmə tərəfindən təsdiqlənmiş geri qaytarmalar. | `RefundRecordV1` + bilet. |

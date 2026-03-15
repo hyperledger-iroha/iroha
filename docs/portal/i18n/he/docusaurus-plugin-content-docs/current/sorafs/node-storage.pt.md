@@ -166,9 +166,9 @@ Ambos os comandos imprimem um resumo Norito JSON em stdout, facilitando o uso em
 > O gateway Torii agora expoe helpers לקריאה בלבד apoiados pelo mesmo
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - retorna o manifest
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - retorna o manifest
 > Norito armazenado (base64) junto com digest/metadata. [crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - retorna o plano de chunk
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - retorna o plano de chunk
 > JSON (`chunk_fetch_specs`) מוגדר עבור כלי עבודה במורד הזרם. [crates/iroha_torii/src/sorafs/api.rs:1259]
 >
 > נקודות הקצה של Esses espelham a saida do CLI para que pipelines possam trocar
@@ -211,19 +211,19 @@ Ambos os comandos imprimem um resumo Norito JSON em stdout, facilitando o uso em
      de governanca estiver definido; por ora o design assume quotas estritas e
      operacoes de unpin iniciadas pelo operador.
 
-### Declaracao de capacidade e integracao de Scheduling- Torii עדכוני agora repassa de `CapacityDeclarationRecord` de `/v2/sorafs/capacity/declare`
+### Declaracao de capacidade e integracao de Scheduling- Torii עדכוני agora repassa de `CapacityDeclarationRecord` de `/v1/sorafs/capacity/declare`
   para o `CapacityManager` embutido, de modo que cada nodo constroi uma visao em memoria
   de suas alocacoes comprometidas de chunker e lane. O מנהל חשיפת תמונות לקריאה בלבד
-  para telemetria (`GET /v2/sorafs/capacity/state`) e impoe reservas por perfil ou lane
+  para telemetria (`GET /v1/sorafs/capacity/state`) e impoe reservas por perfil ou lane
   אנטס דה נובה אורנסס סרם aceitas. [crates/sorafs_node/src/capacity.rs:1] [crates/sorafs_node/src/lib.rs:60]
-- O נקודת קצה `/v2/sorafs/capacity/schedule` aceita מטענים `ReplicationOrderV1`
+- O נקודת קצה `/v1/sorafs/capacity/schedule` aceita מטענים `ReplicationOrderV1`
   emitidos pela governanca. בדוק או מוכיח או מוכיח את המנהל המקומי
   תזמון דופליקדו, valida capacidade de chunker/lane, reserva o slice e retorna
   um `ReplicationPlan` descrevendo capacidade restante para que ferramentas de
   orquestracao possam seguir com a ingestao. Ordens para outros provedores sao
   Reconhecidas com Reposta `ignored` עבור זרימות עבודה מרובות מפעילים נוחים. [crates/iroha_torii/src/routing.rs:4845]
 - Hooks de conclusao (לדוגמה, disparados apos ingestao bem sucedida) chamam
-  `POST /v2/sorafs/capacity/complete` para liberar reservas via
+  `POST /v1/sorafs/capacity/complete` para liberar reservas via
   `CapacityManager::complete_order`. תשובה כוללת תמונת מצב
   `ReplicationRelease` (totais restantes, residuais de chunker/lane) para que tooling
   de orquestracao possa enfileirar a proxima ordem sem polling. Trabalho futuro

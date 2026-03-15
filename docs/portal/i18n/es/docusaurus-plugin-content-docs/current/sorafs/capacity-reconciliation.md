@@ -7,7 +7,7 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 ---
 
-El item del roadmap **SF-2c** exige que tesoreria demuestre que el libro de tarifas de capacidad coincide con las transferencias XOR ejecutadas cada noche. Usa el helper `scripts/telemetry/capacity_reconcile.py` para comparar el snapshot `/v2/sorafs/capacity/state` contra el lote de transferencias ejecutado y emitir metricas de texto de Prometheus para Alertmanager.
+El item del roadmap **SF-2c** exige que tesoreria demuestre que el libro de tarifas de capacidad coincide con las transferencias XOR ejecutadas cada noche. Usa el helper `scripts/telemetry/capacity_reconcile.py` para comparar el snapshot `/v1/sorafs/capacity/state` contra el lote de transferencias ejecutado y emitir metricas de texto de Prometheus para Alertmanager.
 
 ## Prerrequisitos
 - Snapshot del estado de capacidad (entradas `fee_ledger`) exportado desde Torii.

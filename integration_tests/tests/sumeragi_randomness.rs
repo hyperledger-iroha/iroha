@@ -63,7 +63,7 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
     let http = HttpClient::new();
     let telemetry_url = client
         .torii_url
-        .join("v2/sumeragi/telemetry")
+        .join("v1/sumeragi/telemetry")
         .wrap_err("compose telemetry URL")?;
 
     let target_signer = 0_u32;
@@ -296,7 +296,7 @@ async fn npos_zero_participation_epoch_reports_full_no_participation() -> Result
     let http = HttpClient::new();
     let telemetry_url = client
         .torii_url
-        .join("v2/sumeragi/telemetry")
+        .join("v1/sumeragi/telemetry")
         .wrap_err("compose telemetry URL")?;
 
     let penalties = wait_for_penalties(&client, epoch, |json| {
@@ -452,7 +452,7 @@ async fn submit_vrf_commit(
 ) -> Result<()> {
     let url = client
         .torii_url
-        .join("v2/sumeragi/vrf/commit")
+        .join("v1/sumeragi/vrf/commit")
         .wrap_err("compose VRF commit URL")?;
     let body = format!(
         "{{\"epoch\":{epoch},\"signer\":{signer},\"commitment_hex\":\"{}\"}}",
@@ -487,7 +487,7 @@ async fn submit_vrf_reveal(
 ) -> Result<()> {
     let url = client
         .torii_url
-        .join("v2/sumeragi/vrf/reveal")
+        .join("v1/sumeragi/vrf/reveal")
         .wrap_err("compose VRF reveal URL")?;
     let body = format!(
         "{{\"epoch\":{epoch},\"signer\":{signer},\"reveal_hex\":\"{}\"}}",

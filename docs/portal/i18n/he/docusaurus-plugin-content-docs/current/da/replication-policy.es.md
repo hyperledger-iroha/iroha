@@ -32,7 +32,7 @@ el numero requerido de epocas y replicas sin depender de la intencion del emisor
 | _ברירת מחדל (todas las demas clases)_ | 6 הורות | 30 dias | 3 | `warm` | `da.default` |
 
 Estos valores se incrustan en `torii.da_ingest.replication_policy` y se aplican a
-כל התעסקויות `/v2/da/ingest`. Torii כתוב מחדש מניפסטים קו אל פרפיל דה
+כל התעסקויות `/v1/da/ingest`. Torii כתוב מחדש מניפסטים קו אל פרפיל דה
 retencion impuesto y emite una advertencia cuando los callers entregan valores
 ללא מקרים עבור מפעילי זיהוי SDKs desactualizados.
 
@@ -153,5 +153,5 @@ fuera de cumplimiento de forma automatica.
    עוקף את דה emergencia, empareje la salida de la CLI con `iroha app da prove-availability`
    para que SREs puedan referenciar el mismo digest y Evidencia PDP.La cobertura de regresion vive en
 `integration_tests/tests/da/replication_policy.rs`; la suite envia una politica de
-שימור ללא מקרי א `/v2/da/ingest` y verifica que el manifest obtenido
+שימור ללא מקרי א `/v1/da/ingest` y verifica que el manifest obtenido
 expone el perfil impuesto en lugar de la intencion del caller.

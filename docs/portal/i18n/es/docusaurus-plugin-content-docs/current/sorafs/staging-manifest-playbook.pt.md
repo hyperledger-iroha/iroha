@@ -73,13 +73,13 @@ Este manual de estrategias describe cómo habilitar el perfil de fragmentador ra
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. Consulte el punto final de descubrimiento y confirme que el anuncio aparece con alias canónicos:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    Garanta que `profile_aliases` incluye `"sorafs.sf1@1.0.0"` como primera entrada.

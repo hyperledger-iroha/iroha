@@ -79,7 +79,7 @@ API を Torii にピン留めしてください。
 
 |ああ、ああ | और देखें
 |--------|--------|------|
-| Torii | 「`/v2/sorafs/pin` (送信)」「`/v2/sorafs/pin/{cid}` (検索)」「`/v2/sorafs/aliases` (リスト/バインド)」「`/v2/sorafs/replication` (注文/領収書)」。翻訳: 翻訳: + 翻訳: |ネットワーキング TL / コア インフラ |
+| Torii | 「`/v1/sorafs/pin` (送信)」「`/v1/sorafs/pin/{cid}` (検索)」「`/v1/sorafs/aliases` (リスト/バインド)」「`/v1/sorafs/replication` (注文/領収書)」。翻訳: 翻訳: + 翻訳: |ネットワーキング TL / コア インフラ |
 |認証済み | تضمين ارتفاع/هاش レジストリ في الاستجابات؛ Norito の SDK です。 |コアインフラ |
 | CLI | `sorafs_manifest_stub` と CLI の `sorafs_pin` は、`pin submit`、`alias bind`、`order issue`、`registry export` です。 |ツーリングWG |
 | SDK |バインディング (Rust/Go/TS) Norito؛ありがとうございます。 | SDK チーム |意味:
@@ -134,9 +134,9 @@ API を Torii にピン留めしてください。
 SF-4 を開発し、SF-4 を開発しました。
 休息時間:
 
-- `GET /v2/sorafs/pin` と `GET /v2/sorafs/pin/{digest}` はマニフェストを表示します
+- `GET /v1/sorafs/pin` と `GET /v1/sorafs/pin/{digest}` はマニフェストを表示します
   別名 واوامر التكرار وكائن اتستاشن مشتق من هاش اخر كتلة。
-- `GET /v2/sorafs/aliases` と `GET /v2/sorafs/replication` のエイリアス
+- `GET /v1/sorafs/aliases` と `GET /v1/sorafs/replication` のエイリアス
   あなたのことを忘れないでください。
 
 CLI を使用する (`iroha app sorafs pin list`、`pin show`、`alias list`、

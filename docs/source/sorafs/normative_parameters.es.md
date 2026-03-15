@@ -50,7 +50,7 @@ operadores, autores de SDK y auditores compartan una unica fuente de verdad.
 ## 2. Ciclo de vida de Provider Adverts
 
 - Los adverts se regeneran cada 12 horas, expiran despues de 24 horas y deben
-  re-firmarse antes de que Torii los sirva via `/v2/sorafs/providers`.
+  re-firmarse antes de que Torii los sirva via `/v1/sorafs/providers`.
 - `ProviderAdvertBodyV1` incluye QoS, stake y transport hints; governance
   compara nonces deterministas para rechazar payloads replayados.
 - Operadores envian nuevos adverts posteando el payload Norito firmado emitido
@@ -58,7 +58,7 @@ operadores, autores de SDK y auditores compartan una unica fuente de verdad.
 
   ```bash
   curl -sS -X POST --data-binary @provider_advert.to \
-    http://<torii-host>/v2/sorafs/provider/advert
+    http://<torii-host>/v1/sorafs/provider/advert
   ```
 
 - Dashboards a vigilar: `torii_sorafs_admission_total` (labels de resultado),

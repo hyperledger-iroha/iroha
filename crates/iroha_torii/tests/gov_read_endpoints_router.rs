@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for governance read endpoint wiring (`/v2/gov/proposals/{id}`).
+//! Router-level test for governance read endpoint wiring (`/v1/gov/proposals/{id}`).
 #![allow(clippy::similar_names)]
 #![cfg(feature = "app_api")]
 
@@ -76,7 +76,7 @@ async fn gov_proposal_get_router_mapping() {
 
     let request = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/gov/proposals/{id_hex}"))
+        .uri(format!("/v1/gov/proposals/{id_hex}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp = app.oneshot(request).await.unwrap();

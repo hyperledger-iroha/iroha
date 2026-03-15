@@ -90,7 +90,7 @@ Necesite una negociación explícita con el cliente (`Accept-Chunker` + `Accept-
 | Negociación de perfiles de puerta de enlace Torii | ✅ Apoyado | Implemente toda la gramática `Accept-Chunker`, incluidos los encabezados `Content-Chunker` y no exponga el puente CARv1 que sur des demandes de downgrade explícitamente. |
 
 Despliegue de la televisión:- **Télémétrie de fetch de chunks** — la CLI Iroha `sorafs toolkit pack` emet des digestes de chunks, des métadonnées CAR y des racines PoR para ingestión en los tableros.
-- **Anuncios del proveedor**: las cargas útiles de los anuncios incluyen las metadonnées de capacidades y alias; validez de la cobertura vía `/v2/sorafs/providers` (ej., presencia de la capacidad `range`).
+- **Anuncios del proveedor**: las cargas útiles de los anuncios incluyen las metadonnées de capacidades y alias; validez de la cobertura vía `/v1/sorafs/providers` (ej., presencia de la capacidad `range`).
 - **Puerta de enlace de vigilancia**: los operadores deben informar sobre los acoplamientos `Content-Chunker`/`Content-Digest` para detectar las degradaciones inatendidas; El uso del puente está censurado tendre a cero antes de la depreciación.
 
 Política de depreciación: una vez que un perfil sucesor está ratificado, planifique una ventana de doble publicación

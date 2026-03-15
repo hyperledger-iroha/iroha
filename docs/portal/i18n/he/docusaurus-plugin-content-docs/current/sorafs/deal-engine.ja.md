@@ -63,12 +63,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 Torii חושפת endpoints ייעודיים כדי שספקים יוכלו לדווח על שימוש ולהניע את
 מחזור החיים של העסקה ללא wiring מותאם:
 
-- `POST /v2/sorafs/deal/usage` מקבל טלמטריית `DealUsageReport` ומחזיר
+- `POST /v1/sorafs/deal/usage` מקבל טלמטריית `DealUsageReport` ומחזיר
   תוצאות חשבונאיות דטרמיניסטיות (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` מסיים את החלון הנוכחי, ומזרים את
+- `POST /v1/sorafs/deal/settle` מסיים את החלון הנוכחי, ומזרים את
   `DealSettlementRecord` שנוצר לצד `DealSettlementV1` בקידוד base64
   מוכן לפרסום ב-DAG של ממשל.
-- פיד `/v2/events/sse` של Torii משדר כעת רשומות `SorafsGatewayEvent::DealUsage`
+- פיד `/v1/events/sse` של Torii משדר כעת רשומות `SorafsGatewayEvent::DealUsage`
   המסכמות כל שליחת שימוש (epoch, GiB-hours נמדדים, מוני כרטיסים,
   חיובים דטרמיניסטיים), רשומות `SorafsGatewayEvent::DealSettlement`
   הכוללות את snapshot הלדג'ר הקנוני של ההסדר יחד עם digest/size/base64 של BLAKE3

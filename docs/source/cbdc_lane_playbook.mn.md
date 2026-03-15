@@ -233,7 +233,7 @@ iroha app space-directory manifest audit-bundle \
 
 1. **Лайн манифестууд:** `cargo test -p integration_tests nexus::lane_registry -- --nocapture lane_manifest_registry_loads_fixture_manifests`.
 2. **Хуваарьлагчийн квот:** `cargo test -p integration_tests scheduler_teu -- queue_teu_backlog_matches_metering queue_routes_transactions_across_configured_lanes`.
-3. **Гараар утаа:** CBDC файлууд руу чиглэсэн манифест лавлах `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`, дараа нь `/v2/sumeragi/status` дарж, CBDC эгнээний `lane_governance.manifest_ready=true`-г шалгана уу.
+3. **Гараар утаа:** CBDC файлууд руу чиглэсэн манифест лавлах `irohad --sora --config configs/soranexus/nexus/config.toml --chain 0000…`, дараа нь `/v1/sumeragi/status` дарж, CBDC эгнээний `lane_governance.manifest_ready=true`-г шалгана уу.
 4. **Цагаан жагсаалтын тууштай байдлын тест:** `cargo test -p integration_tests nexus::cbdc_whitelist -- --nocapture` `integration_tests/tests/nexus/cbdc_whitelist.rs` дасгалууд, `fixtures/space_directory/profile/cbdc_lane_profile.json`-г задлан шинжилж, лавлагаалагдсан чадавхи нь цагаан жагсаалтын оролт бүрийн UAID, өгөгдлийн зай, идэвхжүүлэх үе болон I180000000000000000000000000000000000000000 зөвшөөрөгдөх жагсаалттай тохирч байгаа эсэхийг шалгах боломжтой. `fixtures/space_directory/capability/` доор. Цагаан жагсаалт эсвэл манифест өөрчлөгдөх бүрт туршилтын бүртгэлийг NX-6 нотлох баримтын багцад хавсаргана уу.
 
 ### 2.2 CLI хэсэг
@@ -243,7 +243,7 @@ iroha app space-directory manifest audit-bundle \
 - Үйл ажиллагааны ширээ алсын автоматжуулалтыг ажиллуулж байгаа бол HTTP-ээр нийтлэх:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",
@@ -259,7 +259,7 @@ iroha app space-directory manifest audit-bundle \
 - Яаралтай цуцлалтыг Torii дугаарт POST хийж алсаас гаргаж болно:
 
   ```bash
-  curl -X POST https://torii.soranexus/v2/space-directory/manifests/revoke \
+  curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
             "authority": "i105...",

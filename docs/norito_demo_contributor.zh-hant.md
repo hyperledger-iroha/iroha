@@ -27,7 +27,7 @@ Norito 將堆棧橋接/連接到 Xcode 項目，請參閱 `docs/connect_swift_in
    與您的環境相匹配的價值觀。應用程序在啟動時讀取這些變量：
    - `TORII_NODE_URL` — 基本 REST URL（WebSocket URL 源自它）。
    - `CONNECT_SESSION_ID` — 32 字節會話標識符 (base64/base64url)。
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v2/connect/session` 返回的令牌。
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v1/connect/session` 返回的令牌。
    - `CONNECT_CHAIN_ID` — 控制握手期間宣布的鏈標識符。
    - `CONNECT_ROLE` — 在 UI 中預先選擇的默認角色（`app` 或 `wallet`）。
    - 用於手動測試的可選助手：`CONNECT_PEER_PUB_B64`、`CONNECT_SHARED_KEY_B64`、
@@ -74,7 +74,7 @@ Norito 將堆棧橋接/連接到 Xcode 項目，請參閱 `docs/connect_swift_in
 2. 在 Xcode 中打開 `NoritoDemoXcode` 項目。
 3. 選擇 `NoritoDemo` 方案並定位 iOS 模擬器或設備。
 4. 確保通過方案的環境變量引用 `.env` 文件。
-   填充 `/v2/connect/session` 導出的 `CONNECT_*` 值，以便 UI 為
+   填充 `/v1/connect/session` 導出的 `CONNECT_*` 值，以便 UI 為
    應用程序啟動時預先填充。
 5. 驗證硬件加速默認值：`App.swift` 調用
    `DemoAccelerationConfig.load().apply()` 因此演示會選擇

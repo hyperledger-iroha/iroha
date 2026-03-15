@@ -31,7 +31,7 @@ async fn protected_namespaces_endpoints_work() {
 
     // Wire routes for GET and POST
     let app = Router::new().route(
-        "/v2/gov/protected-namespaces",
+        "/v1/gov/protected-namespaces",
         get({
             let state = state.clone();
             move || async move { iroha_torii::handle_gov_protected_get(state).await }
@@ -47,7 +47,7 @@ async fn protected_namespaces_endpoints_work() {
     // GET should return found=false
     let req_get0 = http::Request::builder()
         .method("GET")
-        .uri("/v2/gov/protected-namespaces")
+        .uri("/v1/gov/protected-namespaces")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp0 = app.clone().oneshot(req_get0).await.unwrap();
@@ -64,7 +64,7 @@ async fn protected_namespaces_endpoints_work() {
     let body = json::to_string(&body_value).expect("serialize namespaces");
     let req_post = http::Request::builder()
         .method("POST")
-        .uri("/v2/gov/protected-namespaces")
+        .uri("/v1/gov/protected-namespaces")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -74,7 +74,7 @@ async fn protected_namespaces_endpoints_work() {
     // GET now returns found=true with namespaces
     let req_get1 = http::Request::builder()
         .method("GET")
-        .uri("/v2/gov/protected-namespaces")
+        .uri("/v1/gov/protected-namespaces")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp2 = app.clone().oneshot(req_get1).await.unwrap();

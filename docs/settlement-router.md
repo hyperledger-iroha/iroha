@@ -70,4 +70,4 @@ Absent metadata disables buffer snapshotting for that lane (telemetry falls back
 ## Evidence & References
 - NX-3 settlement router acceptance notes: `status.md` (NX-3 section).
 - Operator surfaces: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- Receipt schema and API surfaces: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.
+- Receipt schema and API surfaces: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.

@@ -82,12 +82,12 @@ default_margin_percent = "0.025"
 ### 3.1 لقطات الاعدادات بعد الموافقة
 
 بعد اكتمال الاستفتاء او تصويت الحوكمة وتطبيق تغيير `[settlement.repo]`، التقط لقطات
-`/v2/configuration` من كل peer حتى يتمكن المدققون من اثبات ان السياسة المعتمدة حية عبر
+`/v1/configuration` من كل peer حتى يتمكن المدققون من اثبات ان السياسة المعتمدة حية عبر
 العنقود (راجع `docs/source/finance/repo_ops.md` القسم 2.9 لتدفق الادلة).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v2/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
+curl -fsSL https://peer01.example/v1/configuration       | jq '.'       > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
 | Peer / المصدر | الملف | SHA-256 | ارتفاع الكتلة | ملاحظات |

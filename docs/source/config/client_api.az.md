@@ -46,6 +46,6 @@ Mərhələ semantikası:
 - **ga** — Norito-RPC hər bir autentifikasiya edilmiş zəng edən üçün əlçatandır (şərtdən asılı olaraq
   adi tarif və pre-auth limitləri).
 
-Operatorlar bu dəyərləri `/v2/config` vasitəsilə dinamik olaraq yeniləyə bilərlər. Hər dəyişiklik
+Operatorlar bu dəyərləri `/v1/config` vasitəsilə dinamik olaraq yeniləyə bilərlər. Hər dəyişiklik
 dərhal `/rpc/capabilities`-də əks olunur, SDK-lara və müşahidə olunmağa imkan verir
 canlı nəqliyyat vəziyyətini göstərmək üçün panellər.

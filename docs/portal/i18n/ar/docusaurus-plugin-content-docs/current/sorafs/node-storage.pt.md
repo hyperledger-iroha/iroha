@@ -160,9 +160,9 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 > يا بوابة Torii أغورا اكسبو مساعدي القراءة فقط apoiados pelo mesmo
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - إعادة البيان
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - إعادة البيان
 > Norito armazenado (base64) junto com Digest/metadata. [الصناديق/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - إرجاع قطعة القماش
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - إرجاع قطعة القماش
 > تحديد JSON (`chunk_fetch_specs`) للأدوات النهائية. [الصناديق/iroha_torii/src/sorafs/api.rs:1259]
 >
 > تحدد نقاط النهاية من خلال CLI حتى تتمكن خطوط الأنابيب من حمل المبزل
@@ -202,19 +202,19 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
      دي Goveranca estiver Definido؛ من خلال التصميم أو اتخاذ حصص محددة ه
      Operacoes de unpin iniciadas pelooperador.
 
-### الإعلان عن القدرة والتكامل في الجدولة- Torii قبل إعادة تمرير التحديثات لـ `CapacityDeclarationRecord` de `/v2/sorafs/capacity/declare`
+### الإعلان عن القدرة والتكامل في الجدولة- Torii قبل إعادة تمرير التحديثات لـ `CapacityDeclarationRecord` de `/v1/sorafs/capacity/declare`
   لـ `CapacityManager` المضمنة، من خلال كل عقدة يتم إنشاء صورة في الذاكرة
   من خلال خوادمنا المتوافقة مع نظام القطع والمسارات. يا مدير يعرض لقطات للقراءة فقط
-  للقياس عن بعد (`GET /v2/sorafs/capacity/state`) وإجراء حجوزات للملف أو المسار
+  للقياس عن بعد (`GET /v1/sorafs/capacity/state`) وإجراء حجوزات للملف أو المسار
   أنتي دي نوفا أوردينس سيريم أسيتاس. [الصناديق/sorafs_node/src/capacity.rs:1] [الصناديق/sorafs_node/src/lib.rs:60]
-- يا نقطة النهاية `/v2/sorafs/capacity/schedule` الحمولات الصافية `ReplicationOrderV1`
+- يا نقطة النهاية `/v1/sorafs/capacity/schedule` الحمولات الصافية `ReplicationOrderV1`
   إميتيدوس بيلا غورانفانكا. عندما يتم طلبها أو التحقق من الوكيل المحلي أو المدير
   جدولة النسخ، وصلاحية سعة القطع/الممر، وحجز الشريحة والعودة
   um `ReplicationPlan` يصف السعة المتبقية للأجهزة
   orquestracao possam seguir com a ingestao. Ordens para outros profeores sao
   Reconhecidas com resposta `ignored` لتسهيل سير العمل متعدد المشغلين. [الصناديق/iroha_torii/src/routing.rs:4845]
 - خطافات الختام (على سبيل المثال، disparados apos ingestao bem sucedida) chamam
-  `POST /v2/sorafs/capacity/complete` لتحرير الحجوزات عبر
+  `POST /v1/sorafs/capacity/complete` لتحرير الحجوزات عبر
   `CapacityManager::complete_order`. يتضمن الرد لقطة
   `ReplicationRelease` (الباقي بالكامل، بقايا القطع/الخط) لاستخدام الأدوات
   de orquestracao possa enfileirar a proxima ordem sem polling. Trabalho المستقبل

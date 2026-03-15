@@ -27,7 +27,7 @@ Norito körpüsü/Steki Xcode layihələrinə birləşdirin, baxın `docs/connec
    mühitinizə uyğun dəyərlər. Proqram işə salındıqda bu dəyişənləri oxuyur:
    - `TORII_NODE_URL` — əsas REST URL (WebSocket URL-ləri ondan əldə edilir).
    - `CONNECT_SESSION_ID` — 32 baytlıq sessiya identifikatoru (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v2/connect/session` tərəfindən qaytarılan tokenlər.
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — `/v1/connect/session` tərəfindən qaytarılan tokenlər.
    - `CONNECT_CHAIN_ID` — nəzarət əl sıxma zamanı elan edilmiş zəncir identifikatoru.
    - `CONNECT_ROLE` — UI-də defolt rol əvvəlcədən seçilmişdir (`app` və ya `wallet`).
    - Əllə sınaq üçün əlavə köməkçilər: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
@@ -74,7 +74,7 @@ Qeyri-interaktiv CI işləri üçün `--exit-after-ready`.
 2. Xcode-da `NoritoDemoXcode` layihəsini açın.
 3. `NoritoDemo` sxemini seçin və iOS simulyatorunu və ya cihazını hədəfləyin.
 4. `.env` faylına sxemin mühit dəyişənləri vasitəsilə istinad edildiyinə əmin olun.
-   `/v2/connect/session` tərəfindən ixrac edilmiş `CONNECT_*` dəyərlərini doldurun ki, UI olsun
+   `/v1/connect/session` tərəfindən ixrac edilmiş `CONNECT_*` dəyərlərini doldurun ki, UI olsun
    proqram işə salındıqda əvvəlcədən doldurulur.
 5. Avadanlıq sürətləndirilməsinin defoltlarını yoxlayın: `App.swift` zəngləri
    `DemoAccelerationConfig.load().apply()` beləliklə demo ya seçir

@@ -43,7 +43,7 @@ summary: Final specification for NSC-37a/b covering ticket schema, Halo2 circuit
   - Leaf hash: `BLAKE3("soranet.ticket.body.<field>.v1" || le32(len) || value)` with fields ordered as `blinded_cid`, `scope`, `max_uses`, `valid_after`, `valid_until`, `issuer_id`, `salt_epoch`, `policy_flags`, `metadata`.
   - Internal node hash: `BLAKE3("soranet.ticket.body.node.v1" || left || right)`; if a level has an odd number of leaves the last node is duplicated before hashing.
 - Schema documented with golden vectors; hashed schema version appended to roadmap.
-- Tickets transported via Torii endpoints `/v2/soranet/ticket/issue`, `/verify`, and attached to SoraFS streaming requests (`Sora-Privacy-Ticket` header).
+- Tickets transported via Torii endpoints `/v1/soranet/ticket/issue`, `/verify`, and attached to SoraFS streaming requests (`Sora-Privacy-Ticket` header).
 
 ## Halo2 Circuit & Proof Flow (NSC-37b)
 - Circuit (`TicketCircuitV1`) proves:

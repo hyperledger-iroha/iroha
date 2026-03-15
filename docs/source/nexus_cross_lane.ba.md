@@ -110,7 +110,7 @@ applied (`applied`) or missing/expired/insufficient/disabled during validation.
    During `BlockBuilder::finalize`, each `(lane_id, dataspace_id)` pair drains its accumulator. The builder instantiates a `LaneBlockCommitment`, copies the receipt list, accumulates totals, and stores optional swap metadata (via `SwapEvidence`). The resulting vector is pushed to the Sumeragi status slot (`crates/iroha_core/src/sumeragi/status.rs`) so Torii and telemetry can expose it immediately.
 
 3. **Relay packaging & DA attestations.**  
-   `LaneRelayBroadcaster` now consumes the `LaneRelayEnvelope`s emitted during block sealing and gossips them as high-priority `NetworkMessage::LaneRelay` frames. Envelopes are verified, de-duplicated by `(lane_id,dataspace_id,height,settlement_hash)`, and persisted in the Sumeragi status snapshot (`/v2/sumeragi/status`) for operators and auditors. The broadcaster will continue to evolve to attach DA artefacts (RBC chunk proofs, Norito headers, SoraFS/Object manifests) and feed the merge ring without head-of-line blocking.
+   `LaneRelayBroadcaster` now consumes the `LaneRelayEnvelope`s emitted during block sealing and gossips them as high-priority `NetworkMessage::LaneRelay` frames. Envelopes are verified, de-duplicated by `(lane_id,dataspace_id,height,settlement_hash)`, and persisted in the Sumeragi status snapshot (`/v1/sumeragi/status`) for operators and auditors. The broadcaster will continue to evolve to attach DA artefacts (RBC chunk proofs, Norito headers, SoraFS/Object manifests) and feed the merge ring without head-of-line blocking.
 
 4. **Global ordering & merge ledger.**  
    The NPoS ring validates each relay envelope: check `lane_qc` against the per-dataspace committee,
@@ -119,7 +119,7 @@ applied (`applied`) or missing/expired/insufficient/disabled during validation.
    world-state hash (`global_state_root`) now commits to every `LaneBlockCommitment`.
 
 5. **Persistence & exposure.**  
-   Kura writes the lane block, merge entry, and `LaneBlockCommitment` atomically so replay can reconstruct the same reduction. `/v2/sumeragi/status` exposes:
+   Kura writes the lane block, merge entry, and `LaneBlockCommitment` atomically so replay can reconstruct the same reduction. `/v1/sumeragi/status` exposes:
    - `lane_commitments` (execution metadata).
    - `lane_settlement_commitments` (the payload described here).
    - `lane_relay_envelopes` (relay headers, QCs, DA digests, settlement hash, and RBC byte counts).
@@ -149,7 +149,7 @@ The merge ring MUST enforce the following before accepting a lane commitment:
   `nexus_audit_outcome_total` already exist in `crates/iroha_telemetry/src/metrics.rs`. Operators
   zero), and `lane_relay_invalid_total` should stay at zero outside adversarial drills.
 - **Torii surfaces:**  
-  `/v2/sumeragi/status` includes `lane_commitments`, `lane_settlement_commitments`, and dataspace snapshots. `/v2/nexus/lane-config` (planned) will publish the `LaneConfig` geometry so clients can match `lane_id` ↔ dataspace labels.
+  `/v1/sumeragi/status` includes `lane_commitments`, `lane_settlement_commitments`, and dataspace snapshots. `/v1/nexus/lane-config` (planned) will publish the `LaneConfig` geometry so clients can match `lane_id` ↔ dataspace labels.
 - **Dashboards:**  
   `dashboards/grafana/nexus_lanes.json` charts lane backlog, DA availability signals, and the settlement totals exposed above. Alert definitions should page when:
   - `nexus_scheduler_dataspace_age_slots` breaches policy.

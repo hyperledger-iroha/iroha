@@ -22,11 +22,11 @@ use iroha_data_model::{
 
 use crate::{Error, JsonBody, NoritoJson, SharedAppState};
 
-const ENDPOINT_DA_COMMITMENTS: &str = "/v2/da/commitments";
-const ENDPOINT_DA_COMMITMENTS_PROVE: &str = "/v2/da/commitments/prove";
-const ENDPOINT_DA_COMMITMENTS_VERIFY: &str = "/v2/da/commitments/verify";
-const ENDPOINT_DA_PROOF_POLICIES: &str = "/v2/da/proof_policies";
-const ENDPOINT_DA_PROOF_POLICY_SNAPSHOT: &str = "/v2/da/proof_policy_snapshot";
+const ENDPOINT_DA_COMMITMENTS: &str = "/v1/da/commitments";
+const ENDPOINT_DA_COMMITMENTS_PROVE: &str = "/v1/da/commitments/prove";
+const ENDPOINT_DA_COMMITMENTS_VERIFY: &str = "/v1/da/commitments/verify";
+const ENDPOINT_DA_PROOF_POLICIES: &str = "/v1/da/proof_policies";
+const ENDPOINT_DA_PROOF_POLICY_SNAPSHOT: &str = "/v1/da/proof_policy_snapshot";
 
 /// Request payload for DA commitment queries and proof generation.
 #[derive(
@@ -94,7 +94,7 @@ pub struct DaCommitmentVerifyResponse {
     pub error: Option<String>,
 }
 
-/// HTTP handler for `/v2/da/commitments`.
+/// HTTP handler for `/v1/da/commitments`.
 pub async fn handler_list_commitments(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<DaCommitmentProofRequest>,
@@ -110,7 +110,7 @@ pub async fn handler_list_commitments(
     }))
 }
 
-/// HTTP handler for `/v2/da/commitments/prove`.
+/// HTTP handler for `/v1/da/commitments/prove`.
 pub async fn handler_prove_commitment(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<DaCommitmentProofRequest>,
@@ -131,7 +131,7 @@ pub async fn handler_prove_commitment(
     )
 }
 
-/// HTTP handler for `/v2/da/commitments/verify`.
+/// HTTP handler for `/v1/da/commitments/verify`.
 pub async fn handler_verify_commitment(
     State(app): State<SharedAppState>,
     NoritoJson(proof): NoritoJson<DaCommitmentProof>,
@@ -147,7 +147,7 @@ pub async fn handler_verify_commitment(
     Ok(JsonBody(response))
 }
 
-/// HTTP handler for `/v2/da/proof_policies`.
+/// HTTP handler for `/v1/da/proof_policies`.
 pub async fn handler_list_proof_policies(
     State(app): State<SharedAppState>,
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
@@ -157,7 +157,7 @@ pub async fn handler_list_proof_policies(
     Ok(JsonBody(policies))
 }
 
-/// HTTP handler for `/v2/da/proof_policy_snapshot`.
+/// HTTP handler for `/v1/da/proof_policy_snapshot`.
 pub async fn handler_proof_policy_bundle(
     State(app): State<SharedAppState>,
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {

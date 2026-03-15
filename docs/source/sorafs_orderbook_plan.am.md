@@ -88,14 +88,14 @@ This document completes **SFM-2 — XOR Orderbook & streaming settlement**.
 
 ## APIs
 ### REST
-- `POST /v2/orderbook/orders` — create order. Body `OrderRequestV1` (JSON). Response includes `order_id`.
-- `GET /v2/orderbook/orders/{order_id}` — fetch order status (open, partial, filled, canceled), match history.
-- `POST /v2/orderbook/cancel` — cancel order; requires signature and auth token.
-- `GET /v2/orderbook/depth?tier=hot&levels=25` — returns `DepthSnapshotV1` (bid/ask ladders).
-- `GET /v2/orderbook/trades?since=` — returns trade stream (pagination).
-- `GET /v2/orderbook/bbo?tier=` — best bid/offer with timestamp.
-- `POST /v2/orderbook/settlements` — submit streaming receipt (for providers).
-- `GET /v2/orderbook/settlements/{channel_id}` — settlement channel status and receipts.
+- `POST /v1/orderbook/orders` — create order. Body `OrderRequestV1` (JSON). Response includes `order_id`.
+- `GET /v1/orderbook/orders/{order_id}` — fetch order status (open, partial, filled, canceled), match history.
+- `POST /v1/orderbook/cancel` — cancel order; requires signature and auth token.
+- `GET /v1/orderbook/depth?tier=hot&levels=25` — returns `DepthSnapshotV1` (bid/ask ladders).
+- `GET /v1/orderbook/trades?since=` — returns trade stream (pagination).
+- `GET /v1/orderbook/bbo?tier=` — best bid/offer with timestamp.
+- `POST /v1/orderbook/settlements` — submit streaming receipt (for providers).
+- `GET /v1/orderbook/settlements/{channel_id}` — settlement channel status and receipts.
 
 ### gRPC / WebSocket
 - `StreamDepth(DepthRequest)` — server-stream depth snapshots for tier.

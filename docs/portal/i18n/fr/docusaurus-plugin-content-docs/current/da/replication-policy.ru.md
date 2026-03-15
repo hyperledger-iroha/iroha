@@ -30,7 +30,7 @@ Il n'y a pas d'époque et de réplique sans ouverture de nom.
 | `nexus_lane_sidecar` | 6 heures | 7 jours | 4 | `warm` | `da.sidecar` |
 | `governance_artifact` | 12 heures | 180 jours | 3 | `cold` | `da.governance` |
 | _Par défaut (dans toutes les classes)_ | 6 heures | 30 jours | 3 | `warm` | `da.default` |Cette page est installée sur `torii.da_ingest.replication_policy` et s'ouvre avec
-всем `/v2/da/ingest` отправкам. Torii manifeste les manifestations avec le premier
+всем `/v1/da/ingest` отправкам. Torii manifeste les manifestations avec le premier
 la rétention des profils et la prévention, si les appelants ne sont pas disponibles
 maintenant, les opérateurs peuvent utiliser le SDK.
 
@@ -144,5 +144,5 @@ Il s'agit de SoraFS qui permettent de re-répliquer automatiquement les blobs in
    на тот же digest и PDP preuves.
 
 Couverture de régression находится в `integration_tests/tests/da/replication_policy.rs` ;
-suite отправляет несовпадающую politique rétention в `/v2/da/ingest` и проверяет,
+suite отправляет несовпадающую politique rétention в `/v1/da/ingest` и проверяет,
 Ce manifeste manifeste présente un profil privé, un appelant non intentionnel.

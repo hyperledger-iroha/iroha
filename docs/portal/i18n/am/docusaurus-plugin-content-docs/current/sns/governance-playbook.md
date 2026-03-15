@@ -60,7 +60,7 @@ sidebar_label: አስተዳደር playbook
 | አስተዳደር ምክር ቤት | ቻርተሮችን፣ ቅጥያ ፖሊሲዎችን፣ የክርክር ፍርዶችን እና የመጋቢ ሽክርክሮችን ማርቀቅ እና ማጽደቅ። | `docs/source/sns/governance_addenda/`፣ `artifacts/sns/governance/*`፣ የምክር ቤት ምርጫዎች በ`sns governance charter submit` ተከማችተዋል። | የምክር ቤት ሊቀመንበር + የአስተዳደር ዶኬት መከታተያ። |
 | ጠባቂ ቦርድ | ለስላሳ/ጠንካራ በረዶዎች፣ የአደጋ ጊዜ ቀኖናዎች እና የ72 ሰአታት ግምገማዎችን ይስጡ። | በI18NI0000050X የተለቀቀው የጠባቂ ትኬቶች፣በ`artifacts/sns/guardian/*` ስር የገቡ መግለጫዎችን መሻር። | ጠባቂ በጥሪ ላይ ማሽከርከር (≤15 ደቂቃ ACK)። |
 | ቅጥያ መጋቢዎች | የመዝጋቢ ወረፋዎችን፣ ጨረታዎችን፣ የዋጋ ደረጃዎችን እና የደንበኞችን ኮሞችን ያሂዱ፤ ተገዢነትን መቀበል። | በI18NI0000052X ውስጥ ያሉ የመጋቢ ፖሊሲዎች፣ የዋጋ አወጣጥ ማጣቀሻ ወረቀቶች፣ የመጋቢ እውቅናዎች ከቁጥጥር ማስታወሻዎች ጎን ተከማችተዋል። | መጋቢ ፕሮግራም መሪ + ቅጥያ-ተኮር PagerDuty። |
-| ሬጅስትራር እና የሂሳብ አከፋፈል | `/v2/sns/*` የመጨረሻ ነጥቦችን ያስኬዱ፣ ክፍያዎችን ያስታርቁ፣ ቴሌሜትሪ ያሰራጩ እና የCLI ቅጽበተ-ፎቶዎችን ያቆዩ። | የመመዝገቢያ API ([`registrar-api.md`](./registrar-api.md))፣ `sns_registrar_status_total` ሜትሪክስ፣ የክፍያ ማረጋገጫዎች በ`artifacts/sns/payments/*` ተቀምጠዋል። | የመመዝገቢያ ተረኛ አስተዳዳሪ እና የግምጃ ቤት ግንኙነት። |
+| ሬጅስትራር እና የሂሳብ አከፋፈል | `/v1/sns/*` የመጨረሻ ነጥቦችን ያስኬዱ፣ ክፍያዎችን ያስታርቁ፣ ቴሌሜትሪ ያሰራጩ እና የCLI ቅጽበተ-ፎቶዎችን ያቆዩ። | የመመዝገቢያ API ([`registrar-api.md`](./registrar-api.md))፣ `sns_registrar_status_total` ሜትሪክስ፣ የክፍያ ማረጋገጫዎች በ`artifacts/sns/payments/*` ተቀምጠዋል። | የመመዝገቢያ ተረኛ አስተዳዳሪ እና የግምጃ ቤት ግንኙነት። |
 | መፍትሄ ሰጪ እና መተላለፊያ ኦፕሬተሮች | SoraDNS፣ GAR እና ጌትዌይ ሁኔታ ከመዝጋቢ ክስተቶች ጋር እንዲጣጣሙ ያድርጉ። የዥረት ግልጽነት መለኪያዎች. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)፣ [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)፣ `dashboards/alerts/soradns_transparency_rules.yml`። | መፍትሄ ሰጪ SRE በጥሪ + ጌትዌይ ኦፕስ ድልድይ። |
 | ግምጃ ቤት እና ፋይናንስ | 70/30 የገቢ ክፍፍል፣ ሪፈራል ቀረጻዎች፣ የታክስ/የግምጃ ቤት ሰነዶች እና የ SLA ማረጋገጫዎችን ያመልክቱ። | የገቢ ማጠራቀሚያ መግለጫዎች፣ ስትሪፕ/ግምጃ ቤት ወደ ውጭ መላክ፣ በየሩብ ዓመቱ የKPI አባሪዎች በ`docs/source/sns/regulatory/`። | የፋይናንስ ተቆጣጣሪ + ተገዢነት መኮንን. |
 | ተገዢነት እና የቁጥጥር ግንኙነት | አለምአቀፍ ግዴታዎችን (EU DSA, ወዘተ) ይከታተሉ, የ KPI ቃል ኪዳኖችን ያዘምኑ እና መግለጫዎችን ፋይል ያድርጉ. | በ I18NI0000061X ውስጥ ያሉ የቁጥጥር ማስታወሻዎች ፣ የማጣቀሻ ሰሌዳዎች ፣ `ops/drill-log.md` ግቤቶች ለጠረጴዛዎች ልምምዶች። | የታዛዥነት መርሃ ግብር መሪ. |
@@ -178,7 +178,7 @@ sidebar_label: አስተዳደር playbook
 | ሲግናል | ምንጭ | መግለጫ / ድርጊት |
 |--------|--------|------------|
 | `sns_registrar_status_total{result,suffix}` | Torii ሬጅስትራር ተቆጣጣሪዎች | ለምዝገባዎች ፣ እድሳት ፣ ማገድ ፣ ማስተላለፎች የስኬት / የስህተት ቆጣሪ; ማንቂያዎች `result="error"` ስፒሎች በቅጥያ |
-| `torii_request_duration_seconds{route="/v2/sns/*"}` | Torii መለኪያዎች | የቆይታ ጊዜ SLOs ለኤፒአይ ተቆጣጣሪዎች; ከ`torii_norito_rpc_observability.json` የተገነቡ የምግብ ዳሽቦርዶች። |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii መለኪያዎች | የቆይታ ጊዜ SLOs ለኤፒአይ ተቆጣጣሪዎች; ከ`torii_norito_rpc_observability.json` የተገነቡ የምግብ ዳሽቦርዶች። |
 | `soradns_bundle_proof_age_seconds` & `soradns_bundle_cid_drift_total` | የመፍታት ግልጽነት ቸርቻሪ | የቆዩ ማረጋገጫዎችን ወይም የ GAR ተንሳፋፊን ያግኙ; በ `dashboards/alerts/soradns_transparency_rules.yml` ውስጥ የተገለጹ የጥበቃ መንገዶች። |
 | `sns_governance_activation_total` | አስተዳደር CLI | ቻርተር/መደመር በነቃ ቁጥር ቆጣሪ ይጨምራል። የምክር ቤቱን ውሳኔዎች ከታተመ addda ጋር ለማስታረቅ ያገለግል ነበር። |
 | `guardian_freeze_active` መለኪያ | ጠባቂ CLI | በአንድ መራጭ ለስላሳ/ጠንካራ ቀዝቃዛ መስኮቶችን ይከታተላል; ገጽ SRE እሴቱ ከቆየ `1` SLA ከተገለጸው በላይ። |

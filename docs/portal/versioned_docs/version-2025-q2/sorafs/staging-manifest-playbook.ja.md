@@ -73,13 +73,13 @@ slug: /sorafs/staging-manifest-playbook-ja
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. 検出エンドポイントにクエリを実行し、広告が正規のエイリアスで表示されることを確認します。
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    `profile_aliases` に最初のエントリとして `"sorafs.sf1@1.0.0"` が含まれていることを確認します。

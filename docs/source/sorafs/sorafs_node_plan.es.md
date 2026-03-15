@@ -139,12 +139,12 @@ Logs / eventos:
 
 | Tarea | Descripción | Dependencias |
 |------|-------------|--------------|
-| Worker de ingesta PoR | Expandir `NodeHandle::ingest_por_proof` para aceptar pruebas en streaming, persistirlas en `PorCoordinatorRuntime::storage`, y exponer un endpoint de estado Norito (`/v2/sorafs/por/ingestion`). | `crates/iroha_torii/src/sorafs/por.rs`, `crates/sorafs_node/src/por.rs`. |
+| Worker de ingesta PoR | Expandir `NodeHandle::ingest_por_proof` para aceptar pruebas en streaming, persistirlas en `PorCoordinatorRuntime::storage`, y exponer un endpoint de estado Norito (`/v1/sorafs/por/ingestion`). | `crates/iroha_torii/src/sorafs/por.rs`, `crates/sorafs_node/src/por.rs`. |
 | Cableado de cola de desafíos | Suscribirse a eventos del coordinador emitidos por `PorCoordinatorRuntime::run_epoch`, distribuir desafíos a workers de storage, y asegurar que los reintentos sean idempotentes entre reinicios. | Hooks de wiring de runtime introducidos en `PorCoordinatorRuntime`. |
 | Telemetría de gobernanza | Emitir métricas `sorafs_por_ingest_backlog` + `sorafs_por_ingest_failures_total`, conectarlas a los dashboards del gateway y documentar umbrales de alerta en `docs/source/sorafs_observability_plan.md`. | Plan de observabilidad + `crates/iroha_telemetry`. |
 | Herramientas de operador | Añadir un helper `sorafs-node ingest por --manifest <cid>` y actualizaciones de runbook para que los operadores puedan reproducir pruebas localmente antes de enviarlas. | Añadidos de CLI en `crates/sorafs_node/src/bin/sorafs-node.rs`. |
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` ahora delega en
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` ahora delega en
   `sorafs_node::NodeHandle::por_ingestion_status`, devolviendo profundidad de
   backlog, el epoch/límite más antiguo y los timestamps de éxito/fracaso más
   recientes por proveedor mientras Torii actualiza

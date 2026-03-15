@@ -22,7 +22,7 @@ translation_last_reviewed: 2026-02-07
 ## 1. 评估事件
 
 - **触发条件：** 检测到 SLA 违规（正常运行时间/PoR 故障）、复制不足或计费不一致。
-- **确认遥测：** 为提供商捕获 `/v2/sorafs/capacity/state` 和 `/v2/sorafs/capacity/telemetry` 快照。
+- **确认遥测：** 为提供商捕获 `/v1/sorafs/capacity/state` 和 `/v1/sorafs/capacity/telemetry` 快照。
 - **通知利益相关者：** 存储团队（提供商运营）、治理委员会（决策机构）、可观察性（仪表板更新）。
 
 ## 2. 准备证据包
@@ -70,7 +70,7 @@ translation_last_reviewed: 2026-02-07
    ```
 
 3. 审查 `dispute_summary.json`（确认类型、证据摘要、时间戳）。
-4. 通过治理事务队列向 Torii `/v2/sorafs/capacity/dispute` 提交请求 JSON。捕获`dispute_id_hex`响应值；它是后续撤销行动和审计报告的基础。
+4. 通过治理事务队列向 Torii `/v1/sorafs/capacity/dispute` 提交请求 JSON。捕获`dispute_id_hex`响应值；它是后续撤销行动和审计报告的基础。
 
 ## 4. 撤消和撤销
 

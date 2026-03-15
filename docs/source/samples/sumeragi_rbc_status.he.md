@@ -15,7 +15,7 @@ translator: manual
 # ‏Sumeragi — מצב RBC (Torii)
 
 נקודת קצה
-- `GET /v2/sumeragi/rbc`
+- `GET /v1/sumeragi/rbc`
 
 תגובה (דוגמה)
 ```json
@@ -30,7 +30,7 @@ translator: manual
 }
 ```
 
-דוגמת פירוט סשן (`GET /v2/sumeragi/rbc/sessions`, מקוצר):
+דוגמת פירוט סשן (`GET /v1/sumeragi/rbc/sessions`, מקוצר):
 
 ```json
 {

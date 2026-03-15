@@ -31,7 +31,7 @@ translation_last_reviewed: 2026-01-22
 
 `iroha app sorafs toolkit pack` のマニフェストレポートと、ゲートウェイレジストリ／アドミッション記録の
 プロバイダ ID を使い、対象ゲートウェイ向けのスコープ付きトークンを発行する。CLI は Torii の
-`/v2/sorafs/storage/token` エンドポイントを呼び出し、`X-SoraFS-Client` / `X-SoraFS-Nonce`
+`/v1/sorafs/storage/token` エンドポイントを呼び出し、`X-SoraFS-Client` / `X-SoraFS-Nonce`
 ヘッダを自動で付与する。
 
 ```bash

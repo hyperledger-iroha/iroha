@@ -76,13 +76,13 @@ slug: /sorafs/staging-manifest-playbook-ka
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
-     http://staging-torii:8080/v2/sorafs/provider/advert
+     http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
 2. გამოიკითხეთ აღმოჩენის საბოლოო წერტილი და დაადასტურეთ, რომ რეკლამა გამოჩნდება კანონიკური მეტსახელებით:
 
    ```bash
-   curl -sS http://staging-torii:8080/v2/sorafs/providers | jq .
+   curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
    დარწმუნდით, რომ `profile_aliases` მოიცავს `"sorafs.sf1@1.0.0"`, როგორც პირველ ჩანაწერს.

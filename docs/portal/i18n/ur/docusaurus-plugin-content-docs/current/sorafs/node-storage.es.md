@@ -169,9 +169,9 @@ Torii کے APIs. 【کریٹس/sorafs_node/tests/cli.rs: 1】> HTTP برابری
 > گیٹ وے Torii اب صرف پڑھنے والے مددگاروں کو بے نقاب کرتا ہے جس کی مدد سے اس کی حمایت کی جاتی ہے
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - مینی فیسٹ لوٹاتا ہے
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - مینی فیسٹ لوٹاتا ہے
 > Norito ذخیرہ شدہ (BASE64) کے ساتھ ساتھ ڈائجسٹ/میٹا ڈیٹا۔
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - حصہ منصوبہ لوٹاتا ہے
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - حصہ منصوبہ لوٹاتا ہے
 > ڈاون اسٹریم ٹولنگ کے لئے ڈٹرمینسٹک JSON (`chunk_fetch_specs`)۔
 >
 > یہ اختتامی نکات CLI کی آؤٹ پٹ کی عکاسی کرتے ہیں تاکہ پائپ لائنوں کی مدد کی جاسکے
@@ -218,12 +218,12 @@ Torii کے APIs. 【کریٹس/sorafs_node/tests/cli.rs: 1】> HTTP برابری
      آپریٹر### اہلیت کا اعلان اور شیڈولنگ انضمام
 
 - Torii اب `CapacityDeclarationRecord` سے تازہ کاریوں کو ریلے کرتا ہے
-  `/v2/sorafs/capacity/declare` میں سرایت شدہ `CapacityManager` ، تاکہ
+  `/v1/sorafs/capacity/declare` میں سرایت شدہ `CapacityManager` ، تاکہ
   ہر نوڈ اس کے پرعزم مختص رقم کا ایک میموری نظریہ تشکیل دیتا ہے
   چنکر اور لین۔ منیجر ٹیلی میٹری کے لئے صرف پڑھنے والے سنیپ شاٹس کو بے نقاب کرتا ہے
-  (`GET /v2/sorafs/capacity/state`) اور اس سے پہلے پروفائل یا لین کے ذریعہ تحفظات کا اطلاق کریں
+  (`GET /v1/sorafs/capacity/state`) اور اس سے پہلے پروفائل یا لین کے ذریعہ تحفظات کا اطلاق کریں
   نئے احکامات قبول کریں۔ 【کریٹس/sorafs_node/src/capact.rs: 1 】【 کریٹس/sorafs_node/src/lib.rs: 60】
-- `/v2/sorafs/capacity/schedule` اختتامی نقطہ `ReplicationOrderV1` پے لوڈ کو قبول کرتا ہے
+- `/v1/sorafs/capacity/schedule` اختتامی نقطہ `ReplicationOrderV1` پے لوڈ کو قبول کرتا ہے
   گورننس کے ذریعہ جاری کیا گیا۔ جب آرڈر مقامی سپلائر ، مینیجر کی طرف اشارہ کرتا ہے
   ڈپلیکیٹ شیڈولنگ چیک کریں ، چنکر/لین کی گنجائش چیک کریں ، محفوظ رکھیں
   سلاٹ اور ایک `ReplicationPlan` واپس کرتا ہے جس میں باقی صلاحیت کو بیان کیا جاتا ہے
@@ -231,7 +231,7 @@ Torii کے APIs. 【کریٹس/sorafs_node/tests/cli.rs: 1】> HTTP برابری
   دوسرے فراہم کنندگان کو بہاؤ کی سہولت کے ل i `ignored` ردعمل کے ساتھ پہچانا جاتا ہے
   ملٹی آپریٹر
 - تکمیل ہکس (جیسے کامیاب ادخال پر متحرک)
-  وہ تحفظات کو جاری کرنے کے لئے `POST /v2/sorafs/capacity/complete` کہتے ہیں
+  وہ تحفظات کو جاری کرنے کے لئے `POST /v1/sorafs/capacity/complete` کہتے ہیں
   `CapacityManager::complete_order`۔ جواب میں ایک سنیپ شاٹ شامل ہے
   `ReplicationRelease` (باقی کل ، چنکر/لین باقیات) تاکہ
   آرکیسٹریشن ٹولز بغیر پولنگ کے اگلے آرڈر کی قطار لگاسکتے ہیں۔

@@ -43,7 +43,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 
 Torii pour les instantanés de crédit du fournisseur et les grands livres de frais, ainsi que les tableaux de bord, les soldes et les pénalités pour les portes :
 
-- REST : `GET /v2/sorafs/capacity/state` `credit_ledger[*]` entrées pour le test de trempage et la vérification du test
+- REST : `GET /v1/sorafs/capacity/state` `credit_ledger[*]` entrées pour le test de trempage et la vérification du test
   champs du grand livre دیکھیں
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Import Grafana : compteurs de frappes exportés `dashboards/grafana/sorafs_capacity_penalties.json`, totaux de pénalités,

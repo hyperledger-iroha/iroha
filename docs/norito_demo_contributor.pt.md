@@ -30,7 +30,7 @@ Xcode, consulte `docs/connect_swift_integration.md`.
    - `TORII_NODE_URL` — URL base REST (as URLs WebSocket são derivadas a partir dela).
    - `CONNECT_SESSION_ID` — identificador de sessão de 32 bytes (base64/base64url).
    - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens retornados por
-     `/v2/connect/session`.
+     `/v1/connect/session`.
    - `CONNECT_CHAIN_ID` — identificador de chain anunciado durante o controle do
      handshake.
    - `CONNECT_ROLE` — role padrão pré‑selecionado na UI (`app` ou `wallet`).
@@ -79,7 +79,7 @@ Cada entrada em `SampleAccounts.json` suporta os seguintes campos:
 2. Abra o projeto `NoritoDemoXcode` no Xcode.
 3. Selecione o esquema `NoritoDemo` e aponte para um simulador ou dispositivo iOS.
 4. Certifique‑se de que o `.env` é referenciado através das variáveis de ambiente do
-   esquema. Preencha os valores `CONNECT_*` retornados por `/v2/connect/session` para que
+   esquema. Preencha os valores `CONNECT_*` retornados por `/v1/connect/session` para que
    a UI já venha pré‑preenchida ao iniciar o app.
 5. Verifique os toggles de aceleração de hardware: `App.swift` chama
    `DemoAccelerationConfig.load().apply()` para que a demo respeite tanto o override de

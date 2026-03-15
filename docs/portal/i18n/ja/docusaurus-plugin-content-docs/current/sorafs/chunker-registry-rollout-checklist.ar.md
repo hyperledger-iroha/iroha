@@ -73,7 +73,7 @@ ID: チャンカーレジストリロールアウトチェックリスト
    `torii.sorafs.discovery.admission.envelopes_dir`。
 3. 発見の結果:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. マニフェスト/計画のマニフェスト/計画:
    ```bash

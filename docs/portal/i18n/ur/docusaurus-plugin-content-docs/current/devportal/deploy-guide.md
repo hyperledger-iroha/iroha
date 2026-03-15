@@ -24,7 +24,7 @@ shell exports سے لوڈ کر سکتے ہیں۔
 
 - Node 18.18+ کے ساتھ `npm` یا `pnpm`.
 - `sorafs_cli` جو `cargo run -p sorafs_car --features cli --bin sorafs_cli` سے حاصل ہو۔
-- Torii URL جو `/v2/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
+- Torii URL جو `/v1/sorafs/*` ظاہر کرے اور ایک اتھارٹی اکاؤنٹ/پرائیویٹ کی جو
   مینی فیسٹس اور aliases جمع کر سکے۔
 - OIDC issuer (GitHub Actions, GitLab, workload identity وغیرہ) تاکہ
   `SIGSTORE_ID_TOKEN` منٹ کیا جا سکے۔
@@ -862,7 +862,7 @@ job چلانے سے پہلے درج ذیل repository secrets/variables کنفی
 
 | Name | Purpose |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | Torii host جو `/v2/sorafs/pin/register` ظاہر کرتا ہے۔ |
+| `DOCS_SORAFS_TORII_URL` | Torii host جو `/v1/sorafs/pin/register` ظاہر کرتا ہے۔ |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | submissions کے ساتھ ریکارڈ ہونے والا epoch identifier۔ |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | manifest submission کے لئے signing authority۔ |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | alias tuple جو `perform_submit` true ہونے پر manifest سے bind ہوتا ہے۔ |

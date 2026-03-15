@@ -82,7 +82,7 @@ JSON を書き出す CLI フラグ (`--json-out`, `--por-json-out`, `--por-proof
 |---------------|------|------|
 | `sorafs_manifest_chunk_store` | ✅ サポート | 正規ハンドル + エイリアスを検証し、`--json-out=-` でレポートをストリームし、`ensure_charter_compliance()` でレジストリチャーターを強制します。 |
 | `sorafs_manifest_stub` | ⚠️ レガシー | レガシー manifest builder。CAR/manifest のパッケージングには `iroha app sorafs toolkit pack` を使い、決定的な再検証のために `--plan=-` を維持します。 |
-| `sorafs_provider_advert_stub` | ⚠️ レガシー | オフライン検証 helper のみ。provider advert は公開パイプラインで生成し、`/v2/sorafs/providers` で検証してください。 |
+| `sorafs_provider_advert_stub` | ⚠️ レガシー | オフライン検証 helper のみ。provider advert は公開パイプラインで生成し、`/v1/sorafs/providers` で検証してください。 |
 | `sorafs_fetch`（developer orchestrator） | ✅ サポート | `chunk_fetch_specs` を読み取り、`range` 能力 payload を理解し、CARv2 出力を組み立てます。 |
 | SDK fixtures（Rust/Go/TS） | ✅ サポート | `export_vectors` で再生成。正規ハンドルがエイリアス一覧の先頭に入り、council envelopes により署名されます。 |
 | Torii gateway のプロファイル交渉 | ✅ サポート | `Accept-Chunker` の完全な文法を実装し、`Content-Chunker` ヘッダーを含め、明示的なダウングレード要求でのみ CARv1 bridge を公開します。 |
@@ -90,7 +90,7 @@ JSON を書き出す CLI フラグ (`--json-out`, `--por-json-out`, `--por-proof
 テレメトリのロールアウト:
 
 - **チャンク取得テレメトリ** — Iroha CLI `sorafs toolkit pack` がチャンク digest、CAR メタデータ、PoR ルートを出力し、ダッシュボードへの取り込みに供します。
-- **Provider adverts** — advert payload は能力とエイリアスメタデータを含みます。`/v2/sorafs/providers` でカバレッジを検証してください（例: `range` 能力の存在）。
+- **Provider adverts** — advert payload は能力とエイリアスメタデータを含みます。`/v1/sorafs/providers` でカバレッジを検証してください（例: `range` 能力の存在）。
 - **Gateway 監視** — オペレーターは `Content-Chunker`/`Content-Digest` の組み合わせを報告し、予期しないダウングレードを検知するべきです。bridge の利用は廃止前にゼロへ収束することが期待されます。
 
 廃止ポリシー: 後継プロファイルが批准されたら、提案書に記載された二重公開ウィンドウを設定し、

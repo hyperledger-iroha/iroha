@@ -76,7 +76,7 @@ ID: چنکر رجسٹری-رول آؤٹ-چیک لسٹ
    `torii.sorafs.discovery.admission.envelopes_dir` کے ذریعہ حوالہ دیا گیا ہے۔
 3. چیک کریں کہ کون سا فراہم کنندہ ڈسکوری API کے ذریعے پروپیگنڈہ کرتا ہے:
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. گورننس ہیڈر کے ساتھ ورزش کے ظاہر/منصوبہ بندی کے اختتامی مقامات:
    ```bash

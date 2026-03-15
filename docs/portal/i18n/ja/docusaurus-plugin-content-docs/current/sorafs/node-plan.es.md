@@ -61,7 +61,7 @@ SF-3 entrega el primer crate ejectable `sorafs-node` que convierte un proceso Ir
 実装上の注意:
 
 - ペイロード `norito::json` に対するスタック Axum de Torii。
-- Agrega esquemas Norito para respuestas (`PinResultV1`、`FetchErrorV1`、estructuras de telemetria)。- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` 大量のバックログを説明し、期間中/制限期間中はタイムスタンプを失い、証明済みの期間中はタイムスタンプを取得し、`sorafs_node::NodeHandle::por_ingestion_status`、Torii を実行します。レジストラ ロス ゲージ `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` パラダッシュボード.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- Agrega esquemas Norito para respuestas (`PinResultV1`、`FetchErrorV1`、estructuras de telemetria)。- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` 大量のバックログを説明し、期間中/制限期間中はタイムスタンプを失い、証明済みの期間中はタイムスタンプを取得し、`sorafs_node::NodeHandle::por_ingestion_status`、Torii を実行します。レジストラ ロス ゲージ `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` パラダッシュボード.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
 ### D. スケジュール管理と管理の集中
 

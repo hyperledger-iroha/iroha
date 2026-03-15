@@ -54,12 +54,12 @@ Sidebar_label: Двиjoк сделок
 ## التكامل Torii
 
 يوفر Torii نقاط نهاية رائعة حتى يتمكن مقدمو الخدمة من التحكم في الاستخدام والإصدارات
-عقد دورة حياة بدون أسلاك خاصة:- `POST /v2/sorafs/deal/usage` قم بتشغيل جهاز القياس عن بعد `DealUsageReport` وقم بالاتصال به
+عقد دورة حياة بدون أسلاك خاصة:- `POST /v1/sorafs/deal/usage` قم بتشغيل جهاز القياس عن بعد `DealUsageReport` وقم بالاتصال به
   تحديد نتائج البحث (`UsageOutcome`).
-- `POST /v2/sorafs/deal/settle` إغلاق النافذة، شريط
+- `POST /v1/sorafs/deal/settle` إغلاق النافذة، شريط
   `DealSettlementRecord` الأصلي موجود مع ترميز base64 `DealSettlementV1`,
   готовым к пликации в Governance DAG.
-- لينتا Torii `/v2/events/sse` تيرنر ترانسليبريت `SorafsGatewayEvent::DealUsage`,
+- لينتا Torii `/v1/events/sse` تيرنر ترانسليبريت `SorafsGatewayEvent::DealUsage`,
   الاستخدام المختصر للوقت (العصر، ساعات GiB الصغيرة، بطاقات الذاكرة،
   تحديد الرسوم)، اكتب `SorafsGatewayEvent::DealSettlement`،
   بما في ذلك دفتر الأستاذ القياسي لقطة زائد BLAKE3 دايجست/حجم/base64

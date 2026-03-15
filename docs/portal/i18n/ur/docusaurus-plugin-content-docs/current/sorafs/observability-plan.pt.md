@@ -84,7 +84,7 @@ ID: مشاہدہ کرنے والا منصوبہ
 | `sorafs_node_por_failure_total` | کاؤنٹر | `provider_id` | ناکام مونوٹون پور نمونہ کاؤنٹر۔ |
 | `torii_sorafs_storage_bytes_*` ، `torii_sorafs_storage_por_*` | گیج | `provider` | استعمال شدہ بائٹس کے لئے موجودہ Prometheus گیجز ، قطار کی گہرائی ، ان فلائٹ پور گنتی کے لئے۔ |
 | `torii_sorafs_capacity_*` ، `torii_sorafs_uptime_bps` ، `torii_sorafs_por_bps` | گیج | `provider` | صلاحیت کے ڈیش بورڈ میں کامیاب فراہم کنندہ کی گنجائش/اپ ٹائم ڈیٹا ظاہر ہوتا ہے۔ |
-| `torii_sorafs_por_ingest_backlog` ، `torii_sorafs_por_ingest_failures_total` | گیج | `provider` ، `manifest` | جب بھی `/v2/sorafs/por/ingestion/{manifest}` "پور اسٹالز" پینل/الرٹ کو کھانا کھلایا جاتا ہے تو بیک بلاگ گہرائی کے علاوہ جمع غلطی کاؤنٹرز برآمد ہوتے ہیں۔ |
+| `torii_sorafs_por_ingest_backlog` ، `torii_sorafs_por_ingest_failures_total` | گیج | `provider` ، `manifest` | جب بھی `/v1/sorafs/por/ingestion/{manifest}` "پور اسٹالز" پینل/الرٹ کو کھانا کھلایا جاتا ہے تو بیک بلاگ گہرائی کے علاوہ جمع غلطی کاؤنٹرز برآمد ہوتے ہیں۔ |
 
 ### بروقت بازیافت (POTR) اور حصہ SLA کا ثبوت
 

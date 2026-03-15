@@ -76,10 +76,10 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 1. 使用 [Norito 快速入门](./quickstart.md) 中描述的 CLI 或代码片段构建 `.norito` 有效负载。代理转发 `application/x-norito` 主体不变，因此您可以重复使用与 `curl` 一起发布的相同工件。
 2. 打开 `/reference/torii-rapidoc`（二进制有效负载首选）或 `/reference/torii-swagger`。
 3. 从下拉列表中选择所需的 Torii 快照。快照已签名；该面板显示 `static/openapi/manifest.json` 中记录的清单摘要。
-4. 在“Try it”抽屉中选择 `application/x-norito` 内容类型，单击 **选择文件**，然后选择您的负载。代理将请求重写为 `/proxy/v2/pipeline/submit` 并用 `X-TryIt-Client=docs-portal-rapidoc` 对其进行标记。
+4. 在“Try it”抽屉中选择 `application/x-norito` 内容类型，单击 **选择文件**，然后选择您的负载。代理将请求重写为 `/proxy/v1/pipeline/submit` 并用 `X-TryIt-Client=docs-portal-rapidoc` 对其进行标记。
 5. 要下载 Norito 响应，请设置 `Accept: application/x-norito`。 Swagger/RapiDoc 在同一个抽屉中公开标头选择器，并通过代理将二进制文件流回。
 
-对于纯 JSON 路由，嵌入式 Try it 沙箱通常更快：输入路径（例如 `/v2/accounts/i105.../assets`），选择 HTTP 方法，在需要时粘贴 JSON 正文，然后点击 **发送请求** 以内联检查标头、持续时间和有效负载。
+对于纯 JSON 路由，嵌入式 Try it 沙箱通常更快：输入路径（例如 `/v1/accounts/i105.../assets`），选择 HTTP 方法，在需要时粘贴 JSON 正文，然后点击 **发送请求** 以内联检查标头、持续时间和有效负载。
 
 ## 故障排除
 

@@ -36,7 +36,7 @@ El flujo de empaquetado de SoraFS refuerza la determinación, por lo que pasar d
 
 ## Configuración del entorno
 
-- Los gateways deben habilitar el endpoint de streaming de proofs (`POST /v2/sorafs/proof/stream`) para que el CLI emita resúmenes de telemetría.
+- Los gateways deben habilitar el endpoint de streaming de proofs (`POST /v1/sorafs/proof/stream`) para que el CLI emita resúmenes de telemetría.
 - Configura la política `sorafs_alias_cache` usando los valores predeterminados de `iroha_config` o el helper del CLI (`sorafs_cli manifest submit --alias-*`).
 - Proporciona stream tokens (o credenciales de Torii) mediante un gestor de secretos seguro.
 - Habilita los exportadores de telemetría (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) y envíalos a tu stack Prometheus/OTel.

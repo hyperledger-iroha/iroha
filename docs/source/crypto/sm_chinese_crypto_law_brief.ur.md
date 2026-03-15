@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 1. ** دستاویزات **
    - `docs/source/crypto/sm_program.md` میں تعمیل ضمیمہ شامل کریں ریاستی تجارتی خفیہ نگاری کی حیثیت ، توقعات داخل کرنے ، اور رابطہ پوائنٹس کو نوٹ کرتے ہوئے۔
    - Norito مینی فیسٹ فیلڈ (`crypto.sm.enabled=true` ، `crypto.sm.approval=l0|l1`) شائع کریں جسے فائلنگ تیار کرتے وقت آپریٹرز استعمال کرسکتے ہیں۔
-   - Torii `/v2/node/capabilities` اشتہار (اور `iroha runtime capabilities` CLI عرف) ہر ریلیز کے ساتھ جہازوں کو یقینی بنائیں تاکہ آپریٹرز MLPS/密评 شواہد کے لئے `crypto.sm` مینی فیسٹ اسنیپ شاٹ حاصل کرسکیں۔
+   - Torii `/v1/node/capabilities` اشتہار (اور `iroha runtime capabilities` CLI عرف) ہر ریلیز کے ساتھ جہازوں کو یقینی بنائیں تاکہ آپریٹرز MLPS/密评 شواہد کے لئے `crypto.sm` مینی فیسٹ اسنیپ شاٹ حاصل کرسکیں۔
    - دو لسانی (EN/ZH) تعمیل کوئیک اسٹارٹ کا خلاصہ کرنے کی ذمہ داریوں کو فراہم کریں۔
 2. ** نمونے جاری کریں **
    - SM- قابل تعمیر تعمیرات کیلئے SBOM/cyclonedx فائلیں جہاز۔

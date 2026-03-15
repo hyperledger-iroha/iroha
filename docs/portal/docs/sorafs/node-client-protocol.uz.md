@@ -69,7 +69,7 @@ Asboblarni qo'llab-quvvatlash:
 
 Shlyuzlar reklama metama'lumotlarini aks ettiruvchi deterministik HTTP so'rovlarini qabul qiladi.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`
+### `GET /v1/sorafs/storage/car/{manifest_id}`
 
 | Talab | Tafsilotlar |
 |-------------|---------|
@@ -77,7 +77,7 @@ Shlyuzlar reklama metama'lumotlarini aks ettiruvchi deterministik HTTP so'rovlar
 | **Javoblar** | `206` `Content-Type: application/vnd.ipld.car`, xizmat koʻrsatilayotgan oynani tavsiflovchi `Content-Range`, `X-Sora-Chunk-Range` metamaʼlumotlari va aks-sadolangan chunker/token sarlavhalari. |
 | **Muvaffaqiyatsizlik rejimlari** | Noto'g'ri moslashtirilgan diapazonlar uchun `416`, etishmayotgan/yaroqsiz tokenlar uchun `401`, oqim/bayt byudjetlari oshib ketganda `429`. |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Bir xil sarlavhalar va deterministik bo'laklar dayjesti bilan bitta bo'lakni olish.
 CAR bo'laklari kerak bo'lmaganda qayta urinishlar yoki sud-tibbiy yuklamalar uchun foydalidir.
@@ -128,7 +128,7 @@ Operatorlar/SDKlar uchun keng tarqalgan xatolar:
 - `iroha app sorafs pin list|show`, `alias list` va `replication list`
   pin-registr REST so'nggi nuqtalari va attestatsiya bloklari bilan xom Norito JSON chop etish
   auditorlik dalillari uchun.
-- `iroha app sorafs storage pin` va `torii /v2/sorafs/pin/register` Noritoni qabul qiladi
+- `iroha app sorafs storage pin` va `torii /v1/sorafs/pin/register` Noritoni qabul qiladi
   yoki JSON manifestlari va ixtiyoriy taxallus isbotlari va vorislari; noto'g'ri shakllangan dalillar
   `400` ko'taring, eskirgan sirtni `503` bilan `Warning: 110` va
   muddati o'tgan dalillar `412` ni qaytaradi.
@@ -144,8 +144,8 @@ Operatorlar/SDKlar uchun keng tarqalgan xatolar:
   eng so'nggi o'tishlar bilan cheklangan.
 - `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` faqat o'qish uchun chiqaradi
   audit dalillari uchun mahalliy manifest do'konidan saqlash hisobotlari.
-- REST oxirgi nuqtalari (`/v2/sorafs/pin`, `/v2/sorafs/aliases`,
-  `/v2/sorafs/replication`) mijozlar uchun attestatsiya tuzilmalarini o'z ichiga oladi
+- REST oxirgi nuqtalari (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
+  `/v1/sorafs/replication`) mijozlar uchun attestatsiya tuzilmalarini o'z ichiga oladi
   chora ko'rishdan oldin ma'lumotlarni so'nggi blok sarlavhalari bilan tekshiring.
 
 ## Ma'lumotnomalar

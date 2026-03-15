@@ -26,7 +26,7 @@ resumen: قائمة تحقق للقبول تغطي انضمام المزودين
 
 ### انضمام المزودين| الفحص | التحقق | الدليل |
 |-------|------------|----------|
-| registro يقبل إعلانات السعة القياسية | Esta es la API de la aplicación `/v2/sorafs/capacity/declare`, que contiene metadatos y registros del registro. العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
+| registro يقبل إعلانات السعة القياسية | Esta es la API de la aplicación `/v1/sorafs/capacity/declare`, que contiene metadatos y registros del registro. العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
 | يرفض contrato inteligente الـ cargas útiles غير المتطابقة | يضمن اختبار وحدات أن معرفات المزود وحقول GiB الملتزم بها تطابق الإعلان الموقع قبل الحفظ. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
 | يصدر CLI artefactos انضمام قياسية | El arnés CLI utiliza Norito/JSON/Base64 y realiza viajes de ida y vuelta sin conexión. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
 | Artículos de tocador y artículos para el hogar | توثيق يعدد مخطط الإعلان، política predeterminada, وخطوات المراجعة للمجلس. | `../storage-capacity-marketplace.md` |

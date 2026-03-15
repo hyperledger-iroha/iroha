@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v2/sumeragi/rbc (telemetry-gated)
+//! Router-level test for GET /v1/sumeragi/rbc (telemetry-gated)
 #![cfg(feature = "telemetry")]
 
 #[tokio::test]
@@ -30,7 +30,7 @@ async fn sumeragi_rbc_endpoint_shape() {
 
     // Build a tiny router with the RBC endpoint handler
     let app = Router::new().route(
-        "/v2/sumeragi/rbc",
+        "/v1/sumeragi/rbc",
         get({
             let tel = tel.clone();
             move || {
@@ -47,7 +47,7 @@ async fn sumeragi_rbc_endpoint_shape() {
     let resp = app
         .oneshot(
             axum::http::Request::builder()
-                .uri("/v2/sumeragi/rbc")
+                .uri("/v1/sumeragi/rbc")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

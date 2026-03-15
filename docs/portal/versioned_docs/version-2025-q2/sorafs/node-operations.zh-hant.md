@@ -44,7 +44,7 @@ slug: /sorafs/node-operations-zh-hant
   ```
 
 - 確保 Torii 進程具有對 `data_dir` 的讀/寫訪問權限。
-- 記錄聲明後，確認節點通過 `GET /v2/sorafs/capacity/state` 公佈預期容量。
+- 記錄聲明後，確認節點通過 `GET /v1/sorafs/capacity/state` 公佈預期容量。
 - 啟用平滑後，儀表板會同時顯示原始和平滑後的 GiB·小時/PoR 計數器，以突出顯示無抖動趨勢以及現貨值。
 
 ### CLI 試運行（可選）
@@ -69,8 +69,8 @@ cargo run -p sorafs_node --bin sorafs-node export \
 一旦 Torii 上線，您就可以通過 HTTP 檢索相同的工件：
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 兩個端點均由嵌入式存儲工作人員提供服務，因此 CLI 冒煙測試和網關探測保持同步。 【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
@@ -81,7 +81,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. 使用base64編碼提交清單：
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -90,7 +90,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. 獲取固定數據：
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -106,7 +106,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. 固定至少一個上述清單。
 2. 重新啟動Torii進程（或整個節點）。
 3. 重新提交提取請求。有效負載必須仍然可檢索，並且返回的摘要必須與重新啟動前的值匹配。
-4. 檢查 `GET /v2/sorafs/storage/state` 以確認 `bytes_used` 反映重新啟動後保留的清單。
+4. 檢查 `GET /v1/sorafs/storage/state` 以確認 `bytes_used` 反映重新啟動後保留的清單。
 
 ## 4. 配額拒絕測試
 
@@ -121,7 +121,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. 索取 PoR 樣品：
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -142,7 +142,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 - 儀表板應跟踪：
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` 和 `torii_sorafs_storage_fetch_inflight`
-  - PoR 成功/失敗計數器通過 `/v2/sorafs/capacity/state` 出現
+  - PoR 成功/失敗計數器通過 `/v1/sorafs/capacity/state` 出現
   - 通過 `sorafs_node_deal_publish_total{result=success|failure}` 發布和解嘗試
 
 遵循這些練習可確保嵌入式存儲工作線程能夠在節點向更廣泛的網絡通告容量之前攝取數據、在重新啟動後倖存、遵守配置的配額並生成確定性 PoR 證明。

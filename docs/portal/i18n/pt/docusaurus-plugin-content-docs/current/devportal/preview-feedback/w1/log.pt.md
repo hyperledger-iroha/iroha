@@ -29,7 +29,7 @@ reproduzir as evidências sem perseguir ingressos externos.
 | parceiro-w1-01 | `DOCS-SORA-Preview-REQ-P01` | OK 2025-04-03 | 12/04/2025 15:00 | 12/04/2025 15:11 | Concluído 2025-04-26 | sorafs-op-01; focado em evidência de paridade dos documentos do orquestrador. |
 | parceiro-w1-02 | `DOCS-SORA-Preview-REQ-P02` | OK 2025-04-03 | 12/04/2025 15:03 | 12/04/2025 15:15 | Concluído 2025-04-26 | sorafs-op-02; validou cross-links Norito/telemetria. |
 | parceiro-w1-03 | `DOCS-SORA-Preview-REQ-P03` | OK 2025-04-04 | 12/04/2025 15:06 | 12/04/2025 15:18 | Concluído 2025-04-26 | sorafs-op-03; executou drills de failover multi-source. |
-| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 12/04/2025 15:09 | 12/04/2025 15:21 | Concluído 2025-04-26 | torii-int-01; revisão do livro de receitas Torii `/v2/pipeline` + Experimente. |
+| parceiro-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 12/04/2025 15:09 | 12/04/2025 15:21 | Concluído 2025-04-26 | torii-int-01; revisão do livro de receitas Torii `/v1/pipeline` + Experimente. |
 | parceiro-w1-05 | `DOCS-SORA-Preview-REQ-P05` | OK 2025-04-05 | 12/04/2025 15:12 | 12/04/2025 15:23 | Concluído 2025-04-26 | torii-int-02; acompanhou a atualização do screenshot Try it (docs-preview/w1 #2). |
 | parceiro-w1-06 | `DOCS-SORA-Preview-REQ-P06` | OK 2025-04-05 | 12/04/2025 15:15 | 12/04/2025 15:26 | Concluído 2025-04-26 | SDK-parceiro-01; feedback de livros de receitas JS/Swift + verificações de integridade da ponte ISO. |
 | parceiro-w1-07 | `DOCS-SORA-Preview-REQ-P07` | OK 2025-04-11 | 12/04/2025 15:18 | 12/04/2025 15:29 | Concluído 2025-04-26 | SDK-parceiro-02; cumprimento aprovado em 11/04/2025, focado em notas de Connect/telemetria. |

@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-02-07
 
 |要求 |详情 |
 |-------------|--------|
-|协议| `/v2/sns/*` 和 gRPC 服务 `sns.v1.Registrar` 下的 REST。两者都接受 Norito-JSON (`application/json`) 和 Norito-RPC 二进制文件 (`application/x-norito`)。 |
+|协议| `/v1/sns/*` 和 gRPC 服务 `sns.v1.Registrar` 下的 REST。两者都接受 Norito-JSON (`application/json`) 和 Norito-RPC 二进制文件 (`application/x-norito`)。 |
 |授权 |每个后缀管理员颁发的 `Authorization: Bearer` 令牌或 mTLS 证书。治理敏感端点（冻结/解冻、保留分配）需要 `scope=sns.admin`。 |
 |速率限制 |注册服务商与 JSON 调用者共享 `torii.preauth_scheme_limits` 存储桶以及每个后缀的突发上限：`sns.register`、`sns.renew`、`sns.controller`、`sns.freeze`。 |
 |遥测| Torii 向注册商处理程序公开 `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}`（在 `scheme="norito_rpc"` 上进行过滤）； API 还会递增 `sns_registrar_status_total{result, suffix_id}`。 |
@@ -108,15 +108,15 @@ Struct ReservedAssignmentRequestV1 {
 
 |端点 |方法|有效负载|描述 |
 |----------|--------|---------|------------|
-| `/v2/sns/registrations` |发布 | `RegisterNameRequestV1` |注册或重新命名名称。解决定价层、验证支付/治理证明、发出注册事件。 |
-| `/v2/sns/registrations/{selector}/renew` |发布 | `RenewNameRequestV1` |延长期限。强制实施政策中的宽限/赎回窗口。 |
-| `/v2/sns/registrations/{selector}/transfer` |发布 | `TransferNameRequestV1` |一旦获得治理批准，就转让所有权。 |
-| `/v2/sns/registrations/{selector}/controllers` |放置 | `UpdateControllersRequestV1` |更换控制器组；验证签名的帐户地址。 |
-| `/v2/sns/registrations/{selector}/freeze` |发布 | `FreezeNameRequestV1` |监护人/议会冻结。需要监护人票证和治理记录参考。 |
-| `/v2/sns/registrations/{selector}/freeze` |删除 | `GovernanceHookV1` |修复后解冻；确保理事会推翻记录。 |
-| `/v2/sns/reserved/{selector}` |发布 | `ReservedAssignmentRequestV1` |管理员/理事会分配保留名称。 |
-| `/v2/sns/policies/{suffix_id}` |获取 | — |获取当前 `SuffixPolicyV1`（可缓存）。 |
-| `/v2/sns/registrations/{selector}` |获取 | — |返回当前 `NameRecordV1` + 有效状态（Active、Grace 等）。 |
+| `/v1/sns/registrations` |发布 | `RegisterNameRequestV1` |注册或重新命名名称。解决定价层、验证支付/治理证明、发出注册事件。 |
+| `/v1/sns/registrations/{selector}/renew` |发布 | `RenewNameRequestV1` |延长期限。强制实施政策中的宽限/赎回窗口。 |
+| `/v1/sns/registrations/{selector}/transfer` |发布 | `TransferNameRequestV1` |一旦获得治理批准，就转让所有权。 |
+| `/v1/sns/registrations/{selector}/controllers` |放置 | `UpdateControllersRequestV1` |更换控制器组；验证签名的帐户地址。 |
+| `/v1/sns/registrations/{selector}/freeze` |发布 | `FreezeNameRequestV1` |监护人/议会冻结。需要监护人票证和治理记录参考。 |
+| `/v1/sns/registrations/{selector}/freeze` |删除 | `GovernanceHookV1` |修复后解冻；确保理事会推翻记录。 |
+| `/v1/sns/reserved/{selector}` |发布 | `ReservedAssignmentRequestV1` |管理员/理事会分配保留名称。 |
+| `/v1/sns/policies/{suffix_id}` |获取 | — |获取当前 `SuffixPolicyV1`（可缓存）。 |
+| `/v1/sns/registrations/{selector}` |获取 | — |返回当前 `NameRecordV1` + 有效状态（Active、Grace 等）。 |
 
 **选择器编码：** `{selector}` 路径段接受 I105（首选）、压缩（`sora`，第二好）或每个 ADDR-5 的规范十六进制； Torii 通过 `NameSelectorV1` 将其标准化。
 
@@ -179,7 +179,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` 必须包含有效的 `GovernanceHookV1` 记录（提案 ID、投票哈希、管理员/监护人签名）。每个命令都简单地镜像相应的 `/v2/sns/registrations/{selector}/…` 端点，因此 beta 操作员可以排练 SDK 将调用的确切 Torii 表面。
+`--governance-json` 必须包含有效的 `GovernanceHookV1` 记录（提案 ID、投票哈希、管理员/监护人签名）。每个命令都简单地镜像相应的 `/v1/sns/registrations/{selector}/…` 端点，因此 beta 操作员可以排练 SDK 将调用的确切 Torii 表面。
 
 ## 4.gRPC 服务
 
@@ -214,7 +214,7 @@ service Registrar {
 
 Torii 通过检查来验证证明：
 
-1. 治理账本中存在提案 ID（`/v2/governance/proposals/{id}`），状态为 `Approved`。
+1. 治理账本中存在提案 ID（`/v1/governance/proposals/{id}`），状态为 `Approved`。
 2. 哈希值与记录的投票工件相匹配。
 3. 管理员/监护人签名引用 `SuffixPolicyV1` 中的预期公钥。
 
@@ -224,7 +224,7 @@ Torii 通过检查来验证证明：
 
 ### 6.1 标准注册
 
-1. 客户端查询 `/v2/sns/policies/{suffix_id}` 以获取定价、宽限和可用等级。
+1. 客户端查询 `/v1/sns/policies/{suffix_id}` 以获取定价、宽限和可用等级。
 2.客户端构建`RegisterNameRequestV1`：
    - `selector` 源自首选 I105 或次佳压缩 (`sora`) 标签。
    - `term_years` 在政策范围内。
@@ -251,7 +251,7 @@ Torii 通过检查来验证证明：
 
 1. 监护人提交 `FreezeNameRequestV1` 以及引用事件 ID 的工单。
 2. Torii 将记录移动到 `NameStatus::Frozen`，发出 `NameFrozen`。
-3.整改后，理事会问题优先；操作员发送 DELETE `/v2/sns/registrations/{selector}/freeze` 和 `GovernanceHookV1`。
+3.整改后，理事会问题优先；操作员发送 DELETE `/v1/sns/registrations/{selector}/freeze` 和 `GovernanceHookV1`。
 4. Torii 验证覆盖，发出 `NameUnfrozen`。
 
 ## 7. 验证和错误代码
@@ -269,7 +269,7 @@ Torii 通过检查来验证证明：
 ## 8. 实施注意事项
 
 - Torii 将挂起的拍卖存储在 `NameRecordV1.auction` 下，并在 `PendingAuction` 期间拒绝直接注册尝试。
-- 付款证明重复使用Norito分类账收据；财务服务提供帮助程序 API (`/v2/finance/sns/payments`)。
+- 付款证明重复使用Norito分类账收据；财务服务提供帮助程序 API (`/v1/finance/sns/payments`)。
 - SDK 应使用强类型帮助程序包装这些端点，以便钱包可以提供明确的错误原因（`ERR_SNS_RESERVED` 等）。
 
 ## 9. 后续步骤

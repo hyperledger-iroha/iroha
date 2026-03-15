@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 1. **תיעוד**
    - הוסף נספח תאימות ל-`docs/source/crypto/sm_program.md` המציין את מצב ההצפנה המסחרי, הגשת ציפיות ונקודות מגע.
    - פרסם שדה מניפסט Norito (`crypto.sm.enabled=true`, `crypto.sm.approval=l0|l1`) שבו המפעילים יכולים להשתמש בעת הכנת הגשות.
-   - ודא שהמודעה Torii `/v2/node/capabilities` (וכינוי `iroha runtime capabilities` CLI) נשלחת עם כל מהדורה כדי שהמפעילים יוכלו ללכוד את תמונת המצב של מניפסט `crypto.sm` לראיות MLPS/密评.
+   - ודא שהמודעה Torii `/v1/node/capabilities` (וכינוי `iroha runtime capabilities` CLI) נשלחת עם כל מהדורה כדי שהמפעילים יוכלו ללכוד את תמונת המצב של מניפסט `crypto.sm` לראיות MLPS/密评.
    - לספק התחלה מהירה של תאימות דו-לשונית (EN/ZH) לסיכום חובות.
 2. **חפצי פרסום**
    - שלח קבצי SBOM/CycloneDX עבור רכיבים התומכים ב-SM.

@@ -76,7 +76,7 @@ Référez-vous au [プレイブック マニフェスト ステージング](./s
    ステージング参照の登録は `torii.sorafs.discovery.admission.envelopes_dir` です。
 3. プロバイダーが API ディスカバリー経由で宣伝者を宣伝することを確認します。
    ```bash
-   curl -sS http://<torii-host>/v2/sorafs/providers | jq .
+   curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
 4. エンドポイントの管理上のヘッダーのマニフェスト/計画の実行:
    ```bash

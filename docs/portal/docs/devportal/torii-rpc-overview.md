@@ -5,7 +5,7 @@ title: Norito-RPC Overview
 # Norito-RPC Overview
 
 Norito-RPC is the binary transport for Torii APIs. It reuses the same HTTP paths
-as `/v2/pipeline` but exchanges Norito-framed payloads that include schema
+as `/v1/pipeline` but exchanges Norito-framed payloads that include schema
 hashes and checksums. Use it when you need deterministic, validated responses or
 when pipeline JSON responses become a bottleneck.
 
@@ -23,7 +23,7 @@ curl \
   -H 'Accept: application/x-norito' \
   -H "Authorization: Bearer ${TOKEN}" \
   --data-binary @signed_transaction.norito \
-  https://torii.devnet.sora.example/v2/transactions/submit
+  https://torii.devnet.sora.example/v1/transactions/submit
 ```
 
 1. Serialize your payload with the Norito codec (`iroha_client`, SDK helpers, or
@@ -49,7 +49,7 @@ payloads without writing bespoke scripts.
 1. [Start the proxy](./try-it.md#start-the-proxy-locally) and set
    `TRYIT_PROXY_PUBLIC_URL` so the widgets know where to send traffic.
 2. Open the **Try it** card on this page or the `/reference/torii-swagger`
-   panel and select an endpoint such as `POST /v2/pipeline/submit`
+   panel and select an endpoint such as `POST /v1/pipeline/submit`
    (for MCP/agent flows, use `/reference/torii-mcp` instead).
 3. Switch the **Content-Type** to `application/x-norito`, choose the **Binary**
    editor, and upload `fixtures/norito_rpc/transfer_asset.norito`

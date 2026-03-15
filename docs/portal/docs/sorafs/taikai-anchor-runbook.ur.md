@@ -52,7 +52,7 @@ SoraFS/SoraNet آپریٹرز spool artifacts، Prometheus ٹیلیمیٹری ا
 | `taikai_ingest_segment_latency_ms` | CMAF ingest latency histogram فی cluster/stream (ہدف: p95 < 750 ms، p99 < 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | live-edge drift encoder اور anchor workers کے درمیان (p99 > 1.5 s اگر 10 منٹ تک ہو تو page). |
 | `taikai_ingest_segment_errors_total{reason}` | error counters وجہ کے لحاظ سے (`decode`, `manifest_mismatch`, `lineage_replay`, ...). کسی بھی اضافہ پر `TaikaiIngestFailure` فائر ہوتا ہے۔ |
-| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | جب `/v2/da/ingest` نئے TRM کو قبول کرے تو بڑھتا ہے؛ cadence جانچنے کے لیے `rate()` استعمال کریں۔ |
+| `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | جب `/v1/da/ingest` نئے TRM کو قبول کرے تو بڑھتا ہے؛ cadence جانچنے کے لیے `rate()` استعمال کریں۔ |
 | `/status → telemetry.taikai_alias_rotations[]` | JSON snapshot جس میں `window_start_sequence`, `window_end_sequence`, `manifest_digest_hex`, `rotations_total`, اور timestamps شامل ہوں تاکہ evidence bundles تیار ہوں۔ |
 | `taikai_viewer_*` (rebuffer، CEK rotation age، PQ health، alerts) | viewer KPIs تاکہ CEK rotation + PQ circuits صحت مند رہیں۔ |
 

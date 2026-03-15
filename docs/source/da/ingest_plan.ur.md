@@ -34,7 +34,7 @@ Norito کوڈیکس استعمال کریں۔ کسی سیرڈ/JSON فال بیک
 ## API سطح (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -52,7 +52,7 @@ Content-Type: application/norito+v1
 | 500 داخلی غلطی | غیر متوقع ناکامی (لاگ ان + الرٹ)۔ |
 
 ```
-GET /v2/da/proof_policies
+GET /v1/da/proof_policies
 Accept: application/json | application/x-norito
 ```
 
@@ -68,7 +68,7 @@ Accept: application/json | application/x-norito
 فعال پالیسی سیٹ کے ثبوت کو پابند کرنے کے لئے اضافی راؤنڈ ٹرپ کی ضرورت نہیں ہے۔
 
 ```
-GET /v2/da/proof_policy_snapshot
+GET /v1/da/proof_policy_snapshot
 Accept: application/json | application/x-norito
 ```
 
@@ -239,7 +239,7 @@ pub struct DaIngestReceipt {
 -`iroha app da get` ملٹی سورس آرکیسٹریٹر کے لئے DA پر مبنی عرف شامل کرتا ہے جو پہلے ہی طاقتوں کو حاصل کرتا ہے
   `iroha app sorafs fetch`۔ آپریٹرز اسے منشور + chunk-plan کے نوادرات (`--manifest` ، پر اشارہ کرسکتے ہیں
   `--plan` ، `--manifest-id`) ** یا ** `--storage-ticket` کے ذریعے Torii اسٹوریج ٹکٹ کو آسانی سے پاس کریں۔ جب
-  ٹکٹ کا راستہ استعمال کیا جاتا ہے CLI `/v2/da/manifests/<ticket>` سے ظاہر ہوتا ہے ، بنڈل برقرار رہتا ہے
+  ٹکٹ کا راستہ استعمال کیا جاتا ہے CLI `/v1/da/manifests/<ticket>` سے ظاہر ہوتا ہے ، بنڈل برقرار رہتا ہے
   `artifacts/da/fetch_<timestamp>/` کے تحت (`--manifest-cache-dir` کے ساتھ اوور رائڈ) ، ** مینی فیسٹ سے ماخوذ ہے
   `--manifest-id` کے لئے ہیش ** ، اور پھر فراہم کردہ `--gateway-provider` کے ساتھ آرکسٹریٹر چلاتا ہے
   فہرست پے لوڈ کی توثیق اب بھی ایمبیڈڈ کار/`blob_hash` ڈائجسٹ پر انحصار کرتی ہے جبکہ گیٹ وے ID ہے
@@ -248,7 +248,7 @@ pub struct DaIngestReceipt {
   اوور رائڈس ، اسکور بورڈ ایکسپورٹ ، اور `--output` راستے) ، اور ظاہر اختتامی نقطہ کے ذریعے اوورراڈ کیا جاسکتا ہے
   `--manifest-endpoint` کسٹم Torii میزبانوں کے لئے ، لہذا آخر سے آخر تک دستیابی چیک مکمل طور پر رب کے تحت زندہ رہتی ہے
   `da` نام کی جگہ بغیر کسی آرکیسٹریٹر منطق کی نقل کے۔
-- `iroha app da get-blob` Torii سے `GET /v2/da/manifests/{storage_ticket}` کے ذریعے سیدھے کیننیکل منشور کو کھینچتا ہے۔
+- `iroha app da get-blob` Torii سے `GET /v1/da/manifests/{storage_ticket}` کے ذریعے سیدھے کیننیکل منشور کو کھینچتا ہے۔
   کمانڈ اب مینی فیسٹ ہیش (بلب ID) کے ساتھ نوادرات کا لیبل لگا دیتا ہے ،
   `manifest_{manifest_hash}.norito` ، `manifest_{manifest_hash}.json` ، اور `chunk_plan_{manifest_hash}.json`
   `artifacts/da/fetch_<timestamp>/` (یا صارف فراہم کردہ `--output-dir`) کے تحت عین مطابق گونجتے ہوئے
@@ -259,7 +259,7 @@ pub struct DaIngestReceipt {
   `ToriiClient.getDaManifestBundle(...)`۔ دونوں ڈیکوڈڈ Norito بائٹس ، منشور JSON ، منشور ہیش لوٹاتے ہیں ،اور حصہ منصوبہ ہے تاکہ ایس ڈی کے کال کرنے والے آرکیسٹریٹر سیشنوں کو سی ایل آئی اور سوئفٹ میں گولہ باری کے بغیر ہائیڈریٹ کرسکتے ہیں۔
   کلائنٹ اضافی طور پر `fetchDaPayloadViaGateway(...)` کو مقامی کے ذریعہ ان بنڈلوں کو پائپ کرنے کے لئے کال کرسکتے ہیں
   SoraFS آرکیسٹریٹر ریپر۔
-- `/v2/da/manifests` جوابات اب سطح `manifest_hash` ، اور دونوں CLI + SDK مددگار (`iroha app da get` ،
+- `/v1/da/manifests` جوابات اب سطح `manifest_hash` ، اور دونوں CLI + SDK مددگار (`iroha app da get` ،
   `ToriiClient.fetchDaPayloadViaGateway` ، اور سوئفٹ/جے ایس گیٹ وے ریپرز) اس ڈائجسٹ کو بطور سلوک کریں
   ایمبیڈڈ کار/بلاب ہیش کے خلاف پے لوڈ کی تصدیق کرتے ہوئے کیننیکل مینی فیسٹ شناخت کنندہ۔
 - `iroha app da rent-quote` فراہم کردہ اسٹوریج کے سائز کے ل det ڈٹرمینسٹک کرایہ اور ترغیبی خرابی کی گنتی کرتا ہے
@@ -277,7 +277,7 @@ pub struct DaIngestReceipt {
 - پن رجسٹری کی برابری اب SDKs تک پھیلی ہوئی ہے: `ToriiClient.registerSorafsPinManifest(...)` میں
   جاوا اسکرپٹ ایس ڈی کے نے عین مطابق پے لوڈ کی تعمیر کی ہے جو `iroha app sorafs pin register` کے ذریعہ استعمال ہوتا ہے ، کیننیکل کو نافذ کرتا ہے
   چنکر میٹا ڈیٹا ، پن کی پالیسیاں ، عرفی ثبوت ، اور جانشین پوسٹ کرنے سے پہلے ہضم ہوتا ہے
-  `/v2/sorafs/pin/register`۔ اس سے سی آئی بوٹس اور آٹومیشن کو جب سی ایل آئی میں گولہ باری سے روکتا ہے
+  `/v1/sorafs/pin/register`۔ اس سے سی آئی بوٹس اور آٹومیشن کو جب سی ایل آئی میں گولہ باری سے روکتا ہے
   ریکارڈنگ مینی فیسٹ رجسٹریشن ، اور ٹائپ اسکرپٹ/ریڈم کوریج کے ساتھ مددگار جہاز
   زنگ/سوئفٹ کے ساتھ ساتھ جے ایس پر "جمع کروائیں/ثابت کریں" ٹولنگ کی برابری پوری طرح مطمئن ہے۔
 - `iroha app da prove-availability` مندرجہ بالا سبھی زنجیروں میں: یہ اسٹوریج کا ٹکٹ لیتا ہے ، ڈاؤن لوڈ کرتا ہے
@@ -334,7 +334,7 @@ pub struct DaIngestReceipt {
   نامعلوم ورژن ، جب نئے مینی فیسٹ لے آؤٹ جہاز جہاز کے شپ میں بحال کرنے کی ضمانت دی جاتی ہے۔
 ۔
   ظاہر ہونے کے علاوہ DA-5 شیڈولرز کیننیکل ڈیٹا سے نمونے لینے کے چیلنجوں کا آغاز کرسکتے ہیں۔
-  `Sora-PDP-Commitment` ہیڈر اب دونوں `/v2/da/ingest` اور `/v2/da/manifests/{ticket}` کے ساتھ جہاز بھیجتا ہے
+  `Sora-PDP-Commitment` ہیڈر اب دونوں `/v1/da/ingest` اور `/v1/da/manifests/{ticket}` کے ساتھ جہاز بھیجتا ہے
   جوابات تو ایس ڈی کے فوری طور پر دستخط شدہ عزم کو سیکھتے ہیں کہ آئندہ کی تحقیقات کا حوالہ دیا جائے گا۔ 【کریٹس/sorafs_car/src/lib.rs: 360 】【 creats/sorafs_manifest/src/pdp.rs: 1 】【 creats/iroha_torii/src/da/ingest.rs: 476
 - ** شارڈ کرسر جرنل ** - لین میٹا ڈیٹا `da_shard_id` کی وضاحت کرسکتا ہے (`lane_id` سے پہلے سے طے شدہ) ، اور
   Sumeragi اب سب سے زیادہ `(epoch, sequence)` فی `(shard_id, lane_id)` میں برقرار ہے
@@ -357,7 +357,7 @@ pub struct DaIngestReceipt {
   پے لوڈ بائٹس کو بے نقاب کرنا۔ ری پلے کے دوران کورا سے وصولیاں ہائیڈریٹ ہیں لہذا توثیق کرنے والے اسی کو بازیافت کرتے ہیں
   رازداری کا میٹا ڈیٹا دوبارہ شروع ہونے کے بعد۔ 【کریٹس/آئروہ_کونفگ/ایس آر سی/پیرامیٹرز/اصل۔
 
-## نفاذ کے نوٹ- Torii کا `/v2/da/ingest` اختتامی نقطہ اب پے لوڈ کمپریشن کو معمول بناتا ہے ، ری پلے کیشے کو نافذ کرتا ہے ،
+## نفاذ کے نوٹ- Torii کا `/v1/da/ingest` اختتامی نقطہ اب پے لوڈ کمپریشن کو معمول بناتا ہے ، ری پلے کیشے کو نافذ کرتا ہے ،
   تعی .ن کے ساتھ کیننیکل بائٹس کو گھٹا دیتا ہے ، `DaManifestV1` کی تعمیر نو کرتا ہے ، اور انکوڈڈ پے لوڈ کو گراتا ہے
   `config.da_ingest.manifest_store_dir` میں SoraFS آرکیسٹریشن کے لئے رسید جاری کرنے سے پہلے ؛
   ہینڈلر `Sora-PDP-Commitment` ہیڈر بھی جوڑتا ہے تاکہ کلائنٹ انکوڈڈ عزم کو حاصل کرسکیں
@@ -370,7 +370,7 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` کور مورچا ، ازگر `ToriiClient`
   اب `decode_pdp_commitment_header` ، اور `IrohaSwift` جہازوں سے ملاپ کرنے والے مددگاروں کو برآمد کرتا ہے تاکہ موبائل
   کلائنٹ انکوڈڈ نمونے لینے کے شیڈول کو فوری طور پر اسٹش کرسکتے ہیں۔ 【کریٹس/آئروہ/ایس آر سی/ڈی اے آر ایس: 1 】【 ازگر/اروہہ_ٹوری_کلائنٹ/کلائنٹ ۔پی: 1 】【 Irohaswift/ذرائع/Irohaswift/toriiclient.swift: 1】
-- Torii `GET /v2/da/manifests/{storage_ticket}` کو بھی بے نقاب کرتا ہے تاکہ SDKs اور آپریٹرز ظاہر ہوسکیں
+- Torii `GET /v1/da/manifests/{storage_ticket}` کو بھی بے نقاب کرتا ہے تاکہ SDKs اور آپریٹرز ظاہر ہوسکیں
   اور نوڈ کی اسپل ڈائرکٹری کو چھوئے بغیر اس کے منصوبے۔ جواب Norito بائٹس کو لوٹاتا ہے
   .
   ہیکس ہضم (`storage_ticket` ، `client_blob_id` ، `blob_hash` ، `chunk_root`) لہذا بہاو ٹولنگ کر سکتے ہیں
@@ -388,7 +388,7 @@ pub struct DaIngestReceipt {
   `--block-hash` اوور رائڈ۔ 【کریٹس/آئروہ_ٹوری_شاریڈ/ایس آر سی/ڈی اے/نمونے لینے کے لئے۔ 【جاوا اسکرپٹ/آئروہ_ جے ایس/ایس آر سی/ٹورائکلینٹ. جے ایس: 15903 】【 Irohaswift/ذرائع/irohaswift/toriiclient.swift: 170】
 
 ### بڑے پے لوڈ اسٹریمنگ فلوکلائنٹ جن کو اثاثوں کو ترتیب دینے والی واحد درخواست کی حد سے بڑے اثاثوں کی ضرورت ہوتی ہے
-`POST /v2/da/ingest/chunk/start` پر کال کرکے اسٹریمنگ سیشن۔ Torii a کے ساتھ جواب دیتا ہے
+`POST /v1/da/ingest/chunk/start` پر کال کرکے اسٹریمنگ سیشن۔ Torii a کے ساتھ جواب دیتا ہے
 `ChunkSessionId` (BLAK3 سے ماخوذ بلاب میٹا ڈیٹا سے ماخوذ) اور مذاکرات شدہ حص size ہ سائز۔
 ہر اس کے بعد `DaIngestChunk` درخواست کی جاتی ہے:
 
@@ -403,7 +403,7 @@ Torii `config.da_ingest.manifest_store_dir/chunks/<session>/` کے تحت توث
 آئیڈیمپلیسی کے اعزاز کے لئے ری پلے کیشے کے اندر پیشرفت کو ریکارڈ کرتا ہے۔ جب آخری سلائس اترتا ہے ، Torii
 ڈسک پر پے لوڈ کو دوبارہ جمع کرتا ہے (میموری کی بڑھتی ہوئی وارداتوں سے بچنے کے لئے منڈ ڈائرکٹری کے ذریعے اسٹریمنگ) ،
 ایک شاٹ اپ لوڈ کے ساتھ بالکل اسی طرح کیننیکل مینی فیسٹ/رسید کی گنتی کریں ، اور آخر کار اس کا جواب دیتا ہے
-`POST /v2/da/ingest` اسٹیجڈ نمونے کا استعمال کرکے۔ ناکام سیشنوں کو واضح طور پر یا اسقاط حمل کیا جاسکتا ہے
+`POST /v1/da/ingest` اسٹیجڈ نمونے کا استعمال کرکے۔ ناکام سیشنوں کو واضح طور پر یا اسقاط حمل کیا جاسکتا ہے
 `config.da_ingest.replay_cache_ttl` کے بعد کوڑے دان کے جمع ہیں۔ یہ ڈیزائن نیٹ ورک کی شکل کو برقرار رکھتا ہے
 Norito دوستانہ ، کلائنٹ سے متعلق قابل عمل پروٹوکول سے پرہیز کرتا ہے ، اور موجودہ مینی فیسٹ پائپ لائن کو دوبارہ استعمال کرتا ہے
 کوئی تبدیلی نہیں

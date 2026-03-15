@@ -93,13 +93,13 @@ default_margin_percent = "0.025"
 ### 3.1 დამტკიცების შემდგომი კონფიგურაციის Snapshots
 
 რეფერენდუმის ან მმართველობის კენჭისყრის დასრულების შემდეგ და `[settlement.repo]`
-ცვლილება შემოვიდა, გადაიღეთ `/v2/configuration` კადრები ყველა თანატოლისგან.
+ცვლილება შემოვიდა, გადაიღეთ `/v1/configuration` კადრები ყველა თანატოლისგან.
 აუდიტორებს შეუძლიათ დაამტკიცონ, რომ დამტკიცებული პოლიტიკა მოქმედებს კლასტერში (იხ
 `docs/source/finance/repo_ops.md` §2.9 მტკიცებულების სამუშაო პროცესისთვის).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v2/configuration \
+curl -fsSL https://peer01.example/v1/configuration \
   | jq '.' \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```

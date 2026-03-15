@@ -27,16 +27,16 @@ Os tokens de admissão ML-DSA são usados ​​em retransmissões de borda.
 يعرض خمس نقاط نهاية HTTP:
 
 - `GET /healthz` - فحص vivacidade.
-- `GET /v2/puzzle/config` - يعيد معلمات PoW/puzzle الفعلية المسحوبة
+- `GET /v1/puzzle/config` - يعيد معلمات PoW/puzzle الفعلية المسحوبة
   É um relé JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v2/puzzle/mint` - يصدر تذكرة Argon2; corpo JSON
+- `POST /v1/puzzle/mint` - يصدر تذكرة Argon2; corpo JSON
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   يطلب TTL اقصر (يتم ضبطه ضمن نافذة política), ويربط التذكرة بـ transcrição hash,
   ويعيد تذكرة موقعة من relé + بصمة التوقيع عندما تكون مفاتيح التوقيع مهيئة.
-- `GET /v2/token/config` - `pow.token.enabled = true`
+- `GET /v1/token/config` - `pow.token.enabled = true`
   token de admissão (impressão digital do emissor, TTL/inclinação do relógio, ID de retransmissão,
   ومجموعة revogação المدمجة).
-- `POST /v2/token/mint` - Token de admissão ML-DSA مرتبطا بـ resume hash المقدم؛
+- `POST /v1/token/mint` - Token de admissão ML-DSA مرتبطا بـ resume hash المقدم؛
   corpo é `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
 
 تتم عملية التحقق من التذاكر المنتجة عبر خدمة الاختبار التكاملية
@@ -77,16 +77,16 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 Use o `--token-secret-hex` para que o pipeline esteja conectado. يقوم
-observador لملف revogação بالحفاظ على `/v2/token/config` محدثا؛ نسق التحديثات مع
+observador لملف revogação بالحفاظ على `/v1/token/config` محدثا؛ نسق التحديثات مع
 امر `soranet-admission-token revoke` لتجنب تاخر حالة revogação.Use `pow.signed_ticket_public_key_hex` em JSON para retransmitir para o local de trabalho
-العام ML-DSA-44 المستخدم للتحقق من PoW tickets الموقعة; `/v2/puzzle/config`
+العام ML-DSA-44 المستخدم للتحقق من PoW tickets الموقعة; `/v1/puzzle/config`
 A solução BLAKE3 (`signed_ticket_public_key_fingerprint_hex`) para clientes
 Meu verificador. يتم التحقق من التذاكر الموقعة مقابل ID de retransmissão e ligações de transcrição
 وتشارك نفس مخزن revogação؛ Obter ingressos PoW em 74 dias por semana
 verificador de bilhetes assinados. مرر secret الخاص بالموقع عبر `--signed-ticket-secret-hex`
 E `--signed-ticket-secret-path` é um arquivo de texto; يرفض التشغيل pares de chaves
 Verifique se o produto está em `pow.signed_ticket_public_key_hex`.
-`POST /v2/puzzle/mint` é `"signed": true` (e `"transcript_hash_hex"`) mais alto
+`POST /v1/puzzle/mint` é `"signed": true` (e `"transcript_hash_hex"`) mais alto
 ticket assinado مشفر بـ Norito الى جانب bytes التذكرة الخام; تتضمن الردود
 `signed_ticket_b64` e `signed_ticket_fingerprint_hex` permitem reproduzir impressões digitais. sim
 رفض الطلبات مع `signed = true` اذا لم يتم تهيئة secret الموقع.
@@ -103,10 +103,10 @@ ticket assinado مشفر بـ Norito الى جانب bytes التذكرة الخ
 3. **تجهيز اعادة التشغيل.** اعد تحميل وحدة systemd او الحاوية عند اعلان governança
    Não há cortes. Como usar hot-reload; اعادة التشغيل مطلوبة
    O descritor commit é o seguinte.
-4. **التحقق.** Você pode usar o `POST /v2/puzzle/mint` e o `difficulty` e `expires_at`
+4. **التحقق.** Você pode usar o `POST /v1/puzzle/mint` e o `difficulty` e `expires_at`
    يطابقان السياسة الجديدة. Mergulhe em água (`docs/source/soranet/reports/pow_resilience.md`)
    يلتقط حدود الكمون المتوقعة للمرجعية. عندما تكون التوكنات مفعلة, اجلب
-   `/v2/token/config` para a impressão digital do emissor e para a revogação
+   `/v1/token/config` para a impressão digital do emissor e para a revogação
    يطابقان القيم المتوقعة.
 
 ## اجراء التعطيل الطارئ
@@ -117,7 +117,7 @@ ticket assinado مشفر بـ Norito الى جانب bytes التذكرة الخ
    off-line.
 3. Verifique se o relé está funcionando corretamente.
 4. Use `soranet_handshake_pow_difficulty` para obter hashcash
-   O nome do produto é `/v2/puzzle/config` ou `puzzle = null`.
+   O nome do produto é `/v1/puzzle/config` ou `puzzle = null`.
 
 ## المراقبة والتنبيهات- **SLO de latência:** `soranet_handshake_latency_seconds` e P95 tem duração de 300 ms.
   توفر compensações الخاصة باختبار absorver بيانات معايرة لthrottles الـ guarda.
@@ -126,15 +126,15 @@ ticket assinado مشفر بـ Norito الى جانب bytes التذكرة الخ
   Resfriamentos para `pow.quotas` (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
 - **Alinhamento do quebra-cabeça:** يجب ان يطابق `soranet_handshake_pow_difficulty` الصعوبة
-  O nome é `/v2/puzzle/config`. يشير الاختلاف الى تكوين relé é e não é
+  O nome é `/v1/puzzle/config`. يشير الاختلاف الى تكوين relé é e não é
   Não.
-- **Prontidão do token:** نبه اذا انخفض `/v2/token/config` ou `enabled = false`
+- **Prontidão do token:** نبه اذا انخفض `/v1/token/config` ou `enabled = false`
   Você pode usar o `revocation_source` com carimbos de data/hora. يجب على
   A revogação da versão Norito da CLI é feita por meio de uma chamada de revogação Norito
   Este é o endpoint.
 - **Saúde do serviço:** افحص `/healthz` e cadência vivacidade المعتادة ونبه اذا
-  Use `/v2/puzzle/mint` para HTTP 500 (não use o Argon2 ou
-  no RNG). A criação de token minting é feita através de HTTP 4xx/5xx em `/v2/token/mint`;
+  Use `/v1/puzzle/mint` para HTTP 500 (não use o Argon2 ou
+  no RNG). A criação de token minting é feita através de HTTP 4xx/5xx em `/v1/token/mint`;
   تعامل مع الاخفاقات المتكررة كحالة paginação.
 
 ## الامتثال وتسجيل التدقيق

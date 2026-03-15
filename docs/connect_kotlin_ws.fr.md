@@ -25,7 +25,7 @@ import okhttp3.*
 
 fun joinWs(node: String, sid: String, role: String, token: String, listener: WebSocketListener): WebSocket {
   val http = node.replace("http", "ws")
-  val url = "$http/v2/connect/ws?sid=$sid&role=$role"
+  val url = "$http/v1/connect/ws?sid=$sid&role=$role"
   val req = Request.Builder()
     .url(url)
     .addHeader("Authorization", "Bearer $token")

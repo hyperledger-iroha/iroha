@@ -46,7 +46,7 @@ luminárias.
 Torii теперь показывает instantâneos provedores de crédito вместе с taxas, чтобы
 painéis de controle têm portão com equilíbrio e penalidades:
 
-- REST: `GET /v2/sorafs/capacity/state` é definido como `credit_ledger[*]`,
+- REST: `GET /v1/sorafs/capacity/state` é definido como `credit_ledger[*]`,
   Depois de abrir o livro-razão, verifique no teste de imersão. Sim.
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importar Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` estrutura

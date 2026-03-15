@@ -78,7 +78,7 @@ npm run start
 یہ components `docusaurus.config.js` سے values پڑھتے ہیں:
 
 - **Swagger UI** - `/reference/torii-swagger` پر render ہوتا ہے؛ token موجود ہونے پر bearer scheme کو pre-authorise کرتا ہے، requests کو `X-TryIt-Client` سے tag کرتا ہے، `X-TryIt-Auth` inject کرتا ہے، اور `TRYIT_PROXY_PUBLIC_URL` سیٹ ہونے پر calls کو پروکسی کے ذریعے rewrite کرتا ہے۔
-- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v2/mcp` agent workflows.
+- **MCP reference** - `/reference/torii-mcp`; use this for JSON-RPC `/v1/mcp` agent workflows.
 - **RapiDoc** - `/reference/torii-rapidoc` پر render ہوتا ہے؛ token فیلڈ کو mirror کرتا ہے، Swagger panel جیسے headers reuse کرتا ہے، اور URL configure ہونے پر خودکار طور پر proxy کو target کرتا ہے۔
 - **Try it console** - API overview page میں embedded ہے؛ custom requests بھیجنے، headers دیکھنے، اور response bodies inspect کرنے دیتا ہے۔
 
@@ -135,7 +135,7 @@ Norito-RPC requests اسی proxy اور OAuth plumbing کو شیئر کرتی ہ
 ### Try It console سے Norito payload بھیجیں
 
 1. `fixtures/norito_rpc/transfer_asset.norito` جیسا fixture منتخب کریں۔ یہ فائلیں raw Norito envelopes ہیں؛ انہیں **base64 encode نہ کریں**۔
-2. Swagger یا RapiDoc میں NRPC endpoint تلاش کریں (مثلاً `POST /v2/pipeline/submit`) اور **Content-Type** selector کو `application/x-norito` پر سوئچ کریں۔
+2. Swagger یا RapiDoc میں NRPC endpoint تلاش کریں (مثلاً `POST /v1/pipeline/submit`) اور **Content-Type** selector کو `application/x-norito` پر سوئچ کریں۔
 3. request body editor کو **binary** پر ٹوگل کریں (Swagger کا "File" موڈ یا RapiDoc کا "Binary/File" selector) اور `.norito` فائل اپ لوڈ کریں۔ widget bytes کو proxy کے ذریعے بغیر تبدیلی کے stream کرتا ہے۔
 4. request بھیجیں۔ اگر Torii `X-Iroha-Error-Code: schema_mismatch` واپس کرے تو تصدیق کریں کہ آپ ایسا endpoint کال کر رہے ہیں جو binary payloads قبول کرتا ہے اور `fixtures/norito_rpc/schema_hashes.json` میں ریکارڈ شدہ schema hash آپ کے Torii build سے میچ کرتا ہے۔
 
@@ -148,10 +148,10 @@ Norito-RPC requests اسی proxy اور OAuth plumbing کو شیئر کرتی ہ
 ```bash
 TORII="https://torii.devnet.sora.example"
 TOKEN="Bearer $(cat ~/.config/torii/devnet.token)"
-curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v2/pipeline/submit"
+curl   -H "Content-Type: application/x-norito"   -H "Authorization: ${TOKEN}"   --data-binary @fixtures/norito_rpc/transfer_asset.norito   "${TORII}/v1/pipeline/submit"
 ```
 
-`transaction_fixtures.manifest.json` میں موجود کسی بھی entry کے ساتھ fixture بدلیں یا `cargo xtask norito-rpc-fixtures` سے اپنا payload encode کریں۔ جب Torii canary mode میں ہو تو آپ `curl` کو try-it proxy (`https://docs.sora.example/proxy/v2/pipeline/submit`) پر پوائنٹ کر سکتے ہیں تاکہ وہی infrastructure test ہو جو portal widgets استعمال کرتے ہیں۔
+`transaction_fixtures.manifest.json` میں موجود کسی بھی entry کے ساتھ fixture بدلیں یا `cargo xtask norito-rpc-fixtures` سے اپنا payload encode کریں۔ جب Torii canary mode میں ہو تو آپ `curl` کو try-it proxy (`https://docs.sora.example/proxy/v1/pipeline/submit`) پر پوائنٹ کر سکتے ہیں تاکہ وہی infrastructure test ہو جو portal widgets استعمال کرتے ہیں۔
 
 ## Observability اور operations
 
@@ -163,7 +163,7 @@ deployments کے دوران یا schedule پر bundled probe چلائیں:
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
-TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v2/status" npm run probe:tryit-proxy
+TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" TRYIT_PROXY_SAMPLE_PATH="/v1/status" npm run probe:tryit-proxy
 ```
 
 Environment knobs:

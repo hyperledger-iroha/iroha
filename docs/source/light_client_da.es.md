@@ -21,7 +21,7 @@ recuperando toda la carga útil.
 ## Punto final
 
 ```
-POST /v2/sumeragi/rbc/sample
+POST /v1/sumeragi/rbc/sample
 ```
 
 El punto final requiere un encabezado `X-API-Token` que coincida con uno de los configurados

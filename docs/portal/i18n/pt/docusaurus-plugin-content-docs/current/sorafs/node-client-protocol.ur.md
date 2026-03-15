@@ -68,7 +68,7 @@ Suporte de ferramentas:
 ## Terminais de intervalo de gatewayAs solicitações HTTP determinísticas dos gateways aceitam metadados de anúncio e espelho
 کرتی ہیں۔
 
-###`GET /v2/sorafs/storage/car/{manifest_id}`
+###`GET /v1/sorafs/storage/car/{manifest_id}`
 
 | Requisito | Detalhes |
 |------------|---------|
@@ -76,7 +76,7 @@ Suporte de ferramentas:
 | **Respostas** | `206` com `Content-Type: application/vnd.ipld.car`, `Content-Range` جو janela servida کو بیان کرتا ہے, `X-Sora-Chunk-Range` metadados, e cabeçalhos chunker/token کا echo۔ |
 | **Modos de falha** | intervalos desalinhados پر `416`, tokens ausentes/inválidos پر `401`, اور orçamentos de fluxo/byte excedem ہونے پر `429`۔ |
 
-###`GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+###`GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 Busca de pedaço único انہی cabeçalhos کے ساتھ mais resumo determinístico de pedaços ۔ novas tentativas
 یا downloads forenses کے لیے مفید جب CAR slices غیر ضروری ہوں۔
@@ -125,11 +125,11 @@ Erros de operadores/SDKs کو ملنے والی عام:
 ## CLI e ajudantes REST- `iroha app sorafs pin list|show`, `alias list`, e `replication list` registro de pinos
   Endpoints REST wrap کرتے ہیں اور evidência de auditoria کے لیے blocos de atestado کے ساتھ
   impressão JSON raw Norito کرتے ہیں۔
-- `iroha app sorafs storage pin` e `torii /v2/sorafs/pin/register` Norito ou JSON
+- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` Norito ou JSON
   manifestos کے ساتھ provas de alias opcionais اور sucessores aceitam کرتے ہیں؛ malformado
   provas de `400`, provas obsoletas de `503` de `Warning: 110`, e provas expiradas
   پر `412`۔
-- Pontos de extremidade REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
+- Pontos de extremidade REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   estruturas de atestado شامل کرتے ہیں تاکہ clientes cabeçalhos de bloco mais recentes کے
   Verificação de dados کر سکیں۔
 

@@ -137,8 +137,8 @@ JS4/JS7.
 
 ## قوائم قابلة للتكرار وترقيم الصفحات
 
-تعكس مساعدات ترقيم الصفحات بيئة العمل الخاصة بـ Python SDK لـ `/v2/accounts`،
-`/v2/domains`، `/v2/assets/definitions`، NFTs، الأرصدة، أصحاب الأصول، و
+تعكس مساعدات ترقيم الصفحات بيئة العمل الخاصة بـ Python SDK لـ `/v1/accounts`،
+`/v1/domains`، `/v1/assets/definitions`، NFTs، الأرصدة، أصحاب الأصول، و
 تاريخ معاملات الحساب.
 
 ```ts
@@ -186,7 +186,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) قم بتسليط الضوء على الموعد النهائي التالي لانتهاء الصلاحية (التحديث → السياسة
 → الشهادة) حتى تتمكن شارات واجهة المستخدم من تحذير المشغلين عند وجود بدل
 <24 ساعة متبقية. SDK
-يعكس مرشحات REST المكشوفة بواسطة `/v2/offline/allowances`:
+يعكس مرشحات REST المكشوفة بواسطة `/v1/offline/allowances`:
 `certificateExpiresBeforeMs/AfterMs`، `policyExpiresBeforeMs/AfterMs`،
 `verdictIdHex`، `attestationNonceHex`، `refreshBeforeMs/AfterMs`، و
 `requireVerdict` / `onlyMissingVerdict` القيم المنطقية. مجموعات غير صالحة (ل
@@ -267,8 +267,8 @@ abort.abort(); // closes the underlying WebSocket cleanly
 
 ## لقطات المستكشف وحمولات QR
 
-يوفر القياس عن بعد في Explorer مساعدين مكتوبين لـ `/v2/explorer/metrics` و
-نقاط النهاية `/v2/explorer/accounts/{account_id}/qr` حتى تتمكن لوحات المعلومات من إعادة تشغيل
+يوفر القياس عن بعد في Explorer مساعدين مكتوبين لـ `/v1/explorer/metrics` و
+نقاط النهاية `/v1/explorer/accounts/{account_id}/qr` حتى تتمكن لوحات المعلومات من إعادة تشغيل
 نفس اللقطات التي تعمل على تشغيل البوابة. `getExplorerMetrics()` يقوم بتطبيع ملف
 الحمولة وإرجاع `null` عند تعطيل المسار. إقرانها مع
 `getExplorerAccountQr()` عندما تحتاج إلى I105 (المفضل)/sora (ثاني أفضل) حرفية بالإضافة إلى المضمنة
@@ -373,7 +373,7 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 من حدود الأسطول الحالية.### توصيل اتصال WebSocket
 
 يقوم `ToriiClient.openConnectWebSocket()` بتجميع الملف الأساسي
-عنوان URL `/v2/connect/ws` (بما في ذلك `sid`، و`role`، ومعلمات الرمز المميز)، والترقيات
+عنوان URL `/v1/connect/ws` (بما في ذلك `sid`، و`role`، ومعلمات الرمز المميز)، والترقيات
 `http→ws` / `https→wss`، ويسلم عنوان URL النهائي إلى أي WebSocket
 التنفيذ الذي تقوم بتزويده. تقوم المتصفحات تلقائيًا بإعادة استخدام النطاق العالمي
 `WebSocket`. يجب على مناديب Node.js تمرير مُنشئ مثل `ws`:
@@ -453,7 +453,7 @@ async function dialWithTelemetry(client: ToriiClient) {
 المعيار `connect.queue_depth`، و`connect.queue_overflow_total`، و
 مقاييس `connect.queue_expired_total` المشار إليها في خريطة الطريق.
 
-## مراقبو البث ومؤشرات الأحداثيعرض `ToriiClient.streamEvents()` `/v2/events/sse` كمكرر غير متزامن مع تلقائي
+## مراقبو البث ومؤشرات الأحداثيعرض `ToriiClient.streamEvents()` `/v1/events/sse` كمكرر غير متزامن مع تلقائي
 إعادة المحاولة، لذلك يمكن لـ Node/Bun CLIs تتبع نشاط خط الأنابيب بنفس الطريقة التي تعمل بها Rust CLI.
 استمر في استخدام المؤشر `Last-Event-ID` بجانب عناصر دليل التشغيل الخاص بك حتى يتمكن المشغلون من
 استئناف الدفق دون تخطي الأحداث عند إعادة تشغيل العملية.
@@ -492,7 +492,7 @@ for await (const event of torii.streamEvents({
   يتم استقبال الإشارة قم بتمرير `STREAM_MAX_EVENTS=25` عندما تحتاج فقط إلى الأحداث القليلة الأولى
   لاختبار الدخان.
 - `ToriiClient.streamSumeragiStatus()` يعكس نفس الواجهة لـ
-  `/v2/sumeragi/status/sse` لذلك يمكن تفصيل القياس عن بعد المتفق عليه بشكل منفصل، و
+  `/v1/sumeragi/status/sse` لذلك يمكن تفصيل القياس عن بعد المتفق عليه بشكل منفصل، و
   يكرم المكرر `Last-Event-ID` بنفس الطريقة.
 - راجع `javascript/iroha_js/recipes/streaming.mjs` للتعرف على واجهة سطر الأوامر الجاهزة (استمرارية المؤشر،
   تجاوزات مرشح env-var وتسجيل `extractPipelineStatusKind`) المستخدمة في JS4
@@ -595,14 +595,14 @@ await torii.revokeSpaceDirectoryManifest(
 
 تتطلب خريطة طريق JS أيضًا أخذ عينات من التزام كتلة Roadrunner (RBC) حتى يتمكن المشغلون من القيام بذلك
 إثبات أن الكتلة التي جلبوها من خلال Sumeragi تتطابق مع أدلة القطعة التي قاموا بالتحقق منها.
-استخدم المساعدين المضمنين بدلاً من إنشاء الحمولات يدويًا:1. `getSumeragiRbcSessions()` المرايا `/v2/sumeragi/rbc/sessions`، و
+استخدم المساعدين المضمنين بدلاً من إنشاء الحمولات يدويًا:1. `getSumeragiRbcSessions()` المرايا `/v1/sumeragi/rbc/sessions`، و
    يقوم `findRbcSamplingCandidate()` بتحديد الجلسة الأولى التي تم تسليمها تلقائيًا باستخدام تجزئة الكتلة
    (تعود مجموعة التكامل إليها في أي وقت
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` غير محدد).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` يقوم بتسوية `{blockHash,height,view}`
    بالإضافة إلى تجاوزات `{count,seed,apiToken}` الاختيارية بحيث لا يتم أبدًا استخدام الأعداد السداسية أو الأعداد الصحيحة السالبة المشوهة
    الوصول إلى Torii.
-3. يقوم `sampleRbcChunks()` بنشر الطلب إلى `/v2/sumeragi/rbc/sample`، مع إرجاع بروفات القطع
+3. يقوم `sampleRbcChunks()` بنشر الطلب إلى `/v1/sumeragi/rbc/sample`، مع إرجاع بروفات القطع
    ومسارات Merkle (`samples[].chunkHex`، `chunkRoot`، `payloadHash`) التي يجب أرشفتها باستخدام
    بقية أدلة التبني الخاصة بك.
 4. يلتقط `getSumeragiRbcDelivered(height, view)` بيانات تعريف تسليم المجموعة حتى يتمكن المدققون من

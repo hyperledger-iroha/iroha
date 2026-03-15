@@ -85,7 +85,7 @@ Você pode usar o CARv1 + SHA-256 para obter mais informações (`Accept-Chunker
 |--------|--------|-----|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل, ويبث التقارير عبر `--json-out=-`, ويفرض ميثاق السجل عبر `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifesto قديم؛ Use `iroha app sorafs toolkit pack` para CAR/manifest e `--plan=-` para definir o valor do carro. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provedores de anúncios عبر خط أنابيب النشر والتحقق منها عبر `/v2/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provedores de anúncios عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
 | `sorafs_fetch` (desenvolvedor orquestrador) | ✅ مدعوم | يقرأ `chunk_fetch_specs` ويفهم حمولة قدرة `range` ويجمع إخراج CARv2. |
 | Luminárias para SDK (Rust/Go/TS) | ✅ مدعوم | `export_vectors`; Não se preocupe, não há necessidade de fazer isso. |
 | Gateway de gateway Torii | ✅ مدعوم | Use o `Accept-Chunker` e o `Content-Chunker` e o Bridge CARv1 para fazer o downgrade. |
@@ -93,7 +93,7 @@ Você pode usar o CARv1 + SHA-256 para obter mais informações (`Accept-Chunker
 طرح التليمترية:
 
 - **تليمترية جلب الـ chunks** — يصدر CLI الخاص بـ Iroha `sorafs toolkit pack` digests للـ chunk, وبيانات CAR, وجذور PoR Não se preocupe com isso.
-- **Anúncios de provedores** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ A solução é `/v2/sorafs/providers` (ou seja, `range`).
+- **Anúncios de provedores** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ A solução é `/v1/sorafs/providers` (ou seja, `range`).
 - **مراقبة الـ gateway** — على المشغلين الإبلاغ عن أزواج `Content-Chunker`/`Content-Digest` لاكتشاف أي خفض غير متوقع؛ ومن المتوقع أن ينخفض ​​استخدام الـ bridge إلى الصفر قبل الإيقاف.
 
 سياسة الإيقاف: بعد اعتماد ملف خلف, حدّد نافذة نشر مزدوجة (موثقة في المقترح) قبل وسم

@@ -99,7 +99,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    mənbə üçün konfiqurasiya snapshot:
 
    ```bash
-   curl -sS "${TORII_URL}/v2/configuration" \
+   curl -sS "${TORII_URL}/v1/configuration" \
      -H "Authorization: Bearer ${TOKEN}" | jq .
    ```
 
@@ -110,7 +110,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    daxil edilmiş `RepoGovernance` dəyərlərini yoxlayır. JSON cavablarını saxlayın
    `artifacts/finance/repo/<agreement>/agreements_after.json` altında; həmin dəyərlər
    `[settlement.repo]`-dən əldə edilir, ona görə də onlar ikinci dərəcəli şahid kimi çıxış edirlər.
-   Torii-in `/v2/configuration` şəkli kifayət deyil.
+   Torii-in `/v1/configuration` şəkli kifayət deyil.
 4. Hər iki artefaktı - TOML parçasını və Torii/CLI snapşotlarını - qutuda saxlayın
    idarəetmə sorğusu verməzdən əvvəl sübut paketi. Auditorlar bunu bacarmalıdırlar
    parçanı təkrar oxuyun, onun hashını yoxlayın və onu iş vaxtı görünüşü ilə əlaqələndirin.
@@ -146,10 +146,10 @@ auditorlar təkrar oxuyacaqlar.
 
 ### 2.4 Torii API səthləri
 
-- `GET /v2/repo/agreements` isteğe bağlı səhifələmə, filtrləmə ilə aktiv razılaşmaları qaytarır
+- `GET /v1/repo/agreements` isteğe bağlı səhifələmə, filtrləmə ilə aktiv razılaşmaları qaytarır
   (`filter={...}`), çeşidləmə və ünvan formatlaşdırma parametrləri. Bunu sürətli yoxlamalar üçün istifadə edin və ya
   xam JSON yükləri kifayət qədər olduqda idarə panelləri.
-- `POST /v2/repo/agreements/query` strukturlaşdırılmış sorğu zərfini qəbul edir (səhifələşdirmə, çeşidləmə,
+- `POST /v1/repo/agreements/query` strukturlaşdırılmış sorğu zərfini qəbul edir (səhifələşdirmə, çeşidləmə,
   `FilterExpr`, `fetch_size`).
 - JavaScript SDK indi `listRepoAgreements`, `queryRepoAgreements` və iteratoru ifşa edir
   köməkçilər belə ki, browser/Node.js alətləri Rust/Python ilə eyni tipli DTO-ları alır.
@@ -199,7 +199,7 @@ eligible_collateral = ["bond#wonderland", "note#wonderland"]
    İdarəetmə CLI-də `--notes` sahəsi) və tələb olunan təsdiqləri toplayın
    F1 üçün. İmzalanmış təsdiq paketini fraqment əlavə olunmuş halda saxlayın.
 3. Dəyişikliyi donanma üzrə yay: `[settlement.repo]`-i yeniləyin, hər birini yenidən başladın
-   node, sonra `GET /v2/configuration` şəklini çəkin (və ya
+   node, sonra `GET /v1/configuration` şəklini çəkin (və ya
    `ToriiClient.getConfiguration`) hər peer üçün tətbiq olunan dəyərləri sübut edir.
 4. `integration_tests/tests/repo.rs` plus-ı yenidən işə salın
    `repo_deterministic_lifecycle_proof_matches_fixture` və sonra qeydləri saxlayın
@@ -218,11 +218,11 @@ Norito/`iroha_config` santexnika indi həll edilmiş repo siyasətini ifşa edir
 yalnız təklif olunan TOML deyil, həmyaşıd üçün tətbiq olunan dəyərlər. Həll olunanı ələ keçirin
 hər buraxılışdan sonra konfiqurasiya və onun həzmi:
 
-1. Konfiqurasiyanı hər bir həmyaşıddan əldə edin (`GET /v2/configuration` və ya
+1. Konfiqurasiyanı hər bir həmyaşıddan əldə edin (`GET /v1/configuration` və ya
    `ToriiClient.getConfiguration`) və repo bəndini təcrid edin:
 
    ```bash
-   curl -s http://<torii-host>/v2/configuration \
+   curl -s http://<torii-host>/v1/configuration \
      | jq -cS '.settlement.repo' \
      > artifacts/finance/repo/<agreement-id>/config/repo_config_actual.json
    ```
@@ -286,7 +286,7 @@ matrix) səsvermə təyin edilməzdən əvvəl eyni artefaktları göndərməlid
   əsaslandırma.
 
 **Təsdiqdən sonrakı buraxılışlar**1. Təsdiqlənmiş `[settlement.repo]` konfiqurasiyasını tətbiq edin və hər nodu yenidən başladın (və ya yuvarlayın)
-   avtomatlaşdırmanız vasitəsilə). Dərhal `GET /v2/configuration` nömrəsinə zəng edin və arxivləşdirin
+   avtomatlaşdırmanız vasitəsilə). Dərhal `GET /v1/configuration` nömrəsinə zəng edin və arxivləşdirin
    node başına cavab, beləliklə, idarəetmə paketi hansı həmyaşıdların qəbul etdiyini göstərir
    dəyişdirin.【crates/iroha_torii/src/lib.rs:3225】
 2. Deterministik repo testlərini yenidən icra edin və təzə qeydləri əlavə edin və əlavə edin
@@ -467,17 +467,17 @@ yol xəritəsi **F1** üçtərəfli ssenari üçün GA-hazır sənədləri gönd
 İdarəetmə dəyişikliyi təsdiqlədikdən və `[settlement.repo]` bəndi işə salındıqdan sonra
 çoxluq, hər bir həmyaşıddan təsdiqlənmiş konfiqurasiya şəklini çəkin
 auditorlar təsdiq edilmiş dəyərlərin canlı olduğunu sübut edə bilərlər. Torii ifşa edir
-Bu məqsəd üçün `/v2/configuration` marşrutu və bütün SDK yerüstü köməkçiləri, məsələn
+Bu məqsəd üçün `/v1/configuration` marşrutu və bütün SDK yerüstü köməkçiləri, məsələn
 `ToriiClient.getConfiguration`, beləliklə, çəkmə iş axını masa skriptləri üçün işləyir,
 CI və ya manuel operator işləyir.【crates/iroha_torii/src/lib.rs:3225】【javascript/iroha_js/src/toriiClient.js:2115】【IrohaSwift/Sources/IrohaSwift/Toriift:68】
 
-1. Dərhal sonra hər həmyaşıd üçün `GET /v2/configuration` (və ya SDK köməkçisinə) zəng edin
+1. Dərhal sonra hər həmyaşıd üçün `GET /v1/configuration` (və ya SDK köməkçisinə) zəng edin
    yayılması. Tam JSON altında davam edin
    `artifacts/finance/repo/<agreement>/config/peers/<peer-id>.json` və qeyd edin
    `config/config_snapshot_index.md`-də blok hündürlüyü/klaster vaxt damğası.
    ```bash
    mkdir -p artifacts/finance/repo/<slug>/config/peers
-   curl -fsSL https://peer01.example/v2/configuration \
+   curl -fsSL https://peer01.example/v1/configuration \
      | jq '.' \
      > artifacts/finance/repo/<slug>/config/peers/peer01.json
    ```
@@ -559,7 +559,7 @@ artifacts/finance/repo/<agreement-id>/
   kəməri yenidən işə salmadan.
 - `config/settlement_repo.toml` `[settlement.repo]` parçasını ehtiva edir
   repo icra edildikdə aktiv olan (saç kəsimi, əvəzetmə matrisi).
-- `config/peers/*.json` hər bir həmyaşıd üçün `/v2/configuration` anlıq görüntüləri çəkir,
+- `config/peers/*.json` hər bir həmyaşıd üçün `/v1/configuration` anlıq görüntüləri çəkir,
   mərhələli TOML və həmyaşıdların hesabatı arasındakı iş vaxtı dəyərləri arasındakı dövrəni bağlamaq
   Torii üzərində.
 
@@ -715,7 +715,7 @@ və ya siyasət dəyişikliyi idarəetməyə doğru gedir:
    həll edin, tətbiq olunacaq `[settlement.repo]` TOML blokunu boşaltın və
    müvafiq `AccountEvent::Repo(*)` SSE lentini əks etdirin
    `artifacts/finance/repo/<slug>/events/repo-events.ndjson`. GAR-dan sonra
-   keçir, hər bir həmyaşıd üçün `/v2/configuration` anlıq görüntüləri çəkin (§2.9) və onları yadda saxlayın
+   keçir, hər bir həmyaşıd üçün `/v1/configuration` anlıq görüntüləri çəkin (§2.9) və onları yadda saxlayın
    `config/peers/` altında, beləliklə idarəetmə paketi buraxılışın uğurlu olduğunu sübut edir.
 4. **Dəlil manifestini yaradın.**
    ```bash

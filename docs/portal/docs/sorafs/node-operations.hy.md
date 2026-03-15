@@ -43,7 +43,7 @@ translator: machine-google-reviewed
   ```
 
 - Համոզվեք, որ Torii գործընթացն ունի կարդալու/գրելու մուտք դեպի `data_dir`:
-- Հաստատեք, որ հանգույցը գովազդում է ակնկալվող հզորությունը `GET /v2/sorafs/capacity/state`-ի միջոցով, երբ հայտարարագիրը գրանցվի:
+- Հաստատեք, որ հանգույցը գովազդում է ակնկալվող հզորությունը `GET /v1/sorafs/capacity/state`-ի միջոցով, երբ հայտարարագիրը գրանցվի:
 - Երբ հարթեցումը միացված է, վահանակները ցուցադրում են ինչպես հում, այնպես էլ հարթեցված GiB·hour/PoR հաշվիչները՝ կետային արժեքների հետ մեկտեղ ընդգծելու համար առանց ցնցումների միտումները:
 
 ### CLI Dry Run (ըստ ցանկության)
@@ -82,8 +82,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
 Երբ Torii-ը ուղիղ եթերում է, դուք կարող եք առբերել նույն արտեֆակտները HTTP-ի միջոցով.
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Երկու վերջնակետերն էլ սպասարկվում են ներկառուցված պահեստավորման աշխատողի կողմից, ուստի CLI ծխի թեստերը և դարպասի զոնդերը մնում են համաժամանակյա։【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1
@@ -94,7 +94,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Ներկայացրե՛ք մանիֆեստը base64 կոդավորմամբ.
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -103,7 +103,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 3. Վերցրեք ամրացված տվյալները.
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -119,7 +119,7 @@ curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 1. Ամրացրեք առնվազն մեկ մանիֆեստ ինչպես վերևում:
 2. Վերագործարկեք Torii գործընթացը (կամ ամբողջ հանգույցը):
 3. Կրկին ներկայացրեք առբերման հարցումը: Օգտակար բեռը դեռ պետք է վերականգնվի, և վերադարձված ամփոփումը պետք է համապատասխանի նախնական վերագործարկման արժեքին:
-4. Ստուգեք `GET /v2/sorafs/storage/state`-ը՝ հաստատելու համար, որ `bytes_used`-ն արտացոլում է վերագործարկումից հետո պահպանվող դրսևորումները:
+4. Ստուգեք `GET /v1/sorafs/storage/state`-ը՝ հաստատելու համար, որ `bytes_used`-ն արտացոլում է վերագործարկումից հետո պահպանվող դրսևորումները:
 
 ## 4. Քվոտայի մերժման թեստ
 
@@ -152,7 +152,7 @@ GC CLI-ն միտումնավոր է միայն կարդալու համար: Օգ
 2. Պահանջել PoR նմուշ.
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -175,7 +175,7 @@ GC CLI-ն միտումնավոր է միայն կարդալու համար: Օգ
 - Վահանակները պետք է հետևեն.
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` և `torii_sorafs_storage_fetch_inflight`
-  - PoR-ի հաջողության/ձախողման հաշվիչները հայտնվել են `/v2/sorafs/capacity/state`-ի միջոցով
+  - PoR-ի հաջողության/ձախողման հաշվիչները հայտնվել են `/v1/sorafs/capacity/state`-ի միջոցով
   - Կարգավորման հրապարակման փորձերը `sorafs_node_deal_publish_total{result=success|failure}`-ի միջոցով
 
 Այս զորավարժություններին հետևելը երաշխավորում է, որ ներկառուցված պահեստի աշխատողը կարող է կուլ տալ տվյալներ, գոյատևել վերագործարկումից, հարգել կազմաձևված քվոտաները և առաջացնել որոշիչ PoR ապացույցներ, նախքան հանգույցը գովազդում է հզորությունը ավելի լայն ցանցում:

@@ -1293,12 +1293,12 @@ async fn connect_endpoints_hidden_when_disabled() {
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    // /v2/connect/ws should be 404 when disabled
+    // /v1/connect/ws should be 404 when disabled
     let resp = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/connect/ws?sid=AA&role=app"))
+                .uri(Uri::from_static("/v1/connect/ws?sid=AA&role=app"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1306,11 +1306,11 @@ async fn connect_endpoints_hidden_when_disabled() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
-    // /v2/connect/status should be 404 when disabled
+    // /v1/connect/status should be 404 when disabled
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/connect/status"))
+                .uri(Uri::from_static("/v1/connect/status"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1328,7 +1328,7 @@ async fn connect_status_present_when_enabled() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/connect/status"))
+                .uri(Uri::from_static("/v1/connect/status"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1379,7 +1379,7 @@ async fn connect_status_forces_unknown_relay_strategy_to_local_only() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/connect/status"))
+                .uri(Uri::from_static("/v1/connect/status"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1439,7 +1439,7 @@ async fn connect_status_normalizes_relay_strategy_aliases() {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -1506,7 +1506,7 @@ async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -1578,7 +1578,7 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -1649,7 +1649,7 @@ async fn connect_status_reports_unknown_strategy_as_local_only_with_p2p_attached
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -1726,7 +1726,7 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body.clone()))
                 .unwrap(),
@@ -1745,7 +1745,7 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .expect("sid present")
         .to_owned();
 
-    let delete_uri = format!("/v2/connect/session/{sid}");
+    let delete_uri = format!("/v1/connect/session/{sid}");
     let delete_resp = app
         .clone()
         .oneshot(
@@ -1808,7 +1808,7 @@ async fn connect_session_delete_rejects_ws_attach() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -1832,7 +1832,7 @@ async fn connect_session_delete_rejects_ws_attach() {
         .expect("token_app");
 
     // Delete the session through REST and ensure it reports success.
-    let delete_uri = format!("/v2/connect/session/{sid}");
+    let delete_uri = format!("/v1/connect/session/{sid}");
     let delete_resp = app2
         .clone()
         .oneshot(
@@ -1847,7 +1847,7 @@ async fn connect_session_delete_rejects_ws_attach() {
     assert_eq!(delete_resp.status(), StatusCode::NO_CONTENT);
 
     // Attempt to attach over WS using the stale token; expect 401.
-    let url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
     request.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -1900,7 +1900,7 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -1921,7 +1921,7 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
         .expect("token_app");
 
     // Attempt WS connect using the provided sid/token
-    let url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
     request.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -1970,7 +1970,7 @@ async fn connect_ws_accepts_protocol_token() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -1990,7 +1990,7 @@ async fn connect_ws_accepts_protocol_token() {
         .and_then(|x| x.as_str())
         .expect("token_app");
 
-    let url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
     let encoded = B64.encode(token_app.as_bytes());
     request.headers_mut().insert(
@@ -2043,7 +2043,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -2068,7 +2068,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     sid_bytes.copy_from_slice(&sid_vec);
 
     // Attach as app, then send a mismatched direction (WalletToApp).
-    let url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut request = url.into_client_request().expect("ws request");
     request.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -2138,7 +2138,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -2205,7 +2205,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -2234,7 +2234,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     sid_bytes.copy_from_slice(&sid_vec);
 
     // Connect app role.
-    let app_url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -2248,7 +2248,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     assert_eq!(app_resp.status(), StatusCode::SWITCHING_PROTOCOLS);
 
     // Connect wallet role.
-    let wallet_url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=wallet");
+    let wallet_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=wallet");
     let mut wallet_req = wallet_url.into_client_request().expect("wallet ws request");
     wallet_req.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -2338,7 +2338,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     let status = app2
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v2/connect/status"))
+                .uri(Uri::from_static("/v1/connect/status"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -2403,7 +2403,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -2434,7 +2434,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -2458,7 +2458,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     }
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
 
-    let app_url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -2495,7 +2495,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -2581,7 +2581,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -2605,7 +2605,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     let sid_vec = B64.decode(sid).expect("decode sid");
     sid_bytes.copy_from_slice(&sid_vec);
 
-    let app_url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -2642,7 +2642,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -2726,7 +2726,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -2757,7 +2757,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -2781,7 +2781,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     }
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
 
-    let app_url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -2818,7 +2818,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -2900,7 +2900,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(Uri::from_static("/v2/connect/session"))
+                .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
@@ -2931,7 +2931,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -2955,7 +2955,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     }
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
 
-    let app_url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app");
+    let app_url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app");
     let mut app_req = app_url.into_client_request().expect("app ws request");
     app_req.headers_mut().insert(
         tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
@@ -2992,7 +2992,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(Uri::from_static("/v2/connect/status"))
+                    .uri(Uri::from_static("/v1/connect/status"))
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -3057,7 +3057,7 @@ async fn connect_ws_rejects_query_token() {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
     let sid = B64.encode([0x72u8; 32]);
-    let url = format!("ws://{addr}/v2/connect/ws?sid={sid}&role=app&token=deadbeef");
+    let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token=deadbeef");
     let err = tokio_tungstenite::connect_async(&url)
         .await
         .expect_err("ws handshake should reject query token");
@@ -3089,7 +3089,7 @@ async fn connect_ws_handshake_fails_when_disabled() {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     // Attempt WS connect directly; expect failure
     let url = format!(
-        "ws://{}/v2/connect/ws?sid={}&role=app",
+        "ws://{}/v1/connect/ws?sid={}&role=app",
         addr, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     );
     let res = tokio_tungstenite::connect_async(&url).await;

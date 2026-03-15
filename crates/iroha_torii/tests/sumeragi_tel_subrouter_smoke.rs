@@ -54,10 +54,10 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
     let app = torii.api_router_for_tests();
 
     for uri in [
-        "/v2/sumeragi/pacemaker",
-        "/v2/sumeragi/rbc",
-        "/v2/sumeragi/rbc/delivered/0/0",
-        "/v2/sumeragi/phases",
+        "/v1/sumeragi/pacemaker",
+        "/v1/sumeragi/rbc",
+        "/v1/sumeragi/rbc/delivered/0/0",
+        "/v1/sumeragi/phases",
     ] {
         let resp = app
             .clone()

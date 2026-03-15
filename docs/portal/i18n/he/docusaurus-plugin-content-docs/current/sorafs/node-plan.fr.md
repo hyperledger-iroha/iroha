@@ -61,7 +61,7 @@ La plomberie runtime relie les interactions PoR via `sorafs_node::por` : le trac
 - Utiliser le stack Axum de Torii avec des payloads `norito::json`.
 - Ajouter des schémas Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).
 
-- ✅ `/v2/sorafs/por/ingestion/{manifest_digest_hex}` לחשוף את התחזוקה של ה-profondeur du backlog ainsi que l'époque/échéance la plus ancienne et les timestamps de succès/échec les plus récents par ספק, דרך `sorafs_node::NodeHandle::por_ingestion_status`, et `sorafs_node::NodeHandle::por_ingestion_status`, et I00000180X gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour les לוחות מחוונים.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【ארגזים/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` לחשוף את התחזוקה של ה-profondeur du backlog ainsi que l'époque/échéance la plus ancienne et les timestamps de succès/échec les plus récents par ספק, דרך `sorafs_node::NodeHandle::por_ingestion_status`, et `sorafs_node::NodeHandle::por_ingestion_status`, et I00000180X gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour les לוחות מחוונים.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【ארגזים/iroha_telemetry/src/metrics.rs:5390】
 
 ### ד. מתזמן ויישום מכסות| טאצ'ה | פרטים |
 |------|--------|

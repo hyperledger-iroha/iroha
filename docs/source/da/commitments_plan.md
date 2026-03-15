@@ -15,7 +15,7 @@ governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
   state without consulting off-ledger storage.
 - Provide deterministic membership proofs so light clients can verify that a
   manifest hash was finalised in a given block.
-- Expose Torii queries (`/v2/da/commitments/*`) and proofs that let relays,
+- Expose Torii queries (`/v1/da/commitments/*`) and proofs that let relays,
   SDKs, and governance automation audit availability without replaying every
   block.
 - Keep the existing `SignedBlockWire` envelope canonical by threading the new
@@ -30,7 +30,7 @@ governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
 3. **Persistence/indexes** so the WSV can answer commitment queries quickly
    (`iroha_core/src/wsv/mod.rs`).
 4. **Torii RPC additions** for list/query/prove endpoints under
-   `/v2/da/commitments`.
+   `/v1/da/commitments`.
 5. **Integration tests + fixtures** validating the wire layout and proof flow in
    `integration_tests/tests/da/commitments.rs`.
 
@@ -119,7 +119,7 @@ until Torii threads real bundles through.
 Block assembly and `BlockCreated` ingestion re-validate each commitment against
 the lane catalog: Merkle lanes reject stray KZG commitments, KZG lanes require a
 non-zero KZG commitment and non-zero `chunk_root`, and unknown lanes are
-dropped. Torii’s `/v2/da/commitments/verify` endpoint mirrors the same guard,
+dropped. Torii’s `/v1/da/commitments/verify` endpoint mirrors the same guard,
 and ingest now threads the deterministic KZG commitment into every
 `kzg_bls12_381` record so policy-compliant bundles reach block assembly.
 
@@ -140,9 +140,9 @@ Torii exposes three endpoints:
 
 | Route | Method | Payload | Notes |
 |-------|--------|---------|-------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
 
 All payloads live under `iroha_data_model::da::commitment`. Torii routers mount
 the handlers next to the existing DA ingest endpoints to reuse token/mTLS

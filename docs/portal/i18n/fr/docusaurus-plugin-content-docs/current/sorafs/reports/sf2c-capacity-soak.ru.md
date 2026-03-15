@@ -46,7 +46,7 @@ Les tests s'effectuent pendant une seconde sur le ordinateur de bureau standard 
 Torii permet d'obtenir des instantanés des fournisseurs de crédit dans les registres de frais, par exemple
 Les tableaux de bord comprennent la porte de l'équilibrage national et les pénalités :
 
-- REST : `GET /v2/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
+- REST : `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
   которые отражают поля ledger, проверенные в trempage teste. См.
   `crates/iroha_torii/src/sorafs/registry.rs`.
 - Importer Grafana : `dashboards/grafana/sorafs_capacity_penalties.json` строит

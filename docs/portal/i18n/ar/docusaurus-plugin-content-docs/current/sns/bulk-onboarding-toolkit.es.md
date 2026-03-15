@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -127,10 +127,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- يقوم المساعد بإصدار رقم `POST /v2/sns/registrations` للطلب والإيقاف قبل ذلك
+```- يقوم المساعد بإصدار رقم `POST /v1/sns/registrations` للطلب والإيقاف قبل ذلك
   خطأ تمهيدي HTTP. يتم توصيل الإجابات إلى مسار السجل مثل السجلات
   ندجسون.
-- `--poll-status` قم بزيارة مستشار `/v2/sns/registrations/{selector}` بعد ذلك
+- `--poll-status` قم بزيارة مستشار `/v1/sns/registrations/{selector}` بعد ذلك
   كل إرسال (يحتوي على `--poll-attempts`، الافتراضي 5) لتأكيد التسجيل
   مرئي. Proporcione `--suffix-map` (JSON de `suffix_id` عبارة عن "لاحقة")
   لكي تشتق الأدوات حرفيًا `{label}.{suffix}` من أجل إجراء الاستقصاء.

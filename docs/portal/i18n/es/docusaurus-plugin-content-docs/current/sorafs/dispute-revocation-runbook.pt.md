@@ -26,7 +26,7 @@ Este runbook guía operadores de gobierno na abertura de disputas de capacidade 
 ## 1. Avaliar o incidente
 
 - **Condicoes de gatilho:** detección de violación de SLA (uptime/falha de PoR), déficit de replicación o divergencia de cobranca.
-- **Confirmar telemetría:** capturar instantáneas de `/v2/sorafs/capacity/state` e `/v2/sorafs/capacity/telemetry` del proveedor.
+- **Confirmar telemetría:** capturar instantáneas de `/v1/sorafs/capacity/state` e `/v1/sorafs/capacity/telemetry` del proveedor.
 - **Notificar partes interesadas:** Equipo de Almacenamiento (operacoes do provedor), Consejo de Gobernanza (orgao decisor), Observabilidad (atualizacoes de Dashboards).
 
 ## 2. Preparar o paquete de evidencias1. Colete artefatos brutos (telemetría JSON, registros de CLI, notas de auditoria).
@@ -72,7 +72,7 @@ Este runbook guía operadores de gobierno na abertura de disputas de capacidade 
    ```
 
 3. Revise `dispute_summary.json` (confirme tipo, digest das evidencias e timestamps).
-4. Envie o JSON da requisicao para Torii `/v2/sorafs/capacity/dispute` vía fila de transacciones de gobierno. Captura o valor de respuesta `dispute_id_hex`; ele ancora as acoes de revogacao posteriores e os relatorios de auditoria.
+4. Envie o JSON da requisicao para Torii `/v1/sorafs/capacity/dispute` vía fila de transacciones de gobierno. Captura o valor de respuesta `dispute_id_hex`; ele ancora as acoes de revogacao posteriores e os relatorios de auditoria.
 
 ## 4. Evacuação e revocação1. **Janela de graca:** notifique o provedor sobre a revogacao iminente; permit a evacuacao dos dados fixados quando a politica permitir.
 2. **Gere `ProviderAdmissionRevocationV1`:**

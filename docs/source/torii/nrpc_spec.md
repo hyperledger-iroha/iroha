@@ -15,7 +15,7 @@ Related roadmap items: NRPC-1 (spec), NRPC-2 (rollout), NRPC-3 (SDK adoption)
 ### 1. Transport Overview
 | Property | Requirement |
 |----------|-------------|
-| Endpoint | Same host/port as `/v2/pipeline`; HTTPS/TLS mandatory. |
+| Endpoint | Same host/port as `/v1/pipeline`; HTTPS/TLS mandatory. |
 | HTTP versions | 1.1 and 2.0 supported; ALPN `h2` preferred when available. |
 | Media Type | Requests *must* set `Content-Type: application/x-norito`; responses honour `Accept` negotiation (`crates/iroha_torii/src/utils.rs:63`). |
 | Auth | Standard `Authorization: Bearer …` or Torii `X-API-Token`; mTLS optional per rollout stage (see NRPC-2A). |
@@ -98,14 +98,14 @@ Clients must surface both HTTP status and `X-Iroha-Error-Code` to the caller. SD
   3. When a pre-auth rejection occurs, drop the offending connection immediately and retry on JSON only after the cooldown elapses; otherwise the ban timer (`torii.preauth_ban_duration_ms`) will extend the outage.
   4. Report pool depth and rejection counters in client telemetry so operators can reconcile them with `torii_active_connections_total`.
 
-### 8. Dual-Stack Behaviour & `/v2/pipeline` Coexistence
+### 8. Dual-Stack Behaviour & `/v1/pipeline` Coexistence
 - `/rpc/capabilities` and `/rpc/ping` advertise the live Norito settings (`enabled`, `require_mtls`, rollout `stage`, and the canary allowlist size) pulled straight from `NoritoRpcTransport` (`crates/iroha_torii/src/lib.rs:1042`, `crates/iroha_config/src/parameters/actual.rs:1876`). Clients MUST call `/rpc/capabilities` during startup and before flipping transports.
 - Gate enforcement happens before routing: `evaluate_norito_rpc_gate` blocks requests when `enabled = false`, `stage = disabled`, or the supplied API token is not listed in the canary allowlist, returning `norito_rpc_disabled` or `norito_rpc_canary_denied` envelopes (`crates/iroha_torii/src/lib.rs:1058`, `crates/iroha_torii/src/lib.rs:1090`, `crates/iroha_torii/src/lib.rs:7130`). SDKs must treat these as soft failures and fall back to JSON immediately.
 - Negotiation rules:
   1. Send `/rpc/capabilities`; if `enabled = false` or `stage = "disabled"`, pin the JSON transport until the next poll interval.
   2. When `stage = "canary"`, include an `X-API-Token` that appears in `torii.transport.norito_rpc.allowed_clients`. Missing or stale tokens MUST downgrade the connection and emit a warning.
   3. Honour the `require_mtls` flag. If Torii advertises mTLS but the client cannot supply certificates, stay on JSON.
-  4. Even after switching to Norito, keep the JSON `/v2/pipeline` path hot for retries. Any `415 unsupported_layout`, `norito_rpc_disabled`, or TLS failure requires downgrading the affected request and recording the failure for operators (the rollout plan and canary runbook describe the evidence bundle: `docs/source/torii/norito_rpc_rollout_plan.md`, `docs/source/runbooks/torii_norito_rpc_canary.md`).
+  4. Even after switching to Norito, keep the JSON `/v1/pipeline` path hot for retries. Any `415 unsupported_layout`, `norito_rpc_disabled`, or TLS failure requires downgrading the affected request and recording the failure for operators (the rollout plan and canary runbook describe the evidence bundle: `docs/source/torii/norito_rpc_rollout_plan.md`, `docs/source/runbooks/torii_norito_rpc_canary.md`).
 
 ### 9. Dual-Stack Rollout Review (Scheduled)
 - **Review slot**: 2025-06-19 15:00 UTC (Torii Platform weekly sync).  

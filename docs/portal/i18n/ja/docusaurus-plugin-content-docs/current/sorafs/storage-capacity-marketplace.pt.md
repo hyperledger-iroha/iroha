@@ -63,15 +63,15 @@ OS は、最初のリリースで Exigidos をリリースし、Trilhas acionave
 - `ReplicationOrderV1` Vincula は、冗長性、SLA の制限、および属性の管理に関する属性を示しています。 validadores impoem は canonicos を処理し、Torii の期限までに unicos とプロバイダーを制限し、レジストリを命令します。 [crates/sorafs_manifest/src/capacity.rs:301]
 - `CapacityTelemetryV1` は、エポカのスナップショット (GiB 宣言対ユーティリティ、レプリカの管理、稼働時間のパーセント/PoR) を分配し、料金を支払います。 0 ～ 100% の制限を管理します。 [crates/sorafs_manifest/src/capacity.rs:476]
 - ヘルパー比較 (`CapacityMetadataEntry`、`PricingScheduleV1`、レーン/アトリビューカオ/SLA の検証) ダウンストリームの CI ツールのエラー再利用レポートを実行します。 [crates/sorafs_manifest/src/capacity.rs:230]
-- `PinProviderRegistry` は、`/v2/sorafs/capacity/state` 経由でオンチェーンでスナップショットを公開し、プロバイダーとエントラダを組み合わせて、Norito JSON で料金台帳を決定します。 [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
+- `PinProviderRegistry` は、`/v1/sorafs/capacity/state` 経由でオンチェーンでスナップショットを公開し、プロバイダーとエントラダを組み合わせて、Norito JSON で料金台帳を決定します。 [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
 - 正規の認証、重複の検出、ポーレーンの制限、レプリカの保護、CI なしでのテレメトリの範囲のチェックの有効性を確認するための強制執行。 [crates/sorafs_manifest/src/capacity.rs:792]
-- オペラドールのツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ペイロードの合法的な仕様を変換 Norito canonicos、BLOB Base64 電子履歴の JSON パラメタ オペラドールが `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry` ローカルで有効なレプリカのフィクスチャを準備します。 [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) および `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 経由で参照できるフィクスチャ。
+- オペラドールのツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ペイロードの合法的な仕様を変換 Norito canonicos、BLOB Base64 電子履歴の JSON パラメタ オペラドールが `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` ローカルで有効なレプリカのフィクスチャを準備します。 [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) および `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 経由で参照できるフィクスチャ。
 
 ### 2. 計画管理の統合
 
 |タレファ |レスポンス |メモ |
 |------|-------|------|
-|追加のハンドラー Torii `/v2/sorafs/capacity/declare`、`/v2/sorafs/capacity/telemetry`、`/v2/sorafs/capacity/orders` com ペイロード Norito JSON。 | Torii チーム | Espelhar 論理学は検証します。 reutilizar ヘルパー Norito JSON。 |
+|追加のハンドラー Torii `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry`、`/v1/sorafs/capacity/orders` com ペイロード Norito JSON。 | Torii チーム | Espelhar 論理学は検証します。 reutilizar ヘルパー Norito JSON。 |
 |プロパガーのスナップショット `CapacityDeclarationV1` は、メタデータ、スコアボード、オーケストレーター、プラノス、フェッチ、ゲートウェイを実行します。 |ツーリング WG / オーケストレーター チーム | Estender `provider_metadata` com References de Capacidade para que o スコアリングのマルチソース休憩時間は、ポーレーンを制限します。 |
 |オーケストレーター/ゲートウェイのクライアントのレプリカの順序や、フェールオーバーのヒントなどのオリエンタル アトリビュートが提供されます。 |ネットワーキング TL / ゲートウェイ チーム |おお、ビルダーはスコアボードをコンサム・オーデンス・アッシナダス・ペラ・ガバナンカにする。 |
 |ツール CLI: estender `sorafs_cli` com `capacity declare`、`capacity telemetry`、`capacity orders import`。 |ツーリングWG | Fornecer JSON 決定論 + スコアボードの説明。 |
@@ -92,7 +92,7 @@ OS は、最初のリリースで Exigidos をリリースし、Trilhas acionave
 |決済のパイプライン: コンバーターテレメトリア + データベースとデノミナドと XOR のレプリカ、政府機関のレジストラと台帳を作成します。 |財務/保管チーム | Conectar はディール エンジン / 財務省輸出を担当します。 |
 |メーターを実行するためのダッシュボード/アラートのエクスポート (取り込みのバックログ、テレメトリの古さ)。 |可観測性 | SF-6/SF-7 の Grafana 参照のエステル パック。 |
 
-- Torii アゴラ エキスポ `/v2/sorafs/capacity/telemetry` e `/v2/sorafs/capacity/state` (JSON + Norito) パラ ケ オペラドールのスナップショット デ テレメトリア ポート エポカ電子検査装置の回復と元帳のカノニコ パラ オーディトリア エンパコタメント証拠。 [crates/iroha_torii/src/sorafs/api.rs:268] [crates/iroha_torii/src/sorafs/api.rs:816]
+- Torii アゴラ エキスポ `/v1/sorafs/capacity/telemetry` e `/v1/sorafs/capacity/state` (JSON + Norito) パラ ケ オペラドールのスナップショット デ テレメトリア ポート エポカ電子検査装置の回復と元帳のカノニコ パラ オーディトリア エンパコタメント証拠。 [crates/iroha_torii/src/sorafs/api.rs:268] [crates/iroha_torii/src/sorafs/api.rs:816]
 - Integracao `PinProviderRegistry` は、エンドポイントのアクセス許可を保証します。 CLI のヘルパー (`sorafs_cli capacity telemetry --from-file telemetry.json`) は、自動化されたコンポーネントのハッシュ決定性と解決策を実行する一部の公開テレメトリを検証します。
 - 計測製品のスナップショット `CapacityTelemetrySnapshot` 修正スナップショット `metering`、エクスポート Prometheus ボード Grafana インポート前のスナップショット `docs/source/grafana_sorafs_metering.json` 装備実際の GiB 時間の累積監視、料金 nano-SORA プロジェクトの SLA コンプライアンス。 [crates/iroha_torii/src/routing.rs:5143] [docs/source/grafana_sorafs_metering.json:1]
 - `smoothed_gib_hours` と `smoothed_por_success_bps` を含むスナップショットと EMA コントラ コンタドール ブルートス アメリカドス ペラ ガバナンカ ペイアウトを含むスムージングとメーターの比較。 [crates/sorafs_node/src/metering.rs:401]
@@ -167,7 +167,7 @@ OS は、最初のリリースで Exigidos をリリースし、Trilhas acionave
 ### プロバイダーのオンボーディングと終了スモーク テスト
 - `sorafs_manifest_stub capacity ...` のデクララソン/テレメトリア コムのアートファトを再生成します。
   送信前に CLI をテストします (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
-- Torii (`/v2/sorafs/capacity/declare`) 経由のサブメタと `/v2/sorafs/capacity/state` のキャプチャ
+- Torii (`/v1/sorafs/capacity/declare`) 経由のサブメタと `/v1/sorafs/capacity/state` のキャプチャ
   スクリーンショットは Grafana です。 Siga o fluxo de Saida em `docs/source/sorafs/capacity_onboarding_runbook.md`。
 - 調停に関する成果物や成果物を保管する
   `docs/examples/sorafs_capacity_marketplace_validation/`。

@@ -77,7 +77,7 @@ The SDK bundles specialised flows that mirror the CLI:
 - **Governance helpers** – `recipes/governance.mjs` demonstrates staging
   proposals and ballots with the `governance` instruction builders.
 - **ISO bridge** – `recipes/iso_bridge.mjs` shows how to submit `pacs.008` and
-  poll transfer status using the `/v2/iso20022` endpoints.
+  poll transfer status using the `/v1/iso20022` endpoints.
 - **SoraFS & triggers** – Pagination helpers under `src/toriiClient.js` expose
   typed iterators for contracts, assets, triggers, and SoraFS providers.
 

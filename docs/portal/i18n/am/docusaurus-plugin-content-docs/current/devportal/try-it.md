@@ -177,7 +177,7 @@ DOCS-1b የመንገድ ካርታ በር።
 1. እንደ `fixtures/norito_rpc/transfer_asset.norito` አይነት መሳሪያ ይምረጡ። እነዚህ
    ፋይሎች ጥሬ Norito ፖስታዎች ናቸው; አታድርግ ** base64-encode እነሱን.
 2. በSwagger ወይም RapiDoc ውስጥ የNRPC የመጨረሻ ነጥብ ያግኙ (ለምሳሌ፡
-   `POST /v2/pipeline/submit`) እና **የይዘት አይነት** መራጩን ወደ
+   `POST /v1/pipeline/submit`) እና **የይዘት አይነት** መራጩን ወደ
    `application/x-norito`.
 3. የጥያቄ አካል አርታዒውን ወደ ** ሁለትዮሽ ** (የSwagger "ፋይል" ሁነታ ወይም) ቀይር
    የRapiDoc "ሁለትዮሽ/ፋይል" መራጭ) እና የ`.norito` ፋይልን ይስቀሉ። መግብር
@@ -205,13 +205,13 @@ curl \
   -H "Content-Type: application/x-norito" \
   -H "Authorization: ${TOKEN}" \
   --data-binary @fixtures/norito_rpc/transfer_asset.norito \
-  "${TORII}/v2/pipeline/submit"
+  "${TORII}/v1/pipeline/submit"
 ```
 
 በ`transaction_fixtures.manifest.json` ውስጥ ለተዘረዘረው ማንኛውም ግቤት እቃውን ይቀይሩት።
 ወይም የእራስዎን የክፍያ ጭነት በ `cargo xtask norito-rpc-fixtures`. መቼ Torii
 በካናሪ ሁነታ ላይ ነው `curl` በሙከራ ፕሮክሲው ላይ ማመልከት ይችላሉ
-(`https://docs.sora.example/proxy/v2/pipeline/submit`) ተመሳሳይ ልምምድ ለማድረግ
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) ተመሳሳይ ልምምድ ለማድረግ
 የፖርታል መግብሮች የሚጠቀሙባቸው መሠረተ ልማት.
 
 ## ታዛቢነት እና ተግባራትእያንዳንዱ ጥያቄ አንድ ጊዜ በዘዴ፣ በዱካ፣ በመነሻ፣ በከፍታ ሁኔታ እና በ
@@ -227,7 +227,7 @@ curl \
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
-TRYIT_PROXY_SAMPLE_PATH="/v2/status" \
+TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 

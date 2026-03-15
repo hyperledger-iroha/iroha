@@ -46,7 +46,7 @@ translation_last_reviewed: 2026-02-07
 | مجلس الحوكمة | Он был назначен стюардами из Национальной футбольной ассоциации и стюардов из Нью-Йорка. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, установите флажок `sns governance charter submit`. | رئيس المجلس + متعقب جدول اعمال الحوكمة. |
 | مجلس опекун | Мягкий/жесткий режим, Нюрнберг, Уайт, 72 часа. | تذاكر Guardian الصادرة عبر `sns governance freeze`, ومانيفستات التجاوز المسجلة تحت `artifacts/sns/guardian/*`. | Дежурный опекун (<= 15 минут подтверждения). |
 | стюарды Он был назначен президентом Нью-Йорка, а затем и президентом США. Нэнси Бэнла. | Стюард-стюард في `SuffixPolicyV1`, Билл Мёртвуд-Лолле, стюард-стюард المخزنة بجانب المذكرات التنظيمية. | Его зовут стюард + PagerDuty и он работает стюардом. |
-| عمليات المسجل والفوترة | Установите `/v2/sns/*`, установите флажок, установите флажок, установите флажок Интерфейс командной строки. | Интерфейс API ([`registrar-api.md`](./registrar-api.md)), версия `sns_registrar_status_total`, возможность изменения конфигурации `artifacts/sns/payments/*`. | Он был создан в 2007 году. |
+| عمليات المسجل والفوترة | Установите `/v1/sns/*`, установите флажок, установите флажок, установите флажок Интерфейс командной строки. | Интерфейс API ([`registrar-api.md`](./registrar-api.md)), версия `sns_registrar_status_total`, возможность изменения конфигурации `artifacts/sns/payments/*`. | Он был создан в 2007 году. |
 | Резолвер مشغلو والبوابة | Используйте SoraDNS и GAR, чтобы получить доступ к данным по электронной почте. Он находится в Уэльсе. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | Резолвер SRE по вызову + служба поддержки. |
 | Новости | Вы можете получить 70/30, получить реферал, выполнить условия соглашения/соглашения об уровне обслуживания и SLA. | Создан для печати Stripe/Title, KPI ربع سنوية تحت `docs/source/sns/regulatory/`. | مراقب المالية + مسؤول الامتثال. |
 | جهة اتصال الامتثال والتنظيم | Гарантийное обслуживание (ЕС DSA, Великобритания), а также KPI и отраслевые стандарты. | Создан для `docs/source/sns/regulatory/`, установлен на `ops/drill-log.md`. الطاولة. | قائد برنامج الامتثال. |
@@ -121,7 +121,7 @@ translation_last_reviewed: 2026-02-07
 | الاشارة | صدر | الوصف / الاجراء |
 |---------|--------|-----------------|
 | `sns_registrar_status_total{result,suffix}` | Код Torii | عداد نجاح/خطا للتسجيلات, التجديدات, التجميدات, التحويلات؛ Он был найден в `result="error"` в режиме онлайн. |
-| `torii_request_duration_seconds{route="/v2/sns/*"}` | مقاييس Torii | SLO использует API; Установите флажок `torii_norito_rpc_observability.json`. |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | مقاييس Torii | SLO использует API; Установите флажок `torii_norito_rpc_observability.json`. |
 | `soradns_bundle_proof_age_seconds` и `soradns_bundle_cid_drift_total` | Tailer شفافية преобразователь | تكشف ادلة قديمة او انحراف GAR; Приложение создано для `dashboards/alerts/soradns_transparency_rules.yml`. |
 | `sns_governance_activation_total` | Интерфейс CLI | عداد يزداد عند تفعيل ميثاق/ملحق؛ Он был создан для того, чтобы провести время с пользой для здоровья. |
 | `guardian_freeze_active` манометр | CLI-опекун | يتتبع نوافذ تجميد soft/hard لكل محدد؛ SRE подписал соглашение об уровне обслуживания `1`. |

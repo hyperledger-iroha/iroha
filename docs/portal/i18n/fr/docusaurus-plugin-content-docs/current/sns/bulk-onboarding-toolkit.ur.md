@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v2/sns/registrations
+         https://torii.sora.net/v1/sns/registrations
   done
 ```
 
@@ -130,10 +130,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Helper request pour `POST /v2/sns/registrations` par HTTP
+- Helper request pour `POST /v1/sns/registrations` par HTTP
   erreur پر abandonner کرتا ہے۔ Chemin du journal des réponses avec enregistrements NDJSON et ajout
   ہوتے ہیں۔
-- `--poll-status` pour la soumission par `/v2/sns/registrations/{selector}` pour
+- `--poll-status` pour la soumission par `/v1/sns/registrations/{selector}` pour
   دوبارہ requête کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, par défaut 5) تاکہ record
   visible ہونے کی تصدیق ہو۔ `--suffix-map` (JSON et `suffix_id` et valeurs "suffixe"
   سے map کرے) فراہم کریں تاکہ outil `{label}.{suffix}` les littéraux dérivent کر سکے۔

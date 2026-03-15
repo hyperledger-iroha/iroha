@@ -72,7 +72,7 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v2/sorafs/capacity/declare`) to <file>.
+  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/declare`) to <file>.
   --authority=<account_id>     Account identifier used when building the request JSON.
   --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
@@ -90,7 +90,7 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v2/sorafs/capacity/telemetry`) to <file>.
+  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/telemetry`) to <file>.
   --authority=<account_id>     Account identifier used when building the request JSON.
   --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
@@ -110,7 +110,7 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v2/sorafs/capacity/schedule`) to <file>.
+  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/schedule`) to <file>.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
@@ -123,7 +123,7 @@ fn complete_usage() -> &'static str {
 
 Options:
   --order-id=<hex>             Replication order identifier (BLAKE3-256, hex) (required).
-  --request-out=<file>         Write Torii request JSON (`/v2/sorafs/capacity/complete`) to <file>.
+  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/complete`) to <file>.
   --quiet                      Suppress stdout (otherwise prints the JSON payload).
   --help                       Show this message.
 "#
@@ -137,7 +137,7 @@ Options:
   --json-out=<file>            Write a Norito JSON summary to <file>.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
-  --request-out=<file>         Write Torii request JSON (`/v2/sorafs/capacity/dispute`) to <file>.
+  --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/dispute`) to <file>.
   --authority=<account_id>     Account identifier used when building the request JSON.
   --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).

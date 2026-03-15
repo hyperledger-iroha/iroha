@@ -319,7 +319,7 @@ El resumen a continuación rastrea los elementos principales que surgieron en la
 |-----------|----------------|-------------|-------|
 | SM2 | GB/T32918 (todas las piezas) | GM/T0003 | Firma digital ECC + intercambio de claves; Iroha expone la verificación en nodos centrales y la firma determinista en los SDK. |
 | SM3 | ES/T32905 | GM/T0004 | hash de 256 bits; hash determinista a través de rutas escalares y aceleradas ARMv8. |
-| SM4 | ES/T32907 | GM/T0002 | cifrado de bloques de 128 bits; Iroha proporciona ayudas de GCM/CCM y garantiza la paridad big-endian entre implementaciones. |- **Manifiesto de capacidad:** El punto final Torii `/v2/node/capabilities` anuncia la siguiente forma JSON para que los operadores y las herramientas puedan consumir el manifiesto SM mediante programación:
+| SM4 | ES/T32907 | GM/T0002 | cifrado de bloques de 128 bits; Iroha proporciona ayudas de GCM/CCM y garantiza la paridad big-endian entre implementaciones. |- **Manifiesto de capacidad:** El punto final Torii `/v1/node/capabilities` anuncia la siguiente forma JSON para que los operadores y las herramientas puedan consumir el manifiesto SM mediante programación:
 
 ```json
 {

@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v2/sumeragi/params
+//! Router-level test for GET /v1/sumeragi/params
 
 #[cfg(feature = "telemetry")]
 use axum::http::Request;
@@ -50,7 +50,7 @@ async fn sumeragi_params_endpoint_shape() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v2/sumeragi/params")
+                .uri("/v1/sumeragi/params")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -117,7 +117,7 @@ async fn configuration_endpoint_includes_confidential_gas() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/v2/configuration")
+                .uri("/v1/configuration")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

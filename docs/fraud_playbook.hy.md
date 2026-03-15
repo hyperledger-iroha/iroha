@@ -83,7 +83,7 @@ translator: machine-google-reviewed
 Դարպասը այժմ բացահայտում է կոնկրետ JSON ծրարներ, որոնք քարտեզագրվում են մեկ առ մեկ
 Norito տեսակներ, որոնք իրականացվել են `crates/iroha_data_model::fraud`-ում.
 
-- **Ռիսկերի ընդունում** – `POST /v2/fraud/query` ընդունում է `RiskQuery` սխեման.
+- **Ռիսկերի ընդունում** – `POST /v1/fraud/query` ընդունում է `RiskQuery` սխեման.
   - `query_id` (`[u8; 32]`, վեցանկյուն կոդավորված)
   - `subject` (`AccountId`, կանոնական I105 բառացի; կամընտիր `@<domain>` ակնարկ կամ այլանուն)
   - `operation` (պիտակավորված թվով, որը համապատասխանում է `RiskOperation`; JSON `type`
@@ -94,14 +94,14 @@ Norito տեսակներ, որոնք իրականացվել են `crates/iroha_da
   - `issued_at_ms` (`u64`)
   - `context` (`RiskContext`; կրում է `tenant_id`, կամընտիր `session_id`,
     կամընտիր `reason`)
-- **Ռիսկի որոշում** – `POST /v2/fraud/assessment` սպառում է
+- **Ռիսկի որոշում** – `POST /v1/fraud/assessment` սպառում է
   `FraudAssessment` օգտակար բեռ (նաև արտացոլված է կառավարման արտահանման մեջ).
   - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
     `decision` (`AssessmentDecision` թվով), `rule_outcomes`
     (`{ rule_id, score_delta_bps, rationale? }` զանգված)
   - `generated_at_ms`
   - `signature` (ըստ ցանկության base64 փաթաթում է Norito կոդավորված գնահատումը)
-- **Կառավարման արտահանում** – `GET /v2/fraud/governance/export`-ը վերադարձնում է
+- **Կառավարման արտահանում** – `GET /v1/fraud/governance/export`-ը վերադարձնում է
   `GovernanceExport` կառուցվածքը, երբ `governance` հատկությունը միացված է, փաթեթավորում
   ակտիվ պարամետրերը, վերջին ուժի մեջ մտնելը, մոդելի տարբերակը, քաղաքականության ամփոփումը և
   `DecisionAggregate` հիստոգրամ:

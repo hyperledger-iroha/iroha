@@ -38,7 +38,7 @@ Norito; serde/JSON のフォールバック。
 ## API サーフェス (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -216,7 +216,7 @@ pub struct DaIngestReceipt {
   `iroha app sorafs fetch` を参照してください。アーティファクトを作成する
   マニフェスト + チャンク プラン (`--manifest`、`--plan`、`--manifest-id`) **или** シート
   Torii ストレージ チケット `--storage-ticket`。チケット CLI を使用する
-  マニフェストと `/v2/da/manifests/<ticket>`、バンドルの組み合わせ
+  マニフェストと `/v1/da/manifests/<ticket>`、バンドルの組み合わせ
   `artifacts/da/fetch_<timestamp>/` (`--manifest-cache-dir` をオーバーライド)、
   BLOB ハッシュ `--manifest-id` とオーケストレーターの組み合わせ
   `--gateway-provider` 最低。 SoraFS フェッチャーのノブを使用します。
@@ -226,7 +226,7 @@ pub struct DaIngestReceipt {
   エンドツーエンドの可用性の確認と名前空間 `da` の確認
   дублирования オーケストレーター логики。
 - `iroha app da get-blob` забирает канонические マニフェスト напрямую из Torii через
-  `GET /v2/da/manifests/{storage_ticket}`。 Команда Команда пизет
+  `GET /v1/da/manifests/{storage_ticket}`。 Команда Команда пизет
   `manifest_{ticket}.norito`、`manifest_{ticket}.json`、`chunk_plan_{ticket}.json`
   в `artifacts/da/fetch_<timestamp>/` (`--output-dir`)、
   этом выводит точную команду `iroha app da get` (включая `--manifest-id`), нужную

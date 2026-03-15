@@ -103,10 +103,10 @@ MMR མཐོ་ཚད་ཚུ་ གཡོན་ལས་གཡས་ལུ་
 
 ## API ཁ་ཐོག་།
 
-- `GET /v2/bridge/finality/{height}` – `BridgeFinalityProof` གི་དོན་ལུ་ ལོག་ཐོབ་ཨིན།
+- `GET /v1/bridge/finality/{height}` – `BridgeFinalityProof` གི་དོན་ལུ་ ལོག་ཐོབ་ཨིན།
   སྡེབ་ཚན་མཐོ་ཚད་ཞུ་བ་འབད་ཡོདཔ། Norito བརྒྱུད་དེ་ ནང་དོན་གྲོས་བསྟུན་གྱིས་ Norito ཡང་ན་ རྒྱབ་སྐྱོར་འབདཝ་ཨིན།
   JSON.
-- `GET /v2/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` ལོག་ཐོབ་ཨིན།
+- `GET /v1/bridge/finality/bundle/{height}` – `BridgeFinalityBundle` ལོག་ཐོབ་ཨིན།
   (ཁས་བླངས་ + བདེན་དཔང་ + མགོ་ཡིག་/ལག་ཁྱེར་) ཞུ་བ་འབད་ཡོད་པའི་མཐོ་ཚད་ཀྱི་དོན་ལུ་ཨིན།
 
 ## དྲན་ཐོ་དང་རྗེས་སུ་འབྲང་།

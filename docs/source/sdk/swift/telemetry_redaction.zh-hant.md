@@ -64,7 +64,7 @@ signals across SDKs without exposing raw identifiers.
 | Signal ID | Channel | Key Fields | Redaction / Retention | Notes |
 |-----------|---------|------------|-----------------------|-------|
 | `swift.torii.http.request` | Span (`ToriiClient`) | `authority_hash`, `route`, `status_code`, `latency_ms`, `retry_policy` | `authority_hash = blake2b_256(authority || salt)`; traces retained 30 days | Mirrors Rust `torii.http.request`; `route` excludes query/body data. |
-| `swift.torii.http.retry` | Event | `authority_hash`, `route`, `attempt`, `error_code`, `backoff_ms` | Same hash as above; retained 30 days | Captures SDK retry logic for `/v2/pipeline` and `/v2/connect`. |
+| `swift.torii.http.retry` | Event | `authority_hash`, `route`, `attempt`, `error_code`, `backoff_ms` | Same hash as above; retained 30 days | Captures SDK retry logic for `/v1/pipeline` and `/v1/connect`. |
 | `swift.pipeline.submit` | Counter metric | `manifest_kind`, `pipeline_region`, `sdk_mode` | No PII; retained 90 days | Feeds the pipeline dashboard used by `dashboards/mobile_parity.swift`. |
 | `swift.pipeline.status` | Event + histogram | `hash_prefix`, `state`, `duration_ms`, `authority_hash` | Export only first 12 hex chars of transaction hash + hashed authority; retained 30 days | Provides parity with Torii pipeline telemetry while keeping hashes short. |
 | `swift.connect.session_event` | Event (`ConnectClient`) | `session_alias_hash`, `event_kind`, `wallet_role`, `torii_domain_hash` | Hash alias + Torii domain; retained 30 days | Covers open/approve/reject/close flows for IOS7 readiness. |

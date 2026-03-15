@@ -48,7 +48,7 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 Torii 现在将提供商信用快照与费用分类账一起公开，以便仪表板
 可以控制低余额和罚球：
 
-- REST：`GET /v2/sorafs/capacity/state` 返回 `credit_ledger[*]` 条目
+- REST：`GET /v1/sorafs/capacity/state` 返回 `credit_ledger[*]` 条目
   镜像浸泡测试中验证的账本字段。参见
   `crates/iroha_torii/src/sorafs/registry.rs`。
 - Grafana 导入：`dashboards/grafana/sorafs_capacity_penalties.json` 绘制

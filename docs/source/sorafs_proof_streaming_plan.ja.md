@@ -118,7 +118,7 @@ SDK 機能:
 ## トランスポート方針
 
 - **主要メカニズム: HTTP/2 ストリーミング。**
-  - ゲートウェイは `POST /v2/proof/stream` を公開し、`ProofStreamRequestV1` を受け取り、
+  - ゲートウェイは `POST /v1/proof/stream` を公開し、`ProofStreamRequestV1` を受け取り、
     `application/x-ndjson` 本体で応答する（行ごとに `ProofStreamItemV1`）。HTTP/2 でチャンク
     フェッチと多重化でき、既存のゲートウェイ基盤と整合する。
   - フロー制御でバックプレッシャを扱う。ゲートウェイは 64 件以上をバッファしない。

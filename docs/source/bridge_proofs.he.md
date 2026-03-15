@@ -28,12 +28,12 @@ translation_last_reviewed: 2026-01-01
 
 ## משטח ה-API של Torii
 
-- `GET /v2/zk/proofs` ו-`GET /v2/zk/proofs/count` מקבלים מסננים מודעי-bridge:
+- `GET /v1/zk/proofs` ו-`GET /v1/zk/proofs/count` מקבלים מסננים מודעי-bridge:
   - `bridge_only=true` מחזיר רק הוכחות Bridge.
   - `bridge_pinned_only=true` מצמצם להוכחות Bridge pinned.
   - `bridge_start_from_height` / `bridge_end_until_height` מגבילים את חלון הטווח של bridge.
-- `GET /v2/zk/proof/{backend}/{hash}` מחזיר מטא-דאטה של bridge (טווח, hash של manifest, תקציר payload) לצד מזהה/סטטוס הוכחה וקשרי VK.
-- רשומת ההוכחה המלאה של Norito (כולל bytes של payload) זמינה עדיין דרך `GET /v2/proofs/{proof_id}` עבור מאמתים מחוץ לצומת.
+- `GET /v1/zk/proof/{backend}/{hash}` מחזיר מטא-דאטה של bridge (טווח, hash של manifest, תקציר payload) לצד מזהה/סטטוס הוכחה וקשרי VK.
+- רשומת ההוכחה המלאה של Norito (כולל bytes של payload) זמינה עדיין דרך `GET /v1/proofs/{proof_id}` עבור מאמתים מחוץ לצומת.
 
 ## אירועי קבלה של Bridge
 

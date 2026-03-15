@@ -66,13 +66,13 @@ translation_last_reviewed: 2026-02-07
 
 تقبل البوابات طلبات HTTP حتمية تعكس بيانات الإعلانات.
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`| المتطلب | التفاصيل |
+### `GET /v1/sorafs/storage/car/{manifest_id}`| المتطلب | التفاصيل |
 |--------|--------|
 | **כותרות** | I18NIS اختياري، و`X-SoraFS-Stream-Token` base64 إلزامي. |
 | **תגובות** | `206` مع `Content-Type: application/vnd.ipld.car`، و`Content-Range` يصف النافذة المقدمة، وبيانات `X-Sora-Chunk-Range`، وإعادة إرسال צ'אנקר/אסימון. |
 | **מצבי כשל** | `416` للنطاقات غير المصطفة، `401` للرموز المفقودة/غير الصالحة، `429` عند تجاوز ميزانيات stream/byte. |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 جلب شريحة واحدة بنفس الرؤوس بالإضافة إلى digest الحتمي للشريحة. مفيد لإعادة
 المحاولة أو تنزيلات الطب الشرعي عندما لا تكون شرائح CAR ضرورية.
@@ -120,11 +120,11 @@ translation_last_reviewed: 2026-02-07
 
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` تغلف نقاط REST
   الخاصة بسجل pins وتطبع Norito JSON الخام مع كتل attestation لأدلة التدقيق.
-- `iroha app sorafs storage pin` و`torii /v2/sorafs/pin/register` يقبلان manifests
+- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` يقبلان manifests
   بنمط Norito أو JSON مع proofs اختيارية للـ alias والـ successor؛ تؤدي proofs
   المشوهة إلى `400`، وتُظهر proofs القديمة `503` مع `Warning: 110`، بينما تعيد
   proofs المنتهية تمامًا `412`.
-- REST (`/v2/sorafs/pin`, `/v2/sorafs/aliases`, `/v2/sorafs/replication`)
+- REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   رؤوس الكتل قبل التنفيذ.## المراجع
 

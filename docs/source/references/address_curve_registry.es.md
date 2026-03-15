@@ -59,7 +59,7 @@ generar fixtures.
 
 ## Anuncio de mapa de bits de capacidades
 
-`GET /v2/node/capabilities` ahora expone la lista `allowed_curve_ids` y el
+`GET /v1/node/capabilities` ahora expone la lista `allowed_curve_ids` y el
 arreglo empaquetado `allowed_curve_bitmap` bajo `crypto.curves`. El bitmap es
 little-endian a través de lanes de 64 bits (hasta cuatro valores para cubrir el
 espacio de identificadores `u8` 0–255). El bit `i` activado significa que el

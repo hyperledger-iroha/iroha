@@ -33,7 +33,7 @@ idarəetmə yoxlamaları. Bütün faydalı yüklər Norito kodludur; SCALE və y
   off-ledger storage məsləhətləşmədən dövlət.
 - Yüngül müştərilərin a
   manifest hash verilmiş blokda yekunlaşdırıldı.
-- Torii sorğularını (`/v2/da/commitments/*`) və relelərə imkan verən sübutları ifşa edin,
+- Torii sorğularını (`/v1/da/commitments/*`) və relelərə imkan verən sübutları ifşa edin,
   SDK-lar və hər birini təkrarlamadan idarəetmənin avtomatlaşdırılması auditinin mövcudluğu
   blok.
 - Mövcud `SignedBlockWire` zərfini yenisini keçirərək kanonik saxlayın
@@ -48,7 +48,7 @@ idarəetmə yoxlamaları. Bütün faydalı yüklər Norito kodludur; SCALE və y
 3. **Dözümlülük/indekslər** beləliklə, WSV öhdəlik sorğularına tez cavab verə bilər
    (`iroha_core/src/wsv/mod.rs`).
 4. Aşağıdakı siyahı/sorğu/sübut nöqtələri üçün **Torii RPC əlavələri**
-   `/v2/da/commitments`.
+   `/v1/da/commitments`.
 5. **İnteqrasiya testləri + qurğular** tel düzümünü və sızma axınını təsdiqləyir
    `integration_tests/tests/da/commitments.rs`.
 
@@ -141,9 +141,9 @@ Torii üç son nöqtəni ifşa edir:
 
 | Marşrut | Metod | Yük | Qeydlər |
 |-------|--------|---------|-------|
-| `/v2/da/commitments` | `POST` | `DaCommitmentQuery` (zolaq/epox/ardıcıllıqla diapazon filtri, səhifələmə) | Ümumi say, öhdəliklər və blok hash ilə `DaCommitmentPage` qaytarır. |
-| `/v2/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (zolaqlı + manifest hash və ya `(epoch, sequence)` dəsti). | `DaCommitmentProof` (rekord + Merkle yolu + blok hash) ilə cavab verir. |
-| `/v2/da/commitments/verify` | `POST` | `DaCommitmentProof` | Blok hash hesablamasını təkrarlayan və daxil edilməsini təsdiqləyən vətəndaşlığı olmayan köməkçi; birbaşa `iroha_crypto` ilə əlaqələndirə bilməyən SDK-lar tərəfindən istifadə olunur. |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (zolaq/epox/ardıcıllıqla diapazon filtri, səhifələmə) | Ümumi say, öhdəliklər və blok hash ilə `DaCommitmentPage` qaytarır. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (zolaqlı + manifest hash və ya `(epoch, sequence)` dəsti). | `DaCommitmentProof` (rekord + Merkle yolu + blok hash) ilə cavab verir. |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Blok hash hesablamasını təkrarlayan və daxil edilməsini təsdiqləyən vətəndaşlığı olmayan köməkçi; birbaşa `iroha_crypto` ilə əlaqələndirə bilməyən SDK-lar tərəfindən istifadə olunur. |
 
 Bütün faydalı yüklər `iroha_data_model::da::commitment` altında yaşayır. Torii marşrutlaşdırıcıları quraşdırılır
 mövcud DA-nın yanında olan işləyicilər token/mTLS-ni təkrar istifadə etmək üçün son nöqtələri qəbul edir

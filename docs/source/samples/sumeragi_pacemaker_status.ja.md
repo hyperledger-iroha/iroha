@@ -11,7 +11,7 @@ translator: manual
 # Sumeragi — ペースメーカー状態（Torii）
 
 エンドポイント
-- `GET /v2/sumeragi/pacemaker`
+- `GET /v1/sumeragi/pacemaker`
 
 レスポンス（例）
 ```json

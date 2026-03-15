@@ -22,7 +22,7 @@ async fn zk_roots_endpoint_returns_200() {
 
     // Wire only the tested route
     let app = Router::new().route(
-        "/v2/zk/roots",
+        "/v1/zk/roots",
         post({
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::ZkRootsGetRequestDto>| async move {
@@ -38,7 +38,7 @@ async fn zk_roots_endpoint_returns_200() {
     let body = norito::json::to_string(&body_value).expect("serialize roots request");
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/roots")
+        .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -59,7 +59,7 @@ async fn zk_vote_tally_endpoint_returns_200() {
     let state = Arc::new(CoreState::new_for_testing(World::default(), kura, query));
 
     let app = Router::new().route(
-        "/v2/zk/vote/tally",
+        "/v1/zk/vote/tally",
         post({
             let state = state.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::ZkVoteGetTallyRequestDto>| async move {
@@ -73,7 +73,7 @@ async fn zk_vote_tally_endpoint_returns_200() {
     let body = norito::json::to_string(&body_value).expect("serialize tally request");
     let req = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/vote/tally")
+        .uri("/v1/zk/vote/tally")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();

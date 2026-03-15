@@ -635,7 +635,7 @@ Suivi Sev1/2 et archive les preuves dans `incident/<date>-android-*.md`.
 **Signaux**
 
 - Alertes sur `android_sdk_submission_latency`, `android_sdk_pending_queue_depth`,
-  `android_sdk_offline_replay_errors` et le taux d'erreur Torii `/v2/pipeline`.
+  `android_sdk_offline_replay_errors` et le taux d'erreur Torii `/v1/pipeline`.
 - Widgets `operator-console` (exemples/android) affichant une vidange de file d'attente bloquée ou
   les tentatives sont bloquées dans une interruption exponentielle.
 
@@ -685,7 +685,7 @@ Suivi Sev1/2 et archive les preuves dans `incident/<date>-android-*.md`.
 **Récupération**
 
 1. Si Torii est dégradé, engagez le Torii de garde et continuez à rejouer le
-   file d'attente une fois que `/v2/pipeline` accepte le trafic.
+   file d'attente une fois que `/v1/pipeline` accepte le trafic.
 2. Reconfigurez les clients concernés uniquement via les manifestes `iroha_config` signés. Le
    L'observateur de rechargement à chaud `ClientConfig` doit émettre un journal de réussite avant l'incident
    peut fermer.

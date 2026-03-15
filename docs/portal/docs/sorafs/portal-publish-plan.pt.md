@@ -72,7 +72,7 @@ os revisores de governanca possam rastrear os artefatos de build.
 
 Use `sorafs_cli manifest submit` para enviar manifests ao Torii e vincular aliases.
 Defina `${SUBMITTED_EPOCH}` como a epoca de consenso mais recente (de
-`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` ou seu dashboard).
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` ou seu dashboard).
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -80,7 +80,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

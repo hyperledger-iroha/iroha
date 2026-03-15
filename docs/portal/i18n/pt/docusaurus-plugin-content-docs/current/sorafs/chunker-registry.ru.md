@@ -94,7 +94,7 @@ número de cliente (`Accept-Chunker` + `Accept-Digest`).
 Развертывание telеметрии:
 
 - **Телеметрия fetch чанков** — CLI Iroha `sorafs toolkit pack` эмитит digere чанков, метаданные CAR e корни PoR para ingestão em painéis.
-- **Anúncios de provedores** — anúncios de cargas úteis usam recursos de metadaнные e aliases; teste a capacidade `/v2/sorafs/providers` (por exemplo, capacidade máxima `range`).
+- **Anúncios de provedores** — anúncios de cargas úteis usam recursos de metadaнные e aliases; teste a capacidade `/v1/sorafs/providers` (por exemplo, capacidade máxima `range`).
 - **Мониторинг gateway** — операторы должны сообщать пары `Content-Chunker`/`Content-Digest`, чтобы обнаруживать неожиданные rebaixamentos; ожидается, что использование bridge снизится нуля до депрекации.
 
 Política de deprecação: como usar o perfil profissional, definir uma nova publicação

@@ -18,7 +18,7 @@ translation_last_reviewed: 2026-02-07
 
 - العقدة 18.18+ مع `npm` أو `pnpm`.
 - `sorafs_cli` من `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- عنوان URL Torii، الذي يتم الكشف عنه `/v2/sorafs/*`، بالإضافة إلى مفتاح القفل/المفتاح الخاص، الذي يمكن من خلاله إرسال البيانات و الاسم المستعار.
+- عنوان URL Torii، الذي يتم الكشف عنه `/v1/sorafs/*`، بالإضافة إلى مفتاح القفل/المفتاح الخاص، الذي يمكن من خلاله إرسال البيانات و الاسم المستعار.
 - مُصدر OIDC (GitHub Actions وGitLab وهوية عبء العمل وما إلى ذلك) للإصدار `SIGSTORE_ID_TOKEN`.
 - اختياريًا: `examples/sorafs_cli_quickstart.sh` للتشغيل الجاف و`docs/source/sorafs_ci_templates.md` لتخطيط سير عمل GitHub/GitLab.
 - قم بإنشاء تغييرات OAuth جربها (`DOCS_OAUTH_*`) وقم بتفعيلها
@@ -590,7 +590,7 @@ npm run monitor:publishing -- \
 
 | الاسم | الاسم |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | مضيف Torii مع `/v2/sorafs/pin/register`. |
+| `DOCS_SORAFS_TORII_URL` | مضيف Torii مع `/v1/sorafs/pin/register`. |
 | `DOCS_SORAFS_SUBMITTED_EPOCH` | معرف العصر، يتم كتابته عند الإرسال. |
 | `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | السلطة المصاحبة لتقديم البيان. |
 | `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | الاسم المستعار صف، خاص عند `perform_submit` = `true`. |

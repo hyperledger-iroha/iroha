@@ -46,7 +46,7 @@ description: Torii کے اندر ایمبیڈڈ `sorafs-node` ڈیپلائمنٹ
   ```
 
 - یقینی بنائیں کہ Torii پروسس کے پاس `data_dir` تک leitura/gravação رسائی ہو۔
-- declaração ریکارڈ ہونے کے بعد `GET /v2/sorafs/capacity/state` کے ذریعے تصدیق
+- declaração ریکارڈ ہونے کے بعد `GET /v1/sorafs/capacity/state` کے ذریعے تصدیق
   کریں کہ نوڈ متوقع کپیسٹی اعلان کرتا ہے۔
 - جب suavização فعال ہو، ڈیش بورڈز cru ou suavizado GiB·hora/PoR کاؤنٹرز دونوں
   دکھاتے ہیں تاکہ sem jitter رجحانات کو valores spot کے ساتھ نمایاں کیا جا سکے۔
@@ -98,8 +98,8 @@ contagem de amostra, e resultado do veredicto opcional)۔ `--manifest-id=<hex>` 
 Torii لائیو ہونے کے بعد آپ وہی artefatos HTTP کے ذریعے حاصل کر سکتے ہیں:
 
 ```bash
-curl -s http://$TORII/v2/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
-curl -s http://$TORII/v2/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
+curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
+curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
 Outros endpoints ایمبیڈڈ اسٹوریج ورکر فراہم کرتا ہے، اس لیے CLI smoketests اور
@@ -112,7 +112,7 @@ sondas de gateway
 2. manifesto com codificação base64 کے ساتھ جمع کریں:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/pin \
+   curl -X POST http://$TORII/v1/sorafs/storage/pin \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -122,7 +122,7 @@ sondas de gateway
 3. ڈیٹا buscar کریں fixado:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/fetch \
+   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -137,7 +137,7 @@ sondas de gateway
 2. Torii پروسس (یا پورا نوڈ) ری اسٹارٹ کریں۔
 3. buscar ریکوئسٹ دوبارہ جمع کریں۔ carga útil
    digest ری اسٹارٹ سے پہلے والی قدر کے مطابق ہو۔
-4. `GET /v2/sorafs/storage/state` چیک کریں تاکہ تصدیق ہو کہ `bytes_used` ری بوٹ کے
+4. `GET /v1/sorafs/storage/state` چیک کریں تاکہ تصدیق ہو کہ `bytes_used` ری بوٹ کے
    بعد manifestos persistentes کو ظاہر کرتا ہے۔
 
 ## 4. کوٹا ریجیکشن ٹیسٹ
@@ -156,7 +156,7 @@ sondas de gateway
 2. Exemplo de PoR:
 
    ```bash
-   curl -X POST http://$TORII/v2/sorafs/storage/por-sample \
+   curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
      -H 'Content-Type: application/json' \
      -d '{
        "manifest_id_hex": "<hex id from pin>",
@@ -181,7 +181,7 @@ sondas de gateway
 - ڈیش بورڈز کو یہ ٹریک کرنا چاہیے:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
   - `torii_sorafs_storage_pin_queue_depth` ou `torii_sorafs_storage_fetch_inflight`
-  - `/v2/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
+  - `/v1/sorafs/capacity/state` کے ذریعے ظاہر کیے گئے PoR کامیابی/ناکامی کاؤنٹرز
   - `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے tentativas de publicação de liquidação
 
 ان brocas کی پیروی سے یہ یقینی ہوتا ہے کہ ایمبیڈڈ اسٹوریج ورکر ڈیٹا ingerir کر

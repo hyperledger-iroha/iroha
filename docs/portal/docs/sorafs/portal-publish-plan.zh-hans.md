@@ -71,7 +71,7 @@ SBOM）流经 SoraFS 清单管道并通过 `docs.sora` 提供服务
 
 使用 `sorafs_cli manifest submit` 将清单推送到 Torii 并绑定别名。
 将 `${SUBMITTED_EPOCH}` 设置为最新的共识纪元（从
-`curl -s "${TORII_URL}/v2/status" | jq '.sumeragi.epoch'` 或您的仪表板）。
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` 或您的仪表板）。
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -79,7 +79,7 @@ TORII_URL="https://torii.stg.sora.net/"
 AUTHORITY="i105..."
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
-SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v2/status | jq '.sumeragi.epoch')"
+SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \

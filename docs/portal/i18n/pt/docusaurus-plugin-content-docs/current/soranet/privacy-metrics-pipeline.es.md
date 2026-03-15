@@ -121,14 +121,14 @@ manter acumuladores obsoletos na memória.
 ## Endpoints de ingestão Torii
 
 Torii agora exponha os endpoints HTTP com telemetria gateada para relés e
-colecionadores reenvien observações sem incrustar um transporte sob medida:- `POST /v2/soranet/privacy/event` aceita uma carga útil
+colecionadores reenvien observações sem incrustar um transporte sob medida:- `POST /v1/soranet/privacy/event` aceita uma carga útil
   `RecordSoranetPrivacyEventDto`. O corpo envolve um `SoranetPrivacyEventV1`
   mas uma etiqueta opcional `source`. Torii valida a solicitação contra o
   perfil de telemetria ativo, registre o evento e responda com HTTP
   `202 Accepted` junto com um envelope Norito JSON que contém a janela
   cálculo do balde (`bucket_start_unix`, `bucket_duration_secs`) e el
   modo do relé.
-- `POST /v2/soranet/privacy/share` aceita uma carga útil `RecordSoranetPrivacyShareDto`.
+- `POST /v1/soranet/privacy/share` aceita uma carga útil `RecordSoranetPrivacyShareDto`.
   O corpo contém um `SoranetPrivacyPrioShareV1` e uma dica opcional `forwarded_by`
   para que os operadores auditem fluxos de coletores. As entregas exitosas
   devolve HTTP `202 Accepted` com um envelope Norito JSON que retoma o
@@ -262,7 +262,7 @@ ventilação permitida (padrão 10%) ou quando não houver baldes de feno presen
 Recomendado:
 
 1. Exporte NDJSON do endpoint admin do relé e do stream
-   `/v2/soranet/privacy/event|share` do orquestrador para trás
+   `/v1/soranet/privacy/event|share` do orquestrador para trás
    `artifacts/sorafs_privacy/<relay>.ndjson`.
 2. Execute o ajudante com o pressuposto da política:
 

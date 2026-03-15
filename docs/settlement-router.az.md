@@ -78,4 +78,4 @@ Qeyri-mətaməlumat həmin zolaq üçün bufer snapşotunu deaktiv edir (temetri
 ## Sübut və İstinadlar
 - NX-3 hesablaşma marşrutlaşdırıcısının qəbulu qeydləri: `status.md` (NX-3 bölməsi).
 - Operator səthləri: `dashboards/grafana/settlement_router_overview.json`, `ops/runbooks/settlement-buffers.md`.
-- Qəbz sxemi və API səthləri: `docs/source/nexus_fee_model.md`, `/v2/sumeragi/status` -> `lane_settlement_commitments`.
+- Qəbz sxemi və API səthləri: `docs/source/nexus_fee_model.md`, `/v1/sumeragi/status` -> `lane_settlement_commitments`.

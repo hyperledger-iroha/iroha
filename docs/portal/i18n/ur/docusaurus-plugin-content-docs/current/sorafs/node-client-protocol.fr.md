@@ -72,7 +72,7 @@ translation_last_reviewed: 2026-02-07
 گیٹ وے ڈٹرمینسٹک HTTP درخواستوں کو قبول کرتے ہیں جو عکاسی کرتے ہیں
 ایڈورٹ میٹا ڈیٹا۔
 
-### `GET /v2/sorafs/storage/car/{manifest_id}`
+### `GET /v1/sorafs/storage/car/{manifest_id}`
 
 | ضرورت | تفصیلات |
 | --------- | --------- |
@@ -80,7 +80,7 @@ translation_last_reviewed: 2026-02-07
 | ** جوابات ** | `206` کے ساتھ `Content-Type: application/vnd.ipld.car` ، `Content-Range` پیش کردہ ونڈو کی وضاحت ، میٹا ڈیٹا `X-Sora-Chunk-Range` ، اور چنکر/ٹوکن ہیڈر واپس آئے۔ |
 | ** ناکامی کے طریقوں ** | `416` غلط استعمال کی حدود کے لئے ، `401` گمشدہ/غلط ٹوکن کے لئے ، `429` جب اسٹریم/بائٹ بجٹ سے تجاوز کیا جاتا ہے۔ |
 
-### `GET /v2/sorafs/storage/chunk/{manifest_id}/{digest}`
+### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
 ایک ہی ہیڈر کے ساتھ ایک ہی حصہ لائیں ، نیز اس کے اختیاری ڈائجسٹ
 ٹکڑے فرانزک کوششوں یا ڈاؤن لوڈ کے ل useful مفید ہے
@@ -133,12 +133,12 @@ translation_last_reviewed: 2026-02-07
 - `iroha app sorafs pin list|show` ، `alias list` اور `replication list` پیک کریں
   پن رجسٹری ریسٹ اینڈ پوائنٹس اور پرنٹ را json Norito بلاکس کے ساتھ
   آڈٹ کے لئے سرٹیفیکیشن۔
-- `iroha app sorafs storage pin` اور `torii /v2/sorafs/pin/register` قبول کریں
+- `iroha app sorafs storage pin` اور `torii /v1/sorafs/pin/register` قبول کریں
   Norito یا JSON ظاہر ہوتا ہے ، نیز اختیاری عرف ثبوت اور جانشین ؛
   خراب شدہ ثبوت `400` کی واپسی کرتے ہیں ، متروک ثبوت `503` کے ساتھ بے نقاب کرتے ہیں
   `Warning: 110` ، اور میعاد ختم ہونے والے ثبوت `412` واپس کریں۔
-- آرام کے اختتامی مقامات (`/v2/sorafs/pin` ، `/v2/sorafs/aliases` ،
-  `/v2/sorafs/replication`) تصدیق کے ڈھانچے شامل کریں تاکہ
+- آرام کے اختتامی مقامات (`/v1/sorafs/pin` ، `/v1/sorafs/aliases` ،
+  `/v1/sorafs/replication`) تصدیق کے ڈھانچے شامل کریں تاکہ
   اداکاری سے پہلے کلائنٹ تازہ ترین بلاک ہیڈر کے ساتھ ڈیٹا چیک کرتے ہیں۔
 
 ## حوالہ جات

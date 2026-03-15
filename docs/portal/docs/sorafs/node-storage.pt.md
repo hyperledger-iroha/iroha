@@ -171,9 +171,9 @@ payloads fazem round-trip corretamente antes das APIs Torii entrarem. [crates/so
 > O gateway Torii agora expoe helpers read-only apoiados pelo mesmo
 > `NodeHandle`:
 >
-> - `GET /v2/sorafs/storage/manifest/{manifest_id_hex}` - retorna o manifest
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - retorna o manifest
 >   Norito armazenado (base64) junto com digest/metadata. [crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v2/sorafs/storage/plan/{manifest_id_hex}` - retorna o plano de chunk
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - retorna o plano de chunk
 >   deterministico JSON (`chunk_fetch_specs`) para tooling downstream. [crates/iroha_torii/src/sorafs/api.rs:1259]
 >
 > Esses endpoints espelham a saida do CLI para que pipelines possam trocar
@@ -218,19 +218,19 @@ payloads fazem round-trip corretamente antes das APIs Torii entrarem. [crates/so
 
 ### Declaracao de capacidade e integracao de scheduling
 
-- Torii agora repassa updates de `CapacityDeclarationRecord` de `/v2/sorafs/capacity/declare`
+- Torii agora repassa updates de `CapacityDeclarationRecord` de `/v1/sorafs/capacity/declare`
   para o `CapacityManager` embutido, de modo que cada nodo constroi uma visao em memoria
   de suas alocacoes comprometidas de chunker e lane. O manager expoe snapshots read-only
-  para telemetria (`GET /v2/sorafs/capacity/state`) e impoe reservas por perfil ou lane
+  para telemetria (`GET /v1/sorafs/capacity/state`) e impoe reservas por perfil ou lane
   antes de novas ordens serem aceitas. [crates/sorafs_node/src/capacity.rs:1] [crates/sorafs_node/src/lib.rs:60]
-- O endpoint `/v2/sorafs/capacity/schedule` aceita payloads `ReplicationOrderV1`
+- O endpoint `/v1/sorafs/capacity/schedule` aceita payloads `ReplicationOrderV1`
   emitidos pela governanca. Quando a ordem mira o provedor local o manager verifica
   scheduling duplicado, valida capacidade de chunker/lane, reserva o slice e retorna
   um `ReplicationPlan` descrevendo capacidade restante para que ferramentas de
   orquestracao possam seguir com a ingestao. Ordens para outros provedores sao
   reconhecidas com resposta `ignored` para facilitar workflows multi-operador. [crates/iroha_torii/src/routing.rs:4845]
 - Hooks de conclusao (por exemplo, disparados apos ingestao bem sucedida) chamam
-  `POST /v2/sorafs/capacity/complete` para liberar reservas via
+  `POST /v1/sorafs/capacity/complete` para liberar reservas via
   `CapacityManager::complete_order`. A resposta inclui um snapshot
   `ReplicationRelease` (totais restantes, residuais de chunker/lane) para que tooling
   de orquestracao possa enfileirar a proxima ordem sem polling. Trabalho futuro

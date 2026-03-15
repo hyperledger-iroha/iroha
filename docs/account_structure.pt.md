@@ -669,8 +669,8 @@ seus bilhetes de mudança.
 
 ### Formatos de resposta Torii
 
-- `GET /v2/accounts` aceita um parâmetro de consulta opcional `canonical I105 rendering` e
-  `POST /v2/accounts/query` aceita o mesmo campo dentro do envelope JSON.
+- `GET /v1/accounts` aceita um parâmetro de consulta opcional `canonical I105 rendering` e
+  `POST /v1/accounts/query` aceita o mesmo campo dentro do envelope JSON.
   Os valores suportados são:
   - `i105` (padrão) — as respostas emitem cargas úteis I105 Base58 canônicas (por exemplo,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
@@ -679,7 +679,7 @@ seus bilhetes de mudança.
 - Valores inválidos retornam `400` (`QueryExecutionFail::Conversion`). Isso permite
   carteiras e exploradores para solicitar strings compactadas para UX somente Sora enquanto
   mantendo I105 como padrão interoperável.
-- Listagens de detentores de ativos (`GET /v2/assets/{definition_id}/holders`) e seu JSON
+- Listagens de detentores de ativos (`GET /v1/assets/{definition_id}/holders`) e seu JSON
   contraparte do envelope (`POST …/holders/query`) também homenageia `canonical I105 rendering`.
   O campo `items[*].account_id` emite literais compactados sempre que o
   campo parâmetro/envelope está definido como `i105_default`, espelhando as contas

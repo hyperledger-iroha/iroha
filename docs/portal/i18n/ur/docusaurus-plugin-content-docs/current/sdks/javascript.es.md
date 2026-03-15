@@ -139,8 +139,8 @@ const torii = new ToriiClient(
 
 ## قابل فہرست فہرستیں اور صفحہ بندی
 
-صفحہ بندی کے مددگار `/v2/accounts` کے لئے ازگر ایس ڈی کے ایرگونومکس کو آئینہ دار کرتے ہیں ،
-`/v2/domains` ، `/v2/assets/definitions` ، NFTS ، بیلنس ، اثاثہ ہولڈرز ، اور دی
+صفحہ بندی کے مددگار `/v1/accounts` کے لئے ازگر ایس ڈی کے ایرگونومکس کو آئینہ دار کرتے ہیں ،
+`/v1/domains` ، `/v1/assets/definitions` ، NFTS ، بیلنس ، اثاثہ ہولڈرز ، اور دی
 اکاؤنٹ کے لین دین کی تاریخ۔
 
 ```ts
@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) اگلی میعاد ختم ہونے والی آخری تاریخ (ریفریش → پالیسی کو اجاگر کریں
 → سرٹیفکیٹ) لہذا جب بھی الاؤنس ہوتا ہے تو UI بیج آپریٹرز کو متنبہ کرسکتے ہیں
 <24h باقی۔ ایس ڈی کے
-`/v2/offline/allowances` کے ذریعہ بے نقاب باقی فلٹرز کی آئینہ دار:
+`/v1/offline/allowances` کے ذریعہ بے نقاب باقی فلٹرز کی آئینہ دار:
 `certificateExpiresBeforeMs/AfterMs` ، `policyExpiresBeforeMs/AfterMs` ،
 `verdictIdHex` ، `attestationNonceHex` ، `refreshBeforeMs/AfterMs` ، اور The
 `requireVerdict` / `onlyMissingVerdict` بولینز۔ غلط امتزاج (کے لئے
@@ -271,8 +271,8 @@ abort.abort(); // closes the underlying WebSocket cleanly
 
 ## ایکسپلورر اسنیپ شاٹس اور کیو آر پے لوڈز
 
-ایکسپلورر ٹیلی میٹری `/v2/explorer/metrics` اور کے لئے ٹائپڈ مددگار فراہم کرتا ہے
-`/v2/explorer/accounts/{account_id}/qr` اختتامی نکات تاکہ ڈیش بورڈز دوبارہ چلاسکیں
+ایکسپلورر ٹیلی میٹری `/v1/explorer/metrics` اور کے لئے ٹائپڈ مددگار فراہم کرتا ہے
+`/v1/explorer/accounts/{account_id}/qr` اختتامی نکات تاکہ ڈیش بورڈز دوبارہ چلاسکیں
 وہی سنیپ شاٹس جو پورٹل کو طاقت دیتے ہیں۔ `getExplorerMetrics()` کو معمول بناتا ہے
 جب راستہ غیر فعال ہوتا ہے تو پے لوڈ اور واپسی `null`۔ اس کے ساتھ جوڑ
 `getExplorerAccountQr()` جب بھی آپ کو I105 (ترجیحی)/سورہ (دوسرا بہترین) لٹریلس پلس ان لائن کی ضرورت ہو
@@ -379,7 +379,7 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 ### ویب سائٹ ڈائلنگ سے رابطہ کریں
 
 `ToriiClient.openConnectWebSocket()` نے کیننیکل کو جمع کیا
-`/v2/connect/ws` URL (بشمول `sid` ، `role` ، اور ٹوکن پیرامیٹرز) ، اپ گریڈ
+`/v1/connect/ws` URL (بشمول `sid` ، `role` ، اور ٹوکن پیرامیٹرز) ، اپ گریڈ
 `http→ws` / `https→wss` ، اور حتمی URL کو جو بھی ویب سائٹ پر دے رہا ہے
 عمل درآمد جو آپ سپلائی کرتے ہیں۔ براؤزر خود بخود عالمی سطح پر دوبارہ استعمال کرتے ہیں
 `WebSocket`۔ نوڈ ڈاٹ جے ایس کال کرنے والوں کو ایک کنسٹرکٹر کو پاس کرنا چاہئے جیسے `ws`:
@@ -461,7 +461,7 @@ async function dialWithTelemetry(client: ToriiClient) {
 
 ## نگاہ رکھنے والے اور ایونٹ کے کرسر کو اسٹریمنگ کرنا
 
-`ToriiClient.streamEvents()` `/v2/events/sse` کو خودکار کے ساتھ Async Iterator کے طور پر بے نقاب کرتا ہے
+`ToriiClient.streamEvents()` `/v1/events/sse` کو خودکار کے ساتھ Async Iterator کے طور پر بے نقاب کرتا ہے
 دوبارہ کوششیں ، لہذا نوڈ/بن سی ایل آئی ایس پائپ لائن کی سرگرمی کو اسی طرح دم کر سکتا ہے جس طرح مورچا سی ایل آئی کرتا ہے۔
 اپنے رن بوک نوادرات کے ساتھ ساتھ `Last-Event-ID` کرسر کو بھی برقرار رکھیں تاکہ آپریٹرز کرسکیں
 جب کوئی عمل دوبارہ شروع ہوتا ہے تو واقعات کو چھوڑنے کے بغیر ندی کو دوبارہ شروع کرتا ہے۔
@@ -500,7 +500,7 @@ for await (const event of torii.streamEvents({
   سگنل موصول ہوا ہے ؛ جب آپ کو صرف پہلے چند واقعات کی ضرورت ہو تو `STREAM_MAX_EVENTS=25` پاس کریں
   دھواں ٹیسٹ کے لئے۔
 - `ToriiClient.streamSumeragiStatus()` اسی انٹرفیس کے لئے آئینہ دار ہے
-  `/v2/sumeragi/status/sse` لہذا اتفاق رائے ٹیلی میٹری کو الگ سے دم کیا جاسکتا ہے ، اور
+  `/v1/sumeragi/status/sse` لہذا اتفاق رائے ٹیلی میٹری کو الگ سے دم کیا جاسکتا ہے ، اور
   Iterator `Last-Event-ID` اسی طرح آنرز کرتا ہے۔
 - ٹرنکی سی ایل آئی کے لئے `javascript/iroha_js/recipes/streaming.mjs` دیکھیں (کرسر استقامت ،
   env-var فلٹر اوور رائڈز ، اور `extractPipelineStatusKind` لاگنگ) JS4 میں استعمال کیا جاتا ہے
@@ -607,14 +607,14 @@ await torii.revokeSpaceDirectoryManifest(
 یہ ثابت کریں کہ انہوں نے جس بلاک کو Sumeragi کے ذریعے لایا ہے وہ ان کے ثبوت سے مماثل ہے جس کی وہ تصدیق کرتے ہیں۔
 ہاتھ سے پے لوڈ بنانے کے بجائے بلٹ ان مددگاروں کا استعمال کریں:
 
-1. `getSumeragiRbcSessions()` آئینہ `/v2/sumeragi/rbc/sessions` ، اور
+1. `getSumeragiRbcSessions()` آئینہ `/v1/sumeragi/rbc/sessions` ، اور
    `findRbcSamplingCandidate()` آٹو سلیکٹس پہلے ڈیلیور سیشن کو بلاک ہیش کے ساتھ
    (انضمام سویٹ جب بھی اس پر واپس آجاتا ہے
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` غیر سیٹ ہے)۔
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` `{blockHash,height,view}` کو معمول پر لاتا ہے
    پلس اختیاری `{count,seed,apiToken}` اوور رائڈس تو خراب شدہ ہیکس یا منفی انٹیگر کبھی نہیں
    Torii تک پہنچیں۔
-3. `sampleRbcChunks()` `/v2/sumeragi/rbc/sample` پر درخواست پوسٹ کرتا ہے۔
+3. `sampleRbcChunks()` `/v1/sumeragi/rbc/sample` پر درخواست پوسٹ کرتا ہے۔
    اور مرکل کے راستے (`samples[].chunkHex` ، `chunkRoot` ، `payloadHash`) آپ کو محفوظ شدہ دستاویزات بنائیں
    آپ کو اپنانے کا باقی ثبوت۔
 4. `getSumeragiRbcDelivered(height, view)` آڈیٹرز کو ہم آہنگی کی ترسیل میٹا ڈیٹا کو اپنی گرفت میں لے لیتا ہے

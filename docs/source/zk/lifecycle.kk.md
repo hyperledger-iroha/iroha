@@ -16,9 +16,9 @@ This document captures how verifying keys (VKs) and zero-knowledge proof envelop
 ## High-level flow
 
 1. **Authoritative VK creation** – An operator or compiler artefact produces a verifying key and its 32-byte commitment. VKs are versioned and namespaced by backend (`backend::name`).
-2. **Admission through Torii** – Operators post signed governance instructions to Torii (`/v2/zk/vk/*`). Accepted transactions register or update the VK registry that is stored on-chain and replicated across peers.
+2. **Admission through Torii** – Operators post signed governance instructions to Torii (`/v1/zk/vk/*`). Accepted transactions register or update the VK registry that is stored on-chain and replicated across peers.
 3. **Contract/runtime usage** – Transactions and smart contracts reference VKs by `(backend, name)` or embed an inline VK payload. Execution resolves VK commitments during proof verification.
-4. **Proof verification** – Clients submit proofs (`/v2/zk/verify` or `/v2/zk/submit-proof`). Verification runs inside `iroha_core::zk` during transaction execution. Successful verifications materialise `ProofRecord`s that can be queried via Torii (`/v2/zk/proofs*`).
+4. **Proof verification** – Clients submit proofs (`/v1/zk/verify` or `/v1/zk/submit-proof`). Verification runs inside `iroha_core::zk` during transaction execution. Successful verifications materialise `ProofRecord`s that can be queried via Torii (`/v1/zk/proofs*`).
 5. **Background reporting** – The optional Torii prover worker (`torii.zk_prover_enabled=true`) scans attachments, verifies `ProofAttachment` payloads, and exports telemetry describing proof sizes and processing latency. Reports are deleted automatically after the configured TTL.
 
 ## Verifying keys
@@ -28,10 +28,10 @@ This document captures how verifying keys (VKs) and zero-knowledge proof envelop
 
 ### Relevant endpoints
 
-- `POST /v2/zk/vk/register` – submit a signed `RegisterVerifyingKey` instruction.
-- `POST /v2/zk/vk/update` – submit `UpdateVerifyingKey` with a higher version.
-- `GET  /v2/zk/vk` – list VKs with optional filters (`backend`, `status`, `name_contains`).
-- `GET  /v2/zk/vk/{backend}/{name}` – fetch a single VK record.
+- `POST /v1/zk/vk/register` – submit a signed `RegisterVerifyingKey` instruction.
+- `POST /v1/zk/vk/update` – submit `UpdateVerifyingKey` with a higher version.
+- `GET  /v1/zk/vk` – list VKs with optional filters (`backend`, `status`, `name_contains`).
+- `GET  /v1/zk/vk/{backend}/{name}` – fetch a single VK record.
 
 ### CLI helpers
 
@@ -48,7 +48,7 @@ The JSON DTOs mirror the `iroha_data_model::proof` payloads. Inline VK bytes rem
 
 ### Submission & verification
 
-- Proof envelopes are accepted via `/v2/zk/verify` (synchronous) or `/v2/zk/submit-proof` (for later inspection). Both accept either Norito-encoded envelopes or JSON DTOs.
+- Proof envelopes are accepted via `/v1/zk/verify` (synchronous) or `/v1/zk/submit-proof` (for later inspection). Both accept either Norito-encoded envelopes or JSON DTOs.
 - During transaction execution, `iroha_core::smartcontracts::isi::zk::VerifyProof` hashes the proof bytes together with the backend name, derives a `ProofId`, and ensures the proof is unique across the ledger.
 - The verifier resolves VK commitments from either the inline payload, the referenced `(backend, name)` pair, or both. Backends registered under `debug/*` bypass cryptographic checks for development.
 - The resulting `ProofRecord` stores:
@@ -60,12 +60,12 @@ The JSON DTOs mirror the `iroha_data_model::proof` payloads. Inline VK bytes rem
 
 ### Query surface
 
-`/v2/zk/proofs` and `/v2/zk/proofs/count` expose the ledger-facing records:
+`/v1/zk/proofs` and `/v1/zk/proofs/count` expose the ledger-facing records:
 
 - Filters: `backend`, `status`, `has_tag`, `offset`, `limit`, `order=asc|desc`, `ids_only`.
 - Tag filtering is efficient: tags are indexed at verification time and served from a dedicated `(tag → proof ids)` index.
 - `ids_only=true` returns `{ backend, hash }` objects for lightweight pagination.
-- `/v2/zk/proof/{backend}/{hash}` remains available for direct lookups.
+- `/v1/zk/proof/{backend}/{hash}` remains available for direct lookups.
 
 ### CLI coverage
 
@@ -91,6 +91,6 @@ All commands emit Norito JSON responses. Filters match the HTTP query parameters
   - `torii_zk_prover_budget_exhausted_total{reason}` (counter)
   - `zk_verify_latency_ms` and `zk_verify_proof_bytes` (histograms, labelled by `backend`)
 - Metrics surface under `/metrics` when telemetry is enabled with a profile that allows metrics exposure.
-- Reports older than the TTL are garbage-collected on every scan tick. Manual deletions remain available through `/v2/zk/prover/reports`.
+- Reports older than the TTL are garbage-collected on every scan tick. Manual deletions remain available through `/v1/zk/prover/reports`.
 
 Nightly Milestone 0 runs scrape the new histograms and publish rollups alongside the existing Torii operator dashboard, ensuring proof verification latency regressions surface quickly.

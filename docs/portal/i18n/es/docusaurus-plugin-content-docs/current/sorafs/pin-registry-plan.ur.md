@@ -70,7 +70,7 @@ Tareas:
 
 | جزو | کام | مالک/مالکان |
 |------|-----|-------------|
-| Torii Servicio | `/v2/sorafs/pin` (enviar), `/v2/sorafs/pin/{cid}` (búsqueda), `/v2/sorafs/aliases` (listar/enlazar), `/v2/sorafs/replication` (pedidos/recibos) فراہم کریں۔ paginación + filtrado مہیا کریں۔ | Redes TL / Core Infraestructura |
+| Torii Servicio | `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (listar/enlazar), `/v1/sorafs/replication` (pedidos/recibos) فراہم کریں۔ paginación + filtrado مہیا کریں۔ | Redes TL / Core Infraestructura |
 | Atestación | respuestas میں altura del registro/hash شامل کریں؛ Norito estructura de atestación شامل کریں جسے Los SDK consumen کریں۔ | Infraestructura básica |
 | CLI | `sorafs_manifest_stub` Tarjeta gráfica de usuario `sorafs_pin` Tarjeta gráfica CLI `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | Grupo de Trabajo sobre Herramientas |
 | SDK | El esquema Norito y los enlaces de cliente (Rust/Go/TS) generan کریں؛ pruebas de integración شامل کریں۔ | Equipos SDK |
@@ -123,8 +123,8 @@ Alertas:
 SF-4 کے ہر lista de verificación آئٹم میں پیش رفت پر اس منصوبے کا حوالہ ہونا چاہیے۔
 Fachada REST اب listado de puntos finales certificado کے ساتھ آتی ہے:
 
-- `GET /v2/sorafs/pin` اور `GET /v2/sorafs/pin/{digest}` manifiesta واپس کرتے ہیں جن میں
+- `GET /v1/sorafs/pin` اور `GET /v1/sorafs/pin/{digest}` manifiesta واپس کرتے ہیں جن میں
   enlaces de alias, órdenes de replicación, اور تازہ ترین bloque hash سے ماخوذ objeto de atestación شامل ہے۔
-- `GET /v2/sorafs/aliases` اور `GET /v2/sorafs/replication` فعال alias catálogo اور
+- `GET /v1/sorafs/aliases` اور `GET /v1/sorafs/replication` فعال alias catálogo اور
   acumulación de pedidos de replicación کو paginación consistente اور filtros de estado کے ساتھ ظاہر کرتے ہیں۔CLI y llamadas کو wrap کرتی ہے (`iroha app sorafs pin list`, `pin show`, `alias list`,
 `replication list`) تاکہ operadores کم سطحی API کو چھوئے بغیر auditorías de registro خودکار بنا سکیں۔

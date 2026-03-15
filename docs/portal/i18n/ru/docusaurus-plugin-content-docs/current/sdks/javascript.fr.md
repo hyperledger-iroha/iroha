@@ -139,8 +139,8 @@ JS4/JS7.
 
 ## Итерируемые списки и нумерация страниц
 
-Помощники по нумерации страниц отражают эргономику Python SDK для `/v2/accounts`,
-`/v2/domains`, `/v2/assets/definitions`, NFT, балансы, держатели активов и
+Помощники по нумерации страниц отражают эргономику Python SDK для `/v1/accounts`,
+`/v1/domains`, `/v1/assets/definitions`, NFT, балансы, держатели активов и
 история транзакций по счету.
 
 ```ts
@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) выделить следующий истекающий срок (обновить → политика
 → сертификат), чтобы значки пользовательского интерфейса могли предупреждать операторов о превышении допуска.
 Осталось <24 ч. SDK
-отражает фильтры REST, представленные `/v2/offline/allowances`:
+отражает фильтры REST, представленные `/v1/offline/allowances`:
 И18НИ00000075Х, И18НИ00000076Х,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` и
 `requireVerdict` / `onlyMissingVerdict` логические значения. Недопустимые комбинации (для
@@ -271,8 +271,8 @@ abort.abort(); // closes the underlying WebSocket cleanly
 
 ## Снимки Explorer и полезные данные QR
 
-Телеметрия Explorer предоставляет типизированные помощники для `/v2/explorer/metrics` и
-Конечные точки `/v2/explorer/accounts/{account_id}/qr`, чтобы информационные панели могли воспроизводить
+Телеметрия Explorer предоставляет типизированные помощники для `/v1/explorer/metrics` и
+Конечные точки `/v1/explorer/accounts/{account_id}/qr`, чтобы информационные панели могли воспроизводить
 те же снимки, которые питают портал. `getExplorerMetrics()` нормализует
 полезная нагрузка и возвращает `null`, когда маршрут отключен. Соедините его с
 `getExplorerAccountQr()` всякий раз, когда вам нужны литералы I105 (предпочтительный)/sora (второй лучший) плюс встроенные
@@ -379,7 +379,7 @@ if ((policy.wsPerIpMaxSessions ?? 0) < 5) {
 ### Подключение набора номера через WebSocket
 
 `ToriiClient.openConnectWebSocket()` собирает канонический
-URL-адрес `/v2/connect/ws` (включая `sid`, `role` и параметры токена), обновления
+URL-адрес `/v1/connect/ws` (включая `sid`, `role` и параметры токена), обновления
 `http→ws` / `https→wss` и передает конечный URL-адрес любому веб-сокету.
 реализация, которую вы предоставляете. Браузеры автоматически повторно используют глобальные
 `WebSocket`. Вызывающие Node.js должны передать конструктор, например `ws`:
@@ -461,7 +461,7 @@ async function dialWithTelemetry(client: ToriiClient) {
 
 ## Наблюдатели потоковой передачи и курсоры событий
 
-`ToriiClient.streamEvents()` предоставляет `/v2/events/sse` как асинхронный итератор с автоматическим
+`ToriiClient.streamEvents()` предоставляет `/v1/events/sse` как асинхронный итератор с автоматическим
 повторных попыток, поэтому интерфейсы командной строки Node/Bun могут отслеживать активность конвейера так же, как это делает интерфейс командной строки Rust.
 Сохраните курсор `Last-Event-ID` рядом с артефактами Runbook, чтобы операторы могли
 возобновить поток, не пропуская события при перезапуске процесса.
@@ -500,7 +500,7 @@ for await (const event of torii.streamEvents({
   сигнал принят; передать `STREAM_MAX_EVENTS=25`, когда вам нужны только первые несколько событий
   для дымового теста.
 - `ToriiClient.streamSumeragiStatus()` отражает тот же интерфейс для
-  `/v2/sumeragi/status/sse`, чтобы консенсусную телеметрию можно было отслеживать отдельно, а
+  `/v1/sumeragi/status/sse`, чтобы консенсусную телеметрию можно было отслеживать отдельно, а
   итератор учитывает `Last-Event-ID` таким же образом.
 - См. `javascript/iroha_js/recipes/streaming.mjs` для готового CLI (постоянство курсора,
   переопределения фильтров env-var и ведение журнала `extractPipelineStatusKind`), используемые в JS4.
@@ -607,14 +607,14 @@ await torii.revokeSpaceDirectoryManifest(
 доказать, что блок, который они получили через Sumeragi, соответствует подтверждению фрагмента, которое они проверяют.
 Используйте встроенные помощники вместо создания полезных данных вручную:
 
-1. `getSumeragiRbcSessions()` зеркально отражает `/v2/sumeragi/rbc/sessions`, и
+1. `getSumeragiRbcSessions()` зеркально отражает `/v1/sumeragi/rbc/sessions`, и
    `findRbcSamplingCandidate()` автоматически выбирает первый доставленный сеанс с хешем блока.
    (пакет интеграции возвращается к нему всякий раз, когда
    `IROHA_TORII_INTEGRATION_RBC_SAMPLE` не установлен).
 2. `ToriiClient.buildRbcSampleRequest(session, overrides)` нормализует `{blockHash,height,view}`.
    плюс необязательные переопределения `{count,seed,apiToken}`, поэтому искаженные шестнадцатеричные или отрицательные целые числа никогда не
    достичь Torii.
-3. `sampleRbcChunks()` отправляет запрос POST на `/v2/sumeragi/rbc/sample`, возвращая доказательства фрагмента.
+3. `sampleRbcChunks()` отправляет запрос POST на `/v1/sumeragi/rbc/sample`, возвращая доказательства фрагмента.
    и пути Меркла (`samples[].chunkHex`, `chunkRoot`, `payloadHash`), которые вы должны заархивировать с помощью
    остальные доказательства вашего усыновления.
 4. `getSumeragiRbcDelivered(height, view)` фиксирует метаданные о доставке когорты, чтобы аудиторы

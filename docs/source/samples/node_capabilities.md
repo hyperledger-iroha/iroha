@@ -1,7 +1,7 @@
 # Node Capabilities — ABI Support (Torii)
 
 Endpoint
-- `GET /v2/node/capabilities`
+- `GET /v1/node/capabilities`
 
 Response (first release; single ABI policy V1)
 ```json
@@ -38,4 +38,4 @@ Notes
 - `crypto.curves.allowed_curve_ids` enumerates the [`address_curve_registry`](../references/address_curve_registry.md) identifiers configured in `iroha_config.crypto.curves.allowed_curve_ids`. Use this advert to decide whether ML‑DSA/GOST/SM controllers are usable on the target cluster.
 
 See also
-- `GET /v2/runtime/metrics` for a compact JSON summary of runtime metrics (ABI count and upgrade lifecycle counters).
+- `GET /v1/runtime/metrics` for a compact JSON summary of runtime metrics (ABI count and upgrade lifecycle counters).

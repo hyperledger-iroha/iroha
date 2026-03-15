@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for /v2/zk/attachments endpoints (`app_api`).
+//! Integration tests for /v1/zk/attachments endpoints (`app_api`).
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs)]
 
@@ -126,7 +126,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     let anon_tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
     let app = Router::new()
         .route(
-            "/v2/zk/attachments",
+            "/v1/zk/attachments",
             post({
                 let anon_tenant = anon_tenant.clone();
                 move |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
@@ -148,7 +148,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
             }),
         )
         .route(
-            "/v2/zk/attachments/{id}",
+            "/v1/zk/attachments/{id}",
             get({
                 let anon_tenant = anon_tenant.clone();
                 move |id: axum::extract::Path<String>| async move {
@@ -183,7 +183,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     let body_json = norito::json::to_string(&body_json_value).expect("serialize attachment json");
     let req_post = http::Request::builder()
         .method("POST")
-        .uri("/v2/zk/attachments")
+        .uri("/v1/zk/attachments")
         .header(http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body_json.clone()))
         .unwrap();
@@ -196,7 +196,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     // GET by id
     let req_get = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/attachments/{id}"))
+        .uri(format!("/v1/zk/attachments/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get = app.clone().oneshot(req_get).await.unwrap();
@@ -215,7 +215,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     // LIST
     let req_list = http::Request::builder()
         .method("GET")
-        .uri("/v2/zk/attachments")
+        .uri("/v1/zk/attachments")
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_list = app.clone().oneshot(req_list).await.unwrap();
@@ -230,7 +230,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     // DELETE
     let req_del = http::Request::builder()
         .method("DELETE")
-        .uri(format!("/v2/zk/attachments/{id}"))
+        .uri(format!("/v1/zk/attachments/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_del = app.clone().oneshot(req_del).await.unwrap();
@@ -239,7 +239,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
     // GET after delete -> 404
     let req_get2 = http::Request::builder()
         .method("GET")
-        .uri(format!("/v2/zk/attachments/{id}"))
+        .uri(format!("/v1/zk/attachments/{id}"))
         .body(axum::body::Body::empty())
         .unwrap();
     let resp_get2 = app.clone().oneshot(req_get2).await.unwrap();

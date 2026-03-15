@@ -88,7 +88,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 |--------|--------|---------|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل، ويبث التقارير عبر `--json-out=-`، ويفرض ميثاق السجل عبر `ensure_charter_compliance()`. |
 | `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifest قديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provider adverts عبر خط أنابيب النشر والتحقق منها عبر `/v2/sorafs/providers`. |
+| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provider adverts عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
 | `sorafs_fetch` (developer orchestrator) | ✅ مدعوم | يقرأ `chunk_fetch_specs` ويفهم حمولة قدرة `range` ويجمع إخراج CARv2. |
 | Fixtures للـ SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض المعتمد يظهر أولاً في كل قائمة بدائل ويُوقَّع بواسطة أظرف المجلس. |
 | تفاوض ملفات gateway Torii | ✅ مدعوم | يطبق كامل قواعد `Accept-Chunker`، ويتضمن ترويسات `Content-Chunker`، ويعرض Bridge CARv1 فقط لطلبات downgrade الصريحة. |
@@ -96,7 +96,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 طرح التليمترية:
 
 - **تليمترية جلب الـ chunks** — يصدر CLI الخاص بـ Iroha `sorafs toolkit pack` digests للـ chunk، وبيانات CAR، وجذور PoR لإدخالها في لوحات المتابعة.
-- **Provider adverts** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ تحقّق من التغطية عبر `/v2/sorafs/providers` (مثل وجود قدرة `range`).
+- **Provider adverts** — تتضمن حمولة الإعلانات بيانات القدرات والبدائل؛ تحقّق من التغطية عبر `/v1/sorafs/providers` (مثل وجود قدرة `range`).
 - **مراقبة الـ gateway** — على المشغلين الإبلاغ عن أزواج `Content-Chunker`/`Content-Digest` لاكتشاف أي خفض غير متوقع؛ ومن المتوقع أن ينخفض استخدام الـ bridge إلى الصفر قبل الإيقاف.
 
 سياسة الإيقاف: بعد اعتماد ملف خلف، حدّد نافذة نشر مزدوجة (موثقة في المقترح) قبل وسم

@@ -172,7 +172,7 @@ Isso confirma que o snapshot de TEU, os metadados de alias e os flags de manifes
 
 - **Rust/CLI.** `iroha_cli` e o crate cliente Rust omitem o campo `lane_id` quando voce nao passa `--lane-id` / `LaneSelector`. O router de filas, portanto, cai em `default_lane`. Use flags explicitas `--lane-id`/`--dataspace-id` apenas ao mirar um lane nao padrao.
 - **JS/Swift/Android.** As ultimas releases de SDK tratam `laneId`/`lane_id` como opcionais e fazem fallback para o valor anunciado por `/status`. Mantenha a politica de roteamento sincronizada entre staging e producao para que apps moveis nao precisem de reconfiguracoes de emergencia.
-- **Pipeline/SSE tests.** Os filtros de eventos de transacao aceitam predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v2/pipeline/events/transactions` com esse filtro para provar que escritas enviadas sem lane explicito chegam sob o id de lane de fallback.
+- **Pipeline/SSE tests.** Os filtros de eventos de transacao aceitam predicados `tx_lane_id == <u32>` (veja `docs/source/pipeline.md`). Assine `/v1/pipeline/events/transactions` com esse filtro para provar que escritas enviadas sem lane explicito chegam sob o id de lane de fallback.
 
 ## 7. Observabilidade e ganchos de governanca
 

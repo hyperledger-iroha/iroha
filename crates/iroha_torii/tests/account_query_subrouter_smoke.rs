@@ -107,7 +107,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v2/accounts/{account_segment}/assets"))
+                .uri(format!("/v1/accounts/{account_segment}/assets"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -124,7 +124,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{account_segment}/assets/query"))
+                .uri(format!("/v1/accounts/{account_segment}/assets/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
@@ -142,7 +142,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v2/accounts/{account_segment}/transactions/query"))
+                .uri(format!("/v1/accounts/{account_segment}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
@@ -160,7 +160,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v2/accounts/{account_segment}/permissions?limit=10"
+                    "/v1/accounts/{account_segment}/permissions?limit=10"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),

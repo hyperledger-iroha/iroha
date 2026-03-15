@@ -36,7 +36,7 @@ when validating confidential-asset flows. It complements the rotation playbook
   ```
 
 - 政策元数据和待定转换可通过
-  `GET /v2/confidential/assets/{definition_id}/transitions`
+  `GET /v1/confidential/assets/{definition_id}/transitions`
   (`crates/iroha_torii/src/routing.rs:15205`)，由 Swift SDK 镜像
   (`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:3245`) 并记录在
   机密资产设计和 SDK 指南

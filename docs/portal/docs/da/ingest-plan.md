@@ -30,7 +30,7 @@ use Norito codecs; no serde/JSON fallbacks are permitted.
 ## API Surface (Torii)
 
 ```
-POST /v2/da/ingest
+POST /v1/da/ingest
 Content-Type: application/norito+v1
 ```
 
@@ -200,14 +200,14 @@ hashing, chunking, and verifying optional manifests.
 - `iroha app da get` adds a DA-focused alias for the multi-source orchestrator that already powers
   `iroha app sorafs fetch`. Operators can point it at manifest + chunk-plan artefacts (`--manifest`,
   `--plan`, `--manifest-id`) **or** pass a Torii storage ticket via `--storage-ticket`. When the ticket
-  path is used the CLI pulls the manifest from `/v2/da/manifests/<ticket>`, persists the bundle under
+  path is used the CLI pulls the manifest from `/v1/da/manifests/<ticket>`, persists the bundle under
   `artifacts/da/fetch_<timestamp>/` (override with `--manifest-cache-dir`), derives the blob hash for
   `--manifest-id`, and then runs the orchestrator with the supplied `--gateway-provider` list. All
   advanced knobs from the SoraFS fetcher surface intact (manifest envelopes, client labels, guard caches,
   anonymity transport overrides, scoreboard export, and `--output` paths), and the manifest endpoint can
   be overridden via `--manifest-endpoint` for custom Torii hosts, so end-to-end availability checks live
   entirely under the `da` namespace without duplicating orchestrator logic.
-- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v2/da/manifests/{storage_ticket}`.
+- `iroha app da get-blob` pulls canonical manifests straight from Torii via `GET /v1/da/manifests/{storage_ticket}`.
   The command writes `manifest_{ticket}.norito`, `manifest_{ticket}.json`, and `chunk_plan_{ticket}.json`
   under `artifacts/da/fetch_<timestamp>/` (or a user-supplied `--output-dir`) while echoing the exact
   `iroha app da get` invocation (including `--manifest-id`) required for the follow-up orchestrator fetch.
@@ -257,12 +257,12 @@ All previously blocked ingest TODOs have been implemented and verified:
   unknown versions, guaranteeing deterministic upgrades when new manifest layouts ship.【crates/iroha_data_model/src/da/types.rs:308】
 - **PDP/PoTR hooks** — PDP commitments derive directly from the chunk store and are persisted
   beside manifests so DA-5 schedulers can launch sampling challenges from canonical data, and
-  `/v2/da/ingest` plus `/v2/da/manifests/{ticket}` now include a `Sora-PDP-Commitment` header
+  `/v1/da/ingest` plus `/v1/da/manifests/{ticket}` now include a `Sora-PDP-Commitment` header
   carrying the base64 Norito payload so SDKs cache the exact commitment DA-5 probes target.【crates/sorafs_car/src/lib.rs:360】【crates/sorafs_manifest/src/pdp.rs:1】【crates/iroha_torii/src/da/ingest.rs:476】
 
 ## Implementation Notes
 
-- Torii’s `/v2/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
+- Torii’s `/v1/da/ingest` endpoint now normalises payload compression, enforces the replay cache,
   deterministically chunks the canonical bytes, rebuilds `DaManifestV1`, drops the encoded payload
   into `config.da_ingest.manifest_store_dir` for SoraFS orchestration, and adds the `Sora-PDP-Commitment`
   header so operators capture the commitment that PDP schedulers will reference.【crates/iroha_torii/src/da/ingest.rs:220】
@@ -274,7 +274,7 @@ All previously blocked ingest TODOs have been implemented and verified:
   the Rust crate exports `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`, the Python
   `ToriiClient` now includes `decode_pdp_commitment_header`, and `IrohaSwift` ships
   `decodePdpCommitmentHeader` overloads for raw header maps or `HTTPURLResponse` instances.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii also exposes `GET /v2/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
+- Torii also exposes `GET /v1/da/manifests/{storage_ticket}` so SDKs and operators can fetch manifests
   and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
   (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, the relevant
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), and mirrors the
@@ -286,7 +286,7 @@ All previously blocked ingest TODOs have been implemented and verified:
 ### Large Payload Streaming Flow
 
 Clients that need to ingest assets larger than the configured single-request limit initiate a
-streaming session by calling `POST /v2/da/ingest/chunk/start`. Torii responds with a
+streaming session by calling `POST /v1/da/ingest/chunk/start`. Torii responds with a
 `ChunkSessionId` (BLAKE3-derived from the requested blob metadata) and the negotiated chunk size.
 Each subsequent `DaIngestChunk` request carries:
 
@@ -301,7 +301,7 @@ Torii persists validated slices under `config.da_ingest.manifest_store_dir/chunk
 records progress inside the replay cache to honour idempotency. When the final slice lands, Torii
 reassembles the payload on disk (streaming through the chunk directory to avoid memory spikes),
 computes the canonical manifest/receipt exactly as with single-shot uploads, and finally responds to
-`POST /v2/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
+`POST /v1/da/ingest` by consuming the staged artifact. Failed sessions can be aborted explicitly or
 are garbage-collected after `config.da_ingest.replay_cache_ttl`. This design keeps the network format
 Norito-friendly, avoids client-specific resumable protocols, and reuses the existing manifest pipeline
 unchanged.
