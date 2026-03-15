@@ -1651,9 +1651,7 @@ impl StateBlock<'_> {
             let has_multisig_state = state_transaction
                 .world
                 .smart_contract_state
-                .get(&crate::smartcontracts::isi::multisig::multisig_account_state_key(
-                    &authority,
-                ))
+                .get(&crate::smartcontracts::isi::multisig::multisig_account_state_key(&authority))
                 .is_some();
             let has_multisig_role = state_transaction
                 .world
