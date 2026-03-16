@@ -2,6 +2,43 @@
 
 Last updated: 2026-03-16
 
+## 2026-03-16 Follow-up: asset-definition picker response shape and query semantics
+- Updated Torii asset-definition list/query endpoint payloads so each item now includes:
+  - `id`
+  - `name`
+  - `alias` (nullable)
+- Extended asset-definition list/query sort support to include:
+  - `name`
+  - `alias`
+  - existing `metadata.<key>` behavior
+- Extended asset-definition list/query filter support to include:
+  - `eq`/`ne`/`in`/`nin` on `name` and `alias`
+  - `exists(alias)`
+  - `is_null(alias)`
+  - metadata predicates (`metadata.<key>`) through the adapter path
+- Updated endpoint descriptions in OpenAPI path metadata for:
+  - `GET /v1/assets/definitions`
+  - `POST /v1/assets/definitions/query`
+- Strengthened `crates/iroha_torii/tests/asset_definitions_endpoints.rs` to seed definitions
+  with/without aliases and assert both endpoints return `name` plus nullable `alias`.
+- Added `routing.rs` handler-level tests for:
+  - filtering by `name`
+  - filtering by `alias`
+  - `is_null(alias)`
+  - sorting by `name`
+  - sorting by `alias`
+  - metadata-aware filter/sort behavior
+- Added adapter-level tests for:
+  - validator acceptance/rejection of `name`/`alias`/metadata-nullability expressions
+  - projection matching for `name`/`alias` and metadata passthrough branches
+
+### Validation Matrix (asset-definition picker response shape and query semantics)
+- `cargo fmt --all` (pass)
+- `cargo test -p iroha_torii asset_definitions_query_tests -- --nocapture` (pass)
+- `cargo test -p iroha_torii defs_filter_adapter_accepts_name_alias_and_metadata_nullability -- --nocapture` (pass)
+- `cargo test -p iroha_torii defs_filter_projection_matches_name_alias_and_metadata_passthrough -- --nocapture` (pass)
+- `cargo test -p iroha_torii --test asset_definitions_endpoints -- --nocapture` (pass)
+
 ## 2026-03-16 Follow-up: SORA parliament smoke config canonical governance asset ID
 - Fixed SORA parliament integration smoke fixtures that still configured governance voting/citizenship
   assets using legacy `<name>#<domain>` literals (`xor#govsmoke`), which now fail strict

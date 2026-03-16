@@ -11856,7 +11856,7 @@ async fn handler_post_transaction(
         )));
     }
     let tx_hash = transaction.hash();
-    routing::handle_transaction_with_metrics(
+    let routing_decision = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
@@ -11877,7 +11877,24 @@ async fn handler_post_transaction(
         signer: app.da_receipt_signer.public_key().clone(),
     };
     let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
-    Ok((StatusCode::ACCEPTED, NoritoBody(receipt)))
+    let mut response = (StatusCode::ACCEPTED, NoritoBody(receipt)).into_response();
+    if let Ok(lane_header) =
+        axum::http::HeaderValue::from_str(&routing_decision.lane_id.as_u32().to_string())
+    {
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-iroha-route-lane-id"),
+            lane_header,
+        );
+    }
+    if let Ok(dataspace_header) =
+        axum::http::HeaderValue::from_str(&routing_decision.dataspace_id.as_u64().to_string())
+    {
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-iroha-route-dataspace-id"),
+            dataspace_header,
+        );
+    }
+    Ok(response)
 }
 
 async fn handler_proof_record_get(
@@ -12059,6 +12076,41 @@ async fn handler_pipeline_recovery(
 struct PipelineStatusQuery {
     #[norito(default)]
     hash: Option<String>,
+    #[norito(default)]
+    scope: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelineStatusReadScope {
+    Local,
+    Auto,
+    Global,
+}
+
+impl PipelineStatusReadScope {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Auto => "auto",
+            Self::Global => "global",
+        }
+    }
+}
+
+fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadScope, Error> {
+    let normalized = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("auto")
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "local" => Ok(PipelineStatusReadScope::Local),
+        "auto" => Ok(PipelineStatusReadScope::Auto),
+        "global" => Ok(PipelineStatusReadScope::Global),
+        _ => Err(conversion_error(format!(
+            "invalid scope query parameter \"{normalized}\" (expected local|auto|global)"
+        ))),
+    }
 }
 
 fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>, Error> {
@@ -12070,6 +12122,8 @@ fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>,
 fn pipeline_status_payload(
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
+    scope: PipelineStatusReadScope,
+    resolved_from: &'static str,
 ) -> norito::json::Value {
     let mut status = norito::json::Map::new();
     status.insert(
@@ -12100,6 +12154,11 @@ fn pipeline_status_payload(
     let mut content = norito::json::Map::new();
     content.insert("hash".into(), norito::json::Value::from(hash.to_string()));
     content.insert("status".into(), norito::json::Value::Object(status));
+    content.insert("scope".into(), norito::json::Value::from(scope.as_str()));
+    content.insert(
+        "resolved_from".into(),
+        norito::json::Value::from(resolved_from),
+    );
 
     let mut envelope = norito::json::Map::new();
     envelope.insert("kind".into(), norito::json::Value::from("Transaction"));
@@ -12150,12 +12209,13 @@ async fn handler_pipeline_transaction_status(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
+    let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
     if let Some(entry) = app.pipeline_status_cache.lookup(&hash) {
         return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry),
+            pipeline_status_payload(&hash, &entry, read_scope, "cache"),
             format,
         ));
     }
@@ -12165,7 +12225,7 @@ async fn handler_pipeline_transaction_status(
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache.record_entry(hash, entry.clone());
         return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry),
+            pipeline_status_payload(&hash, &entry, read_scope, "queue"),
             format,
         ));
     }
@@ -12173,9 +12233,15 @@ async fn handler_pipeline_transaction_status(
     if let Some(entry) = pipeline_status_from_state(&app, &hash) {
         app.pipeline_status_cache.record_entry(hash, entry.clone());
         return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry),
+            pipeline_status_payload(&hash, &entry, read_scope, "state"),
             format,
         ));
+    }
+
+    if matches!(read_scope, PipelineStatusReadScope::Local) {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )));
     }
 
     Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -18357,7 +18423,20 @@ pub(crate) mod tests_runtime_handlers {
         )
         .await
         .expect("accepted");
-        assert_eq!(ok.into_response().status(), StatusCode::ACCEPTED);
+        let ok_response = ok.into_response();
+        assert_eq!(ok_response.status(), StatusCode::ACCEPTED);
+        let lane_header = ok_response
+            .headers()
+            .get("x-iroha-route-lane-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("route lane header must be present");
+        let dataspace_header = ok_response
+            .headers()
+            .get("x-iroha-route-dataspace-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("route dataspace header must be present");
+        assert!(!lane_header.trim().is_empty());
+        assert!(!dataspace_header.trim().is_empty());
 
         let err = match super::handler_post_transaction(State(app), headers, NoritoVersioned(tx2))
             .await
@@ -19127,6 +19206,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash().to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19149,6 +19229,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash_as_entrypoint().to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19191,6 +19272,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19213,6 +19295,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_entry_hash.to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19248,6 +19331,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
+                scope: None,
             }),
         )
         .await

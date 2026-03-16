@@ -394,7 +394,11 @@ pub mod isi {
     ) -> bool {
         if world
             .account_permissions_iter(authority)
-            .is_ok_and(|permissions| permissions.into_iter().any(|permission| permission == target))
+            .is_ok_and(|permissions| {
+                permissions
+                    .into_iter()
+                    .any(|permission| permission == target)
+            })
         {
             return true;
         }
@@ -429,11 +433,14 @@ pub mod isi {
             return true;
         }
 
-        if world.account_permissions_iter(authority).is_ok_and(|permissions| {
-            permissions
-                .into_iter()
-                .any(permission_is_global_can_register_account)
-        }) {
+        if world
+            .account_permissions_iter(authority)
+            .is_ok_and(|permissions| {
+                permissions
+                    .into_iter()
+                    .any(permission_is_global_can_register_account)
+            })
+        {
             return true;
         }
 
@@ -2362,14 +2369,21 @@ pub mod isi {
                 .into());
             }
 
-            let domain_owner = state_transaction.world.domain(&label.domain)?.owned_by().clone();
+            let domain_owner = state_transaction
+                .world
+                .domain(&label.domain)?
+                .owned_by()
+                .clone();
             let subject = account.subject_id();
             let scoped = subject.to_account_id(label.domain.clone());
 
             let authority_controls_subject = authority.subject_id() == subject;
             let authority_controls_domain = authority == &domain_owner;
-            let authority_can_register_domain_accounts =
-                authority_can_register_account_in_domain(&state_transaction.world, authority, &label.domain);
+            let authority_can_register_domain_accounts = authority_can_register_account_in_domain(
+                &state_transaction.world,
+                authority,
+                &label.domain,
+            );
             if !authority_controls_subject
                 && !authority_controls_domain
                 && !authority_can_register_domain_accounts
@@ -2445,7 +2459,11 @@ pub mod isi {
                 .into());
             }
 
-            let domain_owner = state_transaction.world.domain(&label.domain)?.owned_by().clone();
+            let domain_owner = state_transaction
+                .world
+                .domain(&label.domain)?
+                .owned_by()
+                .clone();
             let subject = account.subject_id();
             let scoped = subject.to_account_id(label.domain.clone());
 
@@ -3159,15 +3177,16 @@ mod tests {
             .expect("multisig member");
         let policy = MultisigPolicy::new(2, vec![member_a, member_b]).expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
-        let account_label =
-            AccountLabel::new(domain_id.clone(), "cbdc".parse::<Name>().unwrap());
+        let account_label = AccountLabel::new(domain_id.clone(), "cbdc".parse::<Name>().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new(account_id.clone().to_account_id(domain_id.clone())))
-            .execute(&authority, &mut tx)
-            .expect("register unlabeled multisig account");
+        Register::account(Account::new(
+            account_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&authority, &mut tx)
+        .expect("register unlabeled multisig account");
 
         SetAccountLabel {
             account: account_id.clone(),
@@ -3216,9 +3235,11 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new(account_id.clone().to_account_id(domain_id.clone())))
-            .execute(&authority, &mut tx)
-            .expect("register unlabeled multisig account");
+        Register::account(Account::new(
+            account_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&authority, &mut tx)
+        .expect("register unlabeled multisig account");
 
         BindAccountAlias {
             account: account_id.clone(),
@@ -3248,7 +3269,10 @@ mod tests {
             "multisig alias binding should not create single-key rekey records"
         );
         assert!(
-            tx.world.account_rekey_records.get(&issuance_label).is_none(),
+            tx.world
+                .account_rekey_records
+                .get(&issuance_label)
+                .is_none(),
             "multisig alias binding should not create single-key rekey records"
         );
         assert!(
@@ -3283,9 +3307,11 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
-        Register::account(Account::new(account_id.clone().to_account_id(domain_id.clone())))
-            .execute(&domain_owner, &mut tx)
-            .expect("register account");
+        Register::account(Account::new(
+            account_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register account");
 
         BindAccountAlias {
             account: account_id.clone(),
@@ -3323,9 +3349,11 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
-        Register::account(Account::new(account_id.clone().to_account_id(domain_id.clone())))
-            .execute(&domain_owner, &mut tx)
-            .expect("register account");
+        Register::account(Account::new(
+            account_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register account");
 
         BindAccountAlias {
             account: account_id.clone(),
@@ -3357,12 +3385,16 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new(first_id.clone().to_account_id(domain_id.clone())))
-            .execute(&authority, &mut tx)
-            .expect("register first account");
-        Register::account(Account::new(second_id.clone().to_account_id(domain_id.clone())))
-            .execute(&authority, &mut tx)
-            .expect("register second account");
+        Register::account(Account::new(
+            first_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&authority, &mut tx)
+        .expect("register first account");
+        Register::account(Account::new(
+            second_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&authority, &mut tx)
+        .expect("register second account");
 
         BindAccountAlias {
             account: first_id.clone(),
