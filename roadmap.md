@@ -1,6 +1,6 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
 
 ## Mobile SDK Follow-up
 1. Stabilize bridge-enabled Swift test runs for the new asset-id-literal-from-parts path and add bridge-on coverage in CI.

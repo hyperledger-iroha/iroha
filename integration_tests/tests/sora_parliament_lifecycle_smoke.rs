@@ -52,7 +52,6 @@ const THIRD_REFERENDUM_VOTERS: usize = 8;
 const THIRD_REFERENDUM_APPROVE_VOTERS: usize = 5;
 const GOV_MAX_CONVICTION: u64 = 6;
 const GOV_DOMAIN_ID: &str = "govsmoke";
-const GOV_ASSET_ID: &str = "xor#govsmoke";
 const FIRST_CONTRACT_ID: &str = "parliament.lifecycle.smoke.contract";
 const SECOND_CONTRACT_ID: &str = "parliament.lifecycle.smoke.reject.contract";
 const TX_STATUS_TIMEOUT: Duration = Duration::from_secs(900);
@@ -81,6 +80,15 @@ fn governance_escrow_account_literal() -> String {
     ALICE_ID
         .canonical_i105()
         .expect("alice account id should encode to canonical i105")
+}
+
+fn governance_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        GOV_DOMAIN_ID
+            .parse()
+            .expect("governance domain id must parse"),
+        "xor".parse().expect("governance asset name must parse"),
+    )
 }
 
 fn tune_client_timeouts(client: &mut Client) {
@@ -862,13 +870,14 @@ async fn wait_for_tx_rejected(
 
 fn governance_builder_for_hostile_takeover() -> NetworkBuilder {
     let alice_escrow_account = governance_escrow_account_literal();
+    let governance_asset_id = governance_asset_definition_id().to_string();
     NetworkBuilder::new()
         .with_peers(4)
         .with_config_layer(move |layer| {
             layer
                 .write(["default_account_domain_label"], "wonderland")
-                .write(["gov", "voting_asset_id"], GOV_ASSET_ID)
-                .write(["gov", "citizenship_asset_id"], GOV_ASSET_ID)
+                .write(["gov", "voting_asset_id"], governance_asset_id.clone())
+                .write(["gov", "citizenship_asset_id"], governance_asset_id.clone())
                 .write(
                     ["gov", "citizenship_bond_amount"],
                     i64::try_from(CITIZEN_BOND).expect("bond amount should fit i64"),
@@ -975,7 +984,7 @@ async fn setup_hostile_fixture(
     let attackers = all_citizens;
 
     let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
-    let asset_def_id: AssetDefinitionId = GOV_ASSET_ID.parse()?;
+    let asset_def_id = governance_asset_definition_id();
     alice
         .submit(Register::domain(Domain::new(gov_domain_id.clone())))
         .wrap_err("register governance domain for hostile fixture")?;
@@ -1208,7 +1217,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
     let wonderland_domain: DomainId = "wonderland".parse()?;
-    let asset_def_id: AssetDefinitionId = GOV_ASSET_ID.parse()?;
+    let asset_def_id = governance_asset_definition_id();
     alice
         .submit(Register::domain(Domain::new(gov_domain_id.clone())))
         .wrap_err("register governance domain")?;
