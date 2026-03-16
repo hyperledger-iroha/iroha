@@ -1019,6 +1019,22 @@ impl Actor {
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
         let no_commit_evidence = reschedule_vote_count == 0;
+        let zero_vote_progress_window = reschedule_backoff.max(Duration::from_millis(1));
+        if no_commit_evidence && progress_age < zero_vote_progress_window {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                progress_age_ms = progress_age.as_millis(),
+                reschedule_backoff_ms = reschedule_backoff.as_millis(),
+                "deferring zero-vote quorum reschedule: recent pending progress is still within backoff window"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         // Once quorum timeout expires with no commit evidence, this block is just zombie state:
         // keeping and rebroadcasting it only multiplies conflicting frontier candidates.
         let drop_pending = no_commit_evidence;
@@ -1026,8 +1042,18 @@ impl Actor {
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         let contiguous_frontier = height == frontier_height;
+        let frontier_window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
         let frontier_window_owned =
             contiguous_frontier && self.frontier_recovery_owns_height_window(height, now);
+        let frontier_quorum_owner_active_without_action = contiguous_frontier
+            && self.frontier_recovery.is_some_and(|state| {
+                state.frontier_height == height
+                    && state.last_cause == "quorum_timeout"
+                    && state.last_action_at.is_none()
+                    && now.saturating_duration_since(state.last_progress_at) < frontier_window
+            });
         if frontier_window_owned && drop_pending {
             debug!(
                 block = %block_hash,
@@ -1038,6 +1064,20 @@ impl Actor {
                 pending_age_ms = pending_age.as_millis(),
                 quorum_stall_age_ms = quorum_stall_age.as_millis(),
                 "suppressing zero-vote quorum reschedule; frontier recovery already acted this window"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
+        if frontier_quorum_owner_active_without_action && drop_pending {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "suppressing zero-vote quorum reschedule; quorum-timeout frontier owner is still active this window"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;

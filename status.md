@@ -1,6 +1,84 @@
 # Status
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
+
+## 2026-03-17 Follow-up: zero-vote quorum-timeout now suppresses no-op drop while frontier owner is active
+- Updated `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` to suppress
+  contiguous-frontier zero-vote quorum-timeout drop/requeue when:
+  - the existing frontier owner is already `quorum_timeout` at that height,
+  - `last_action_at` is not set,
+  - and owner progress is still inside the current frontier recovery window.
+- This closes the no-op handoff shape where a zero-vote drop could still fire,
+  then immediately report `frontier_recovery_advance = Some(None)` in the same
+  owner window.
+- Added regression in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `zero_vote_quorum_timeout_does_not_drop_while_quorum_timeout_owner_active_without_action`.
+- Also fixed the unrelated `iroha_core` lib-test compile blocker in
+  `crates/iroha_core/src/smartcontracts/isi/domain.rs` test imports by adding:
+  - `CanRegisterAccount`,
+  - `BOB_ID`.
+- Validation for this follow-up:
+  - `cargo fmt --all` (pass),
+  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_ -- --nocapture` (pass),
+  - `cargo test -p iroha_core --lib contiguous_frontier_missing_payload_dwell_ -- --nocapture` (pass),
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window -- --nocapture` (pass),
+  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture` (pass),
+  - `cargo test -p iroha_core --lib frontier_recovery_rotates_once_after_cleanup_window_expires -- --nocapture` (pass),
+  - `cargo build --release -p irohad --bin iroha3d` (pass).
+- Runtime note:
+  - warmed keep-dirs probe (strict pipefail) log:
+    `/tmp/izanami_npos_healthy_probe_zero_vote_owner_active_noop_guard_20260317T001915.log`,
+    network dir:
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_VEMRRO`,
+    exit:
+    `timed out before reaching target blocks (quorum min height 67, strict min 72, target 120, tolerated_failures 0)`.
+  - compared with the immediately previous warmed keep-dirs rerun
+    (`/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_1qE1Ki`,
+    `quorum 61 / strict 67`):
+    - `commit quorum missing past timeout; rescheduling block for reassembly`: `16 -> 8`,
+    - `drop_pending: true`: `6 -> 0`,
+    - `frontier_recovery_advance = Some(None)` on commit-quorum warnings: `1 -> 0`,
+    - `drop_pending: true` with `progress_age_ms <= 100`: stayed `0 -> 0`,
+    - contiguous-frontier missing-payload dwell warnings/fallbacks remained quiet
+      (`retry-routed=0`, `view-change-routed=0`, direct `MissingPayload` fallback `0`),
+      with a single `missing_payload` range-pull record (`1`).
+  - Remaining runtime bottleneck is still late commit-quorum convergence above
+    the high-60s/low-70s frontier, not repeated zero-vote ownerless drop churn.
+
+## 2026-03-16 Follow-up: zero-vote quorum-timeout now defers drop when progress is fresh
+- Updated `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` so zero-vote
+  quorum-timeout handling no longer drops/requeues immediately when pending
+  progress is still fresh inside the current reschedule backoff window:
+  - new guard checks `progress_age < reschedule_backoff` for zero-vote blocks,
+  - if true, the pending block is retained and quorum reschedule is deferred for
+    the remainder of that backoff window.
+- Added focused regression in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `zero_vote_quorum_timeout_defers_drop_when_progress_is_recent` (defer first,
+    then drop/handoff after backoff expiry).
+- Validation for this follow-up:
+  - `cargo fmt --all` (pass),
+  - `cargo check -p iroha_core --lib` (pass),
+  - `cargo build --release -p irohad --bin iroha3d` (pass),
+  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_defers_drop_when_progress_is_recent -- --nocapture`
+    was blocked at that point by unrelated pre-existing lib-test compile errors in
+    `crates/iroha_core/src/smartcontracts/isi/domain.rs` (`BOB_ID`,
+    `CanRegisterAccount` imports missing in that test module).
+- Runtime note:
+  - warmed keep-dirs probe
+    `/tmp/izanami_npos_healthy_probe_zero_vote_recent_progress_guard_20260316T234527.log`
+    (`/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_oL218c`)
+    still timed out at `quorum 48 / strict 54`,
+  - compared to the prior keep-dirs run
+    (`/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_jLEG3t`):
+    - `commit quorum missing past timeout; rescheduling block for reassembly` stayed `25 -> 25`,
+    - `drop_pending: true` reduced `5 -> 3`,
+    - `drop_pending: true` with `progress_age_ms <= 100` reduced `1 -> 0`
+      (the pathological near-zero-progress drop no longer appeared),
+    - missing-block dwell warning paths remained quiet (`routed through frontier recovery = 0`,
+      direct `MissingPayload` fallback = `0`).
+  - dominant stall shape in this run was early vote-split/queue-pressure churn
+    around heights `10` and `33` (multiple block hashes at the same height with
+    `votes=1/2`), not same-window missing-block dwell ownership.
 
 ## 2026-03-16 Follow-up: contiguous-frontier dwell now enforces strict elapsed-window ownership
 - Tightened contiguous-frontier window ownership in

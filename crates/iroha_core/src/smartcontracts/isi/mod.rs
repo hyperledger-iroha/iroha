@@ -116,6 +116,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::LinkAccountDomain>,
+    dispatch_instruction::<iroha_data_model::isi::domain_link::BindAccountAlias>,
+    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountLabel>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,

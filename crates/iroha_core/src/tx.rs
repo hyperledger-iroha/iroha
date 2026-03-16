@@ -1677,7 +1677,12 @@ impl StateBlock<'_> {
             &state_transaction.nexus.lane_catalog,
             &state_transaction.nexus.dataspace_catalog,
             &tx,
-        );
+        )
+        .map_err(|err| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "transaction routing could not be resolved: {err}"
+            )))
+        })?;
         let lane_assignment = LaneAssignment {
             lane_id: routing_decision.lane_id,
             dataspace_id: routing_decision.dataspace_id,

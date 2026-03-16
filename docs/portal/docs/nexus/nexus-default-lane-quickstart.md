@@ -85,6 +85,11 @@ and `default_dataspace`. The router logic lives in
 `crates/iroha_core/src/queue/router.rs` and applies the policy transparently to
 Torii REST/gRPC surfaces.
 
+If a rule (or explicit request) resolves to an unknown lane, unknown dataspace,
+or a lane/dataspace mismatch, Torii rejects the request with a deterministic
+unresolved-route error. The router does not rewrite these ambiguous cases to the
+default lane.
+
 ```toml
 [nexus.routing_policy]
 default_lane = 0                # use the "core" lane when no rules match

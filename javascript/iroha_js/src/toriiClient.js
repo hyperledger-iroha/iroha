@@ -56,7 +56,12 @@ const OFFLINE_SETTLEMENT_AND_WAIT_OPTION_KEYS = new Set([
 ]);
 const GET_METRICS_OPTION_KEYS = new Set(["asText", "signal"]);
 const CONNECT_APP_LIST_OPTION_KEYS = new Set(["limit", "cursor", "signal"]);
-const GET_TX_STATUS_OPTION_KEYS = new Set(["allowShortHash", "signal"]);
+const GET_TX_STATUS_OPTION_KEYS = new Set([
+  "allowShortHash",
+  "signal",
+  "scope",
+  "endpoints",
+]);
 
 const ISO_NON_TERMINAL_STATUS_VALUES = new Set(["pending", "accepted"]);
 const ISO_STATUS_VALUES = new Map([
@@ -622,6 +627,76 @@ function normalizeStatusSet(input, fallback) {
   return result;
 }
 
+function normalizeTransactionStatusScope(value, context, fallback = "auto") {
+  const raw = value === undefined || value === null ? fallback : value;
+  const normalized = String(raw).trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (normalized === "local" || normalized === "auto" || normalized === "global") {
+    return normalized;
+  }
+  throw createValidationError(
+    ValidationErrorCode.INVALID_OBJECT,
+    `${context} must be one of: local, auto, global`,
+    context,
+  );
+}
+
+function normalizeStatusEndpointCandidates(primaryBaseUrl, endpoints, context) {
+  const normalized = [];
+  const seen = new Set();
+  const pushEndpoint = (value, pathLabel) => {
+    const text = String(value ?? "").trim();
+    if (!text) {
+      return;
+    }
+    let parsed;
+    try {
+      parsed = new URL(text);
+    } catch {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${pathLabel} must be a valid absolute URL`,
+        pathLabel,
+      );
+    }
+    parsed.pathname = "";
+    parsed.search = "";
+    parsed.hash = "";
+    const canonical = parsed.toString().replace(/\/+$/u, "");
+    if (!seen.has(canonical)) {
+      seen.add(canonical);
+      normalized.push(canonical);
+    }
+  };
+
+  pushEndpoint(primaryBaseUrl, `${context}.primary`);
+  if (endpoints === undefined || endpoints === null) {
+    return normalized;
+  }
+
+  let values;
+  if (typeof endpoints === "string") {
+    values = endpoints.split(",").map((entry) => entry.trim());
+  } else if (Array.isArray(endpoints)) {
+    values = endpoints;
+  } else if (typeof endpoints[Symbol.iterator] === "function") {
+    values = [...endpoints];
+  } else {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must be a string or iterable of URLs`,
+      context,
+    );
+  }
+
+  values.forEach((value, index) => {
+    pushEndpoint(value, `${context}[${index}]`);
+  });
+  return normalized;
+}
+
 function readHeaderValue(headers, name) {
   if (!headers) {
     return null;
@@ -791,6 +866,8 @@ export class ToriiClient {
  * @param {Record<string, string>} [options.defaultHeaders]
  * @param {string} [options.authToken]
  * @param {string} [options.apiToken]
+ * @param {"local"|"auto"|"global"} [options.transactionStatusScope]
+ * @param {ReadonlyArray<string> | string} [options.statusEndpoints]
  * @param {typeof sorafsGatewayFetch} [options.sorafsGatewayFetch] Custom gateway fetch hook (tests).
  * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
  * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
@@ -2916,15 +2993,63 @@ export class ToriiClient {
       retryProfile: "pipeline",
     });
     await this._expectStatus(response, [200, 201, 202, 204]);
+    const route = this._extractSubmissionRoute(response);
     const contentType = this._getHeader(response, "content-type");
+    const enrichSubmission = (value) => {
+      if (!route) {
+        return value;
+      }
+      if (value === null || value === undefined) {
+        return { route };
+      }
+      if (typeof value === "object" && !Array.isArray(value)) {
+        return { ...value, route };
+      }
+      return { value, route };
+    };
     if (contentType && contentType.toLowerCase().includes("application/x-norito")) {
       const body = Buffer.from(await response.arrayBuffer());
       if (body.length === 0) {
-        return null;
+        return enrichSubmission(null);
       }
-      return decodeTransactionReceiptPayload(body);
+      return enrichSubmission(decodeTransactionReceiptPayload(body));
     }
-    return this._maybeJson(response);
+    return enrichSubmission(await this._maybeJson(response));
+  }
+
+  _extractSubmissionRoute(response) {
+    const laneRaw = this._getHeader(response, "x-iroha-route-lane-id");
+    const dataspaceRaw = this._getHeader(response, "x-iroha-route-dataspace-id");
+    let laneId = null;
+    if (laneRaw != null && String(laneRaw).trim() !== "") {
+      try {
+        laneId = ToriiClient._normalizeUnsignedInteger(
+          laneRaw,
+          "submitTransaction.route.laneId",
+        );
+      } catch {
+        laneId = null;
+      }
+    }
+    let dataspaceId = null;
+    if (dataspaceRaw != null && String(dataspaceRaw).trim() !== "") {
+      try {
+        dataspaceId = ToriiClient._normalizeUnsignedInteger(
+          dataspaceRaw,
+          "submitTransaction.route.dataspaceId",
+        );
+      } catch {
+        dataspaceId = null;
+      }
+    }
+    if (laneId === null && dataspaceId === null) {
+      return null;
+    }
+    return {
+      acceptedBy: this._baseUrl,
+      laneId,
+      dataspaceId,
+    };
   }
 
   async _ensureDataModelCompatibility() {
@@ -2978,7 +3103,12 @@ export class ToriiClient {
   /**
    * Query pipeline status for a transaction hash (hex encoded).
    * @param {string} hashHex
-   * @param {{allowShortHash?: boolean, signal?: AbortSignal}} [options]
+   * @param {{
+   *   allowShortHash?: boolean,
+   *   signal?: AbortSignal,
+   *   scope?: "local" | "auto" | "global",
+   *   endpoints?: ReadonlyArray<string> | string,
+   * }} [options]
    * @returns {Promise<any>} Parsed JSON if present; otherwise null.
   */
   async getTransactionStatus(hashHex, options = {}) {
@@ -3003,6 +3133,16 @@ export class ToriiClient {
       );
     }
     const allowShortHash = optionRecord.allowShortHash === true;
+    const scope = normalizeTransactionStatusScope(
+      optionRecord.scope,
+      "getTransactionStatus options.scope",
+      this._config.transactionStatusScope || "auto",
+    );
+    const endpointCandidates = normalizeStatusEndpointCandidates(
+      this._baseUrl,
+      optionRecord.endpoints ?? this._config.statusEndpoints,
+      "getTransactionStatus options.endpoints",
+    );
     const { signal } = normalizeSignalOption(
       optionRecord,
       "getTransactionStatus",
@@ -3012,11 +3152,54 @@ export class ToriiClient {
       "getTransactionStatus.hashHex",
       { allowShort: allowShortHash },
     );
+    const candidates =
+      scope === "local" ? endpointCandidates.slice(0, 1) : endpointCandidates;
+    let firstError = null;
+    for (const endpointBaseUrl of candidates) {
+      try {
+        const payload = await this._getTransactionStatusFromEndpoint(
+          endpointBaseUrl,
+          normalizedHash,
+          { signal, scope },
+        );
+        if (!payload) {
+          continue;
+        }
+        if (
+          endpointBaseUrl !== this._baseUrl &&
+          payload &&
+          typeof payload === "object" &&
+          !Array.isArray(payload)
+        ) {
+          return {
+            ...payload,
+            resolved_from: endpointBaseUrl,
+          };
+        }
+        return payload;
+      } catch (error) {
+        if (this._isAbortError(error)) {
+          throw error;
+        }
+        if (!firstError) {
+          firstError = error;
+        }
+      }
+    }
+    if (firstError) {
+      throw firstError;
+    }
+    return null;
+  }
+
+  async _getTransactionStatusFromEndpoint(baseUrl, normalizedHash, options = {}) {
+    const { signal, scope } = options;
     const response = await this._request(
       "GET",
-      "/v1/pipeline/transactions/status",
+      `${baseUrl}/v1/pipeline/transactions/status`,
       {
-        params: { hash: normalizedHash },
+        params: { hash: normalizedHash, scope },
+        allowAbsoluteUrl: true,
         retryProfile: "pipeline",
         signal,
       },

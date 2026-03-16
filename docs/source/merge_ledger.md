@@ -1,14 +1,18 @@
 # Merge Ledger Design — Lane Finality and Global Reduction
 
 This note finalises the merge-ledger design for Milestone 5. It explains the
-non-empty block policy, cross-lane QC merge semantics, and the finality workflow
-that binds lane-level execution to the global world state commitment.
+non-empty block policy, asynchronous cross-lane merge semantics, and the
+finality workflow that binds lane-level execution to the global world state
+commitment.
 
 The design extends the Nexus architecture described in `nexus.md`. Terms such as
 "lane block", "lane QC", "merge hint", and "merge ledger" inherit their
 definition from that document; this note focuses on behavioural rules and
 implementation guidance that must be enforced by the runtime, storage, and WSV
 layers.
+
+**Scope:** the rules below apply when `nexus.enabled = true`. Legacy
+single-lane mode is unchanged.
 
 ## 1. Non-Empty Block Policy
 
@@ -48,27 +52,40 @@ in the block.
   execution-vote preimage (block hash, `parent_state_root`,
   `post_state_root`, height/view/epoch, chain_id, and mode tag).
 
-Merge nodes collect the latest tips `{(B_i, lane_qc_i, merge_hint_root_i)}` for
-all lanes `i ∈ [0, K)`.
+Merge nodes maintain the latest admissible relay snapshot per active
+`(lane_id, dataspace_id)` pair. A merge candidate is emitted:
+
+- once for bootstrap after every active lane has produced at least one finalized
+  relay snapshot, and
+- thereafter whenever any lane advances.
+
+Unchanged lanes are carried forward from the previous merge entry. Merge epochs
+increase monotonically and are independent of per-lane block heights.
 
 **Merge Entry (MUST):**
 
 ```
+MergeLaneSnapshot {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    tip_hash: Hash32,
+    merge_hint_root: Hash32,
+}
+
 MergeLedgerEntry {
     epoch_id: u64,
-    lane_tips: [Hash32; K],
-    merge_hint_root: [Hash32; K],
+    lane_snapshots: Vec<MergeLaneSnapshot>,
     global_state_root: Hash32,
-    merge_qc: QuorumCertificate,
+    merge_qc: MergeQuorumCertificate,
 }
 ```
 
-- `lane_tips[i]` is the hash of the lane block the merge entry seals for lane
-  `i`. If a lane emitted no block since the previous merge entry, this value is
-  repeated.
-- `merge_hint_root[i]` is the `merge_hint_root` from the corresponding lane
-  block. It is repeated when `lane_tips[i]` repeats.
-- `global_state_root` equals `ReduceMergeHints(merge_hint_root[0..K-1])`, a
+- `lane_snapshots` is canonically sorted by `(lane_id, dataspace_id)` and MUST
+  not contain duplicates.
+- `lane_snapshots[*].tip_hash` and `lane_snapshots[*].merge_hint_root` repeat
+  unchanged values when that lane did not advance since the previous entry.
+- `global_state_root` equals `ReduceMergeHints(lane_snapshots[*].merge_hint_root)`, a
   Poseidon2 fold with domain separation tag
   `"iroha:merge:reduce:v1\0"`. The reduction is deterministic and MUST
   reconstruct the same value across peers.
@@ -86,14 +103,13 @@ merge_qc_digest = blake2b32(
     norito(MergeLedgerSignPayload {
         view,
         epoch_id,
-        lane_tips,
-        merge_hint_roots,
+        lane_snapshots,
         global_state_root,
     })
 )
 ```
 
-- `view` is the merge-committee view derived from the lane tips (max
+- `view` is the merge-committee view derived from the lane snapshots (max
   `view_change_index` across the lane headers sealed by the entry).
 - `chain_id` is the configured chain identifier string (UTF-8 bytes).
 - The payload uses Norito encoding with the field order shown above.
@@ -112,12 +128,15 @@ verified by BLS signatures.
 
 **Validation (MUST):**
 
-1. Verify each `lane_qc_i` against `lane_tips[i]` and confirm the block headers
-   include the matching `merge_hint_root_i`.
-2. Ensure no `lane_qc_i` points to an `Invalid` or unexecuted block. The
+1. Verify each lane snapshot points to a relay envelope with a valid lane QC,
+   matching tip hash/header height, and matching merge-hint root.
+2. Require valid FastPQ proof material for each admitted relay envelope. Missing,
+   invalid, or unverified FastPQ proofs MUST block merge admission (no QC-only
+   fallback).
+3. Ensure no admitted relay points to an `Invalid` or unexecuted block. The
    non-empty policy above ensures the header includes state overlays.
-3. Recompute `ReduceMergeHints` and compare with `global_state_root`.
-4. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
+4. Recompute `ReduceMergeHints` and compare with `global_state_root`.
+5. Recompute the merge QC digest and verify the signer bitmap, quorum threshold,
    and aggregate signature against the commit-topology roster.
 
 **Observability:** Merge nodes emit Prometheus counters for
@@ -133,7 +152,8 @@ operational visibility.
 artifacts.
 3. Upon validation, the lane committee signs the execution-vote preimage that
    binds the block hash, state roots, and height/view/epoch. The tuple
-   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final.
+   `(block_hash, lane_qc_i, merge_hint_root_i)` is considered lane-final only
+   after the relay envelope includes valid FastPQ proof material.
 4. Light clients MAY treat the lane tip as final for DS-limited proofs, but
 must record the associated `merge_hint_root` to reconcile with the merge ledger
 later.
@@ -149,8 +169,8 @@ pauses until quorum is restored (emergency recovery is handled separately).
 
 ### 3.2 Merge-Ledger Finality
 
-1. Merge committee collects the latest lane tips, verifies each `lane_qc_i`, and
-constructs the `MergeLedgerEntry` as defined above.
+1. Merge committee collects the rolling lane snapshots, verifies each relay (QC
+   + FastPQ), and constructs the `MergeLedgerEntry` as defined above.
 2. After verifying the deterministic reduction, the merge committee signs the
 entry (`merge_qc`).
 3. Nodes append the entry to the merge ledger log and persist it alongside the
@@ -165,17 +185,20 @@ value; deterministic replay must reproduce the same reduction.
   final `global_state_root`, bridging lane execution with the global checksum.
 - Kura persists `MergeLedgerEntry` adjacent to the lane block artifacts so a
   replay can reconstruct both lane-level and global finality sequences.
-- When a lane skips a slot, storage simply retains the previous tip; no
-  placeholder merge entries are created until at least one lane produces a new
-  block.
+- When a lane skips a slot, storage retains the previous snapshot for that lane.
+  Merge entries still advance whenever at least one other lane produces a new
+  admissible relay.
 - API surfaces (Torii, telemetry) expose both lane tips and the latest merge
   entry so operators and clients can reconcile per-lane and global views.
 
 ## 4. Implementation Notes
 
-- `crates/iroha_core/src/state.rs`: `State::commit_merge_entry` validates the
-  reduction and wires the lane/global metadata into the world state so queries
-  and observers can access the merge hints and the authoritative global hash.
+- `crates/iroha_core/src/state.rs`: merge-candidate synthesis tracks the latest
+  finalized relay per active `(lane_id, dataspace_id)` pair, carries forward
+  unchanged snapshots, and emits a new candidate only when at least one lane
+  advances after bootstrap. `State::commit_merge_entry` validates the reduction
+  and wires lane/global metadata into the world state so queries and observers
+  can access merge hints and the authoritative global hash.
 - `crates/iroha_core/src/kura.rs`: `Kura::store_block_with_merge_entry` enqueues
   the block and persists the associated merge entry in one step, rolling back
   the in-memory block when the append fails so storage never records a block

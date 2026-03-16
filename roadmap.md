@@ -1,6 +1,56 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-16
+Last updated: 2026-03-17
+
+Latest sync (2026-03-17 zero-vote active-owner no-op drop suppression):
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now suppresses
+contiguous-frontier zero-vote quorum-timeout drop/requeue when the existing
+`quorum_timeout` frontier owner for that height is still active in the current
+window but has no recorded `last_action_at` yet. This removes the observed
+no-op shape where commit-quorum warnings could still emit
+`drop_pending=true` together with `frontier_recovery_advance=Some(None)`.
+Added regression
+`zero_vote_quorum_timeout_does_not_drop_while_quorum_timeout_owner_active_without_action`
+in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, fixed the unrelated
+`iroha_core` lib-test import blocker in
+`crates/iroha_core/src/smartcontracts/isi/domain.rs` (`BOB_ID`,
+`CanRegisterAccount`), and revalidated the ownership subset green
+(`contiguous_frontier_missing_payload_dwell_*`, `zero_vote_quorum_timeout_*`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`frontier_recovery_rotates_once_after_cleanup_window_expires`).
+
+Warmed keep-dirs probe rerun
+(`/tmp/izanami_npos_healthy_probe_zero_vote_owner_active_noop_guard_20260317T001915.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_VEMRRO`)
+still timed out at `quorum 67 / strict 72`, but compared to the previous warmed
+rerun (`1qE1Ki`, `61 / 67`) peer-log churn improved:
+`commit quorum missing ...` `16 -> 8`, `drop_pending=true` `6 -> 0`,
+and `frontier_recovery_advance=Some(None)` warnings `1 -> 0`. Open work remains
+late commit-quorum convergence beyond ~`70` blocks (vote-backed/split-vote
+stalls), not repeated zero-vote no-op drop ownership churn.
+
+Latest sync (2026-03-16 zero-vote recent-progress drop guard):
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now defers zero-vote
+quorum-timeout drop/requeue when pending progress is still inside the current
+reschedule backoff window (`progress_age < reschedule_backoff`), instead of
+dropping immediately on every zero-vote timeout edge. Added regression
+`zero_vote_quorum_timeout_defers_drop_when_progress_is_recent` in
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs` (defer first, then drop and
+handoff after backoff expiry). Build validation on this tree is green
+(`cargo check -p iroha_core --lib`, `cargo build --release -p irohad --bin iroha3d`);
+`cargo test -p iroha_core --lib ...` was temporarily blocked at that point by unrelated existing
+lib-test compile errors in `crates/iroha_core/src/smartcontracts/isi/domain.rs`
+(missing `BOB_ID` / `CanRegisterAccount` imports in that test module). Warmed
+keep-dirs probe
+(`/tmp/izanami_npos_healthy_probe_zero_vote_recent_progress_guard_20260316T234527.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_oL218c`)
+still timed out at `quorum 48 / strict 54`, but removed the pathological
+near-zero-progress zero-vote drop signature (`drop_pending=true` with
+`progress_age_ms <= 100`: `1 -> 0`; total `drop_pending=true`: `5 -> 3` vs prior
+run). Immediate open work remains commit-quorum convergence under queue pressure:
+this run collapsed around heights `10` and `33` with competing same-height block
+hashes and split votes (`1/2`), not missing-block dwell ownership duplication.
 
 Latest sync (2026-03-16 strict elapsed-window dwell ownership revalidation):
 `crates/iroha_core/src/sumeragi/main_loop.rs` now enforces contiguous-frontier

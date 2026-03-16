@@ -483,10 +483,13 @@ mod tests {
     fn sample_pipeline_events() -> Vec<PipelineEventBox> {
         let merge_entry = MergeLedgerEntry {
             epoch_id: 42,
-            lane_tips: vec![HashOf::from_untyped_unchecked(Hash::prehashed(
-                [3_u8; Hash::LENGTH],
-            ))],
-            merge_hint_roots: vec![Hash::new(b"hint")],
+            lane_snapshots: vec![crate::merge::MergeLaneSnapshot {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+                lane_block_height: 9,
+                tip_hash: HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH])),
+                merge_hint_root: Hash::new(b"hint"),
+            }],
             global_state_root: Hash::new(b"global"),
             merge_qc: MergeQuorumCertificate::new(
                 7,

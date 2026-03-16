@@ -54,7 +54,8 @@ use iroha_data_model::{
     isi::{InstructionBox, Log},
     merge::MergeCommitteeSignature,
     nexus::{
-        DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility,
+        DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, LaneStorageProfile,
+        LaneVisibility,
         staking::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     },
     parameter::TransactionParameters,
@@ -445,7 +446,16 @@ fn sample_lane_relay_envelope_with_bitmap(
             timestamp_ms: 1_700_000_000_000,
         }],
     };
-    LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope")
+    LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
+        .expect("valid envelope")
+        .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: Hash::new([
+                u8::try_from(lane_id.as_u32()).unwrap_or(0),
+                u8::try_from(height & 0xFF).unwrap_or(0),
+                signers_bitmap,
+            ]),
+            verified_at_height: Some(height),
+        }))
 }
 
 fn account_id_for_keypair(keypair: &KeyPair) -> AccountId {
@@ -3527,9 +3537,12 @@ async fn merge_committee_signatures_commit_merge_entry() {
         .latest()
         .expect("merge entry committed");
     assert_eq!(entry.epoch_id, 1);
-    assert_eq!(entry.lane_tips.as_slice(), &[envelope.block_header.hash()]);
     assert_eq!(
-        entry.merge_hint_roots.as_slice(),
+        entry.lane_tips().as_slice(),
+        &[envelope.block_header.hash()]
+    );
+    assert_eq!(
+        entry.merge_hint_roots().as_slice(),
         &[*envelope.settlement_hash]
     );
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x01]);
@@ -82087,7 +82100,9 @@ async fn zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_tim
     let payload_hash = Hash::new(&payload_bytes);
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
-    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    let stalled_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, 0, payload_hash);
 
@@ -82141,7 +82156,9 @@ async fn zero_vote_quorum_timeout_suppresses_same_window_repeat_while_frontier_o
     let payload_hash = Hash::new(&payload_bytes);
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
     let mut pending = PendingBlock::new(block, payload_hash, height, 0);
-    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    let stalled_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, 0, payload_hash);
 
@@ -82199,6 +82216,132 @@ async fn zero_vote_quorum_timeout_suppresses_same_window_repeat_while_frontier_o
     assert_eq!(
         snapshot.view_change_causes.missing_qc_total, 0,
         "same-window suppression must not emit MissingQc fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn zero_vote_quorum_timeout_does_not_drop_while_quorum_timeout_owner_active_without_action() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let now = Instant::now();
+    let stalled_at = now
+        .checked_sub(quorum_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, 0, payload_hash);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: now,
+        last_progress_at: now,
+        last_dependency_progress_at: Some(now),
+        last_action_at: None,
+        no_progress_windows: 0,
+        cleanup_done: false,
+        last_view: 0,
+        last_rotation_view: None,
+        last_cause: "quorum_timeout",
+    });
+
+    assert!(
+        !actor.frontier_recovery_owns_height_window(height, now),
+        "setup requires ownership without an in-window action timestamp"
+    );
+    assert!(
+        !actor.reschedule_stale_pending_blocks_with_now(now, None),
+        "zero-vote reschedule should stay suppressed while quorum-timeout owner is active in this window even without a recorded action"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "suppressed zero-vote reschedule should keep the pending block"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.last_cause == "quorum_timeout"
+                && state.last_action_at.is_none()
+        }),
+        "suppression should preserve the existing quorum-timeout frontier owner state"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(
+        snapshot.view_change_causes.missing_qc_total, 0,
+        "suppression should not trigger MissingQc fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn zero_vote_quorum_timeout_defers_drop_when_progress_is_recent() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let now = Instant::now();
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.inserted_at = now - quorum_timeout - Duration::from_millis(1);
+    pending.touch_progress(now - Duration::from_millis(5));
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, 0, payload_hash);
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks_with_now(now, None),
+        "zero-vote quorum timeout should defer while progress is still inside the backoff window"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "zero-vote pending should remain while recent progress is still fresh"
+    );
+    assert!(
+        actor.frontier_recovery.is_none(),
+        "deferred zero-vote reschedule should not seed frontier recovery yet"
+    );
+
+    let after_backoff = now
+        .checked_add(super::saturating_mul_duration(quorum_timeout, 5))
+        .and_then(|at| at.checked_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    assert!(
+        actor.reschedule_stale_pending_blocks_with_now(after_backoff, None),
+        "zero-vote pending should drop once progress ages beyond the backoff window"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "zero-vote pending should be dropped after the backoff window expires"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height && state.last_cause == "quorum_timeout"
+        }),
+        "post-backoff zero-vote drop should hand ownership to frontier quorum-timeout recovery"
     );
 
     harness.shutdown.send();
@@ -83633,7 +83776,9 @@ async fn reschedule_defers_zero_vote_quorum_timeout_while_block_queue_backlogged
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
-    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    let stalled_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
 

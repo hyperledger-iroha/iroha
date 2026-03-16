@@ -67,7 +67,7 @@ use iroha_data_model::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         settlement::{SettlementId, SettlementLedger},
     },
-    merge::MergeLedgerEntry,
+    merge::{MergeLaneSnapshot, MergeLedgerEntry},
     metadata::Metadata,
     nexus::{
         AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry,
@@ -949,6 +949,10 @@ impl LaneRelayStore {
                 self.entries.insert(key, envelope);
                 return Ok(LaneRelayInsert::Replaced);
             }
+            if !existing.has_fastpq_proof_material() && envelope.has_fastpq_proof_material() {
+                self.entries.insert(key, envelope);
+                return Ok(LaneRelayInsert::Replaced);
+            }
             if existing == &envelope {
                 return Ok(LaneRelayInsert::Duplicate);
             }
@@ -968,6 +972,33 @@ impl LaneRelayStore {
         height: u64,
     ) -> Option<&LaneRelayEnvelope> {
         self.entries.get(&(lane_id, dataspace_id, height))
+    }
+
+    /// Return the highest relay envelope stored for a lane/dataspace pair.
+    #[must_use]
+    pub fn latest_for_lane_dataspace(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Option<&LaneRelayEnvelope> {
+        self.entries
+            .range((lane_id, dataspace_id, 0)..=(lane_id, dataspace_id, u64::MAX))
+            .next_back()
+            .map(|(_, envelope)| envelope)
+    }
+
+    /// Return the highest relay envelope that satisfies merge-admission prerequisites.
+    #[must_use]
+    pub fn latest_merge_admissible_for_lane_dataspace(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Option<&LaneRelayEnvelope> {
+        self.entries
+            .range((lane_id, dataspace_id, 0)..=(lane_id, dataspace_id, u64::MAX))
+            .rev()
+            .map(|(_, envelope)| envelope)
+            .find(|envelope| envelope.qc.is_some() && envelope.has_fastpq_proof_material())
     }
 
     /// Snapshot stored envelopes in deterministic order.
@@ -1091,15 +1122,19 @@ pub enum MergeLedgerCommitError {
     /// The merge entry must reference at least one lane.
     #[error("merge ledger entry must include at least one lane")]
     EmptyEntry,
-    /// Length mismatch between lane tips and merge-hint roots.
+    /// Lane snapshots must be sorted by `(lane_id, dataspace_id)` and unique.
     #[error(
-        "merge ledger entry lane count mismatch: lane_tips={lane_tips}, merge_hint_roots={merge_hint_roots}"
+        "merge ledger lane snapshots must be unique and sorted: previous={previous_lane}:{previous_dataspace}, current={current_lane}:{current_dataspace}"
     )]
-    LaneVectorLengthMismatch {
-        /// Number of lane tips supplied by the producer.
-        lane_tips: usize,
-        /// Number of merge-hint roots supplied by the producer.
-        merge_hint_roots: usize,
+    LaneSnapshotOrderViolation {
+        /// Previous lane identifier encountered while walking the entry payload.
+        previous_lane: LaneId,
+        /// Previous dataspace identifier encountered while walking the entry payload.
+        previous_dataspace: DataSpaceId,
+        /// Current lane identifier that violated strict ordering.
+        current_lane: LaneId,
+        /// Current dataspace identifier that violated strict ordering.
+        current_dataspace: DataSpaceId,
     },
     /// Merge QC epoch does not match the entry epoch.
     #[error("merge ledger qc epoch mismatch: entry={entry_epoch}, qc={qc_epoch}")]
@@ -16178,6 +16213,7 @@ impl State {
         )?;
         envelope.verify_with_quorum(quorum)?;
         self.verify_lane_relay_qc(envelope, &committee)?;
+        envelope.verify_fastpq_proof_material()?;
 
         let inserted = {
             let mut guard = self.lane_relays.write();
@@ -16226,58 +16262,92 @@ impl State {
             return Vec::new();
         }
 
-        let mut next_height = self
-            .merge_ledger
-            .latest()
+        let latest_merge_entry = self.merge_ledger.latest();
+        let next_epoch = latest_merge_entry
+            .as_ref()
             .map_or(0, |entry| entry.epoch_id)
             .saturating_add(1);
-        let mut candidates = Vec::new();
+        let previous_view = latest_merge_entry
+            .as_ref()
+            .map_or(0, |entry| entry.merge_qc.view);
+        let previous_snapshots: BTreeMap<(LaneId, DataSpaceId), MergeLaneSnapshot> =
+            latest_merge_entry
+                .as_ref()
+                .map_or_else(BTreeMap::new, |entry| {
+                    entry
+                        .lane_snapshots
+                        .iter()
+                        .map(|snapshot| ((snapshot.lane_id, snapshot.dataspace_id), *snapshot))
+                        .collect()
+                });
 
-        loop {
-            let mut lane_tips = Vec::with_capacity(lane_keys.len());
-            let mut merge_hint_roots = Vec::with_capacity(lane_keys.len());
-            let mut max_view = 0u64;
+        let mut lane_snapshots = Vec::with_capacity(lane_keys.len());
+        let mut advanced = latest_merge_entry.is_none();
+        let mut max_view = previous_view;
 
-            {
-                let relays = self.lane_relays.read();
-                for (lane_id, dataspace_id) in &lane_keys {
-                    let Some(envelope) = relays.get(*lane_id, *dataspace_id, next_height) else {
-                        return candidates;
-                    };
-                    if envelope.dataspace_id != *dataspace_id {
-                        iroha_logger::warn!(
-                            lane_id = %lane_id,
-                            expected = %dataspace_id,
-                            actual = %envelope.dataspace_id,
-                            height = next_height,
-                            "skipping merge entry synthesis due to dataspace mismatch"
-                        );
-                        return candidates;
-                    }
-                    if envelope.qc.is_none() {
-                        return candidates;
-                    }
-                    lane_tips.push(envelope.block_header.hash());
-                    merge_hint_roots.push(*envelope.settlement_hash);
-                    let view = envelope.block_header.view_change_index();
-                    if view > max_view {
-                        max_view = view;
-                    }
+        {
+            let relays = self.lane_relays.read();
+            for (lane_id, dataspace_id) in &lane_keys {
+                let Some(latest_admissible) =
+                    relays.latest_merge_admissible_for_lane_dataspace(*lane_id, *dataspace_id)
+                else {
+                    return Vec::new();
+                };
+                if latest_admissible.dataspace_id != *dataspace_id {
+                    iroha_logger::warn!(
+                        lane_id = %lane_id,
+                        expected = %dataspace_id,
+                        actual = %latest_admissible.dataspace_id,
+                        height = latest_admissible.block_height,
+                        "skipping merge entry synthesis due to dataspace mismatch"
+                    );
+                    return Vec::new();
                 }
+
+                let key = (*lane_id, *dataspace_id);
+                let selected_snapshot = match previous_snapshots.get(&key).copied() {
+                    Some(previous)
+                        if previous.lane_block_height >= latest_admissible.block_height =>
+                    {
+                        previous
+                    }
+                    _ => {
+                        advanced = true;
+                        MergeLaneSnapshot {
+                            lane_id: *lane_id,
+                            dataspace_id: *dataspace_id,
+                            lane_block_height: latest_admissible.block_height,
+                            tip_hash: latest_admissible.block_header.hash(),
+                            merge_hint_root: *latest_admissible.settlement_hash,
+                        }
+                    }
+                };
+
+                let snapshot_view = relays
+                    .get(*lane_id, *dataspace_id, selected_snapshot.lane_block_height)
+                    .map_or(previous_view, |envelope| {
+                        envelope.block_header.view_change_index()
+                    });
+                max_view = max_view.max(snapshot_view);
+                lane_snapshots.push(selected_snapshot);
             }
-
-            let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
-            let entry = crate::merge::MergeLedgerCandidate {
-                epoch_id: next_height,
-                view: max_view,
-                lane_tips,
-                merge_hint_roots,
-                global_state_root,
-            };
-
-            candidates.push(entry);
-            next_height = next_height.saturating_add(1);
         }
+
+        if !advanced {
+            return Vec::new();
+        }
+
+        let merge_hint_roots: Vec<Hash> = lane_snapshots
+            .iter()
+            .map(|snapshot| snapshot.merge_hint_root)
+            .collect();
+        let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
+        vec![crate::merge::MergeLedgerCandidate {
+            epoch_id: next_epoch,
+            view: max_view,
+            lane_snapshots,
+            global_state_root,
+        }]
     }
 
     /// Snapshot stored lane relay envelopes.
@@ -16301,16 +16371,23 @@ impl State {
         entry: MergeLedgerEntry,
     ) -> core::result::Result<Arc<MergeLedgerEntry>, MergeLedgerCommitError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        let lane_tips = entry.lane_tips.len();
-        if lane_tips == 0 {
+        if entry.lane_snapshots.is_empty() {
             return Err(MergeLedgerCommitError::EmptyEntry);
         }
-        let merge_hint_roots = entry.merge_hint_roots.len();
-        if lane_tips != merge_hint_roots {
-            return Err(MergeLedgerCommitError::LaneVectorLengthMismatch {
-                lane_tips,
-                merge_hint_roots,
-            });
+        let mut prev_key: Option<(LaneId, DataSpaceId)> = None;
+        for snapshot in &entry.lane_snapshots {
+            let key = (snapshot.lane_id, snapshot.dataspace_id);
+            if let Some(prev) = prev_key
+                && key <= prev
+            {
+                return Err(MergeLedgerCommitError::LaneSnapshotOrderViolation {
+                    previous_lane: prev.0,
+                    previous_dataspace: prev.1,
+                    current_lane: key.0,
+                    current_dataspace: key.1,
+                });
+            }
+            prev_key = Some(key);
         }
         self.validate_merge_quorum_certificate(&entry)?;
 
@@ -16470,16 +16547,17 @@ impl State {
     }
 
     fn update_merge_metadata(&self, entry: &MergeLedgerEntry) {
+        let entry_merge_hint_roots = entry.merge_hint_roots();
         let should_update_roots = {
             let current = self.world.merge_hint_roots.view();
-            current.as_slice() != entry.merge_hint_roots.as_slice()
+            current.as_slice() != entry_merge_hint_roots.as_slice()
         };
         if should_update_roots {
             let mut block = self.world.merge_hint_roots.block();
             {
                 let mut tx = block.transaction();
                 tx.clear();
-                tx.extend(entry.merge_hint_roots.iter().map(Clone::clone));
+                tx.extend(entry_merge_hint_roots.iter().copied());
                 tx.apply();
             }
             block.commit();
@@ -19621,12 +19699,13 @@ impl<'state> StateBlock<'state> {
     }
 
     fn update_merge_metadata(&mut self, entry: &MergeLedgerEntry) {
+        let entry_merge_hint_roots = entry.merge_hint_roots();
         let should_update_roots =
-            self.world.merge_hint_roots.as_slice() != entry.merge_hint_roots.as_slice();
+            self.world.merge_hint_roots.as_slice() != entry_merge_hint_roots.as_slice();
         if should_update_roots {
             let mut tx = self.world.merge_hint_roots.transaction();
             tx.clear();
-            tx.extend(entry.merge_hint_roots.iter().copied());
+            tx.extend(entry_merge_hint_roots.iter().copied());
             tx.apply();
         }
 
@@ -25223,9 +25302,9 @@ mod tests {
             AxtHandleFragment, AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot,
             AxtProofFragment, AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog,
             DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
-            LaneConfig, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError,
-            LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob, RemoteSpendIntent,
-            SpendOp, TouchManifest,
+            LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEmergencyValidatorSet,
+            LaneRelayEnvelope, LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion,
+            ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
         },
         peer::PeerId,
         prelude::*,
@@ -27869,6 +27948,7 @@ mod tests {
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
     ) -> LaneRelayEnvelope {
+        let fastpq_proof = sample_fastpq_proof_material(height, lane_id, view);
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             None,
@@ -27905,7 +27985,24 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
         };
-        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope")
+        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
+            .expect("valid envelope")
+            .with_fastpq_proof_material(Some(fastpq_proof))
+    }
+
+    fn sample_fastpq_proof_material(
+        height: u64,
+        lane_id: LaneId,
+        view: u64,
+    ) -> LaneFastpqProofMaterial {
+        LaneFastpqProofMaterial {
+            proof_digest: Hash::new([
+                u8::try_from(lane_id.as_u32()).unwrap_or(0),
+                u8::try_from(height & 0xFF).unwrap_or(0),
+                u8::try_from(view & 0xFF).unwrap_or(0),
+            ]),
+            verified_at_height: Some(height),
+        }
     }
 
     #[test]
@@ -27964,6 +28061,59 @@ mod tests {
             .expect_err("invalid relay should be rejected");
         assert!(matches!(err, LaneRelayError::BlockHeightMismatch));
         assert!(state.lane_relay_snapshot().is_empty());
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_missing_fastpq_proof() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+        );
+        configure_commit_topology(&state, 1);
+
+        let mut envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap);
+        envelope.fastpq_proof = None;
+
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("missing FastPQ proof must be rejected");
+        assert!(matches!(err, LaneRelayError::MissingFastpqProof));
+    }
+
+    #[test]
+    fn record_lane_relay_rejects_invalid_fastpq_proof() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        install_lane_manifest_registry(
+            &state,
+            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+        );
+        configure_commit_topology(&state, 1);
+
+        let mut envelope = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap);
+        envelope.fastpq_proof = Some(LaneFastpqProofMaterial {
+            proof_digest: Hash::prehashed([0u8; Hash::LENGTH]),
+            verified_at_height: Some(2),
+        });
+
+        let err = state
+            .record_lane_relay(&envelope)
+            .expect_err("invalid FastPQ proof must be rejected");
+        assert!(matches!(err, LaneRelayError::InvalidFastpqProof));
     }
 
     #[test]
@@ -28078,7 +28228,8 @@ mod tests {
             settlement,
             envelope.rbc_bytes_total,
         )
-        .expect("conflicting relay envelope is structurally valid");
+        .expect("conflicting relay envelope is structurally valid")
+        .with_fastpq_proof_material(envelope.fastpq_proof.clone());
         let err = state
             .record_lane_relay(&conflicting)
             .expect_err("conflicting relay must be rejected");
@@ -28359,7 +28510,12 @@ mod tests {
             }],
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
-            .expect("lane relay envelope");
+            .expect("lane relay envelope")
+            .with_fastpq_proof_material(Some(sample_fastpq_proof_material(
+                height,
+                LaneId::new(0),
+                0,
+            )));
         let inserted = state
             .record_lane_relay(&envelope)
             .expect("relay accepted with emergency override");
@@ -28496,7 +28652,12 @@ mod tests {
             }],
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
-            .expect("lane relay envelope");
+            .expect("lane relay envelope")
+            .with_fastpq_proof_material(Some(sample_fastpq_proof_material(
+                height,
+                LaneId::new(0),
+                0,
+            )));
         let inserted = state
             .record_lane_relay(&envelope)
             .expect("relay accepted on expiry height");
@@ -28818,18 +28979,14 @@ mod tests {
         let candidate = candidates
             .first()
             .expect("merge candidate computed from relay");
+        let lane_tips = candidate.lane_tips();
+        let merge_hint_roots = candidate.merge_hint_roots();
         assert_eq!(candidate.epoch_id, 1);
-        assert_eq!(
-            candidate.lane_tips.as_slice(),
-            &[envelope.block_header.hash()]
-        );
-        assert_eq!(
-            candidate.merge_hint_roots.as_slice(),
-            &[*envelope.settlement_hash]
-        );
+        assert_eq!(lane_tips.as_slice(), &[envelope.block_header.hash()]);
+        assert_eq!(merge_hint_roots.as_slice(), &[*envelope.settlement_hash]);
         assert_eq!(
             candidate.global_state_root,
-            crate::merge::reduce_merge_hint_roots(&candidate.merge_hint_roots)
+            crate::merge::reduce_merge_hint_roots(&merge_hint_roots)
         );
 
         let qc = merge_qc_for_candidate(&state, candidate, &keypairs, &[0]);
@@ -28895,18 +29052,20 @@ mod tests {
         let candidate = candidates
             .first()
             .expect("merge candidate computed once both lanes relayed");
+        let lane_tips = candidate.lane_tips();
+        let merge_hint_roots = candidate.merge_hint_roots();
         assert_eq!(candidate.epoch_id, 1);
         assert_eq!(
-            candidate.lane_tips.as_slice(),
+            lane_tips.as_slice(),
             &[lane0.block_header.hash(), lane1.block_header.hash()]
         );
         assert_eq!(
-            candidate.merge_hint_roots.as_slice(),
+            merge_hint_roots.as_slice(),
             &[*lane0.settlement_hash, *lane1.settlement_hash]
         );
         assert_eq!(
             candidate.global_state_root,
-            crate::merge::reduce_merge_hint_roots(&candidate.merge_hint_roots)
+            crate::merge::reduce_merge_hint_roots(&merge_hint_roots)
         );
 
         let qc = merge_qc_for_candidate(&state, candidate, &keypairs, &[0]);
@@ -28974,6 +29133,94 @@ mod tests {
             .first()
             .expect("merge candidate computed once both lanes relayed");
         assert_eq!(candidate.view, 3);
+    }
+
+    #[test]
+    fn merge_candidate_carries_forward_unchanged_lane_snapshot() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "beta".to_string(),
+                    dataspace_id: DataSpaceId::GLOBAL,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("two-lane catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(nexus)
+            .expect("apply two-lane Nexus catalog");
+
+        install_lane_manifest_registry(
+            &state,
+            &[
+                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids.clone()),
+            ],
+        );
+        let keypairs = configure_commit_topology(&state, 1);
+
+        let lane0_h1 =
+            sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap.clone());
+        let lane1_h1 =
+            sample_lane_relay_envelope(1, LaneId::new(1), &signers, signers_bitmap.clone());
+        state
+            .record_lane_relay(&lane0_h1)
+            .expect("lane0 height1 accepted");
+        state
+            .record_lane_relay(&lane1_h1)
+            .expect("lane1 height1 accepted");
+
+        let first_candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("initial merge candidate");
+        let first_qc = merge_qc_for_candidate(&state, &first_candidate, &keypairs, &[0]);
+        state
+            .commit_merge_entry(merge_entry_from_candidate(first_candidate, first_qc))
+            .expect("commit initial merge entry");
+
+        let lane0_h2 = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap);
+        state
+            .record_lane_relay(&lane0_h2)
+            .expect("lane0 height2 accepted");
+
+        let second_candidate = state
+            .merge_entry_candidates_from_lane_relays()
+            .into_iter()
+            .next()
+            .expect("rolling merge candidate");
+        assert_eq!(second_candidate.epoch_id, 2);
+        let lane0_snapshot = second_candidate
+            .lane_snapshots
+            .iter()
+            .find(|snapshot| snapshot.lane_id == LaneId::new(0))
+            .expect("lane0 snapshot");
+        let lane1_snapshot = second_candidate
+            .lane_snapshots
+            .iter()
+            .find(|snapshot| snapshot.lane_id == LaneId::new(1))
+            .expect("lane1 snapshot");
+        assert_eq!(lane0_snapshot.lane_block_height, 2);
+        assert_eq!(lane0_snapshot.tip_hash, lane0_h2.block_header.hash());
+        assert_eq!(lane1_snapshot.lane_block_height, 1);
+        assert_eq!(lane1_snapshot.tip_hash, lane1_h1.block_header.hash());
     }
 
     #[test]
@@ -36119,22 +36366,27 @@ mod tests {
     }
 
     fn merge_candidate_with_lanes(epoch: u64, count: usize) -> crate::merge::MergeLedgerCandidate {
-        let mut lane_tips = Vec::with_capacity(count);
-        let mut merge_hint_roots = Vec::with_capacity(count);
+        let mut lane_snapshots = Vec::with_capacity(count);
         for idx in 0..count {
             let tip = u8::try_from(idx).expect("lane index fits in u8");
-            lane_tips.push(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([
-                tip,
-            ])));
             let hint = tip.strict_add(1);
-            merge_hint_roots.push(iroha_crypto::Hash::new([hint]));
+            lane_snapshots.push(MergeLaneSnapshot {
+                lane_id: LaneId::new(u32::try_from(idx).expect("lane index fits in u32")),
+                dataspace_id: DataSpaceId::new(u64::try_from(idx + 1).expect("dsid fits in u64")),
+                lane_block_height: epoch.saturating_add(u64::try_from(idx).expect("height fits")),
+                tip_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([tip])),
+                merge_hint_root: iroha_crypto::Hash::new([hint]),
+            });
         }
+        let merge_hint_roots: Vec<Hash> = lane_snapshots
+            .iter()
+            .map(|snapshot| snapshot.merge_hint_root)
+            .collect();
         let global_state_root = crate::merge::reduce_merge_hint_roots(&merge_hint_roots);
         crate::merge::MergeLedgerCandidate {
             epoch_id: epoch,
             view: 0,
-            lane_tips,
-            merge_hint_roots,
+            lane_snapshots,
             global_state_root,
         }
     }
@@ -36566,8 +36818,7 @@ mod tests {
 
         let entry = MergeLedgerEntry {
             epoch_id: 1,
-            lane_tips: Vec::new(),
-            merge_hint_roots: Vec::new(),
+            lane_snapshots: Vec::new(),
             global_state_root: iroha_crypto::Hash::new(b"root"),
             merge_qc: dummy_merge_qc(),
         };
@@ -36579,24 +36830,21 @@ mod tests {
     }
 
     #[test]
-    fn commit_merge_entry_rejects_length_mismatch() {
+    fn commit_merge_entry_rejects_unsorted_lane_snapshots() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
 
         let candidate = merge_candidate_with_lanes(1, 2);
         let mut entry = merge_entry_from_candidate(candidate, dummy_merge_qc());
-        entry.merge_hint_roots.pop();
+        entry.lane_snapshots.reverse();
 
         let err = state
             .commit_merge_entry(entry)
-            .expect_err("mismatched lanes must be rejected");
+            .expect_err("unsorted lane snapshots must be rejected");
         assert!(matches!(
             err,
-            MergeLedgerCommitError::LaneVectorLengthMismatch {
-                lane_tips: 2,
-                merge_hint_roots: 1
-            }
+            MergeLedgerCommitError::LaneSnapshotOrderViolation { .. }
         ));
     }
 
@@ -36681,8 +36929,9 @@ mod tests {
 
         assert_eq!(stored.epoch_id, epoch_id);
         let stored_ref = stored.as_ref();
+        let stored_merge_hint_roots = stored_ref.merge_hint_roots();
         let roots_view = state.world.merge_hint_roots.view();
-        assert_eq!(&*roots_view, &stored_ref.merge_hint_roots);
+        assert_eq!(&*roots_view, &stored_merge_hint_roots);
         let global_view = state.world.merge_global_state_root.view();
         assert_eq!(global_view.as_ref(), Some(&stored_ref.global_state_root));
         let latest = state
@@ -36732,6 +36981,7 @@ mod tests {
             .commit_merge_entry(entry)
             .expect("merge entry commit persists");
         let stored_ref = stored.as_ref();
+        let stored_merge_hint_roots = stored_ref.merge_hint_roots();
 
         {
             let mut roots_block = state.world.merge_hint_roots.block();
@@ -36759,7 +37009,7 @@ mod tests {
 
         assert_eq!(
             &*state.world.merge_hint_roots.view(),
-            &stored_ref.merge_hint_roots
+            &stored_merge_hint_roots
         );
         assert_eq!(
             state.world.merge_global_state_root.view().as_ref(),

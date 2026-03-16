@@ -115,6 +115,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<endorsement::SetDomainEndorsementPolicy>,
     InstructionRegistry::register::<endorsement::SubmitDomainEndorsement>,
     InstructionRegistry::register::<domain_link::LinkAccountDomain>,
+    InstructionRegistry::register::<domain_link::BindAccountAlias>,
+    InstructionRegistry::register::<domain_link::SetAccountLabel>,
     InstructionRegistry::register::<domain_link::UnlinkAccountDomain>,
     InstructionRegistry::register::<asset_alias::SetAssetDefinitionAlias>,
     InstructionRegistry::register::<sorafs::RegisterPinManifest>,
@@ -255,6 +257,10 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
         .register_with_id::<endorsement::SubmitDomainEndorsement>("nexus::SubmitDomainEndorsement");
     registry =
         registry.register_with_id::<domain_link::LinkAccountDomain>("identity::LinkAccountDomain");
+    registry =
+        registry.register_with_id::<domain_link::BindAccountAlias>("identity::BindAccountAlias");
+    registry =
+        registry.register_with_id::<domain_link::SetAccountLabel>("identity::SetAccountLabel");
     registry = registry
         .register_with_id::<domain_link::UnlinkAccountDomain>("identity::UnlinkAccountDomain");
     registry = registry.register_with_id::<asset_alias::SetAssetDefinitionAlias>(
