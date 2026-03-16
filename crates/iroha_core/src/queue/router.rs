@@ -23,6 +23,7 @@ use crate::{
     state::{State, StateView, WorldReadOnly},
     tx::AcceptedTransaction,
 };
+use thiserror::Error;
 
 /// Routing decision returned by a [`LaneRouter`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +48,47 @@ impl RoutingDecision {
 impl Default for RoutingDecision {
     fn default() -> Self {
         Self::new(LaneId::SINGLE, DataSpaceId::GLOBAL)
+    }
+}
+
+/// Deterministic routing resolution failure against configured Nexus catalogs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum RoutingResolveError {
+    /// lane {lane_id} is not present in the lane catalog
+    #[error("lane {lane_id} is not present in the lane catalog")]
+    UnknownLane {
+        /// Lane selected by the routing policy.
+        lane_id: LaneId,
+    },
+    /// dataspace {dataspace_id} is not present in the dataspace catalog
+    #[error("dataspace {dataspace_id} is not present in the dataspace catalog")]
+    UnknownDataspace {
+        /// Dataspace selected by the routing policy.
+        dataspace_id: DataSpaceId,
+    },
+    /// lane {lane_id} is bound to dataspace {lane_dataspace_id}, but resolved dataspace is {dataspace_id}
+    #[error(
+        "lane {lane_id} is bound to dataspace {lane_dataspace_id}, but resolved dataspace is {dataspace_id}"
+    )]
+    LaneDataspaceMismatch {
+        /// Lane selected by the routing policy.
+        lane_id: LaneId,
+        /// Dataspace configured for the resolved lane.
+        lane_dataspace_id: DataSpaceId,
+        /// Dataspace selected by the routing policy.
+        dataspace_id: DataSpaceId,
+    },
+}
+
+impl RoutingResolveError {
+    /// Stable telemetry label for deterministic routing failures.
+    #[must_use]
+    pub const fn as_label(&self) -> &'static str {
+        match self {
+            Self::UnknownLane { .. } => "unknown_lane",
+            Self::UnknownDataspace { .. } => "unknown_dataspace",
+            Self::LaneDataspaceMismatch { .. } => "lane_dataspace_mismatch",
+        }
     }
 }
 
@@ -85,89 +127,55 @@ fn evaluate_policy_with_view(
     RoutingDecision::new(lane_id, dataspace_id)
 }
 
-/// Evaluate the routing policy and align the decision to the configured catalogs.
+/// Evaluate the routing policy and resolve it against the configured catalogs.
 pub fn evaluate_policy_with_catalog(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
     tx: &AcceptedTransaction<'_>,
-) -> RoutingDecision {
+) -> Result<RoutingDecision, RoutingResolveError> {
     let decision = evaluate_policy(policy, tx);
-    normalize_routing_decision(decision, policy, lane_catalog, dataspace_catalog)
+    resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
 }
 
-fn normalize_routing_decision(
+/// Resolve a policy decision against lane/dataspace catalogs without fallback.
+///
+/// This function intentionally rejects unresolved or ambiguous combinations
+/// instead of silently rewriting them to defaults.
+pub fn resolve_routing_decision(
     decision: RoutingDecision,
-    policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-) -> RoutingDecision {
-    let lane_id = if lane_catalog
+) -> Result<RoutingDecision, RoutingResolveError> {
+    let Some(lane) = lane_catalog
         .lanes()
         .iter()
-        .any(|lane| lane.id == decision.lane_id)
-    {
-        decision.lane_id
-    } else if lane_catalog
-        .lanes()
-        .iter()
-        .any(|lane| lane.id == policy.default_lane)
-    {
-        policy.default_lane
-    } else {
-        lane_catalog
-            .lanes()
-            .iter()
-            .min_by_key(|lane| lane.id.as_u32())
-            .map_or(policy.default_lane, |lane| lane.id)
+        .find(|lane| lane.id == decision.lane_id)
+    else {
+        return Err(RoutingResolveError::UnknownLane {
+            lane_id: decision.lane_id,
+        });
     };
 
-    let dataspace_known = |dataspace_id: DataSpaceId| {
-        dataspace_catalog
-            .entries()
-            .iter()
-            .any(|entry| entry.id == dataspace_id)
-    };
-    let fallback_dataspace = dataspace_catalog
+    let dataspace_known = dataspace_catalog
         .entries()
         .iter()
-        .find(|entry| entry.id == DataSpaceId::GLOBAL)
-        .map(|entry| entry.id)
-        .or_else(|| {
-            dataspace_catalog
-                .entries()
-                .iter()
-                .min_by_key(|entry| entry.id.as_u64())
-                .map(|entry| entry.id)
-        })
-        .unwrap_or(policy.default_dataspace);
-    let default_dataspace = if dataspace_known(policy.default_dataspace) {
-        policy.default_dataspace
-    } else {
-        fallback_dataspace
-    };
+        .any(|entry| entry.id == decision.dataspace_id);
+    if !dataspace_known {
+        return Err(RoutingResolveError::UnknownDataspace {
+            dataspace_id: decision.dataspace_id,
+        });
+    }
 
-    let dataspace_id = if dataspace_known(decision.dataspace_id) {
-        decision.dataspace_id
-    } else {
-        default_dataspace
-    };
+    if lane.dataspace_id != decision.dataspace_id {
+        return Err(RoutingResolveError::LaneDataspaceMismatch {
+            lane_id: lane.id,
+            lane_dataspace_id: lane.dataspace_id,
+            dataspace_id: decision.dataspace_id,
+        });
+    }
 
-    let lane_dataspace = lane_catalog
-        .lanes()
-        .iter()
-        .find(|lane| lane.id == lane_id)
-        .map(|lane| lane.dataspace_id)
-        .filter(|dataspace_id| dataspace_known(*dataspace_id))
-        .unwrap_or(default_dataspace);
-
-    let dataspace_id = if dataspace_id == lane_dataspace {
-        dataspace_id
-    } else {
-        lane_dataspace
-    };
-
-    RoutingDecision::new(lane_id, dataspace_id)
+    Ok(decision)
 }
 
 fn rule_matches(
@@ -495,6 +503,44 @@ pub trait LaneRouter: Send + Sync + 'static {
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
         Some(self.route(tx))
     }
+
+    /// Route the given transaction and return deterministic route-resolution errors.
+    fn try_route(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        Ok(self.route(tx))
+    }
+
+    /// Route with an existing state view and return deterministic route-resolution errors.
+    fn try_route_with_view(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        Ok(self.route_with_view(tx, state_view))
+    }
+
+    /// Route with narrow state access and return deterministic route-resolution errors.
+    fn try_route_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        if let Some(decision) = self.try_route_without_state(tx)? {
+            return Ok(decision);
+        }
+        let state_view = state.view();
+        self.try_route_with_view(tx, &state_view)
+    }
+
+    /// Route without state snapshot when possible and return deterministic route errors.
+    fn try_route_without_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+        Ok(self.route_without_state(tx))
+    }
 }
 
 /// Trivial router that keeps the single-lane/global-dataspace behaviour.
@@ -541,13 +587,7 @@ impl ConfigLaneRouter {
 
 impl LaneRouter for ConfigLaneRouter {
     fn route(&self, tx: &AcceptedTransaction<'_>) -> RoutingDecision {
-        let decision = evaluate_policy(&self.policy, tx);
-        normalize_routing_decision(
-            decision,
-            self.policy.as_ref(),
-            self.lane_catalog.as_ref(),
-            self.dataspace_catalog.as_ref(),
-        )
+        evaluate_policy(&self.policy, tx)
     }
 
     fn route_with_view(
@@ -555,13 +595,7 @@ impl LaneRouter for ConfigLaneRouter {
         tx: &AcceptedTransaction<'_>,
         state_view: &StateView<'_>,
     ) -> RoutingDecision {
-        let decision = evaluate_policy_with_view(&self.policy, tx, state_view);
-        normalize_routing_decision(
-            decision,
-            self.policy.as_ref(),
-            self.lane_catalog.as_ref(),
-            self.dataspace_catalog.as_ref(),
-        )
+        evaluate_policy_with_view(&self.policy, tx, state_view)
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
@@ -569,6 +603,41 @@ impl LaneRouter for ConfigLaneRouter {
             return None;
         }
         Some(self.route(tx))
+    }
+
+    fn try_route(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let decision = evaluate_policy(&self.policy, tx);
+        resolve_routing_decision(
+            decision,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+        )
+    }
+
+    fn try_route_with_view(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let decision = evaluate_policy_with_view(&self.policy, tx, state_view);
+        resolve_routing_decision(
+            decision,
+            self.lane_catalog.as_ref(),
+            self.dataspace_catalog.as_ref(),
+        )
+    }
+
+    fn try_route_without_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+    ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+        if policy_needs_state(self.policy.as_ref()) {
+            return Ok(None);
+        }
+        self.try_route(tx).map(Some)
     }
 }
 
@@ -897,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn aligns_dataspace_with_lane_binding_on_mismatch() {
+    fn route_resolution_rejects_lane_dataspace_mismatch() {
         use iroha_data_model::nexus::DataSpaceMetadata;
 
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -932,7 +1001,6 @@ mod tests {
         ])
         .expect("valid dataspace catalog");
 
-        let policy_for_helper = policy.clone();
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::GLOBAL),
             (LaneId::new(4), DataSpaceId::new(7)),
@@ -949,15 +1017,19 @@ mod tests {
 
         let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::new(4));
-        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
+        assert_eq!(decision.dataspace_id, DataSpaceId::new(9));
 
-        let helper_decision =
-            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
-        assert_eq!(helper_decision, decision);
+        let helper_err =
+            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
+                .expect_err("mismatched lane/dataspace must be rejected");
+        assert!(matches!(
+            helper_err,
+            RoutingResolveError::LaneDataspaceMismatch { .. }
+        ));
     }
 
     #[test]
-    fn unknown_lane_rule_falls_back_to_default_dataspace() {
+    fn route_resolution_rejects_unknown_lane() {
         use iroha_data_model::nexus::DataSpaceMetadata;
 
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -986,7 +1058,6 @@ mod tests {
         ])
         .expect("valid dataspace catalog");
 
-        let policy_for_helper = policy.clone();
         let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::GLOBAL)]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
 
@@ -999,16 +1070,20 @@ mod tests {
         );
 
         let decision = router.route_with_view(&tx, &blank_state().view());
-        assert_eq!(decision.lane_id, LaneId::SINGLE);
-        assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(decision.lane_id, LaneId::new(9));
+        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
 
-        let helper_decision =
-            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
-        assert_eq!(helper_decision, decision);
+        let helper_err =
+            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
+                .expect_err("unknown lane must be rejected");
+        assert!(matches!(
+            helper_err,
+            RoutingResolveError::UnknownLane { .. }
+        ));
     }
 
     #[test]
-    fn missing_default_lane_falls_back_to_lowest_lane() {
+    fn route_resolution_rejects_missing_default_lane() {
         use iroha_data_model::nexus::DataSpaceMetadata;
 
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -1043,7 +1118,6 @@ mod tests {
         ])
         .expect("valid dataspace catalog");
 
-        let policy_for_helper = policy.clone();
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::new(2), DataSpaceId::new(7)),
             (LaneId::new(4), DataSpaceId::new(9)),
@@ -1059,16 +1133,20 @@ mod tests {
         );
 
         let decision = router.route_with_view(&tx, &blank_state().view());
-        assert_eq!(decision.lane_id, LaneId::new(2));
-        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
+        assert_eq!(decision.lane_id, LaneId::new(9));
+        assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
 
-        let helper_decision =
-            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
-        assert_eq!(helper_decision, decision);
+        let helper_err =
+            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
+                .expect_err("missing default lane must be rejected");
+        assert!(matches!(
+            helper_err,
+            RoutingResolveError::UnknownLane { .. }
+        ));
     }
 
     #[test]
-    fn missing_default_dataspace_falls_back_to_catalog() {
+    fn route_resolution_rejects_missing_default_dataspace() {
         use iroha_data_model::nexus::DataSpaceMetadata;
 
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -1094,7 +1172,6 @@ mod tests {
         }])
         .expect("valid dataspace catalog");
 
-        let policy_for_helper = policy.clone();
         let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::new(9))]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
 
@@ -1108,11 +1185,15 @@ mod tests {
 
         let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::SINGLE);
-        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
+        assert_eq!(decision.dataspace_id, DataSpaceId::new(11));
 
-        let helper_decision =
-            evaluate_policy_with_catalog(&policy_for_helper, &lane_catalog, &catalog, &tx);
-        assert_eq!(helper_decision, decision);
+        let helper_err =
+            evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
+                .expect_err("missing default dataspace must be rejected");
+        assert!(matches!(
+            helper_err,
+            RoutingResolveError::UnknownDataspace { .. }
+        ));
     }
 
     #[test]

@@ -5987,9 +5987,20 @@ fn protected_contract_namespaces(
         &nexus.lane_catalog,
         &nexus.dataspace_catalog,
         &accepted,
-    );
+    )
+    .map_err(|err| {
+        iroha_logger::warn!(
+            reason = %err,
+            reason_label = err.as_label(),
+            "unable to resolve lane route while loading protected contract namespaces"
+        );
+        err
+    })
+    .ok();
 
-    let mut namespaces = lane_manifest_protected_namespaces(state, routing.lane_id);
+    let mut namespaces = routing
+        .map(|routing| lane_manifest_protected_namespaces(state, routing.lane_id))
+        .unwrap_or_else(|| all_lane_manifest_protected_namespaces(state));
     if namespaces.is_empty() {
         namespaces = all_lane_manifest_protected_namespaces(state);
     }

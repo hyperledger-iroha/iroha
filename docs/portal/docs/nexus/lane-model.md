@@ -112,13 +112,19 @@ LaneConfigEntry {
 
 ## Routing & APIs
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
-  `lane_default`.
+- Torii REST/gRPC endpoints accept an optional `lane_id`; absence resolves via
+  `nexus.routing_policy.default_lane` / `default_dataspace`.
+- Any Torii ingress node may accept transactions and route them using the
+  active routing policy, even if the target dataspace is not validated locally
+  by that ingress node.
 - SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
   the lane catalog.
 - Routing rules operate on the validated catalog and may pick both lane and
   dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
   logs.
+- Unresolved routing is deterministic: if a rule resolves to an unknown lane,
+  unknown dataspace, or lane/dataspace mismatch, admission is rejected with an
+  unresolved-route error (no fallback-to-default rewrite for ambiguous inputs).
 
 ## Settlement & fees
 

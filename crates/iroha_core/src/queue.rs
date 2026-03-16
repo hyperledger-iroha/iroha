@@ -56,8 +56,8 @@ use mv::storage::StorageReadOnly;
 use norito::core::NoritoSerialize;
 use parking_lot::RwLock;
 pub use router::{
-    ConfigLaneRouter, LaneRouter, RoutingDecision, SingleLaneRouter, evaluate_policy,
-    evaluate_policy_with_catalog,
+    ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
+    evaluate_policy, evaluate_policy_with_catalog, resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{
@@ -405,6 +405,11 @@ pub enum Error {
     MaximumTransactionsPerUser,
     /// The transaction is already in the queue
     IsInQueue,
+    /// Transaction routing could not be resolved: {reason}
+    UnresolvedRoute {
+        /// Deterministic route-resolution failure reason.
+        reason: String,
+    },
     /// Lane governance manifest is missing or invalid: {0}
     Governance(GovernanceGuardError),
     /// Transaction not permitted by lane governance manifest: {alias} ({reason})
@@ -1456,11 +1461,24 @@ impl Queue {
     }
 
     /// Resolve routing without a [`StateView`] when the active router supports it.
+    fn resolve_queue_routing_decision(
+        &self,
+        decision: RoutingDecision,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let lane_catalog = self.lane_catalog.read();
+        let dataspace_catalog = self.dataspace_catalog.read();
+        resolve_routing_decision(decision, lane_catalog.as_ref(), dataspace_catalog.as_ref())
+    }
+
+    /// Resolve routing without a [`StateView`] when the active router supports it.
     pub(crate) fn route_for_gossip_without_state(
         &self,
         tx: &AcceptedTransaction<'_>,
-    ) -> Option<RoutingDecision> {
-        self.router.read().route_without_state(tx)
+    ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+        let decision = self.router.read().try_route_without_state(tx)?;
+        decision
+            .map(|decision| self.resolve_queue_routing_decision(decision))
+            .transpose()
     }
 
     /// Resolve routing for an inbound gossip transaction with the current state.
@@ -1471,8 +1489,9 @@ impl Queue {
         &self,
         tx: &AcceptedTransaction<'_>,
         state: &State,
-    ) -> RoutingDecision {
-        self.router.read().route_with_state(tx, state)
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let decision = self.router.read().try_route_with_state(tx, state)?;
+        self.resolve_queue_routing_decision(decision)
     }
 
     /// Returns whether the queue currently tracks the transaction hash.
@@ -1530,7 +1549,22 @@ impl Queue {
         state_view: &StateView<'_>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        let routing_decision = self.router.read().route_with_view(&tx, state_view);
+        let routing_decision = match self
+            .router
+            .read()
+            .try_route_with_view(&tx, state_view)
+            .and_then(|decision| self.resolve_queue_routing_decision(decision))
+        {
+            Ok(decision) => decision,
+            Err(err) => {
+                return Err(Failure {
+                    tx: tx.into(),
+                    err: Error::UnresolvedRoute {
+                        reason: err.to_string(),
+                    },
+                });
+            }
+        };
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -1589,8 +1623,25 @@ impl Queue {
         routing_decision: Option<RoutingDecision>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        let routing_decision =
-            routing_decision.unwrap_or_else(|| self.router.read().route_with_state(&tx, state));
+        let routing_decision = match routing_decision {
+            Some(decision) => self.resolve_queue_routing_decision(decision),
+            None => self
+                .router
+                .read()
+                .try_route_with_state(&tx, state)
+                .and_then(|decision| self.resolve_queue_routing_decision(decision)),
+        };
+        let routing_decision = match routing_decision {
+            Ok(decision) => decision,
+            Err(err) => {
+                return Err(Failure {
+                    tx: tx.into(),
+                    err: Error::UnresolvedRoute {
+                        reason: err.to_string(),
+                    },
+                });
+            }
+        };
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
 
@@ -2132,6 +2183,18 @@ impl Queue {
                 err: Error::Expired,
             });
         }
+
+        let routing_decision = match self.resolve_queue_routing_decision(routing_decision) {
+            Ok(decision) => decision,
+            Err(err) => {
+                return Err(Failure {
+                    tx: Box::new(checked.into_accepted()),
+                    err: Error::UnresolvedRoute {
+                        reason: err.to_string(),
+                    },
+                });
+            }
+        };
 
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
@@ -3252,7 +3315,27 @@ impl Queue {
                 }
                 continue;
             }
-            let routing = router.route_with_view(tx.as_accepted(), state_view);
+            let routing = match router
+                .try_route_with_view(tx.as_accepted(), state_view)
+                .and_then(|decision| {
+                    resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
+                }) {
+                Ok(routing) => routing,
+                Err(err) => {
+                    warn!(
+                        tx = %entry.key(),
+                        reason = %err,
+                        reason_label = err.as_label(),
+                        "skipping reroute for queued transaction due to unresolved route"
+                    );
+                    self.routing_decisions.remove(entry.key());
+                    #[cfg(feature = "telemetry")]
+                    {
+                        self.tx_teu.remove(entry.key());
+                    }
+                    continue;
+                }
+            };
             self.routing_decisions.insert(*entry.key(), routing);
             #[cfg(feature = "telemetry")]
             {
@@ -3321,11 +3404,64 @@ impl Queue {
                 }
                 continue;
             }
-            let routing = if let Some(routing) = router.route_without_state(tx.as_accepted()) {
-                routing
-            } else {
-                let state_view = route_view.get_or_insert_with(|| state.view());
-                router.route_with_view(tx.as_accepted(), state_view)
+            let routing = match router.try_route_without_state(tx.as_accepted()) {
+                Ok(Some(routing)) => {
+                    match resolve_routing_decision(routing, lane_catalog, dataspace_catalog) {
+                        Ok(routing) => routing,
+                        Err(err) => {
+                            warn!(
+                                tx = %entry.key(),
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "skipping reroute for queued transaction due to unresolved route"
+                            );
+                            self.routing_decisions.remove(entry.key());
+                            #[cfg(feature = "telemetry")]
+                            {
+                                self.tx_teu.remove(entry.key());
+                            }
+                            continue;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    let state_view = route_view.get_or_insert_with(|| state.view());
+                    match router
+                        .try_route_with_view(tx.as_accepted(), state_view)
+                        .and_then(|routing| {
+                            resolve_routing_decision(routing, lane_catalog, dataspace_catalog)
+                        }) {
+                        Ok(routing) => routing,
+                        Err(err) => {
+                            warn!(
+                                tx = %entry.key(),
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "skipping reroute for queued transaction due to unresolved route"
+                            );
+                            self.routing_decisions.remove(entry.key());
+                            #[cfg(feature = "telemetry")]
+                            {
+                                self.tx_teu.remove(entry.key());
+                            }
+                            continue;
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        tx = %entry.key(),
+                        reason = %err,
+                        reason_label = err.as_label(),
+                        "skipping reroute for queued transaction due to unresolved route"
+                    );
+                    self.routing_decisions.remove(entry.key());
+                    #[cfg(feature = "telemetry")]
+                    {
+                        self.tx_teu.remove(entry.key());
+                    }
+                    continue;
+                }
             };
             self.routing_decisions.insert(*entry.key(), routing);
             #[cfg(feature = "telemetry")]
@@ -4982,6 +5118,36 @@ pub mod tests {
     }
 
     #[test]
+    fn push_with_lane_with_state_rejects_unresolved_route() {
+        struct UnresolvedRouter;
+
+        impl LaneRouter for UnresolvedRouter {
+            fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+                RoutingDecision::new(LaneId::new(99), DataSpaceId::new(77))
+            }
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue =
+            Queue::test_with_router(config_factory(), &time_source, Arc::new(UnresolvedRouter));
+        let tx = accepted_tx_by_someone(&time_source);
+
+        let err = queue
+            .push_with_lane_with_state(tx, &state)
+            .expect_err("unresolved route must be rejected");
+        assert!(matches!(err.err, Error::UnresolvedRoute { .. }));
+        if let Error::UnresolvedRoute { reason } = &err.err {
+            assert!(
+                reason.contains("lane"),
+                "route rejection reason should include lane lookup failure"
+            );
+        }
+    }
+
+    #[test]
     fn contains_pending_hash_ignores_committed_entries() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5512,8 +5678,8 @@ pub mod tests {
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let expected_lane = LaneId::new(2);
-        let expected_dataspace = DataSpaceId::new(7);
+        let expected_lane = LaneId::SINGLE;
+        let expected_dataspace = DataSpaceId::GLOBAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -5524,7 +5690,9 @@ pub mod tests {
         );
 
         let tx = accepted_tx_by_someone(&time_source);
-        let routing = queue.route_for_gossip_with_state(&tx, state.as_ref());
+        let routing = queue
+            .route_for_gossip_with_state(&tx, state.as_ref())
+            .expect("route should resolve with configured catalogs");
 
         assert_eq!(routing.lane_id, expected_lane);
         assert_eq!(routing.dataspace_id, expected_dataspace);
@@ -5555,8 +5723,8 @@ pub mod tests {
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let expected_lane = LaneId::new(3);
-        let expected_dataspace = DataSpaceId::new(9);
+        let expected_lane = LaneId::SINGLE;
+        let expected_dataspace = DataSpaceId::GLOBAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -5567,7 +5735,9 @@ pub mod tests {
         );
 
         let tx = accepted_tx_by_someone(&time_source);
-        let routing = queue.route_for_gossip_with_state(&tx, state.as_ref());
+        let routing = queue
+            .route_for_gossip_with_state(&tx, state.as_ref())
+            .expect("route should resolve with configured catalogs");
 
         assert_eq!(routing.lane_id, expected_lane);
         assert_eq!(routing.dataspace_id, expected_dataspace);
@@ -5606,8 +5776,8 @@ pub mod tests {
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let expected_lane = LaneId::new(4);
-        let expected_dataspace = DataSpaceId::new(11);
+        let expected_lane = LaneId::SINGLE;
+        let expected_dataspace = DataSpaceId::GLOBAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -5618,7 +5788,9 @@ pub mod tests {
         );
 
         let tx = accepted_tx_by_someone(&time_source);
-        let routing = queue.route_for_gossip_with_state(&tx, state.as_ref());
+        let routing = queue
+            .route_for_gossip_with_state(&tx, state.as_ref())
+            .expect("route should resolve with configured catalogs");
 
         assert_eq!(routing.lane_id, expected_lane);
         assert_eq!(routing.dataspace_id, expected_dataspace);
@@ -5662,8 +5834,8 @@ pub mod tests {
         let hash = tx.as_ref().hash();
         queue.push(tx, state.view()).expect("push");
 
-        let expected_lane = LaneId::new(6);
-        let expected_dataspace = DataSpaceId::new(14);
+        let expected_lane = LaneId::SINGLE;
+        let expected_dataspace = DataSpaceId::GLOBAL;
         let router: Arc<dyn LaneRouter> = Arc::new(ViewOnlyRouter {
             lane: expected_lane,
             dataspace: expected_dataspace,

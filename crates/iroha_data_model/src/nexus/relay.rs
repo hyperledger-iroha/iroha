@@ -50,6 +50,24 @@ pub struct LaneRelayEnvelope {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub manifest_root: Option<[u8; 32]>,
+    /// FastPQ proof material required before this relay can be admitted into the merge path.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub fastpq_proof: Option<LaneFastpqProofMaterial>,
+}
+
+/// FastPQ proof metadata attached to a lane relay envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneFastpqProofMaterial {
+    /// Deterministic digest of the proof payload.
+    pub proof_digest: Hash,
+    /// Optional block height where the proof was verified.
+    #[norito(default)]
+    pub verified_at_height: Option<u64>,
 }
 
 /// Operator evidence bundle captured when ingesting a lane relay envelope fails.
@@ -183,6 +201,7 @@ impl LaneRelayEnvelope {
             settlement_hash,
             rbc_bytes_total,
             manifest_root: None,
+            fastpq_proof: None,
         })
     }
 
@@ -295,6 +314,41 @@ impl LaneRelayEnvelope {
     pub fn with_manifest_root(mut self, manifest_root: Option<[u8; 32]>) -> Self {
         self.manifest_root = manifest_root;
         self
+    }
+
+    /// Attach FastPQ proof material to the envelope.
+    #[must_use]
+    pub fn with_fastpq_proof_material(
+        mut self,
+        fastpq_proof: Option<LaneFastpqProofMaterial>,
+    ) -> Self {
+        self.fastpq_proof = fastpq_proof;
+        self
+    }
+
+    /// Whether the envelope includes structurally valid FastPQ proof material.
+    #[must_use]
+    pub fn has_fastpq_proof_material(&self) -> bool {
+        self.verify_fastpq_proof_material().is_ok()
+    }
+
+    /// Validate FastPQ proof metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneRelayError::MissingFastpqProof`] when proof metadata is absent and
+    /// [`LaneRelayError::InvalidFastpqProof`] when the digest is zero-like.
+    pub fn verify_fastpq_proof_material(&self) -> Result<(), LaneRelayError> {
+        let Some(material) = self.fastpq_proof.as_ref() else {
+            return Err(LaneRelayError::MissingFastpqProof);
+        };
+        let bytes = material.proof_digest.as_ref();
+        let is_zero_like =
+            bytes[..Hash::LENGTH - 1].iter().all(|byte| *byte == 0) && bytes[Hash::LENGTH - 1] <= 1;
+        if is_zero_like {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+        Ok(())
     }
 
     /// Re-compute the settlement hash and ensure it matches the envelope.
@@ -425,6 +479,12 @@ pub enum LaneRelayError {
     /// Aggregate signature bytes are missing, zeroed, or invalid.
     #[error("aggregate signature missing or invalid for QC")]
     AggregateSignatureInvalid,
+    /// FastPQ proof metadata is required for merge admission.
+    #[error("FastPQ proof metadata missing for lane relay envelope")]
+    MissingFastpqProof,
+    /// FastPQ proof metadata failed structural validation.
+    #[error("FastPQ proof metadata is invalid for lane relay envelope")]
+    InvalidFastpqProof,
 }
 
 impl PartialEq for LaneRelayError {
@@ -442,6 +502,8 @@ impl PartialEq for LaneRelayError {
             | (DaCommitmentHashMismatch, DaCommitmentHashMismatch)
             | (MissingQc, MissingQc)
             | (AggregateSignatureInvalid, AggregateSignatureInvalid)
+            | (MissingFastpqProof, MissingFastpqProof)
+            | (InvalidFastpqProof, InvalidFastpqProof)
             | (Encode(_), Encode(_)) => true,
             (UnknownLane(a_lane), UnknownLane(b_lane)) => a_lane == b_lane,
             (
@@ -547,6 +609,8 @@ impl LaneRelayError {
             LaneRelayError::InvalidSignerIndex { .. } => "invalid_signer_index",
             LaneRelayError::InsufficientQuorum { .. } => "insufficient_quorum",
             LaneRelayError::AggregateSignatureInvalid => "aggregate_signature_invalid",
+            LaneRelayError::MissingFastpqProof => "missing_fastpq_proof",
+            LaneRelayError::InvalidFastpqProof => "invalid_fastpq_proof",
             LaneRelayError::Encode(_) => "encode",
         }
     }

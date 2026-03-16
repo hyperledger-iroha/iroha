@@ -54,7 +54,8 @@ use iroha_data_model::{
     isi::{InstructionBox, Log},
     merge::MergeCommitteeSignature,
     nexus::{
-        DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility,
+        DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, LaneStorageProfile,
+        LaneVisibility,
         staking::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     },
     parameter::TransactionParameters,
@@ -444,7 +445,16 @@ fn sample_lane_relay_envelope_with_bitmap(
             timestamp_ms: 1_700_000_000_000,
         }],
     };
-    LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope")
+    LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
+        .expect("valid envelope")
+        .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest: Hash::new([
+                u8::try_from(lane_id.as_u32()).unwrap_or(0),
+                u8::try_from(height & 0xFF).unwrap_or(0),
+                signers_bitmap,
+            ]),
+            verified_at_height: Some(height),
+        }))
 }
 
 fn account_id_for_keypair(keypair: &KeyPair) -> AccountId {
@@ -3502,9 +3512,12 @@ async fn merge_committee_signatures_commit_merge_entry() {
         .latest()
         .expect("merge entry committed");
     assert_eq!(entry.epoch_id, 1);
-    assert_eq!(entry.lane_tips.as_slice(), &[envelope.block_header.hash()]);
     assert_eq!(
-        entry.merge_hint_roots.as_slice(),
+        entry.lane_tips().as_slice(),
+        &[envelope.block_header.hash()]
+    );
+    assert_eq!(
+        entry.merge_hint_roots().as_slice(),
         &[*envelope.settlement_hash]
     );
     assert_eq!(entry.merge_qc.signers_bitmap, vec![0x01]);
