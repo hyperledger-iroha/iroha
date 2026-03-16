@@ -1389,7 +1389,30 @@ impl TransactionGossiper {
             ) {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
-                    let local_route = self.queue.route_for_gossip_with_state(&tx, state);
+                    let local_route = match self.queue.route_for_gossip_with_state(&tx, state) {
+                        Ok(route) => route,
+                        Err(err) => {
+                            iroha_logger::warn!(
+                                %tx_hash,
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "dropping transaction gossip entry due to unresolved local route"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                route.dataspace_id,
+                                &[route.lane_id],
+                                "route_unresolved",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                            continue;
+                        }
+                    };
                     if local_route != advertised_route {
                         iroha_logger::warn!(
                                 %tx_hash,
@@ -1648,7 +1671,30 @@ impl TransactionGossiper {
             ) {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
-                    let local_route = self.queue.route_for_gossip_with_state(&tx, state);
+                    let local_route = match self.queue.route_for_gossip_with_state(&tx, state) {
+                        Ok(route) => route,
+                        Err(err) => {
+                            iroha_logger::warn!(
+                                %tx_hash,
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "dropping transaction gossip entry due to unresolved local route"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                route.dataspace_id,
+                                &[route.lane_id],
+                                "route_unresolved",
+                                false,
+                                None,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                            continue;
+                        }
+                    };
                     if local_route != advertised_route {
                         iroha_logger::warn!(
                                 %tx_hash,

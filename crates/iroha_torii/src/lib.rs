@@ -20681,6 +20681,31 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[test]
+    fn push_into_queue_unresolved_route_maps_to_bad_request() {
+        use nonzero_ext::nonzero;
+
+        let err = super::Error::PushIntoQueue {
+            source: Box::new(queue::Error::UnresolvedRoute {
+                reason: "lane 9 is not present in the lane catalog".to_owned(),
+            }),
+            backpressure: queue::BackpressureState::Healthy {
+                queued: 0,
+                capacity: nonzero!(1_usize),
+            },
+        };
+
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|v| v.to_str().ok()),
+            Some("PRTRY:ROUTE_UNRESOLVED")
+        );
+    }
+
     #[tokio::test]
     async fn serialization_error_emits_redacted_norito_payload() {
         let err = super::Error::SerializationFailure {
@@ -20851,6 +20876,13 @@ mod tests_queue_metadata {
                 queue::Error::Expired,
                 "ED07",
                 "transaction expired before admission",
+            ),
+            (
+                queue::Error::UnresolvedRoute {
+                    reason: "lane 9 is unknown".to_owned(),
+                },
+                "PRTRY:ROUTE_UNRESOLVED",
+                "transaction route could not be resolved: lane 9 is unknown",
             ),
             (
                 queue::Error::InBlockchain,
@@ -21050,6 +21082,7 @@ impl Error {
                 StatusCode::TOO_MANY_REQUESTS
             }
             queue::Error::Expired => StatusCode::BAD_REQUEST,
+            queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
             queue::Error::Governance(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -21069,6 +21102,10 @@ impl Error {
             queue::Error::Expired => (
                 "transaction_expired",
                 "transaction expired before admission",
+            ),
+            queue::Error::UnresolvedRoute { .. } => (
+                "queue_unresolved_route",
+                "transaction route could not be resolved",
             ),
             queue::Error::InBlockchain => (
                 "already_committed",
@@ -21166,6 +21203,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "authority reached per-user queue capacity".to_owned(),
         ),
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
+        queue::Error::UnresolvedRoute { reason } => (
+            "PRTRY:ROUTE_UNRESOLVED",
+            format!("transaction route could not be resolved: {reason}"),
+        ),
         queue::Error::InBlockchain => (
             "PRTRY:ALREADY_COMMITTED",
             "transaction already committed to the blockchain".to_owned(),

@@ -4,7 +4,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
-    merge::{MergeLedgerEntry, MergeQuorumCertificate},
+    merge::{MergeLaneSnapshot, MergeLedgerEntry, MergeQuorumCertificate},
 };
 use iroha_zkp_halo2::poseidon;
 use norito::codec::Encode;
@@ -21,22 +21,37 @@ pub struct MergeLedgerCandidate {
     pub epoch_id: u64,
     /// Merge committee view derived from lane tips.
     pub view: u64,
-    /// Canonical tips for each execution lane.
-    pub lane_tips: Vec<HashOf<BlockHeader>>,
-    /// Merge-hint Poseidon roots aligned with the lane tips.
-    pub merge_hint_roots: Vec<Hash>,
+    /// Canonical per-lane snapshots for this merge entry.
+    pub lane_snapshots: Vec<MergeLaneSnapshot>,
     /// Deterministic reduction of `merge_hint_roots` across all lanes.
     pub global_state_root: Hash,
 }
 
 impl MergeLedgerCandidate {
+    /// Canonical lane tips derived from [`Self::lane_snapshots`].
+    #[must_use]
+    pub fn lane_tips(&self) -> Vec<HashOf<BlockHeader>> {
+        self.lane_snapshots
+            .iter()
+            .map(|snapshot| snapshot.tip_hash)
+            .collect()
+    }
+
+    /// Canonical merge-hint roots derived from [`Self::lane_snapshots`].
+    #[must_use]
+    pub fn merge_hint_roots(&self) -> Vec<Hash> {
+        self.lane_snapshots
+            .iter()
+            .map(|snapshot| snapshot.merge_hint_root)
+            .collect()
+    }
+
     /// Convert this candidate into a full merge-ledger entry with the supplied QC.
     #[must_use]
     pub fn into_entry(self, merge_qc: MergeQuorumCertificate) -> MergeLedgerEntry {
         MergeLedgerEntry {
             epoch_id: self.epoch_id,
-            lane_tips: self.lane_tips,
-            merge_hint_roots: self.merge_hint_roots,
+            lane_snapshots: self.lane_snapshots,
             global_state_root: self.global_state_root,
             merge_qc,
         }
@@ -48,8 +63,7 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
         Self {
             epoch_id: entry.epoch_id,
             view: entry.merge_qc.view,
-            lane_tips: entry.lane_tips.clone(),
-            merge_hint_roots: entry.merge_hint_roots.clone(),
+            lane_snapshots: entry.lane_snapshots.clone(),
             global_state_root: entry.global_state_root,
         }
     }
@@ -59,8 +73,7 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
 struct MergeLedgerSignPayload {
     view: u64,
     epoch_id: u64,
-    lane_tips: Vec<HashOf<BlockHeader>>,
-    merge_hint_roots: Vec<Hash>,
+    lane_snapshots: Vec<MergeLaneSnapshot>,
     global_state_root: Hash,
 }
 
@@ -70,8 +83,7 @@ pub fn merge_qc_message_digest(chain_id: &ChainId, candidate: &MergeLedgerCandid
     let payload = MergeLedgerSignPayload {
         view: candidate.view,
         epoch_id: candidate.epoch_id,
-        lane_tips: candidate.lane_tips.clone(),
-        merge_hint_roots: candidate.merge_hint_roots.clone(),
+        lane_snapshots: candidate.lane_snapshots.clone(),
         global_state_root: candidate.global_state_root,
     };
     let payload_bytes = payload.encode();
@@ -151,8 +163,13 @@ mod tests {
         let candidate = MergeLedgerCandidate {
             epoch_id: 7,
             view: 3,
-            lane_tips: vec![HashOf::from_untyped_unchecked(Hash::new(b"lane-0"))],
-            merge_hint_roots: vec![Hash::new(b"hint-0")],
+            lane_snapshots: vec![MergeLaneSnapshot {
+                lane_id: iroha_data_model::nexus::LaneId::new(1),
+                dataspace_id: iroha_data_model::nexus::DataSpaceId::new(7),
+                lane_block_height: 9,
+                tip_hash: HashOf::from_untyped_unchecked(Hash::new(b"lane-0")),
+                merge_hint_root: Hash::new(b"hint-0"),
+            }],
             global_state_root: Hash::new(b"global"),
         };
         let chain_id: ChainId = "nexus-merge".parse().expect("chain id parses");

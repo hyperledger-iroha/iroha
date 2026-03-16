@@ -474,9 +474,36 @@ fn requeue_block_transactions(
     for tx in txs {
         let tx_hash = tx.hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let routing_decision = crate::queue::routing_ledger::get(&tx_hash)
-            .or_else(|| queue.route_for_gossip_without_state(&accepted))
-            .unwrap_or_else(|| queue.route_for_gossip_with_state(&accepted, state));
+        let routing_decision = if let Some(decision) = crate::queue::routing_ledger::get(&tx_hash) {
+            decision
+        } else if let Some(decision) = match queue.route_for_gossip_without_state(&accepted) {
+            Ok(decision) => decision,
+            Err(err) => {
+                warn!(
+                    tx = %tx_hash,
+                    reason = %err,
+                    reason_label = err.as_label(),
+                    "failed to resolve routing without state during requeue"
+                );
+                None
+            }
+        } {
+            decision
+        } else {
+            match queue.route_for_gossip_with_state(&accepted, state) {
+                Ok(decision) => decision,
+                Err(err) => {
+                    failures = failures.saturating_add(1);
+                    warn!(
+                        tx = %tx_hash,
+                        reason = %err,
+                        reason_label = err.as_label(),
+                        "failed to resolve routing during requeue"
+                    );
+                    continue;
+                }
+            }
+        };
         match queue.push_requeued_with_routing(accepted, routing_decision, state) {
             Ok(()) => {
                 requeued = requeued.saturating_add(1);

@@ -10,7 +10,10 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use crate::block::{BlockHeader, consensus::ValidatorIndex};
+use crate::{
+    block::{BlockHeader, consensus::ValidatorIndex},
+    nexus::{DataSpaceId, LaneId},
+};
 
 /// BFT quorum certificate produced by the merge committee for a merge-ledger entry.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -69,6 +72,25 @@ pub struct MergeCommitteeSignature {
     pub bls_sig: Vec<u8>,
 }
 
+/// Canonical per-lane snapshot recorded inside a merge-ledger entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct MergeLaneSnapshot {
+    /// Numeric lane identifier.
+    pub lane_id: LaneId,
+    /// Numeric dataspace identifier.
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height represented by this snapshot.
+    pub lane_block_height: u64,
+    /// Canonical tip hash for the lane.
+    pub tip_hash: HashOf<BlockHeader>,
+    /// Merge-hint root associated with this lane snapshot.
+    pub merge_hint_root: Hash,
+}
+
 /// Ordered log entry produced by the merge ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -78,10 +100,8 @@ pub struct MergeCommitteeSignature {
 pub struct MergeLedgerEntry {
     /// Epoch in which the entry was committed.
     pub epoch_id: u64,
-    /// Canonical tips for each execution lane.
-    pub lane_tips: Vec<HashOf<BlockHeader>>,
-    /// Merge-hint Poseidon roots aligned with the lane tips.
-    pub merge_hint_roots: Vec<Hash>,
+    /// Canonical per-lane snapshots included in this merge entry.
+    pub lane_snapshots: Vec<MergeLaneSnapshot>,
     /// Deterministic reduction of `merge_hint_roots` across all lanes.
     pub global_state_root: Hash,
     /// Merge committee quorum certificate sealing the entry.
@@ -92,7 +112,25 @@ impl MergeLedgerEntry {
     /// Number of lanes represented by this entry.
     #[must_use]
     pub fn lane_count(&self) -> usize {
-        self.lane_tips.len()
+        self.lane_snapshots.len()
+    }
+
+    /// Canonical lane tips derived from [`Self::lane_snapshots`].
+    #[must_use]
+    pub fn lane_tips(&self) -> Vec<HashOf<BlockHeader>> {
+        self.lane_snapshots
+            .iter()
+            .map(|snapshot| snapshot.tip_hash)
+            .collect()
+    }
+
+    /// Canonical merge-hint roots derived from [`Self::lane_snapshots`].
+    #[must_use]
+    pub fn merge_hint_roots(&self) -> Vec<Hash> {
+        self.lane_snapshots
+            .iter()
+            .map(|snapshot| snapshot.merge_hint_root)
+            .collect()
     }
 }
 
@@ -119,13 +157,29 @@ mod tests {
         );
         let entry = MergeLedgerEntry {
             epoch_id: 3,
-            lane_tips: vec![sample_tip(b"lane-0"), sample_tip(b"lane-1")],
-            merge_hint_roots: vec![sample_hash(b"root-0"), sample_hash(b"root-1")],
+            lane_snapshots: vec![
+                MergeLaneSnapshot {
+                    lane_id: LaneId::new(1),
+                    dataspace_id: DataSpaceId::new(7),
+                    lane_block_height: 11,
+                    tip_hash: sample_tip(b"lane-0"),
+                    merge_hint_root: sample_hash(b"root-0"),
+                },
+                MergeLaneSnapshot {
+                    lane_id: LaneId::new(2),
+                    dataspace_id: DataSpaceId::new(9),
+                    lane_block_height: 14,
+                    tip_hash: sample_tip(b"lane-1"),
+                    merge_hint_root: sample_hash(b"root-1"),
+                },
+            ],
             global_state_root: sample_hash(b"global"),
             merge_qc: qc.clone(),
         };
 
         assert_eq!(entry.lane_count(), 2);
+        assert_eq!(entry.lane_tips().len(), 2);
+        assert_eq!(entry.merge_hint_roots().len(), 2);
 
         let encoded = Encode::encode(&entry);
         let decoded = MergeLedgerEntry::decode(&mut &encoded[..])

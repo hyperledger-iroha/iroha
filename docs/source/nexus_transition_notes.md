@@ -66,6 +66,10 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
 - Iroha 2 bundles remain lane-free: configs with `nexus.enabled = false` now
   reject lane/dataspace/routing overrides unless the Nexus profile is enabled
   (`--sora`), so strip `nexus.*` sections from single-lane templates.
+- Universal merge-ledger rollout policy (Nexus mode): release the async merge
+  schema and routing contract via genesis reset + full node redeploy. In-place
+  migration and backward wire compatibility are intentionally out of scope for
+  this rollout.
 - Keep the governance vote log (GOV-2026-03-19) linked from both the tracker and
   this note so future votes can copy the format without re-discovering the
   approval ritual.
