@@ -2382,42 +2382,6 @@ fn on_chain_permissioned_collector_params(actor: &Actor) -> (usize, u8) {
     )
 }
 
-/// Compute how many block sync updates should be gossiped given the target roster.
-fn expected_block_sync_update_targets(actor: &Actor, peers: &[PeerId]) -> usize {
-    if actor.block_sync_gossip_limit == 0 || peers.is_empty() {
-        return 0;
-    }
-    let online_peers = actor
-        .network
-        .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
-    let local_peer = actor.common_config.peer.id().clone();
-    let world_peers: BTreeSet<_> = peers.iter().cloned().collect();
-    let mut strays = 0usize;
-    let mut world_online = 0usize;
-    for peer in &online_peers {
-        if peer == &local_peer {
-            continue;
-        }
-        if world_peers.contains(peer) {
-            world_online += 1;
-        } else {
-            strays += 1;
-        }
-    }
-    let mut targets = actor.block_sync_gossip_limit.min(strays);
-    let remaining = actor.block_sync_gossip_limit.saturating_sub(targets);
-    if remaining == 0 {
-        return targets;
-    }
-    let fallback_world = if world_online == 0 {
-        peers.iter().filter(|peer| **peer != local_peer).count()
-    } else {
-        world_online
-    };
-    targets += remaining.min(fallback_world);
-    targets
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn actor_should_tick_tracks_missing_block_requests() {
     let mut harness = test_actor_harness(1).await;
@@ -11659,12 +11623,63 @@ async fn process_precommit_qc_upgrades_highest_qc_phase() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
+async fn process_precommit_qc_skips_payload_fallback_without_roster_proof() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(2, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block, payload_hash, 2, 0);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let _ = harness.background_rx.try_iter().count();
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        2,
+        0,
+        0,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    assert!(actor.process_precommit_qc(&qc, true, true));
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let fallback_posts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
+            )
+        })
+        .count();
+    assert_eq!(
+        fallback_posts, 0,
+        "commit QC processing should not fall back to BlockCreated without roster proof"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn quorum_reschedule_rebroadcasts_votes_without_block_created_without_roster() {
     let mut harness = test_actor_harness(4).await;
     let block = nonempty_block_for_actor(&harness.actor, &harness.key_pairs, 1, 0, None);
-    let block_hash = block.hash();
     let payload_hash = Hash::prehashed([0x55; 32]);
     let pending = PendingBlock::new(block, payload_hash, 1, 0);
+    let block_hash = pending.block.hash();
 
     harness.actor.reschedule_pending_quorum_block(
         pending,
@@ -11677,8 +11692,6 @@ async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
         Instant::now(),
     );
 
-    let topology_peers = harness.actor.effective_commit_topology();
-    let expected_targets = expected_block_sync_update_targets(&harness.actor, &topology_peers);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
     let sync_updates = posts
         .iter()
@@ -11711,8 +11724,16 @@ async fn quorum_reschedule_rebroadcasts_block_created_without_roster() {
         "quorum reschedule should skip unverifiable block-sync updates"
     );
     assert_eq!(
-        block_created, expected_targets,
-        "quorum reschedule should rebroadcast the block payload to topology peers"
+        block_created, 0,
+        "quorum reschedule should not switch back into BlockCreated payload rebroadcast"
+    );
+    assert!(
+        harness
+            .actor
+            .pending
+            .pending_blocks
+            .contains_key(&block_hash),
+        "quorum reschedule should retain pending state when it does not drop the block"
     );
 
     harness.shutdown.send();
@@ -11743,7 +11764,7 @@ async fn touch_pending_progress_updates_pending_age() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn quorum_reschedule_falls_back_to_block_created_when_roster_proof_missing() {
+async fn quorum_reschedule_skips_block_created_fallback_when_roster_proof_missing() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -11754,8 +11775,6 @@ async fn quorum_reschedule_falls_back_to_block_created_when_roster_proof_missing
     let view = block.header().view_change_index();
     let epoch = actor.epoch_for_height(height);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let topology_peers = actor.effective_commit_topology();
-    let expected_targets = expected_block_sync_update_targets(actor, &topology_peers);
     let local_idx = actor
         .local_validator_index_for_topology(&topology)
         .expect("local validator index");
@@ -11790,6 +11809,16 @@ async fn quorum_reschedule_falls_back_to_block_created_when_roster_proof_missing
     );
 
     let posts_first: Vec<_> = harness.background_rx.try_iter().collect();
+    let vote_rebroadcasts_first = posts_first
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(msg.as_ref(), BlockMessage::QcVote(_))
+            )
+        })
+        .count();
     let sync_updates_first = posts_first
         .iter()
         .filter(|post| {
@@ -11820,9 +11849,13 @@ async fn quorum_reschedule_falls_back_to_block_created_when_roster_proof_missing
         sync_updates_first, 0,
         "first reschedule should skip unverifiable block-sync update when roster proof is unavailable"
     );
+    assert!(
+        vote_rebroadcasts_first > 0,
+        "first reschedule should still rebroadcast commit votes"
+    );
     assert_eq!(
-        block_created_first, expected_targets,
-        "first reschedule should rebroadcast BlockCreated payload to active targets"
+        block_created_first, 0,
+        "first reschedule should not switch back to BlockCreated payload rebroadcast"
     );
 
     let pending = actor
@@ -11881,7 +11914,7 @@ async fn quorum_reschedule_falls_back_to_block_created_when_roster_proof_missing
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn quorum_reschedule_near_quorum_fans_out_payload_rebroadcast_targets() {
+async fn quorum_reschedule_near_quorum_rebroadcasts_votes_without_payload_rebroadcast() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -11942,11 +11975,17 @@ async fn quorum_reschedule_near_quorum_fans_out_payload_rebroadcast_targets() {
         Instant::now(),
     );
 
-    let expected_targets = topology_peers
-        .iter()
-        .filter(|peer| *peer != &local_peer_id)
-        .count();
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let vote_rebroadcasts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(msg.as_ref(), BlockMessage::QcVote(_))
+            )
+        })
+        .count();
     let block_created = posts
         .iter()
         .filter(|post| {
@@ -11960,9 +11999,13 @@ async fn quorum_reschedule_near_quorum_fans_out_payload_rebroadcast_targets() {
             )
         })
         .count();
+    assert!(
+        vote_rebroadcasts > 0,
+        "near-quorum reschedule should still rebroadcast votes"
+    );
     assert_eq!(
-        block_created, expected_targets,
-        "near-quorum reschedule should fan out payload rebroadcasts to all non-local peers"
+        block_created, 0,
+        "near-quorum reschedule should not re-enter BlockCreated payload broadcast"
     );
 
     harness.shutdown.send();
@@ -15342,7 +15385,7 @@ async fn commit_quorum_timeout_uses_npos_commit_floor() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_payload_broadcast_is_rate_limited() {
+async fn precommit_vote_skips_payload_fallback_across_rapid_votes_without_roster() {
     let mut harness = test_actor_harness(4).await;
 
     let block = sample_block(1, 0, None);
@@ -15411,10 +15454,8 @@ async fn precommit_vote_payload_broadcast_is_rate_limited() {
     );
     harness.actor.handle_vote(vote_b);
 
-    let topology_peers = harness.actor.effective_commit_topology();
-    let expected_targets = expected_block_sync_update_targets(&harness.actor, &topology_peers);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let payload_posts = posts
+    let fallback_posts = posts
         .iter()
         .filter(|post| {
             matches!(
@@ -15423,23 +15464,20 @@ async fn precommit_vote_payload_broadcast_is_rate_limited() {
                     if matches!(
                         msg.as_ref(),
                         BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
-                    ) || matches!(
-                        msg.as_ref(),
-                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
                     )
             )
         })
         .count();
     assert_eq!(
-        payload_posts, expected_targets,
-        "block payload broadcasts should be throttled across rapid precommit votes"
+        fallback_posts, 0,
+        "rapid precommit votes should not trigger payload fallback without verifiable roster evidence"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_payload_broadcast_cooldown_uses_chain_block_time() {
+async fn precommit_vote_payload_broadcast_cooldown_does_not_override_roster_gate() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     {
@@ -15487,10 +15525,8 @@ async fn precommit_vote_payload_broadcast_cooldown_uses_chain_block_time() {
     let mut pending_after = PendingBlock::new(block, payload_hash_after, 1, view);
     actor.maybe_broadcast_block_sync_update_for_precommit_vote(&mut pending_after, &vote);
 
-    let topology_peers = actor.effective_commit_topology();
-    let expected_targets = expected_block_sync_update_targets(actor, &topology_peers);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let payload_posts = posts
+    let fallback_posts = posts
         .iter()
         .filter(|post| {
             matches!(
@@ -15499,16 +15535,13 @@ async fn precommit_vote_payload_broadcast_cooldown_uses_chain_block_time() {
                     if matches!(
                         msg.as_ref(),
                         BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
-                    ) || matches!(
-                        msg.as_ref(),
-                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
                     )
             )
         })
         .count();
     assert_eq!(
-        payload_posts, expected_targets,
-        "block payload broadcast cooldown should follow chain block_time"
+        fallback_posts, 0,
+        "cooldown expiry must not re-enable payload fallback when roster evidence is still unavailable"
     );
 
     harness.shutdown.send();
@@ -15578,12 +15611,12 @@ async fn precommit_vote_skips_payload_broadcast_for_aborted_pending() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
+async fn precommit_vote_skips_payload_fallback_when_pending_tracked_without_roster() {
     let mut harness = test_actor_harness(4).await;
 
     let _genesis_hash = seed_genesis_block_for_state(harness.actor.state.as_ref());
     let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"precommit_vote_broadcasts_payload_when_pending_tracked",
+        b"precommit_vote_skips_payload_fallback_when_pending_tracked_without_roster",
     ));
     let block = sample_block(2, 0, Some(parent_hash));
     let block_hash = block.hash();
@@ -15617,10 +15650,8 @@ async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
         .actor
         .maybe_broadcast_block_sync_update_for_precommit_vote(&mut pending, &vote);
 
-    let topology_peers = harness.actor.effective_commit_topology();
-    let expected_targets = expected_block_sync_update_targets(&harness.actor, &topology_peers);
     let posts: Vec<_> = harness.background_rx.try_iter().collect();
-    let payload_posts = posts
+    let fallback_posts = posts
         .iter()
         .filter(|post| {
             matches!(
@@ -15629,16 +15660,13 @@ async fn precommit_vote_broadcasts_payload_when_pending_tracked() {
                     if matches!(
                         msg.as_ref(),
                         BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
-                    ) || matches!(
-                        msg.as_ref(),
-                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
                     )
             )
         })
         .count();
     assert_eq!(
-        payload_posts, expected_targets,
-        "expected block payload posts after local precommit"
+        fallback_posts, 0,
+        "local precommit should not fall back to BlockCreated without verifiable roster evidence"
     );
 
     harness.shutdown.send();
@@ -33041,6 +33069,7 @@ async fn same_height_no_proposal_storm_counter_persists_until_true_progress() {
         committed_height,
         false,
         dependency_progress,
+        now,
     );
     assert_eq!(
         actor.same_height_no_proposal_storm_count_for_height(height),
@@ -33058,6 +33087,7 @@ async fn same_height_no_proposal_storm_counter_persists_until_true_progress() {
         committed_height,
         false,
         progressed_dependency,
+        now,
     );
     assert_eq!(
         actor.same_height_no_proposal_storm_count_for_height(height),
@@ -33081,6 +33111,7 @@ async fn same_height_no_proposal_storm_counter_persists_until_true_progress() {
         committed_height,
         true,
         progressed_dependency,
+        now,
     );
     assert_eq!(
         actor.same_height_no_proposal_storm_count_for_height(height),
@@ -33632,9 +33663,7 @@ async fn frontier_recovery_cleanup_clears_frontier_new_view_state() {
     let higher_view = 5_u64;
     let future_view = 2_u64;
     let now = Instant::now();
-    let committed_qc = actor
-        .latest_committed_qc()
-        .expect("committed QC should be available in test harness");
+    let committed_qc = sample_qc_ref(frontier_height.saturating_sub(1).max(1), 0);
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let tracker_peer = topology
         .as_ref()
@@ -38297,6 +38326,292 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn contiguous_frontier_missing_payload_dwell_hands_off_once_per_window() {
+    let mut harness = test_actor_harness(4).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _proof_guard = super::status::view_change_proof_test_guard();
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
+
+    let height = actor.active_consensus_round_height();
+    assert_eq!(
+        height,
+        actor.committed_height_snapshot().saturating_add(1),
+        "test setup requires active round at contiguous frontier"
+    );
+    let view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let frontier_window = actor.frontier_recovery_window();
+    let dwell_start = now
+        .checked_sub(
+            super::saturating_mul_duration(frontier_window, 2)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let stale_progress = dwell_start
+        .checked_sub(actor.recovery_missing_block_height_ttl() + Duration::from_millis(1))
+        .unwrap_or(dwell_start);
+    let block_hash = insert_unresolved_missing_request_for_tests(
+        actor,
+        0xC1,
+        height,
+        0,
+        dwell_start,
+        stale_progress,
+    );
+
+    assert!(
+        actor.retry_missing_block_requests(now, None),
+        "initial contiguous-frontier dwell should hand off into frontier recovery"
+    );
+    let first_state = actor
+        .frontier_recovery
+        .expect("frontier recovery should be seeded by first dwell handoff");
+    let first_action_at = first_state
+        .last_action_at
+        .expect("first dwell handoff should perform one frontier recovery action");
+    assert_eq!(first_state.frontier_height, height);
+    assert_eq!(first_state.last_cause, "missing_payload");
+
+    let same_window = now.checked_add(Duration::from_millis(1)).unwrap_or(now);
+    let _ = actor.retry_missing_block_requests(same_window, None);
+    let second_state = actor
+        .frontier_recovery
+        .expect("frontier recovery should remain owned after same-window retry");
+    assert_eq!(
+        second_state.last_action_at,
+        Some(first_action_at),
+        "same-window dwell should not hand off a second time"
+    );
+    assert_eq!(
+        actor
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .and_then(|request| request.view_change_triggered_view),
+        None,
+        "same-window contiguous-frontier dwell should not mark a direct MissingPayload fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn contiguous_frontier_missing_payload_dwell_does_not_fallback_to_direct_view_change_while_window_owned()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _proof_guard = super::status::view_change_proof_test_guard();
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
+
+    let height = actor.active_consensus_round_height();
+    assert_eq!(
+        height,
+        actor.committed_height_snapshot().saturating_add(1),
+        "test setup requires active round at contiguous frontier"
+    );
+    let view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let frontier_window = actor.frontier_recovery_window();
+    let entered_at = now
+        .checked_sub(super::saturating_mul_duration(frontier_window, 3))
+        .unwrap_or(now);
+    let last_progress_at = now
+        .checked_sub(super::saturating_mul_duration(frontier_window, 2))
+        .unwrap_or(now);
+    let last_action_at = now;
+    let preserved_state = super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::RotateArmed,
+        entered_at,
+        last_progress_at,
+        last_dependency_progress_at: Some(last_progress_at),
+        last_action_at: Some(last_action_at),
+        no_progress_windows: 17,
+        cleanup_done: true,
+        last_view: view,
+        last_rotation_view: Some(view.saturating_sub(1)),
+        last_cause: "quorum_timeout",
+    };
+    actor.frontier_recovery = Some(preserved_state);
+    assert!(
+        actor.frontier_recovery_owns_height_window(height, now),
+        "test setup requires the existing frontier owner to hold the current recovery window"
+    );
+
+    let dwell_start = now
+        .checked_sub(
+            super::saturating_mul_duration(frontier_window, 2)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let stale_progress = dwell_start
+        .checked_sub(actor.recovery_missing_block_height_ttl() + Duration::from_millis(1))
+        .unwrap_or(dwell_start);
+    let block_hash = insert_unresolved_missing_request_for_tests(
+        actor,
+        0xC2,
+        height,
+        0,
+        dwell_start,
+        stale_progress,
+    );
+    let before = super::status::snapshot();
+
+    let _ = actor.retry_missing_block_requests(now, None);
+
+    let after_state = actor
+        .frontier_recovery
+        .expect("frontier recovery should remain present for contiguous owner");
+    assert_eq!(
+        after_state.entered_at, preserved_state.entered_at,
+        "same-window suppression should preserve frontier recovery entry timestamp"
+    );
+    assert_eq!(
+        after_state.phase, preserved_state.phase,
+        "same-window suppression should preserve frontier recovery phase"
+    );
+    assert_eq!(
+        after_state.cleanup_done, preserved_state.cleanup_done,
+        "same-window suppression should preserve cleanup marker"
+    );
+    assert_eq!(
+        after_state.no_progress_windows, preserved_state.no_progress_windows,
+        "same-window suppression should preserve no-progress window count"
+    );
+    assert_eq!(
+        after_state.last_action_at, preserved_state.last_action_at,
+        "same-window suppression should preserve last action timestamp"
+    );
+    assert_eq!(
+        after_state.last_cause, preserved_state.last_cause,
+        "same-window suppression should preserve frontier recovery owner cause"
+    );
+    assert_eq!(
+        actor
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .and_then(|request| request.view_change_triggered_view),
+        None,
+        "frontier-owned same-window dwell must not mark direct MissingPayload fallback"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        after.view_change_causes.missing_payload_total,
+        before.view_change_causes.missing_payload_total,
+        "frontier-owned same-window dwell must not emit MissingPayload view changes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn contiguous_frontier_missing_payload_dwell_rearms_only_after_next_window() {
+    let mut harness = test_actor_harness(4).await;
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _proof_guard = super::status::view_change_proof_test_guard();
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let actor = &mut harness.actor;
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
+
+    let height = actor.active_consensus_round_height();
+    assert_eq!(
+        height,
+        actor.committed_height_snapshot().saturating_add(1),
+        "test setup requires active round at contiguous frontier"
+    );
+    let view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view, now);
+
+    let frontier_window = actor.frontier_recovery_window();
+    let last_progress_at = now
+        .checked_sub(super::saturating_mul_duration(frontier_window, 2))
+        .unwrap_or(now);
+    let last_action_at = now;
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: now
+            .checked_sub(super::saturating_mul_duration(frontier_window, 3))
+            .unwrap_or(now),
+        last_progress_at,
+        last_dependency_progress_at: Some(last_progress_at),
+        last_action_at: Some(last_action_at),
+        no_progress_windows: 19,
+        cleanup_done: false,
+        last_view: view,
+        last_rotation_view: None,
+        last_cause: "missing_payload",
+    });
+    assert!(
+        actor.frontier_recovery_owns_height_window(height, now),
+        "test setup requires the existing frontier owner to hold the current recovery window"
+    );
+
+    let dwell_start = now
+        .checked_sub(
+            super::saturating_mul_duration(frontier_window, 2)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    let stale_progress = dwell_start
+        .checked_sub(actor.recovery_missing_block_height_ttl() + Duration::from_millis(1))
+        .unwrap_or(dwell_start);
+    let _ = insert_unresolved_missing_request_for_tests(
+        actor,
+        0xC3,
+        height,
+        0,
+        dwell_start,
+        stale_progress,
+    );
+
+    let _ = actor.retry_missing_block_requests(now, None);
+    let same_window_state = actor
+        .frontier_recovery
+        .expect("same-window retry should preserve existing frontier owner");
+    assert_eq!(
+        same_window_state.no_progress_windows, 19,
+        "frontier owner should not rearm in the same recovery window"
+    );
+
+    let next_window_at = now
+        .checked_add(frontier_window.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let _ = actor.retry_missing_block_requests(next_window_at, None);
+    let next_window_state = actor
+        .frontier_recovery
+        .expect("frontier owner should remain present after next-window retry");
+    assert_ne!(
+        next_window_state.no_progress_windows, 19,
+        "frontier owner should only rearm after entering the next recovery window"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retry_missing_block_requests_background_priority_never_triggers_view_change() {
     let mut harness = test_actor_harness(4).await;
     let _worker_guard = super::status::worker_queue_test_guard();
@@ -39777,6 +40092,94 @@ async fn frontier_stall_routes_same_height_stall_through_unified_recovery() {
     assert!(
         after.pending_queue_evictions_total == before.pending_queue_evictions_total,
         "same-height frontier recovery should avoid deterministic same-height cache eviction loops"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_stall_does_not_emit_second_recovery_action_in_same_window() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let frontier_height = committed_height.saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(frontier_height, now);
+    actor.phase_tracker.on_view_change(frontier_height, 0, now);
+
+    let ttl = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1));
+    let stale_time = now
+        .checked_sub(ttl.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let frontier_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE6; Hash::LENGTH]));
+    actor.pending.missing_block_requests.insert(
+        frontier_hash,
+        super::MissingBlockRequest {
+            height: frontier_height,
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: stale_time,
+            last_requested: stale_time,
+            last_dependency_progress: stale_time,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 5,
+        },
+    );
+
+    let window = actor
+        .frontier_recovery_window()
+        .max(Duration::from_millis(1));
+    let near_boundary_elapsed =
+        super::saturating_mul_duration(window, 2).saturating_sub(Duration::from_nanos(1));
+    let last_progress_at = now.checked_sub(near_boundary_elapsed).unwrap_or(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: now
+            .checked_sub(super::saturating_mul_duration(window, 3))
+            .unwrap_or(now),
+        last_progress_at,
+        last_dependency_progress_at: Some(last_progress_at),
+        last_action_at: Some(now),
+        no_progress_windows: 2,
+        cleanup_done: false,
+        last_view: 0,
+        last_rotation_view: None,
+        last_cause: "missing_payload",
+    });
+
+    let before = super::status::snapshot();
+    let same_window_now = now.checked_add(Duration::from_nanos(1)).unwrap_or(now);
+    let _ = actor.maybe_reset_stalled_frontier_state(committed_height, same_window_now);
+    let after = super::status::snapshot();
+
+    let state = actor
+        .frontier_recovery
+        .expect("frontier owner should remain present after same-window stall check");
+    assert_eq!(
+        state.last_action_at,
+        Some(now),
+        "same-window frontier-stall pass must not emit a second catch-up action"
+    );
+    assert!(
+        actor.frontier_recovery_owns_height_window(frontier_height, same_window_now),
+        "frontier ownership should remain active in the same action window"
+    );
+    assert_eq!(
+        after.blocksync_range_pull_escalation_total, before.blocksync_range_pull_escalation_total,
+        "same-window frontier-stall evaluation must not emit an extra range-pull"
     );
 
     super::status::reset_missing_block_fetch_counters_for_tests();
@@ -51032,7 +51435,8 @@ async fn force_view_change_if_idle_suppresses_missing_qc_when_matching_frontier_
         actor.runtime_da_enabled(),
     );
     let initial_frontier_proposal_grace =
-        actor.rebroadcast_cooldown().max(Duration::from_millis(500));
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
     let start = now
         .checked_sub(
             timeout
@@ -52880,13 +53284,12 @@ async fn force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_qu
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_routes_frontier_missing_dependency_through_missing_payload_owner()
- {
+async fn force_view_change_if_idle_preserves_quorum_timeout_owner_across_post_rotation_empty_view()
+{
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
     let _guard = super::status::view_change_cause_test_guard();
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -52907,7 +53310,7 @@ async fn force_view_change_if_idle_routes_frontier_missing_dependency_through_mi
         actor.latest_committed_qc(),
         committed_height,
     );
-    let current_view = 0_u64;
+    let current_view = 1_u64;
     let now = Instant::now();
     let timeout = super::idle_view_timeout(
         false,
@@ -52927,6 +53330,60 @@ async fn force_view_change_if_idle_routes_frontier_missing_dependency_through_mi
         since: start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: now,
+        last_progress_at: now,
+        last_dependency_progress_at: None,
+        last_action_at: None,
+        no_progress_windows: 0,
+        cleanup_done: false,
+        last_view: current_view.saturating_sub(1),
+        last_rotation_view: Some(current_view.saturating_sub(1)),
+        last_cause: "quorum_timeout",
+    });
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "the empty post-rotation view should stay under quorum-timeout ownership instead of re-entering MissingQc immediately"
+    );
+    let after = super::status::snapshot();
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::CatchUp
+                && state.last_cause == "quorum_timeout"
+        }),
+        "post-rotation empty view should preserve the existing quorum-timeout frontier owner"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "preserving quorum-timeout ownership must not count a MissingQc rotation"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "preserving quorum-timeout ownership should not install a forced-view marker"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_dependency_recovery_cause_classifies_contiguous_missing_block_as_missing_payload()
+{
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let now = Instant::now();
 
     let missing_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"frontier-missing-owner"));
@@ -52934,13 +53391,13 @@ async fn force_view_change_if_idle_routes_frontier_missing_dependency_through_mi
         missing_hash,
         MissingBlockRequest {
             height,
-            view: current_view,
+            view: 0,
             phase: Phase::Commit,
             priority: MissingBlockPriority::Consensus,
             retry_window: Duration::from_secs(1),
             view_change_window: Some(Duration::from_secs(1)),
-            first_seen: start,
-            last_requested: start,
+            first_seen: now,
+            last_requested: now,
             last_dependency_progress: now,
             last_rbc_observed: None,
             last_view_change_triggered: None,
@@ -52949,33 +53406,38 @@ async fn force_view_change_if_idle_routes_frontier_missing_dependency_through_mi
         },
     );
 
-    let before = super::status::snapshot();
     assert!(
-        !actor.force_view_change_if_idle(now),
-        "frontier missing-block dependency should transfer ownership into missing-payload recovery instead of triggering empty missing_qc rotation"
-    );
-    let after = super::status::snapshot();
-    assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height && state.last_cause == "missing_payload"
-        }),
-        "frontier dependency-backed idle recovery should preserve a missing-payload owner"
-    );
-    assert!(
-        actor.subsystems.propose.forced_view_after_timeout.is_none(),
-        "first dependency-backed timeout should not install a forced-view marker"
-    );
-    assert_eq!(
-        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
-        "dependency-backed handoff should not count a MissingQc rotation"
-    );
-    assert_eq!(
-        after.view_change_causes.missing_payload_total,
-        before.view_change_causes.missing_payload_total,
-        "first dependency-backed handoff should not yet count a MissingPayload rotation"
+        actor.frontier_dependency_recovery_cause(height, 0, now) == Some("missing_payload"),
+        "contiguous frontier missing-block pressure should classify as missing-payload recovery"
     );
 
-    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_dependency_recovery_cause_classifies_contiguous_vote_evidence_as_quorum_timeout()
+{
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let view = 0_u64;
+    let block = sample_block(height, view, actor.state.view().latest_block_hash());
+    let block_hash = block.hash();
+
+    seed_near_quorum_commit_votes_for_block(actor, &harness.key_pairs, block_hash, height, view);
+
+    assert_eq!(
+        actor.frontier_dependency_recovery_cause(height, view, Instant::now()),
+        Some("quorum_timeout"),
+        "contiguous frontier vote evidence should classify as quorum-timeout recovery even without pending state"
+    );
+
     harness.shutdown.send();
 }
 
@@ -53080,6 +53542,225 @@ async fn force_view_change_if_idle_defers_to_existing_missing_payload_frontier_r
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 1);
     assert_eq!(snapshot.last_cause.as_deref(), Some("missing_payload"));
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_routes_empty_frontier_vote_evidence_through_quorum_timeout_recovery()
+ {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0_u64;
+    let now = Instant::now();
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let initial_frontier_proposal_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let start = now
+        .checked_sub(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+
+    let block = sample_block(height, current_view, actor.state.view().latest_block_hash());
+    let block_hash = block.hash();
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, _) = actor.consensus_context_for_height(height);
+    let validator_set = actor.effective_commit_topology();
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: Hash::prehashed([0x31; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0x32; Hash::LENGTH]),
+        height,
+        view: current_view,
+        epoch,
+        mode_tag: mode_tag.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![0b0000_0011],
+            bls_aggregate_signature: vec![0xAB],
+        },
+    };
+    actor
+        .qc_cache
+        .insert((Phase::Commit, block_hash, height, current_view, epoch), qc);
+    assert!(
+        actor.pending.pending_blocks.is_empty(),
+        "test requires empty-frontier state without pending blocks"
+    );
+    assert!(
+        actor.pending.missing_block_requests.is_empty(),
+        "test requires slot evidence without synthetic missing-block recovery state"
+    );
+    assert!(
+        actor.frontier_recovery.is_none(),
+        "test requires no pre-existing frontier recovery owner"
+    );
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle timeout should hand vote-backed empty-frontier recovery to the unified quorum-timeout controller instead of emitting MissingQc"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "handoff should keep the current view on the first timeout window"
+    );
+    let frontier_recovery = actor.frontier_recovery;
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height && state.last_cause == "quorum_timeout"
+        }),
+        "vote-backed empty-frontier timeout should reserve quorum-timeout recovery ownership; state={frontier_recovery:?}; causes={:?}",
+        after.view_change_causes
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "handoff should not count a MissingQc rotation"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "handoff should not install a forced-view marker"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_through_unified_frontier_recovery()
+ {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _guard = super::status::view_change_cause_test_guard();
+
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let availability_timeout =
+        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
+    let start = now
+        .checked_sub(
+            timeout
+                .saturating_add(availability_timeout)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.subsystems.propose.proposals_seen.clear();
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+    actor.frontier_recovery = None;
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "empty contiguous-frontier missing_qc should arm the unified frontier controller before rotating"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "handoff should keep the current view on the first empty-frontier timeout"
+    );
+    let frontier_recovery = actor.frontier_recovery;
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height
+                && state.phase == super::FrontierRecoveryPhase::CatchUp
+                && state.last_cause == "missing_qc"
+        }),
+        "empty-frontier missing_qc should reserve missing_qc frontier recovery ownership; state={frontier_recovery:?}; causes={:?}",
+        after.view_change_causes
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "handoff should not count an immediate MissingQc rotation"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "handoff should not install a forced-view marker"
+    );
 
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -54443,7 +55124,8 @@ async fn force_view_change_if_idle_defers_initial_contiguous_frontier_gap_for_bo
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
-    let frontier_grace = actor.rebroadcast_cooldown().max(Duration::from_millis(500));
+    let frontier_grace = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+        .max(Duration::from_millis(500));
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
         .unwrap_or(now);
@@ -54749,15 +55431,25 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availa
         .unwrap_or(after_timeout);
     assert!(
         !actor.force_view_change_if_idle(after_availability_grace),
-        "first post-grace timeout should defer once for bounded missing-QC reacquire"
+        "first post-grace timeout should transfer ownership into missing-payload frontier recovery"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height && state.last_cause == "missing_payload"
+        }),
+        "proposal-gap backlog should no longer become a missing_qc owner after grace expires"
     );
     let rotate_after_reacquire = after_availability_grace
-        .checked_add(Duration::from_millis(1))
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
         .unwrap_or(after_availability_grace);
     actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_after_reacquire);
     assert!(
         actor.force_view_change_if_idle(rotate_after_reacquire),
-        "proposal-gap view change should trigger after bounded missing-QC reacquire deferral"
+        "proposal-gap view change should trigger only after the dependency-backed frontier controller exhausts its cleanup window"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -54856,15 +55548,25 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
         .unwrap_or(after_timeout);
     assert!(
         !actor.force_view_change_if_idle(after_availability_grace),
-        "first post-grace timeout should defer once for bounded missing-QC reacquire"
+        "first post-grace timeout should transfer ownership into missing-payload frontier recovery"
+    );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height && state.last_cause == "missing_payload"
+        }),
+        "vote backlog should no longer re-enter as missing_qc after grace expires"
     );
     let rotate_after_reacquire = after_availability_grace
-        .checked_add(Duration::from_millis(1))
+        .checked_add(
+            actor
+                .frontier_recovery_window()
+                .saturating_add(Duration::from_millis(2)),
+        )
         .unwrap_or(after_availability_grace);
     actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_after_reacquire);
     assert!(
         actor.force_view_change_if_idle(rotate_after_reacquire),
-        "proposal-gap view change should trigger after bounded missing-QC reacquire deferral"
+        "proposal-gap view change should trigger only after the dependency-backed frontier controller exhausts its cleanup window"
     );
     assert_eq!(
         actor.phase_tracker.current_view(height),
@@ -69562,7 +70264,8 @@ async fn block_created_without_hint_rejects_conflicting_lock() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn block_created_without_hint_reject_at_active_height_triggers_missing_qc_recovery() {
+async fn block_created_without_hint_reject_at_active_height_routes_through_unified_frontier_recovery()
+ {
     let _guard = super::status::view_change_proof_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
     let mut harness = test_actor_harness(4).await;
@@ -69603,18 +70306,26 @@ async fn block_created_without_hint_reject_at_active_height_triggers_missing_qc_
     );
     assert_eq!(
         actor.phase_tracker.current_view(2),
-        Some(1),
-        "active-height lock rejection should deterministically advance the round view"
+        None,
+        "active-height lock rejection should not create a round tracker entry before unified frontier recovery actually acts"
     );
     assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout,
-        Some((2, 1)),
-        "active-height lock rejection should set forced view marker for the next round"
+        actor.subsystems.propose.forced_view_after_timeout, None,
+        "active-height lock rejection should not set a forced view marker outside the frontier controller"
     );
     assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "active-height lock rejection should emit one MissingQc view-change cause"
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "active-height lock rejection should not emit a direct MissingQc view-change cause"
+    );
+    let frontier_recovery = actor
+        .frontier_recovery
+        .as_ref()
+        .expect("active-height lock rejection should seed unified frontier recovery");
+    assert_eq!(frontier_recovery.frontier_height, 2);
+    assert_eq!(frontier_recovery.last_cause, "missing_qc");
+    assert_eq!(
+        frontier_recovery.phase,
+        super::FrontierRecoveryPhase::CatchUp
     );
 
     harness.shutdown.send();
@@ -81222,7 +81933,7 @@ async fn da_gate_context_does_not_block_quorum_reschedule() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn stake_quorum_timeout_reschedules_without_immediate_view_change() {
+async fn stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Npos;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -81270,16 +81981,19 @@ async fn stake_quorum_timeout_reschedules_without_immediate_view_change() {
     let topology = super::network_topology::Topology::new(commit_topology.clone());
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let roster_hash = HashOf::new(&signature_topology.as_ref().to_vec());
+    let membership_hash = HashOf::new(&super::roster::canonicalize_roster_for_mode(
+        signature_topology.as_ref().to_vec(),
+        consensus_mode,
+    ));
     let epoch = actor.epoch_for_height(height);
-    for keypair in harness.key_pairs.iter().skip(1) {
-        let peer_id = PeerId::new(keypair.public_key().clone());
-        let signer_idx = signature_topology
-            .as_ref()
-            .iter()
-            .position(|peer| peer == &peer_id)
-            .expect("signer in topology");
+    let local_peer_id = actor.common_config.peer.id().clone();
+    for (signer_idx, peer) in signature_topology.as_ref().iter().enumerate() {
+        if peer == &local_peer_id {
+            continue;
+        }
         let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
-        let mut vote = crate::sumeragi::consensus::Vote {
+        let vote = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash,
             parent_state_root: zero_state_root(),
@@ -81291,10 +82005,15 @@ async fn stake_quorum_timeout_reschedules_without_immediate_view_change() {
             signer,
             bls_sig: Vec::new(),
         };
-        let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
-        let signature = Signature::new(keypair.private_key(), &preimage);
-        vote.bls_sig = signature.payload().to_vec();
-        actor.handle_vote(vote);
+        let key = (Phase::Commit, height, view_idx, epoch, signer);
+        actor.vote_log.insert(key, vote);
+        actor.vote_validation_cache.insert(
+            key,
+            super::VoteValidationCacheEntry {
+                roster_hash,
+                membership_hash,
+            },
+        );
     }
 
     let status = actor.commit_vote_quorum_status_for_block_detail(block_hash, height, view_idx);
@@ -81303,6 +82022,18 @@ async fn stake_quorum_timeout_reschedules_without_immediate_view_change() {
     assert!(
         status.stake_quorum_missing,
         "stake quorum miss should be flagged"
+    );
+    let targets = actor.quorum_retransmit_targets_for_missing_votes(
+        block_hash,
+        height,
+        view_idx,
+        &commit_topology,
+        topology.min_votes_for_commit(),
+        status.vote_count,
+    );
+    assert!(
+        targets.is_empty(),
+        "test requires a stake-quorum miss with no missing vote targets"
     );
 
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
@@ -81313,8 +82044,8 @@ async fn stake_quorum_timeout_reschedules_without_immediate_view_change() {
     actor.pending.pending_blocks.insert(block_hash, pending);
 
     assert!(
-        actor.reschedule_stale_pending_blocks(None),
-        "stake quorum miss should reschedule pending block"
+        !actor.reschedule_stale_pending_blocks(None),
+        "stake quorum miss with a numerically full signer set should not record a no-op reschedule"
     );
     let pending_after = actor
         .pending
@@ -81322,12 +82053,16 @@ async fn stake_quorum_timeout_reschedules_without_immediate_view_change() {
         .get(&block_hash)
         .expect("pending retained");
     assert!(
-        pending_after.last_quorum_reschedule.is_some(),
-        "pending should be quorum-rescheduled on stake quorum timeout"
+        pending_after.last_quorum_reschedule.is_none(),
+        "stake quorum miss should not mark quorum reschedule when no retransmit targets remain"
     );
     assert!(
         pending_after.progress_age(Instant::now()) >= quorum_timeout,
-        "vote-backed quorum reschedule should preserve the original stall age"
+        "skipping the no-op reschedule must preserve the original stall age"
+    );
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "no-op stake quorum handling should not emit retransmit traffic"
     );
     let snapshot = super::status::snapshot();
     assert_eq!(snapshot.view_change_causes.stake_quorum_timeout_total, 0);
@@ -81336,7 +82071,7 @@ async fn stake_quorum_timeout_reschedules_without_immediate_view_change() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn zero_vote_quorum_timeout_drops_pending_without_immediate_view_change() {
+async fn zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_timeout_recovery() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     super::status::reset_view_change_cause_counters_for_tests();
@@ -81364,11 +82099,106 @@ async fn zero_vote_quorum_timeout_drops_pending_without_immediate_view_change() 
         !actor.pending.pending_blocks.contains_key(&block_hash),
         "zero-vote quorum reschedule should drop the stale pending block"
     );
+    assert!(
+        actor.frontier_recovery.is_some_and(|state| {
+            state.frontier_height == height && state.last_cause == "quorum_timeout"
+        }),
+        "dropping the contiguous-frontier zero-vote block must hand ownership to unified quorum-timeout recovery"
+    );
     let snapshot = super::status::snapshot();
     assert_eq!(snapshot.view_change_causes.missing_qc_total, 0);
     assert!(
         actor.subsystems.propose.forced_view_after_timeout.is_none(),
         "zero-vote quorum reschedule should leave view rotation to the frontier timeout controller"
+    );
+    assert!(
+        !actor.force_view_change_if_idle(Instant::now()),
+        "empty frontier after zero-vote drop should stay under quorum-timeout ownership instead of immediately re-entering MissingQc"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(
+        snapshot.view_change_causes.missing_qc_total, 0,
+        "handoff to quorum-timeout recovery must not count a MissingQc rotation on the next idle tick"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn zero_vote_quorum_timeout_suppresses_same_window_repeat_while_frontier_owner_active() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_bytes = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, 0, payload_hash);
+
+    assert!(
+        actor.reschedule_stale_pending_blocks(None),
+        "first zero-vote quorum miss should still hand ownership to frontier quorum-timeout recovery"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "first stale pending should still be dropped"
+    );
+    let first_state = actor
+        .frontier_recovery
+        .expect("frontier recovery should exist after first zero-vote handoff");
+    let first_action_at = first_state
+        .last_action_at
+        .expect("first zero-vote handoff should record a frontier action");
+
+    let same_window_now = first_action_at
+        .checked_add(Duration::from_millis(1))
+        .unwrap_or(first_action_at);
+    let second_block = sample_block(height, 1, parent);
+    let second_hash = second_block.hash();
+    let second_payload_bytes = super::proposals::block_payload_bytes(&second_block);
+    let second_payload_hash = Hash::new(&second_payload_bytes);
+    let mut second_pending = PendingBlock::new(second_block, second_payload_hash, height, 1);
+    second_pending.inserted_at = same_window_now - quorum_timeout - Duration::from_millis(1);
+    actor
+        .pending
+        .pending_blocks
+        .insert(second_hash, second_pending);
+    actor.note_proposal_seen(height, 1, second_payload_hash);
+    assert!(
+        actor.frontier_recovery_owns_height_window(height, same_window_now),
+        "test setup requires frontier quorum-timeout owner to hold the current recovery window"
+    );
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks_with_now(same_window_now, None),
+        "same-window zero-vote retry should not trigger another quorum-timeout reschedule"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&second_hash),
+        "same-window zero-vote retry should keep the pending block instead of dropping it again"
+    );
+    let second_state = actor
+        .frontier_recovery
+        .expect("frontier recovery should remain owned after same-window suppression");
+    assert_eq!(
+        second_state.last_action_at,
+        Some(first_action_at),
+        "same-window suppression should preserve the first frontier recovery action timestamp"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(
+        snapshot.view_change_causes.missing_qc_total, 0,
+        "same-window suppression must not emit MissingQc fallback"
     );
 
     harness.shutdown.send();
@@ -82424,6 +83254,95 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = block.header().view_change_index();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires at least three votes for commit quorum"
+    );
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signature topology must contain at least one signer");
+    let signer_idx = signature_topology
+        .as_ref()
+        .iter()
+        .position(|candidate| candidate == signer_peer)
+        .expect("signer in topology");
+    let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+    let keypair = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("matching signer keypair");
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: view_idx,
+        epoch,
+        highest_qc: None,
+        signer,
+        bls_sig: Vec::new(),
+    };
+    let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+    let signature = Signature::new(keypair.private_key(), &preimage);
+    vote.bls_sig = signature.payload().to_vec();
+    actor.handle_vote(vote);
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.touch_progress(Instant::now());
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks(None),
+        "vote-backed quorum timeout should not reschedule while vote progress is still fresh"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .and_then(|pending| pending.last_quorum_reschedule)
+            .is_none(),
+        "fresh vote progress should keep the reschedule gate closed"
+    );
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.is_empty(),
+        "fresh vote progress should not emit retransmit work"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -82537,6 +83456,156 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
     assert!(
         posts_after_second.is_empty(),
         "duplicate reschedule should not emit retransmit work"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned() {
+    let _worker_guard = super::status::worker_queue_test_guard();
+    let _proof_guard = super::status::view_change_proof_test_guard();
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_worker_loop_snapshot_for_tests();
+    super::status::reset_view_change_cause_counters_for_tests();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let view_idx = block.header().view_change_index();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(
+        required >= 3,
+        "test requires at least three votes for commit quorum"
+    );
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("signature topology must contain at least one signer");
+    let signer_idx = signature_topology
+        .as_ref()
+        .iter()
+        .position(|candidate| candidate == signer_peer)
+        .expect("signer in topology");
+    let signer = ValidatorIndex::try_from(signer_idx).expect("signer fits u32");
+    let keypair = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("matching signer keypair");
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: view_idx,
+        epoch,
+        highest_qc: None,
+        signer,
+        bls_sig: Vec::new(),
+    };
+    let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
+    let signature = Signature::new(keypair.private_key(), &preimage);
+    vote.bls_sig = signature.payload().to_vec();
+    actor.handle_vote(vote);
+
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let frontier_window = actor.frontier_recovery_window();
+    let now = Instant::now();
+    let last_progress = now
+        .checked_sub(super::saturating_mul_duration(frontier_window, 2))
+        .unwrap_or(now);
+    let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
+    pending.inserted_at = now
+        .checked_sub(quorum_timeout.saturating_add(Duration::from_millis(10)))
+        .unwrap_or(now);
+    pending.touch_progress(last_progress);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.frontier_recovery = Some(super::FrontierRecoveryState {
+        frontier_height: height,
+        phase: super::FrontierRecoveryPhase::CatchUp,
+        entered_at: now.checked_sub(frontier_window / 2).unwrap_or(now),
+        last_progress_at: last_progress,
+        last_dependency_progress_at: None,
+        last_action_at: Some(now),
+        no_progress_windows: 1,
+        cleanup_done: false,
+        last_view: view_idx,
+        last_rotation_view: None,
+        last_cause: "missing_payload",
+    });
+    assert!(
+        actor.frontier_recovery_owns_height_window(height, now),
+        "test setup requires frontier recovery to own the current window"
+    );
+    let before = super::status::snapshot();
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks_with_now(now, None),
+        "vote-backed retransmit should defer while the unified frontier recovery window already owns this height"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(
+        pending_after.last_quorum_reschedule, None,
+        "frontier-owned window should not require or set a quorum-reschedule marker"
+    );
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.is_empty(),
+        "frontier-owned window should not emit an extra quorum retransmit burst"
+    );
+    let after_first = super::status::snapshot();
+    assert_eq!(
+        after_first.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "frontier-owned suppression should not trigger direct MissingQc fallback"
+    );
+    assert_eq!(
+        after_first.view_change_causes.missing_payload_total,
+        before.view_change_causes.missing_payload_total,
+        "frontier-owned suppression should not trigger direct MissingPayload fallback"
+    );
+
+    let next_window_at = now
+        .checked_add(frontier_window.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    assert!(
+        actor.reschedule_stale_pending_blocks_with_now(next_window_at, None),
+        "vote-backed retransmit should rearm after moving into the next frontier window"
+    );
+    let pending_after_rearm = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained after vote-backed rearm");
+    assert_eq!(
+        pending_after_rearm.last_quorum_reschedule,
+        Some(next_window_at),
+        "next-window rearm should mark quorum-reschedule time at the rearm instant"
+    );
+    let posts_after_rearm: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        !posts_after_rearm.is_empty(),
+        "next-window rearm should emit retransmit traffic"
     );
 
     harness.shutdown.send();

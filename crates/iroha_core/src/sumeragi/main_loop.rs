@@ -4659,6 +4659,27 @@ impl Actor {
             .is_some()
     }
 
+    fn slot_has_vote_backed_consensus_evidence(&self, height: u64, view: u64) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        self.vote_log.values().any(|vote| {
+            matches!(
+                vote.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && vote.height == height
+                && vote.view == view
+                && vote.epoch == expected_epoch
+        }) || self.qc_cache.values().any(|qc| {
+            matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && qc.height == height
+                && qc.view == view
+                && qc.epoch == expected_epoch
+        })
+    }
+
     fn pending_block_has_consensus_evidence(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -4751,12 +4772,31 @@ impl Actor {
         self.frontier_non_missing_qc_recovery_cause(frontier_height) == Some("quorum_timeout")
     }
 
+    fn frontier_recovery_owns_height_window(&self, frontier_height: u64, now: Instant) -> bool {
+        let Some(state) = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == frontier_height)
+        else {
+            return false;
+        };
+        let Some(last_action_at) = state.last_action_at else {
+            return false;
+        };
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        now.saturating_duration_since(last_action_at) < window
+    }
+
     fn frontier_dependency_recovery_cause(
         &self,
         frontier_height: u64,
+        frontier_view: u64,
         now: Instant,
     ) -> Option<&'static str> {
-        if self.frontier_vote_backed_recovery_active(frontier_height, now) {
+        if self.frontier_vote_backed_recovery_active(frontier_height, now)
+            || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+        {
             return Some("quorum_timeout");
         }
 
@@ -23062,6 +23102,7 @@ impl Actor {
         committed_height: u64,
         proposal_seen: bool,
         dependency_progress_at: Option<Instant>,
+        now: Instant,
     ) {
         let Some(mut state) = self.frontier_recovery else {
             return;
@@ -23073,11 +23114,7 @@ impl Actor {
             state.last_dependency_progress_at,
             dependency_progress_at,
         );
-        if committed_advanced
-            || frontier_changed
-            || proposal_progress
-            || dependency_progress_advanced
-        {
+        if committed_advanced || frontier_changed || proposal_progress {
             self.frontier_recovery = None;
             return;
         }
@@ -23087,6 +23124,23 @@ impl Actor {
                 (Some(value), None) | (None, Some(value)) => Some(value),
                 (None, None) => None,
             };
+        if dependency_progress_advanced {
+            let progressed_at = state.last_dependency_progress_at.unwrap_or(now);
+            state.phase = FrontierRecoveryPhase::CatchUp;
+            state.entered_at = progressed_at;
+            state.last_progress_at = progressed_at;
+            state.no_progress_windows = 0;
+            state.cleanup_done = false;
+            state.last_rotation_view = None;
+            // Preserve the current owner through the active cooldown window so another source
+            // cannot immediately emit a second catch-up action after dependency movement.
+            if self.frontier_recovery_action_taken_in_current_window(state, now) {
+                self.frontier_recovery = Some(state);
+            } else {
+                self.frontier_recovery = None;
+            }
+            return;
+        }
         self.frontier_recovery = Some(state);
     }
 
@@ -23097,14 +23151,15 @@ impl Actor {
         committed_height: u64,
         dependency_progress_at: Option<Instant>,
     ) -> u32 {
+        let now = Instant::now();
         self.reset_same_height_no_proposal_storm_if_progressed(
             height,
             view,
             committed_height,
             false,
             dependency_progress_at,
+            now,
         );
-        let now = Instant::now();
         let mut state = self
             .frontier_recovery
             .filter(|state| state.frontier_height == height)
@@ -23164,8 +23219,10 @@ impl Actor {
         let Some(last_action_at) = state.last_action_at else {
             return false;
         };
-        self.frontier_recovery_window_index_at(state, last_action_at)
-            == self.frontier_recovery_window_index_at(state, now)
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        now.saturating_duration_since(last_action_at) < window
     }
 
     fn emit_frontier_recovery_range_pull(
@@ -23681,15 +23738,18 @@ impl Actor {
             committed_height,
             proposal_seen,
             dependency_progress_at,
+            now,
         );
 
         let reserved_recovery_window = self.frontier_recovery.is_some_and(|current| {
-            current.frontier_height == frontier_height
-                && current.cleanup_done
-                && current.last_cause != "missing_qc"
+            current.frontier_height == frontier_height && current.last_cause != "missing_qc"
         });
+        let empty_frontier_missing_qc =
+            reason == "missing_qc" && !proposal_seen && height == frontier_height;
         let actionable_dependency = reserved_recovery_window
+            || empty_frontier_missing_qc
             || backlog_signals
+            || self.slot_has_vote_backed_consensus_evidence(frontier_height, view)
             || self.frontier_catchup_has_unresolved_dependency(frontier_height)
             || self.has_actionable_missing_block_requests()
             || self.has_actionable_deferred_missing_payload_qcs()
@@ -24752,6 +24812,7 @@ impl Actor {
             committed_height,
             proposal_seen,
             same_height_dependency_progress_at,
+            now,
         );
         let missing_qc_progress_signal =
             committed_height >= height || !same_height_unresolved_backlog;
@@ -24859,7 +24920,7 @@ impl Actor {
             && !frontier_pending_exists
             && self.subsystems.commit.inflight.is_none()
         {
-            self.rebroadcast_cooldown().max(Duration::from_millis(500))
+            saturating_mul_duration(self.rebroadcast_cooldown(), 4).max(Duration::from_millis(500))
         } else {
             Duration::ZERO
         };
@@ -25168,11 +25229,13 @@ impl Actor {
                         tip_hash,
                     )
             });
+        let frontier_slot_vote_backed_evidence = height == committed_height.saturating_add(1)
+            && self.slot_has_vote_backed_consensus_evidence(height, current_view);
         let frontier_non_missing_qc_recovery_cause = (height == committed_height.saturating_add(1))
             .then(|| self.frontier_non_missing_qc_recovery_cause(height))
             .flatten();
         let frontier_dependency_recovery_cause = (height == committed_height.saturating_add(1))
-            .then(|| self.frontier_dependency_recovery_cause(height, now))
+            .then(|| self.frontier_dependency_recovery_cause(height, current_view, now))
             .flatten();
         let frontier_vote_backed_recovery_active = height == committed_height.saturating_add(1)
             && self.frontier_vote_backed_recovery_active(height, now);
@@ -25198,6 +25261,29 @@ impl Actor {
                     FrontierRecoveryAdvance::Rotate
                 );
             }
+            if frontier_slot_vote_backed_evidence
+                && !frontier_vote_backed_recovery_active
+                && !frontier_matching_pending
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "routing empty-frontier slot with vote/QC evidence through unified quorum-timeout recovery instead of MissingQc"
+                );
+                return matches!(
+                    self.advance_frontier_recovery(
+                        "quorum_timeout",
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        true,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
+            }
             if frontier_vote_backed_recovery_active || frontier_matching_pending {
                 debug!(
                     height,
@@ -25208,17 +25294,25 @@ impl Actor {
                 );
                 return false;
             }
-            self.frontier_recovery = None;
             if !proposal_seen {
-                if let Some(telemetry) = self.telemetry_handle() {
-                    telemetry.inc_proposal_gap();
-                }
-                self.trigger_view_change_with_cause(
+                debug!(
                     height,
-                    current_view,
-                    ViewChangeCause::MissingQc,
+                    view = current_view,
+                    committed_height,
+                    "routing empty-frontier missing_qc through unified frontier recovery instead of emitting an immediate direct rotation"
                 );
-                return true;
+                return matches!(
+                    self.advance_frontier_recovery(
+                        "missing_qc",
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        true,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
             }
             return false;
         }

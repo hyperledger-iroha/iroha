@@ -45,7 +45,9 @@ use crate::{
         self, CpuStressConfig, DiskSaturationConfig, FaultConfig, NetworkLatencyConfig,
         NetworkPartitionConfig,
     },
-    instructions::{self, AccountRecord, PreparedChaos, TransactionPlan, WorkloadEngine},
+    instructions::{
+        self, AccountRecord, PlanUpdate, PreparedChaos, TransactionPlan, WorkloadEngine,
+    },
 };
 
 const IZANAMI_BLOCK_PAYLOAD_QUEUE: i64 = 512;
@@ -2369,6 +2371,37 @@ const fn should_run_trigger_precheck(submission_confirmation: SubmissionConfirma
     )
 }
 
+fn state_updates_require_applied_confirmation(state_updates: &[PlanUpdate]) -> bool {
+    state_updates.iter().any(|update| {
+        matches!(
+            update,
+            PlanUpdate::RegisterTrigger(_)
+                | PlanUpdate::RegisterCallTrigger(_)
+                | PlanUpdate::TrackRepeatableTrigger(_)
+                | PlanUpdate::MintTriggerRepetitions { .. }
+                | PlanUpdate::BurnTriggerRepetitions { .. }
+                | PlanUpdate::ReleaseTriggerRepetitionsReservation { .. }
+                | PlanUpdate::SetTriggerMetadata { .. }
+                | PlanUpdate::ClearTriggerMetadata(_)
+        )
+    })
+}
+
+fn effective_submission_confirmation(
+    submission_confirmation: SubmissionConfirmationMode,
+    state_updates: &[PlanUpdate],
+) -> SubmissionConfirmationMode {
+    if matches!(
+        submission_confirmation,
+        SubmissionConfirmationMode::AcceptedByIngress
+    ) && state_updates_require_applied_confirmation(state_updates)
+    {
+        SubmissionConfirmationMode::BlockingApplied
+    } else {
+        submission_confirmation
+    }
+}
+
 async fn wait_for_submission_capacity(
     submissions: &mut JoinSet<()>,
     backlog_limit: usize,
@@ -3192,7 +3225,9 @@ async fn submit_plan(
     let workload = Arc::clone(workload);
     let burn_target = plan.burn_trigger_repetitions();
     let mint_target = plan.mint_trigger_repetitions();
-    let run_trigger_precheck = should_run_trigger_precheck(submission_confirmation);
+    let effective_submission_confirmation =
+        effective_submission_confirmation(submission_confirmation, &plan.state_updates);
+    let run_trigger_precheck = should_run_trigger_precheck(effective_submission_confirmation);
 
     if run_trigger_precheck && let Some((trigger_id, burn_amount)) = burn_target.clone() {
         let precheck = evaluate_burn_precheck(
@@ -3318,10 +3353,10 @@ async fn submit_plan(
                                 &signer_for_submit.id,
                                 signer_for_submit.key_pair.private_key().clone(),
                             ),
-                            submission_confirmation,
+                            effective_submission_confirmation,
                         );
                         let metadata = submission_metadata(submission_counter_for_submit.as_ref());
-                        match submission_confirmation {
+                        match effective_submission_confirmation {
                             SubmissionConfirmationMode::BlockingApplied => client
                                 .submit_all_blocking_with_metadata(
                                     instructions_for_submit.clone(),
@@ -4485,6 +4520,32 @@ mod tests {
         assert!(!should_run_trigger_precheck(
             SubmissionConfirmationMode::AcceptedByIngress
         ));
+    }
+
+    #[test]
+    fn trigger_state_updates_force_blocking_confirmation() {
+        let updates = vec![PlanUpdate::TrackRepeatableTrigger(
+            "repeat_trigger_test".parse().expect("valid trigger id"),
+        )];
+        assert_eq!(
+            effective_submission_confirmation(
+                SubmissionConfirmationMode::AcceptedByIngress,
+                &updates,
+            ),
+            SubmissionConfirmationMode::BlockingApplied
+        );
+    }
+
+    #[test]
+    fn non_trigger_state_updates_keep_ingress_confirmation() {
+        let updates = Vec::<PlanUpdate>::new();
+        assert_eq!(
+            effective_submission_confirmation(
+                SubmissionConfirmationMode::AcceptedByIngress,
+                &updates,
+            ),
+            SubmissionConfirmationMode::AcceptedByIngress
+        );
     }
 
     #[test]

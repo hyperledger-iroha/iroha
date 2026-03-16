@@ -1483,9 +1483,12 @@ impl Actor {
                 if self.prepare_block_sync_update_for_broadcast(&mut sync_update, consensus_mode) {
                     self.broadcast_block_sync_update(sync_update, &world_peers);
                 } else {
-                    self.broadcast_block_created_for_block_sync(
-                        super::message::BlockCreated::from(&sync_block),
-                        &world_peers,
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        targets = world_peers.len(),
+                        "skipping committed block payload fallback because a verifiable block sync update is unavailable"
                     );
                 }
                 #[cfg(feature = "telemetry")]
@@ -3289,17 +3292,13 @@ impl Actor {
                     "sending block sync update to commit topology after emitting local precommit vote"
                 );
             } else {
-                self.broadcast_block_created_for_block_sync(
-                    super::message::BlockCreated::from(&pending.block),
-                    &topology_peers,
-                );
-                iroha_logger::info!(
+                iroha_logger::debug!(
                     height = vote.height,
                     view = vote.view,
                     block = %vote.block_hash,
                     signer = vote.signer,
                     targets = topology_peers.len(),
-                    "sending BlockCreated payload fallback to active targets while roster proof is unavailable"
+                    "skipping BlockCreated payload fallback after local precommit vote because roster proof is unavailable"
                 );
             }
         } else {

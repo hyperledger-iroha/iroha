@@ -5284,6 +5284,10 @@ pub struct ToriiOnboarding {
     pub private_key: ExposedPrivateKey,
     /// Optional domain restriction for registered accounts.
     pub allowed_domain: Option<DomainId>,
+    /// Permission names that onboarding may grant to newly registered accounts.
+    pub allowed_permissions: Vec<String>,
+    /// Optional sponsor account granted via `CanUseFeeSponsor`.
+    pub fee_sponsor_account: Option<AccountId>,
 }
 
 /// Offline certificate issuer configuration exposed to Torii.

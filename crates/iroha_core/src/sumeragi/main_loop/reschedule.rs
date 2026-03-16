@@ -801,7 +801,7 @@ impl Actor {
             if let Some(pending) = self.pending.pending_blocks.remove(&key.0) {
                 self.subsystems.validation.inflight.remove(&key.0);
                 self.subsystems.validation.superseded_results.remove(&key.0);
-                self.reschedule_pending_quorum_block(
+                let action_taken = self.reschedule_pending_quorum_block(
                     pending,
                     age,
                     quorum_stall_age,
@@ -811,7 +811,7 @@ impl Actor {
                     effective_reschedule_backoff,
                     now,
                 );
-                progress = true;
+                progress |= action_taken;
             }
         }
 
@@ -967,7 +967,7 @@ impl Actor {
         quorum_timeout: Duration,
         reschedule_backoff: Duration,
         now: Instant,
-    ) {
+    ) -> bool {
         let block_hash = pending.block.hash();
         let height = pending.height;
         let view = pending.view;
@@ -998,23 +998,7 @@ impl Actor {
                 "skipping quorum reschedule: pending block not on local tip"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
-            return;
-        }
-        if !self.try_reserve_round_recovery_bundle_window(
-            height,
-            super::RoundRecoveryBundleSource::CommitQuorumReschedule,
-            now,
-        ) {
-            debug!(
-                block = %block_hash,
-                height,
-                view,
-                pending_age_ms = pending_age.as_millis(),
-                quorum_stall_age_ms = quorum_stall_age.as_millis(),
-                "suppressing repeated commit-quorum reschedule in current deterministic recovery bundle window"
-            );
-            self.pending.pending_blocks.insert(block_hash, pending);
-            return;
+            return false;
         }
 
         let precommit_vote_count = self
@@ -1038,6 +1022,41 @@ impl Actor {
         // Once quorum timeout expires with no commit evidence, this block is just zombie state:
         // keeping and rebroadcasting it only multiplies conflicting frontier candidates.
         let drop_pending = no_commit_evidence;
+        let frontier_height = u64::try_from(state_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let contiguous_frontier = height == frontier_height;
+        let frontier_window_owned =
+            contiguous_frontier && self.frontier_recovery_owns_height_window(height, now);
+        if frontier_window_owned && drop_pending {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "suppressing zero-vote quorum reschedule; frontier recovery already acted this window"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
+        if frontier_window_owned && has_reschedule_votes && !drop_pending {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "suppressing vote-backed quorum reschedule; frontier recovery already acted this window"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
+        let handoff_frontier_quorum_timeout_owner = drop_pending && contiguous_frontier;
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
@@ -1047,12 +1066,53 @@ impl Actor {
             } else {
                 (0, 0, 0, Vec::new())
             };
-        pending.mark_quorum_reschedule(now);
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
         let mut topology_peers =
             self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
         if topology_peers.is_empty() {
             topology_peers = self.effective_commit_topology();
+        }
+        if !drop_pending
+            && requeued == 0
+            && self
+                .quorum_retransmit_targets_for_missing_votes(
+                    block_hash,
+                    height,
+                    view,
+                    &topology_peers,
+                    min_votes_for_commit,
+                    vote_count,
+                )
+                .is_empty()
+        {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "skipping no-op commit-quorum reschedule: no actionable retransmit targets remain"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
+        if !self.try_reserve_round_recovery_bundle_window(
+            height,
+            super::RoundRecoveryBundleSource::CommitQuorumReschedule,
+            now,
+        ) {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "suppressing repeated commit-quorum reschedule in current deterministic recovery bundle window"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
         }
         let rebroadcast = self.rebroadcast_pending_block_updates(
             &mut pending,
@@ -1065,6 +1125,40 @@ impl Actor {
             vote_count,
             now,
         );
+        let action_taken = drop_pending
+            || requeued > 0
+            || rebroadcast.votes > 0
+            || rebroadcast.block_sync
+            || rebroadcast.block;
+        if !action_taken {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "skipping no-op commit-quorum reschedule after pacing/cooldown suppressed all retransmit work"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
+        pending.mark_quorum_reschedule(now);
+        let frontier_recovery_advance = if handoff_frontier_quorum_timeout_owner {
+            self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+            Some(self.advance_frontier_recovery(
+                "quorum_timeout",
+                height,
+                view,
+                false,
+                false,
+                true,
+                now,
+            ))
+        } else {
+            None
+        };
 
         if drop_pending {
             if !keep_commit_qc {
@@ -1117,6 +1211,8 @@ impl Actor {
             rebroadcasted_block = rebroadcast.block,
             rebroadcasted_block_sync = rebroadcast.block_sync,
             drop_pending,
+            handoff_frontier_quorum_timeout_owner,
+            frontier_recovery_advance = ?frontier_recovery_advance,
             precommit_votes = precommit_vote_count,
             commit_votes = commit_vote_count,
             reschedule_backoff_ms = reschedule_backoff.as_millis(),
@@ -1124,6 +1220,7 @@ impl Actor {
             rotate_immediately = false,
             "commit quorum missing past timeout; rescheduling block for reassembly"
         );
+        true
     }
 
     fn paced_retransmit_targets(
@@ -1314,7 +1411,7 @@ impl Actor {
                         block = %block_hash,
                         commit_votes,
                         targets = retransmit_targets.len(),
-                        "roster proof unavailable for block sync update; falling back to BlockCreated retransmit"
+                        "roster proof unavailable for block sync update; skipping payload fallback during quorum reschedule"
                     );
                 }
             } else {
@@ -1328,35 +1425,9 @@ impl Actor {
                 );
             }
         }
-        // Keep and rebroadcast the pending block so late payload requests can still succeed while
-        // allowing a fresh proposal to be assembled from the requeued transactions.
-        let block = if drop_pending {
-            false
-        } else if retransmit_targets.is_empty() {
-            false
-        } else {
-            let cooldown = self.payload_rebroadcast_cooldown();
-            if self
-                .payload_rebroadcast_log
-                .allow(block_hash, now, cooldown)
-            {
-                self.broadcast_block_created_for_block_sync(
-                    super::message::BlockCreated::from(&pending.block),
-                    &retransmit_targets,
-                );
-                true
-            } else {
-                super::status::inc_retransmit_skip_cooldown();
-                debug!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    cooldown_ms = cooldown.as_millis(),
-                    "skipping pending block rebroadcast due to cooldown"
-                );
-                false
-            }
-        };
+        // Keep quorum reschedule single-owner: retransmit votes and verifiable block-sync updates,
+        // but do not switch back into BlockCreated payload broadcast from this late recovery path.
+        let block = false;
         if votes > 0 || block_sync || block {
             pending.mark_precommit_rebroadcast(now);
         }

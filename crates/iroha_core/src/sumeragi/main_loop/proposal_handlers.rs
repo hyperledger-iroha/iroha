@@ -148,24 +148,18 @@ impl Actor {
             .is_some_and(|highest| {
                 self.request_missing_block_for_highest_qc_force(highest, source)
             });
-        let view_change_triggered = if self.try_reserve_missing_qc_height_stall_rotation_window(
-            height,
-            ViewChangeCause::MissingQc,
-            now,
-        ) {
-            self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingQc);
-            true
-        } else {
-            false
-        };
+        let recovery_advance =
+            self.advance_frontier_recovery("missing_qc", height, view, false, true, true, now);
+        let view_change_triggered = matches!(recovery_advance, FrontierRecoveryAdvance::Rotate);
         warn!(
             height,
             view,
             block = %block_hash,
             source,
             highest_qc_fetch_requested,
+            recovery_advance = ?recovery_advance,
             view_change_triggered,
-            "triggered deterministic active-height recovery after lock-rejected BlockCreated"
+            "routed lock-rejected active-height recovery through unified frontier recovery"
         );
     }
 
