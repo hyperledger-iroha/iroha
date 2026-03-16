@@ -2,6 +2,17 @@
 
 Last updated: 2026-03-15
 
+## 2026-03-15 Follow-up: multisig unauthorized integration expectation
+- Fixed `integration_tests/tests/multisig.rs` failure in `multisig_unauthorized`:
+  - updated the proposal-entry assertion after quorum approval attempts to match current executor behavior.
+  - `multisig/proposals/{instructions_hash}` is now asserted to be absent for all paths, including unauthorized final-approval failures.
+- Clarified test comment to document this behavior explicitly.
+
+### Validation Matrix (multisig unauthorized integration expectation)
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test multisig multisig_unauthorized -- --nocapture` (pass)
+- `cargo test -p integration_tests --test multisig -- --nocapture` (pass; 13 passed, 0 failed)
+
 ## 2026-03-15 Follow-up: address canonicalisation path-helper regression fix
 - Fixed `integration_tests/tests/address_canonicalisation.rs` helper paths used by account/explorer
   path-surface tests:
