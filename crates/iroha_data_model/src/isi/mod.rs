@@ -365,6 +365,16 @@ impl From<crate::isi::domain_link::LinkAccountDomain> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::domain_link::BindAccountAlias> for InstructionBox {
+    fn from(i: crate::isi::domain_link::BindAccountAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::domain_link::SetAccountLabel> for InstructionBox {
+    fn from(i: crate::isi::domain_link::SetAccountLabel) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
     fn from(i: crate::isi::domain_link::UnlinkAccountDomain) -> Self {
         InstructionBox(Box::new(i))
@@ -2145,7 +2155,7 @@ pub mod prelude {
         },
         consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
-        domain_link::{LinkAccountDomain, UnlinkAccountDomain},
+        domain_link::{BindAccountAlias, LinkAccountDomain, SetAccountLabel, UnlinkAccountDomain},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },

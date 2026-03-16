@@ -1267,16 +1267,22 @@ fn execute_propose(
     }
 
     match proposal_state(state_transaction, &multisig_account, &instructions_hash) {
-        Ok(_) => {
+        Ok(existing)
+            if now_ms(state_transaction) < existing.expires_at_ms =>
+        {
             return Err(ValidationFail::NotPermitted(
                 "multisig proposal duplicates".to_owned(),
             ));
         }
+        Ok(_) => {}
         Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {}
         Err(err) => return Err(err),
     }
 
     let now_ms = now_ms(state_transaction);
+    if proposal_state(state_transaction, &multisig_account, &instructions_hash).is_ok() {
+        prune_expired(state_transaction, &multisig_account, &instructions_hash)?;
+    }
     let expires_at_ms = {
         let ttl_ms = instruction
             .transaction_ttl_ms
@@ -3307,6 +3313,95 @@ mod tests {
         let approve = MultisigApprove::new(multisig_id.clone(), instructions_hash);
         execute_approve(&mut state_transaction, &signer2_id, &approve)
             .expect("signatory approve without roles");
+    }
+
+    #[test]
+    fn multisig_propose_replaces_expired_duplicate() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-expired-duplicate-replace"),
+        );
+
+        let domain_id: iroha_data_model::domain::DomainId = "retryable".parse().unwrap();
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(1).unwrap(),
+        };
+
+        let multisig_id = {
+            let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+            let mut block = state.block(block_header);
+            let mut state_transaction = block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&signer1_id, &mut state_transaction)
+                .expect("domain registration");
+            register_account_in_domain(
+                &mut state_transaction,
+                &signer1_id,
+                &domain_id,
+                &signer1_id,
+                "register signer1",
+            );
+            register_account_in_domain(
+                &mut state_transaction,
+                &signer1_id,
+                &domain_id,
+                &signer2_id,
+                "register signer2",
+            );
+
+            let multisig_id = register_multisig_account(
+                &mut state_transaction,
+                &signer1_id,
+                &domain_id,
+                &spec,
+                "register multisig account",
+            );
+            let instructions = Vec::<InstructionBox>::new();
+            execute_propose(
+                &mut state_transaction,
+                &signer1_id,
+                &MultisigPropose::new(multisig_id.clone(), instructions, None),
+            )
+            .expect("initial propose");
+
+            drop(state_transaction);
+            block.commit().expect("commit first block");
+            multisig_id
+        };
+
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 3, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let instructions = Vec::<InstructionBox>::new();
+        let instructions_hash = HashOf::new(&instructions);
+        execute_propose(
+            &mut state_transaction,
+            &signer2_id,
+            &MultisigPropose::new(multisig_id.clone(), instructions, None),
+        )
+        .expect("expired duplicate should be replaced");
+
+        let proposal = proposal_value(&state_transaction, &multisig_id, &instructions_hash)
+            .expect("replacement proposal");
+        assert_eq!(proposal.proposed_at_ms, 3);
+        assert_eq!(proposal.expires_at_ms, 4);
+        assert_eq!(
+            proposal.approvals,
+            BTreeSet::from([signer2_id]),
+            "replacement proposal should record only the new proposer approval"
+        );
     }
 
     #[test]

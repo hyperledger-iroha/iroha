@@ -610,6 +610,80 @@ fn resolve_alias_via_service(
     }
 }
 
+fn parse_account_alias_label(
+    alias_input: &str,
+) -> Result<(String, iroha_data_model::account::rekey::AccountLabel), Error> {
+    let canonical = alias_input.trim().to_ascii_lowercase();
+    let (label, domain) = canonical.split_once('@').ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias must be formatted as name@domain".to_string(),
+            ),
+        ))
+    })?;
+    if label.trim().is_empty() || domain.trim().is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias must be formatted as name@domain".to_string(),
+            ),
+        )));
+    }
+
+    let label_name = Name::from_str(label).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+    let domain_id = DomainId::from_str(domain).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+    let alias_label = iroha_data_model::account::rekey::AccountLabel::new(domain_id, label_name);
+    Ok((canonical, alias_label))
+}
+
+fn resolve_alias_on_chain(
+    app: &SharedAppState,
+    alias_input: &str,
+) -> Result<Option<(String, AccountId)>, Error> {
+    let (canonical, alias_label) = parse_account_alias_label(alias_input)?;
+    let state_view = app.state.view();
+    Ok(state_view
+        .world()
+        .account_aliases()
+        .get(&alias_label)
+        .cloned()
+        .map(|account_id| (canonical, account_id)))
+}
+
+fn resolve_alias_index_on_chain(
+    app: &SharedAppState,
+    index: u64,
+) -> Result<Option<(String, AccountId)>, Error> {
+    let idx = usize::try_from(index).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias index does not fit in usize".to_string(),
+            ),
+        ))
+    })?;
+    let state_view = app.state.view();
+    Ok(state_view
+        .world()
+        .account_aliases()
+        .iter()
+        .nth(idx)
+        .map(|(label, account_id)| {
+            let alias = format!(
+                "{}@{}",
+                label.label.as_ref().to_ascii_lowercase(),
+                label.domain.to_string().to_ascii_lowercase()
+            );
+            (alias, account_id.clone())
+        }))
+}
+
 fn resolve_alias_index_via_service(
     service: &AliasService,
     index: u64,
@@ -12804,6 +12878,11 @@ async fn handler_alias_resolve(
         )));
     }
 
+    if let Some((alias, account_id)) = resolve_alias_on_chain(&app, &request.alias)? {
+        let account_id_string = account_id.to_string();
+        return alias_resolve_ok(&alias, &account_id_string, None, "on_chain");
+    }
+
     if let Some(service) = &app.alias_service {
         return resolve_alias_via_service(service.as_ref(), &request.alias);
     }
@@ -12835,6 +12914,11 @@ async fn handler_alias_resolve_index(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<routing::AliasResolveIndexRequestDto>,
 ) -> Result<AxResponse, Error> {
+    if let Some((alias, account_id)) = resolve_alias_index_on_chain(&app, request.index)? {
+        let account_id_string = account_id.to_string();
+        return alias_resolve_index_ok(request.index, &alias, &account_id_string, "on_chain");
+    }
+
     if let Some(service) = &app.alias_service {
         return resolve_alias_index_via_service(service.as_ref(), request.index);
     }
