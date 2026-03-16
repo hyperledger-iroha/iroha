@@ -1,6 +1,20 @@
 # Status
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
+
+## 2026-03-16 Follow-up: SORA parliament smoke config canonical governance asset ID
+- Fixed SORA parliament integration smoke fixtures that still configured governance voting/citizenship
+  assets using legacy `<name>#<domain>` literals (`xor#govsmoke`), which now fail strict
+  `AssetDefinitionId` parsing.
+- Updated both fixtures to derive a deterministic canonical asset definition ID via
+  `AssetDefinitionId::new("govsmoke", "xor")` and feed `aid:<32-lower-hex>` into config writes.
+- Updated runtime setup paths in those tests to use the same derived `AssetDefinitionId` directly
+  instead of parsing legacy strings.
+
+### Validation Matrix (SORA parliament smoke canonical asset ID)
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test sora_parliament_lifecycle_smoke -- --nocapture` (pass; all 3 smoke tests are sandbox-skipped on loopback bind restriction)
+- `cargo test -p integration_tests --test sora_runtime_upgrade_resilience -- --nocapture` (pass; runtime resilience tests are sandbox-skipped on loopback bind restriction, one long-running soak test remains ignored by design)
 
 ## 2026-03-15 Follow-up: multisig unauthorized integration expectation
 - Fixed `integration_tests/tests/multisig.rs` failure in `multisig_unauthorized`:
