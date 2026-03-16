@@ -1267,9 +1267,7 @@ fn execute_propose(
     }
 
     match proposal_state(state_transaction, &multisig_account, &instructions_hash) {
-        Ok(existing)
-            if now_ms(state_transaction) < existing.expires_at_ms =>
-        {
+        Ok(existing) if now_ms(state_transaction) < existing.expires_at_ms => {
             return Err(ValidationFail::NotPermitted(
                 "multisig proposal duplicates".to_owned(),
             ));

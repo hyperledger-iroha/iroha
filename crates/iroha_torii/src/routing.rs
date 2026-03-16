@@ -33013,6 +33013,274 @@ mod accounts_query_tests {
     }
 }
 
+#[cfg(all(test, feature = "app_api"))]
+mod asset_definitions_query_tests {
+    use std::sync::Arc;
+
+    use http_body_util::BodyExt as _;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{Registrable as _, prelude as dm};
+
+    use super::*;
+
+    fn state_with_asset_definitions() -> Arc<CoreState> {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
+        let domain = dm::Domain::new(domain_id.clone()).build(&authority);
+        let account =
+            dm::Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+
+        let mut pkr_metadata = dm::Metadata::default();
+        pkr_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
+        let mut pkr = dm::AssetDefinition::numeric(
+            "aid:550e8400e29b41d4a7164466554400dd"
+                .parse()
+                .expect("asset definition id"),
+        )
+        .with_name("PKR".to_owned())
+        .with_metadata(pkr_metadata)
+        .build(&authority);
+        pkr.alias = Some("pkr#sbp".parse().expect("asset alias"));
+
+        let mut usd_metadata = dm::Metadata::default();
+        usd_metadata.insert("rank".parse().expect("metadata key"), 1_u32);
+        let usd = dm::AssetDefinition::numeric(
+            "aid:550e8400e29b41d4a7164466554400ee"
+                .parse()
+                .expect("asset definition id"),
+        )
+        .with_name("USD".to_owned())
+        .with_metadata(usd_metadata)
+        .build(&authority);
+
+        Arc::new(State::new_for_testing(
+            World::with([domain], [account], [pkr, usd]),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+
+    async fn response_json(response: impl IntoResponse) -> norito::json::Value {
+        let body = response
+            .into_response()
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        norito::json::from_slice(&body).expect("valid JSON")
+    }
+
+    #[tokio::test]
+    async fn assets_definitions_list_exposes_name_and_nullable_alias() {
+        let state = state_with_asset_definitions();
+        let params = ListFilterParams {
+            filter: None,
+            limit: Some(8),
+            offset: 0,
+            sort: Some("name:asc".to_owned()),
+        };
+
+        let doc = response_json(
+            handle_v1_assets_definitions(state, crate::NoritoQuery(params))
+                .await
+                .expect("handler ok"),
+        )
+        .await;
+
+        assert_eq!(doc["total"].as_u64(), Some(2));
+        let items = doc["items"].as_array().expect("items");
+        assert_eq!(items.len(), 2);
+
+        assert_eq!(items[0]["name"].as_str(), Some("PKR"));
+        assert_eq!(items[0]["alias"].as_str(), Some("pkr#sbp"));
+        assert_eq!(items[1]["name"].as_str(), Some("USD"));
+        assert!(items[1]["alias"].is_null());
+    }
+
+    #[tokio::test]
+    async fn assets_definitions_query_filters_name_alias_and_null_alias() {
+        let state = state_with_asset_definitions();
+
+        let by_name = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("name".into()),
+                norito::json::Value::from("USD"),
+            )),
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let doc = response_json(
+            handle_v1_assets_definitions_query(
+                state.clone(),
+                crate::utils::extractors::NoritoJson(by_name),
+            )
+            .await
+            .expect("handler ok"),
+        )
+        .await;
+        let items = doc["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["name"].as_str(), Some("USD"));
+        assert!(items[0]["alias"].is_null());
+
+        let by_alias = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("alias".into()),
+                norito::json::Value::from("pkr#sbp"),
+            )),
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let doc = response_json(
+            handle_v1_assets_definitions_query(
+                state.clone(),
+                crate::utils::extractors::NoritoJson(by_alias),
+            )
+            .await
+            .expect("handler ok"),
+        )
+        .await;
+        let items = doc["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["name"].as_str(), Some("PKR"));
+        assert_eq!(items[0]["alias"].as_str(), Some("pkr#sbp"));
+
+        let null_alias = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::IsNull(crate::filter::FieldPath(
+                "alias".into(),
+            ))),
+            select: None,
+            sort: Vec::new(),
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let doc = response_json(
+            handle_v1_assets_definitions_query(
+                state,
+                crate::utils::extractors::NoritoJson(null_alias),
+            )
+            .await
+            .expect("handler ok"),
+        )
+        .await;
+        let items = doc["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["name"].as_str(), Some("USD"));
+        assert!(items[0]["alias"].is_null());
+    }
+
+    #[tokio::test]
+    async fn assets_definitions_query_sorts_by_name_alias_and_metadata() {
+        let state = state_with_asset_definitions();
+
+        let name_sort = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: vec![crate::filter::SortKey {
+                key: crate::filter::FieldPath("name".into()),
+                order: crate::filter::Order::Desc,
+            }],
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let doc = response_json(
+            handle_v1_assets_definitions_query(
+                state.clone(),
+                crate::utils::extractors::NoritoJson(name_sort),
+            )
+            .await
+            .expect("handler ok"),
+        )
+        .await;
+        let items = doc["items"].as_array().expect("items");
+        assert_eq!(items[0]["name"].as_str(), Some("USD"));
+        assert_eq!(items[1]["name"].as_str(), Some("PKR"));
+
+        let alias_sort = crate::filter::QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            sort: vec![crate::filter::SortKey {
+                key: crate::filter::FieldPath("alias".into()),
+                order: crate::filter::Order::Asc,
+            }],
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let doc = response_json(
+            handle_v1_assets_definitions_query(
+                state.clone(),
+                crate::utils::extractors::NoritoJson(alias_sort),
+            )
+            .await
+            .expect("handler ok"),
+        )
+        .await;
+        let items = doc["items"].as_array().expect("items");
+        assert_eq!(items[0]["name"].as_str(), Some("USD"));
+        assert_eq!(items[1]["name"].as_str(), Some("PKR"));
+
+        let metadata_sort = crate::filter::QueryEnvelope {
+            query: None,
+            filter: Some(crate::filter::FilterExpr::Eq(
+                crate::filter::FieldPath("metadata.rank".into()),
+                norito::json::Value::from(1_u64),
+            )),
+            select: None,
+            sort: vec![crate::filter::SortKey {
+                key: crate::filter::FieldPath("metadata.rank".into()),
+                order: crate::filter::Order::Asc,
+            }],
+            pagination: crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let doc = response_json(
+            handle_v1_assets_definitions_query(
+                state,
+                crate::utils::extractors::NoritoJson(metadata_sort),
+            )
+            .await
+            .expect("handler ok"),
+        )
+        .await;
+        let items = doc["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["name"].as_str(), Some("USD"));
+    }
+}
+
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_accounts(
     state: Arc<CoreState>,
@@ -35712,6 +35980,8 @@ pub async fn handle_v1_explorer_block_detail(
 #[derive(Clone)]
 struct AssetDefinitionListItem {
     id: String,
+    name: String,
+    alias: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -35759,6 +36029,8 @@ fn validate_accounts_filter_adapter(expr: &FilterExpr) -> Result<()> {
 #[derive(Clone)]
 enum AssetDefinitionSortField {
     Id,
+    Name,
+    Alias,
     Metadata(Option<iroha_data_model::prelude::Name>),
     Unsupported,
 }
@@ -35779,6 +36051,10 @@ fn compile_asset_definition_sort_spec(
         let ascending = matches!(sk.order, crate::filter::Order::Asc);
         let field = if sk.key.0.as_str() == "id" {
             AssetDefinitionSortField::Id
+        } else if sk.key.0.as_str() == "name" {
+            AssetDefinitionSortField::Name
+        } else if sk.key.0.as_str() == "alias" {
+            AssetDefinitionSortField::Alias
         } else if let Some(rest) = sk.key.0.strip_prefix("metadata.") {
             AssetDefinitionSortField::Metadata(rest.parse().ok())
         } else {
@@ -35804,6 +36080,12 @@ fn asset_definition_sort_key(
     for selector in selectors {
         let value = match selector.field {
             AssetDefinitionSortField::Id => def.id().to_string(),
+            AssetDefinitionSortField::Name => def.name().clone(),
+            AssetDefinitionSortField::Alias => def
+                .alias()
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
             AssetDefinitionSortField::Metadata(Some(ref name)) => def
                 .metadata()
                 .get(name)
@@ -35835,6 +36117,11 @@ fn asset_definition_filter_object(
         F::Eq(f, v) => {
             if f.0 == "id" {
                 v.as_str().is_some_and(|s| s == def.id().to_string())
+            } else if f.0 == "name" {
+                v.as_str().is_some_and(|s| s == def.name())
+            } else if f.0 == "alias" {
+                v.as_str()
+                    .is_some_and(|s| def.alias().as_ref().map(AsRef::as_ref) == Some(s))
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     def.metadata().get(&name).is_some_and(|j| {
@@ -35851,6 +36138,12 @@ fn asset_definition_filter_object(
             if f.0 == "id" {
                 v.as_str()
                     .map(|s| s != def.id().to_string())
+                    .unwrap_or(true)
+            } else if f.0 == "name" {
+                v.as_str().map(|s| s != def.name()).unwrap_or(true)
+            } else if f.0 == "alias" {
+                v.as_str()
+                    .map(|s| def.alias().as_ref().map(AsRef::as_ref) != Some(s))
                     .unwrap_or(true)
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
@@ -35895,6 +36188,14 @@ fn asset_definition_filter_object(
             if f.0 == "id" {
                 let id = def.id().to_string();
                 list.iter().filter_map(|v| v.as_str()).any(|s| s == id)
+            } else if f.0 == "name" {
+                list.iter()
+                    .filter_map(|v| v.as_str())
+                    .any(|s| s == def.name())
+            } else if f.0 == "alias" {
+                let alias = def.alias().as_ref().map(AsRef::as_ref);
+                alias
+                    .is_some_and(|alias| list.iter().filter_map(|v| v.as_str()).any(|s| s == alias))
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     if let Some(j) = def.metadata().get(&name) {
@@ -35912,6 +36213,13 @@ fn asset_definition_filter_object(
             if f.0 == "id" {
                 let id = def.id().to_string();
                 list.iter().filter_map(|v| v.as_str()).all(|s| s != id)
+            } else if f.0 == "name" {
+                list.iter()
+                    .filter_map(|v| v.as_str())
+                    .all(|s| s != def.name())
+            } else if f.0 == "alias" {
+                let alias = def.alias().as_ref().map(AsRef::as_ref);
+                alias.is_none_or(|alias| list.iter().filter_map(|v| v.as_str()).all(|s| s != alias))
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     if let Some(j) = def.metadata().get(&name) {
@@ -35930,6 +36238,10 @@ fn asset_definition_filter_object(
         F::Exists(f) => {
             if f.0 == "id" {
                 true
+            } else if f.0 == "name" {
+                true
+            } else if f.0 == "alias" {
+                def.alias().is_some()
             } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     def.metadata().get(&name).is_some()
@@ -35941,7 +36253,9 @@ fn asset_definition_filter_object(
             }
         }
         F::IsNull(f) => {
-            if let Some(k) = f.0.strip_prefix("metadata.") {
+            if f.0 == "alias" {
+                def.alias().is_none()
+            } else if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     def.metadata().get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>()
@@ -35971,26 +36285,96 @@ fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionL
         F::Not(inner) => !asset_definition_filter_projection(inner, proj),
         F::Eq(f, v) => match f.0.as_str() {
             "id" => v.as_str().is_some_and(|s| s == proj.id),
+            "name" => v.as_str().is_some_and(|s| s == proj.name),
+            "alias" => v.as_str().is_some_and(|s| proj.alias.as_deref() == Some(s)),
+            field if field.starts_with("metadata.") => true,
             _ => false,
         },
         F::Ne(f, v) => match f.0.as_str() {
             "id" => v.as_str().is_some_and(|s| s != proj.id),
+            "name" => v.as_str().is_some_and(|s| s != proj.name),
+            "alias" => v
+                .as_str()
+                .map(|s| proj.alias.as_deref() != Some(s))
+                .unwrap_or(true),
+            field if field.starts_with("metadata.") => true,
             _ => false,
         },
         F::In(f, list) => match f.0.as_str() {
             "id" => list.iter().filter_map(|v| v.as_str()).any(|s| s == proj.id),
+            "name" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .any(|s| s == proj.name),
+            "alias" => proj
+                .alias
+                .as_deref()
+                .is_some_and(|alias| list.iter().filter_map(|v| v.as_str()).any(|s| s == alias)),
+            field if field.starts_with("metadata.") => true,
             _ => false,
         },
         F::Nin(f, list) => match f.0.as_str() {
             "id" => list.iter().filter_map(|v| v.as_str()).all(|s| s != proj.id),
+            "name" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .all(|s| s != proj.name),
+            "alias" => proj
+                .alias
+                .as_deref()
+                .is_none_or(|alias| list.iter().filter_map(|v| v.as_str()).all(|s| s != alias)),
+            field if field.starts_with("metadata.") => true,
             _ => false,
         },
-        F::Exists(f) => matches!(f.0.as_str(), "id"),
-        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
+        F::Exists(f) => match f.0.as_str() {
+            "id" | "name" => true,
+            "alias" => proj.alias.is_some(),
+            field if field.starts_with("metadata.") => true,
+            _ => false,
+        },
+        F::IsNull(f) => match f.0.as_str() {
+            "alias" => proj.alias.is_none(),
+            field if field.starts_with("metadata.") => true,
+            _ => false,
+        },
+        F::Lt(f, _) | F::Lte(f, _) | F::Gt(f, _) | F::Gte(f, _) => {
+            f.0.as_str().starts_with("metadata.")
+        }
     }
 }
 
-/// GET /v1/assets/definitions — List asset definitions with basic pagination.
+#[cfg(feature = "app_api")]
+fn asset_definition_filter_mentions_metadata(expr: &FilterExpr) -> bool {
+    use FilterExpr as F;
+
+    match expr {
+        F::And(list) | F::Or(list) => list.iter().any(asset_definition_filter_mentions_metadata),
+        F::Not(inner) => asset_definition_filter_mentions_metadata(inner),
+        F::Eq(f, _)
+        | F::Ne(f, _)
+        | F::Lt(f, _)
+        | F::Lte(f, _)
+        | F::Gt(f, _)
+        | F::Gte(f, _)
+        | F::In(f, _)
+        | F::Nin(f, _)
+        | F::Exists(f)
+        | F::IsNull(f) => f.0.starts_with("metadata."),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn project_asset_definition_list_item(
+    def: &iroha_data_model::asset::definition::AssetDefinition,
+) -> AssetDefinitionListItem {
+    AssetDefinitionListItem {
+        id: def.id().to_string(),
+        name: def.name().clone(),
+        alias: def.alias().as_ref().map(ToString::to_string),
+    }
+}
+
+/// GET /v1/assets/definitions — List asset definitions with `id`, `name`, and optional `alias`.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions(
@@ -36026,10 +36410,10 @@ pub async fn handle_v1_assets_definitions(
                     return None;
                 }
             }
-            let projected = AssetDefinitionListItem {
-                id: def.id().to_string(),
-            };
-            if let Some(expr) = filter_ref {
+            let projected = project_asset_definition_list_item(&def);
+            if let Some(expr) =
+                filter_ref.filter(|expr| !asset_definition_filter_mentions_metadata(expr))
+            {
                 if !asset_definition_filter_projection(expr, &projected) {
                     return None;
                 }
@@ -36045,6 +36429,15 @@ pub async fn handle_v1_assets_definitions(
     for it in &items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
+        m.insert("name".into(), norito::json::Value::from(it.name.clone()));
+        m.insert(
+            "alias".into(),
+            it.alias
+                .as_ref()
+                .map_or(norito::json::Value::Null, |alias| {
+                    norito::json::Value::from(alias.clone())
+                }),
+        );
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -36063,7 +36456,8 @@ pub async fn handle_v1_assets_definitions(
     Ok(resp)
 }
 
-/// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort.
+/// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort and
+/// `name`/`alias` projection fields.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions_query(
@@ -36113,10 +36507,10 @@ pub async fn handle_v1_assets_definitions_query(
                     return None;
                 }
             }
-            let projected = AssetDefinitionListItem {
-                id: def.id().to_string(),
-            };
-            if let Some(expr) = filter_ref {
+            let projected = project_asset_definition_list_item(&def);
+            if let Some(expr) =
+                filter_ref.filter(|expr| !asset_definition_filter_mentions_metadata(expr))
+            {
                 if !asset_definition_filter_projection(expr, &projected) {
                     return None;
                 }
@@ -36132,6 +36526,15 @@ pub async fn handle_v1_assets_definitions_query(
     for it in &items {
         let mut m = norito::json::Map::new();
         m.insert("id".into(), norito::json::Value::from(it.id.clone()));
+        m.insert("name".into(), norito::json::Value::from(it.name.clone()));
+        m.insert(
+            "alias".into(),
+            it.alias
+                .as_ref()
+                .map_or(norito::json::Value::Null, |alias| {
+                    norito::json::Value::from(alias.clone())
+                }),
+        );
         arr.push(norito::json::Value::Object(m));
     }
     let mut top = norito::json::Map::new();
@@ -36162,7 +36565,10 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
         }
         F::Not(inner) => validate_defs_filter_adapter(inner),
         F::Eq(f, v) | F::Ne(f, v) => {
-            if f.0.as_str() != "id" {
+            if f.0.starts_with("metadata.") {
+                return Ok(());
+            }
+            if !matches!(f.0.as_str(), "id" | "name" | "alias") {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             if !v.is_string() {
@@ -36171,7 +36577,10 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
             Ok(())
         }
         F::In(f, list) | F::Nin(f, list) => {
-            if f.0.as_str() != "id" {
+            if f.0.starts_with("metadata.") {
+                return Ok(());
+            }
+            if !matches!(f.0.as_str(), "id" | "name" | "alias") {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             if !list.iter().all(norito::json::Value::is_string) {
@@ -36180,13 +36589,24 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
             Ok(())
         }
         F::Exists(f) => {
-            if f.0.as_str() != "id" {
+            if !matches!(f.0.as_str(), "id" | "name" | "alias") && !f.0.starts_with("metadata.") {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             Ok(())
         }
-        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => {
-            Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
+        F::IsNull(f) => {
+            if f.0.as_str() == "alias" || f.0.starts_with("metadata.") {
+                Ok(())
+            } else {
+                Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
+            }
+        }
+        F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => {
+            if f.0.starts_with("metadata.") && v.as_u64().is_some() {
+                Ok(())
+            } else {
+                Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
+            }
         }
     }
 }
@@ -44334,6 +44754,53 @@ mod adapter_filter_tests {
         crate::filter::validate_filter(&expr2).unwrap();
         #[cfg(feature = "app_api")]
         assert!(validate_defs_filter_adapter(&expr2).is_err());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn defs_filter_adapter_accepts_name_alias_and_metadata_nullability() {
+        let name_eq = FilterExpr::Eq(FieldPath("name".into()), Value::from("PKR"));
+        validate_defs_filter_adapter(&name_eq).unwrap();
+
+        let alias_null = FilterExpr::IsNull(FieldPath("alias".into()));
+        validate_defs_filter_adapter(&alias_null).unwrap();
+
+        let metadata_lt = FilterExpr::Lt(FieldPath("metadata.rank".into()), Value::from(2_u64));
+        validate_defs_filter_adapter(&metadata_lt).unwrap();
+
+        let bad = FilterExpr::IsNull(FieldPath("name".into()));
+        assert!(validate_defs_filter_adapter(&bad).is_err());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn defs_filter_projection_matches_name_alias_and_metadata_passthrough() {
+        let item = AssetDefinitionListItem {
+            id: "aid:550e8400e29b41d4a7164466554400dd".to_owned(),
+            name: "PKR".to_owned(),
+            alias: Some("pkr#sbp".to_owned()),
+        };
+
+        assert!(asset_definition_filter_projection(
+            &FilterExpr::Eq(FieldPath("name".into()), Value::from("PKR")),
+            &item,
+        ));
+        assert!(asset_definition_filter_projection(
+            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("pkr#sbp")),
+            &item,
+        ));
+        assert!(asset_definition_filter_projection(
+            &FilterExpr::Exists(FieldPath("metadata.rank".into())),
+            &item,
+        ));
+        assert!(asset_definition_filter_projection(
+            &FilterExpr::Lt(FieldPath("metadata.rank".into()), Value::from(2_u64)),
+            &item,
+        ));
+        assert!(!asset_definition_filter_projection(
+            &FilterExpr::IsNull(FieldPath("alias".into())),
+            &item,
+        ));
     }
 
     #[test]

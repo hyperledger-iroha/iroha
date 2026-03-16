@@ -2585,10 +2585,13 @@ fn transaction_paths() -> Map {
         "Fetch pipeline transaction status.",
         "Return the latest pipeline status for a signed transaction hash.",
         "#/components/schemas/JsonValue",
-        vec![required_string_query_param(
-            "hash",
-            "Transaction hash (hex).",
-        )],
+        vec![
+            required_string_query_param("hash", "Transaction hash (hex)."),
+            string_query_param(
+                "scope",
+                "Read scope hint (`local`, `auto`, or `global`; defaults to `auto`).",
+            ),
+        ],
     );
     if let Some(Value::Object(get_op)) = pipeline_status.get_mut("get") {
         if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
@@ -3673,8 +3676,8 @@ fn asset_paths() -> Map {
         "/v1/assets/definitions".to_owned(),
         Value::Object(json_get_operation(
             "Assets",
-            "List asset definitions.",
-            "List asset definitions.",
+            "List asset definitions with name and alias.",
+            "List asset definitions with canonical id, human-readable name, and optional alias.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -3683,8 +3686,8 @@ fn asset_paths() -> Map {
         "/v1/assets/definitions/query".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
-            "Query asset definitions.",
-            "Query asset definitions with JSON envelope.",
+            "Query asset definitions with name and alias.",
+            "Query asset definitions with JSON envelope, including name and optional alias fields.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -10719,6 +10722,21 @@ mod tests {
         assert!(
             responses.contains_key("404"),
             "pipeline status should document 404 for missing cache entries"
+        );
+        let params = get
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("pipeline status params");
+        let has_scope = params.iter().any(|param| {
+            param
+                .as_object()
+                .and_then(|obj| obj.get("name"))
+                .and_then(Value::as_str)
+                == Some("scope")
+        });
+        assert!(
+            has_scope,
+            "pipeline status should document scope query hint"
         );
     }
 
