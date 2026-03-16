@@ -790,15 +790,8 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
             .get(format!("multisig/proposals/{instructions_hash}").as_str())
             .cloned()
     });
-    match (&transaction_ttl_ms_opt, &unauthorized_target_opt) {
-        (None, Some(_)) => {
-            // In case failing validation, the entry can exit only by expiring
-            res.unwrap();
-        }
-        _ => {
-            assert!(res.is_none());
-        }
-    }
+    // Proposals are removed once quorum processing runs, including unauthorized execution failures.
+    assert!(res.is_none());
 
     Ok(())
 }
