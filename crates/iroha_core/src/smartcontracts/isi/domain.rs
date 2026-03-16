@@ -2861,11 +2861,12 @@ mod tests {
         prelude::Domain,
         role::{Role, RoleId},
     };
+    use iroha_executor_data_model::permission::account::CanRegisterAccount;
     use iroha_primitives::{
         json::Json,
         numeric::{Numeric, NumericSpec},
     };
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
 
     use super::*;
