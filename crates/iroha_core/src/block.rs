@@ -5740,7 +5740,7 @@ pub(crate) mod valid {
                     }
                 }
             }
-            let routing_decisions: Vec<_> = if workers > 1 {
+            let routing_results: Vec<_> = if workers > 1 {
                 if let Some(pool) = pool.as_ref() {
                     pool.install(|| {
                         txs.par_iter()
@@ -5785,6 +5785,20 @@ pub(crate) mod valid {
                     })
                     .collect()
             };
+            let mut routing_decisions = Vec::with_capacity(routing_results.len());
+            let mut routing_errors = Vec::with_capacity(routing_results.len());
+            for routing in routing_results {
+                match routing {
+                    Ok(decision) => {
+                        routing_decisions.push(decision);
+                        routing_errors.push(None);
+                    }
+                    Err(err) => {
+                        routing_decisions.push(crate::queue::RoutingDecision::default());
+                        routing_errors.push(Some(err));
+                    }
+                }
+            }
             let mut signature_overrides: Vec<
                 Option<Result<(), crate::tx::SignatureVerificationFail>>,
             > = vec![None; txs.len()];
@@ -6276,6 +6290,13 @@ pub(crate) mod valid {
             let t_stateless_start = Instant::now();
             let mut stateless_rejections: Vec<Option<TransactionRejectionReason>> = {
                 let validate_tx = |(idx, tx): (usize, &&SignedTransaction)| {
+                    if let Some(err) = routing_errors[idx].as_ref() {
+                        return Some(TransactionRejectionReason::Validation(
+                            iroha_data_model::ValidationFail::NotPermitted(format!(
+                                "transaction routing could not be resolved: {err}"
+                            )),
+                        ));
+                    }
                     if !skip_stateless_checks && tx.creation_time() >= block_creation_time {
                         return Some(TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(format!(

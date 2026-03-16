@@ -610,6 +610,80 @@ fn resolve_alias_via_service(
     }
 }
 
+fn parse_account_alias_label(
+    alias_input: &str,
+) -> Result<(String, iroha_data_model::account::rekey::AccountLabel), Error> {
+    let canonical = alias_input.trim().to_ascii_lowercase();
+    let (label, domain) = canonical.split_once('@').ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias must be formatted as name@domain".to_string(),
+            ),
+        ))
+    })?;
+    if label.trim().is_empty() || domain.trim().is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias must be formatted as name@domain".to_string(),
+            ),
+        )));
+    }
+
+    let label_name = Name::from_str(label).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+    let domain_id = DomainId::from_str(domain).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+    let alias_label = iroha_data_model::account::rekey::AccountLabel::new(domain_id, label_name);
+    Ok((canonical, alias_label))
+}
+
+fn resolve_alias_on_chain(
+    app: &SharedAppState,
+    alias_input: &str,
+) -> Result<Option<(String, AccountId)>, Error> {
+    let (canonical, alias_label) = parse_account_alias_label(alias_input)?;
+    let state_view = app.state.view();
+    Ok(state_view
+        .world()
+        .account_aliases()
+        .get(&alias_label)
+        .cloned()
+        .map(|account_id| (canonical, account_id)))
+}
+
+fn resolve_alias_index_on_chain(
+    app: &SharedAppState,
+    index: u64,
+) -> Result<Option<(String, AccountId)>, Error> {
+    let idx = usize::try_from(index).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "alias index does not fit in usize".to_string(),
+            ),
+        ))
+    })?;
+    let state_view = app.state.view();
+    Ok(state_view
+        .world()
+        .account_aliases()
+        .iter()
+        .nth(idx)
+        .map(|(label, account_id)| {
+            let alias = format!(
+                "{}@{}",
+                label.label.as_ref().to_ascii_lowercase(),
+                label.domain.to_string().to_ascii_lowercase()
+            );
+            (alias, account_id.clone())
+        }))
+}
+
 fn resolve_alias_index_via_service(
     service: &AliasService,
     index: u64,
@@ -11920,7 +11994,7 @@ async fn handler_post_transaction(
         )));
     }
     let tx_hash = transaction.hash();
-    routing::handle_transaction_with_metrics(
+    let routing_decision = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
@@ -11941,7 +12015,24 @@ async fn handler_post_transaction(
         signer: app.da_receipt_signer.public_key().clone(),
     };
     let receipt = TransactionSubmissionReceipt::sign(payload, &app.da_receipt_signer);
-    Ok((StatusCode::ACCEPTED, NoritoBody(receipt)))
+    let mut response = (StatusCode::ACCEPTED, NoritoBody(receipt)).into_response();
+    if let Ok(lane_header) =
+        axum::http::HeaderValue::from_str(&routing_decision.lane_id.as_u32().to_string())
+    {
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-iroha-route-lane-id"),
+            lane_header,
+        );
+    }
+    if let Ok(dataspace_header) =
+        axum::http::HeaderValue::from_str(&routing_decision.dataspace_id.as_u64().to_string())
+    {
+        response.headers_mut().insert(
+            axum::http::header::HeaderName::from_static("x-iroha-route-dataspace-id"),
+            dataspace_header,
+        );
+    }
+    Ok(response)
 }
 
 async fn handler_proof_record_get(
@@ -12123,6 +12214,41 @@ async fn handler_pipeline_recovery(
 struct PipelineStatusQuery {
     #[norito(default)]
     hash: Option<String>,
+    #[norito(default)]
+    scope: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelineStatusReadScope {
+    Local,
+    Auto,
+    Global,
+}
+
+impl PipelineStatusReadScope {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Auto => "auto",
+            Self::Global => "global",
+        }
+    }
+}
+
+fn parse_pipeline_status_scope(raw: Option<&str>) -> Result<PipelineStatusReadScope, Error> {
+    let normalized = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("auto")
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "local" => Ok(PipelineStatusReadScope::Local),
+        "auto" => Ok(PipelineStatusReadScope::Auto),
+        "global" => Ok(PipelineStatusReadScope::Global),
+        _ => Err(conversion_error(format!(
+            "invalid scope query parameter \"{normalized}\" (expected local|auto|global)"
+        ))),
+    }
 }
 
 fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>, Error> {
@@ -12134,6 +12260,8 @@ fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>,
 fn pipeline_status_payload(
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
+    scope: PipelineStatusReadScope,
+    resolved_from: &'static str,
 ) -> norito::json::Value {
     let mut status = norito::json::Map::new();
     status.insert(
@@ -12164,6 +12292,11 @@ fn pipeline_status_payload(
     let mut content = norito::json::Map::new();
     content.insert("hash".into(), norito::json::Value::from(hash.to_string()));
     content.insert("status".into(), norito::json::Value::Object(status));
+    content.insert("scope".into(), norito::json::Value::from(scope.as_str()));
+    content.insert(
+        "resolved_from".into(),
+        norito::json::Value::from(resolved_from),
+    );
 
     let mut envelope = norito::json::Map::new();
     envelope.insert("kind".into(), norito::json::Value::from("Transaction"));
@@ -12214,12 +12347,13 @@ async fn handler_pipeline_transaction_status(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
+    let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
     if let Some(entry) = app.pipeline_status_cache.lookup(&hash) {
         return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry),
+            pipeline_status_payload(&hash, &entry, read_scope, "cache"),
             format,
         ));
     }
@@ -12229,7 +12363,7 @@ async fn handler_pipeline_transaction_status(
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache.record_entry(hash, entry.clone());
         return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry),
+            pipeline_status_payload(&hash, &entry, read_scope, "queue"),
             format,
         ));
     }
@@ -12237,9 +12371,15 @@ async fn handler_pipeline_transaction_status(
     if let Some(entry) = pipeline_status_from_state(&app, &hash) {
         app.pipeline_status_cache.record_entry(hash, entry.clone());
         return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry),
+            pipeline_status_payload(&hash, &entry, read_scope, "state"),
             format,
         ));
+    }
+
+    if matches!(read_scope, PipelineStatusReadScope::Local) {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )));
     }
 
     Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -12942,6 +13082,11 @@ async fn handler_alias_resolve(
         )));
     }
 
+    if let Some((alias, account_id)) = resolve_alias_on_chain(&app, &request.alias)? {
+        let account_id_string = account_id.to_string();
+        return alias_resolve_ok(&alias, &account_id_string, None, "on_chain");
+    }
+
     if let Some(service) = &app.alias_service {
         return resolve_alias_via_service(service.as_ref(), &request.alias);
     }
@@ -12973,6 +13118,11 @@ async fn handler_alias_resolve_index(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<routing::AliasResolveIndexRequestDto>,
 ) -> Result<AxResponse, Error> {
+    if let Some((alias, account_id)) = resolve_alias_index_on_chain(&app, request.index)? {
+        let account_id_string = account_id.to_string();
+        return alias_resolve_index_ok(request.index, &alias, &account_id_string, "on_chain");
+    }
+
     if let Some(service) = &app.alias_service {
         return resolve_alias_index_via_service(service.as_ref(), request.index);
     }
@@ -18427,7 +18577,20 @@ pub(crate) mod tests_runtime_handlers {
         )
         .await
         .expect("accepted");
-        assert_eq!(ok.into_response().status(), StatusCode::ACCEPTED);
+        let ok_response = ok.into_response();
+        assert_eq!(ok_response.status(), StatusCode::ACCEPTED);
+        let lane_header = ok_response
+            .headers()
+            .get("x-iroha-route-lane-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("route lane header must be present");
+        let dataspace_header = ok_response
+            .headers()
+            .get("x-iroha-route-dataspace-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("route dataspace header must be present");
+        assert!(!lane_header.trim().is_empty());
+        assert!(!dataspace_header.trim().is_empty());
 
         let err = match super::handler_post_transaction(State(app), headers, NoritoVersioned(tx2))
             .await
@@ -19197,6 +19360,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash().to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19219,6 +19383,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash_as_entrypoint().to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19261,6 +19426,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19283,6 +19449,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_entry_hash.to_string()),
+                scope: None,
             }),
         )
         .await
@@ -19318,6 +19485,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
+                scope: None,
             }),
         )
         .await
@@ -20667,6 +20835,31 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[test]
+    fn push_into_queue_unresolved_route_maps_to_bad_request() {
+        use nonzero_ext::nonzero;
+
+        let err = super::Error::PushIntoQueue {
+            source: Box::new(queue::Error::UnresolvedRoute {
+                reason: "lane 9 is not present in the lane catalog".to_owned(),
+            }),
+            backpressure: queue::BackpressureState::Healthy {
+                queued: 0,
+                capacity: nonzero!(1_usize),
+            },
+        };
+
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|v| v.to_str().ok()),
+            Some("PRTRY:ROUTE_UNRESOLVED")
+        );
+    }
+
     #[tokio::test]
     async fn serialization_error_emits_redacted_norito_payload() {
         let err = super::Error::SerializationFailure {
@@ -20837,6 +21030,13 @@ mod tests_queue_metadata {
                 queue::Error::Expired,
                 "ED07",
                 "transaction expired before admission",
+            ),
+            (
+                queue::Error::UnresolvedRoute {
+                    reason: "lane 9 is unknown".to_owned(),
+                },
+                "PRTRY:ROUTE_UNRESOLVED",
+                "transaction route could not be resolved: lane 9 is unknown",
             ),
             (
                 queue::Error::InBlockchain,
@@ -21036,6 +21236,7 @@ impl Error {
                 StatusCode::TOO_MANY_REQUESTS
             }
             queue::Error::Expired => StatusCode::BAD_REQUEST,
+            queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
             queue::Error::InBlockchain => StatusCode::CONFLICT,
             queue::Error::IsInQueue => StatusCode::CONFLICT,
             queue::Error::Governance(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -21055,6 +21256,10 @@ impl Error {
             queue::Error::Expired => (
                 "transaction_expired",
                 "transaction expired before admission",
+            ),
+            queue::Error::UnresolvedRoute { .. } => (
+                "queue_unresolved_route",
+                "transaction route could not be resolved",
             ),
             queue::Error::InBlockchain => (
                 "already_committed",
@@ -21152,6 +21357,10 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
             "authority reached per-user queue capacity".to_owned(),
         ),
         queue::Error::Expired => ("ED07", "transaction expired before admission".to_owned()),
+        queue::Error::UnresolvedRoute { reason } => (
+            "PRTRY:ROUTE_UNRESOLVED",
+            format!("transaction route could not be resolved: {reason}"),
+        ),
         queue::Error::InBlockchain => (
             "PRTRY:ALREADY_COMMITTED",
             "transaction already committed to the blockchain".to_owned(),

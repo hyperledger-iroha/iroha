@@ -5814,7 +5814,7 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashParam}`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashParam}&scope=auto`,
     );
     return createResponse({
       status: 200,
@@ -5832,6 +5832,61 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
       content: { hash: txHash, status: { kind: "Committed", content: null } },
     });
   });
+
+test("getTransactionStatus fans out to alternate endpoints in auto scope", async () => {
+  const hashHex = "ef".repeat(32);
+  const fallbackBaseUrl = "https://torii-sbp.soramitsu.io";
+  const seenUrls = [];
+  const fetchImpl = async (url) => {
+    seenUrls.push(url);
+    if (url === `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`) {
+      return createResponse({ status: 404 });
+    }
+    if (
+      url ===
+      `${fallbackBaseUrl}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`
+    ) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          kind: "Transaction",
+          content: { hash: hashHex, status: { kind: "Committed", content: null } },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    statusEndpoints: [fallbackBaseUrl],
+  });
+  const payload = await client.getTransactionStatus(hashHex);
+  assert.equal(seenUrls.length, 2);
+  assert.equal(payload?.resolved_from, fallbackBaseUrl);
+});
+
+test("getTransactionStatus local scope does not fan out", async () => {
+  const hashHex = "01".repeat(32);
+  const fallbackBaseUrl = "https://torii-sbp.soramitsu.io";
+  const seenUrls = [];
+  const fetchImpl = async (url) => {
+    seenUrls.push(url);
+    if (url === `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=local`) {
+      return createResponse({ status: 404 });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    statusEndpoints: [fallbackBaseUrl],
+  });
+  const payload = await client.getTransactionStatus(hashHex, { scope: "local" });
+  assert.equal(payload, null);
+  assert.deepEqual(seenUrls, [
+    `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=local`,
+  ]);
+});
 
 test("getTransactionStatus forwards signal to fetch", async () => {
   const hashHex = "ab".repeat(32);
@@ -5881,6 +5936,17 @@ test("getTransactionStatus validates allowShortHash option type", async () => {
   );
 });
 
+test("getTransactionStatus validates scope option", async () => {
+  const client = new ToriiClient(BASE_URL, { fetchImpl: async () => createResponse({ status: 404 }) });
+  await assert.rejects(
+    () =>
+      client.getTransactionStatus("ab".repeat(32), {
+        scope: "invalid",
+      }),
+    /getTransactionStatus options\.scope must be one of: local, auto, global/,
+  );
+});
+
   test("getTransactionStatus retries 425 via pipeline profile", async () => {
     const hash = "ab".repeat(32);
     let attempts = 0;
@@ -5888,7 +5954,7 @@ test("getTransactionStatus validates allowShortHash option type", async () => {
       attempts += 1;
       assert.equal(
         url,
-        `${BASE_URL}/v1/pipeline/transactions/status?hash=${hash}`,
+        `${BASE_URL}/v1/pipeline/transactions/status?hash=${hash}&scope=auto`,
       );
       if (attempts === 1) {
         return createResponse({ status: 425, jsonData: { status: "TooEarly" } });
@@ -5920,7 +5986,7 @@ test("getTransactionStatus returns null when Torii responds with 404", async () 
   const fetchImpl = async (url) => {
     assert.equal(
       url,
-      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}`,
+      `${BASE_URL}/v1/pipeline/transactions/status?hash=${hashHex}&scope=auto`,
     );
     return createResponse({ status: 404 });
   };

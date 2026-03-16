@@ -76,9 +76,11 @@ impl VisitExecute for MultisigPropose {
             deny!(executor, "not qualified to propose multisig");
         }
 
-        let proposal_key_name = proposal_key(&instructions_hash);
-        match super::load_account_metadata(&multisig_account, &proposal_key_name, executor) {
-            Ok(_) => deny!(executor, "multisig proposal duplicates"),
+        match proposal_value(&multisig_account, instructions_hash, executor) {
+            Ok(existing) if now_ms(executor) < existing.expires_at_ms => {
+                deny!(executor, "multisig proposal duplicates")
+            }
+            Ok(_) => {}
             Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::MetadataKey(
                 _,
             )))) => {}
@@ -93,6 +95,9 @@ impl VisitExecute for MultisigPropose {
         let spec = multisig_spec(&multisig_account, executor)?;
 
         let now_ms = now_ms(executor);
+        if proposal_value(&multisig_account, instructions_hash, executor).is_ok() {
+            prune_expired(multisig_account.clone(), instructions_hash, executor)?;
+        }
         let expires_at_ms = {
             let ttl_ms = self.transaction_ttl_ms.unwrap_or(spec.transaction_ttl_ms);
             now_ms.saturating_add(ttl_ms.into())

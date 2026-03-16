@@ -6295,7 +6295,7 @@ mod tests {
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
         merge::MergeQuorumCertificate,
-        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
         transaction::TransactionBuilder,
@@ -6796,13 +6796,21 @@ mod tests {
         let epoch_plus_three = epoch_u8
             .checked_add(3)
             .expect("test epoch offset 3 must fit in a u8");
-        let lane_tips = vec![HashOf::from_untyped_unchecked(Hash::new([epoch_u8]))];
-        let merge_hint_roots = vec![Hash::new([epoch_plus_one])];
+        let lane_snapshots = vec![iroha_data_model::merge::MergeLaneSnapshot {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            lane_block_height: epoch,
+            tip_hash: HashOf::from_untyped_unchecked(Hash::new([epoch_u8])),
+            merge_hint_root: Hash::new([epoch_plus_one]),
+        }];
+        let merge_hint_roots: Vec<Hash> = lane_snapshots
+            .iter()
+            .map(|snapshot| snapshot.merge_hint_root)
+            .collect();
         let global_state_root = reduce_merge_hint_roots(&merge_hint_roots);
         MergeLedgerEntry {
             epoch_id: epoch,
-            lane_tips,
-            merge_hint_roots,
+            lane_snapshots,
             global_state_root,
             merge_qc: MergeQuorumCertificate::new(
                 epoch,
