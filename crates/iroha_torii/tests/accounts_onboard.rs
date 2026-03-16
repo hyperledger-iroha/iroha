@@ -77,6 +77,8 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
         allowed_domain: Some(domain_id.clone()),
+        allowed_permissions: Vec::new(),
+        fee_sponsor_account: None,
     });
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -201,4 +203,158 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .get(&DataSpaceId::GLOBAL)
         .expect("global manifest present");
     assert!(record.is_active(), "global manifest should be active");
+}
+
+#[tokio::test]
+async fn accounts_onboard_multisig_registers_multisig_account() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+
+    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let authority_id = AccountId::new(authority_kp.public_key().clone());
+    let domain = Domain::new(domain_id.clone()).build(&authority_id);
+    let authority_account =
+        Account::new(authority_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
+    let mut world = World::with([domain], [authority_account], []);
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+
+    cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
+        authority: authority_id.clone(),
+        private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        allowed_domain: Some(domain_id.clone()),
+        allowed_permissions: Vec::new(),
+        fee_sponsor_account: None,
+    });
+
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    let _ = peers_tx;
+    #[cfg(feature = "telemetry")]
+    let telemetry = {
+        use iroha_core::telemetry as core_telemetry;
+        let metrics = fixtures::shared_metrics();
+        let (_mh, ts) =
+            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
+        core_telemetry::start(
+            metrics,
+            state.clone(),
+            kura.clone(),
+            queue.clone(),
+            peers_rx.clone(),
+            local_peer_id,
+            ts,
+            false,
+        )
+        .0
+    };
+
+    let chain_id = iroha_data_model::ChainId::from("test-chain");
+    let da_receipt_signer = cfg.common.key_pair.clone();
+    let torii = {
+        #[cfg(feature = "telemetry")]
+        {
+            Torii::new(
+                chain_id.clone(),
+                kiso,
+                cfg.torii.clone(),
+                queue.clone(),
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state.clone(),
+                da_receipt_signer.clone(),
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+                telemetry,
+                true,
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            Torii::new(
+                chain_id.clone(),
+                kiso,
+                cfg.torii.clone(),
+                queue.clone(),
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state.clone(),
+                da_receipt_signer,
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+            )
+        }
+    };
+
+    let app = torii.api_router_for_tests();
+    let signer_a = AccountId::new(
+        KeyPair::random_with_algorithm(Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let signer_b = AccountId::new(
+        KeyPair::random_with_algorithm(Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+    let body = json_object(vec![
+        json_entry("alias", "multisig-company"),
+        json_entry("required_signers", 2_u64),
+        json_entry(
+            "member_account_ids",
+            vec![signer_a.to_string(), signer_b.to_string()],
+        ),
+    ]);
+    let body = norito::json::to_json(&body).expect("serialize multisig onboarding request");
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts/onboard/multisig")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("multisig onboarding response");
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    let payload: norito::json::Value =
+        norito::json::from_slice(&bytes).expect("decode response json");
+    let multisig_id = payload
+        .as_object()
+        .and_then(|map| map.get("account_id"))
+        .and_then(norito::json::Value::as_str)
+        .expect("response includes account_id")
+        .to_string();
+
+    let expected_height = u64::try_from(state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let applied = iroha_torii::test_utils::apply_queued_in_one_block(
+        &state,
+        &queue,
+        &chain_id,
+        expected_height,
+    );
+    assert!(applied > 0);
+
+    let multisig_id = AccountId::parse_encoded(&multisig_id)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("parse multisig account id");
+    let view = state.view();
+    assert!(
+        view.world().account(&multisig_id).is_ok(),
+        "multisig account should be registered"
+    );
 }

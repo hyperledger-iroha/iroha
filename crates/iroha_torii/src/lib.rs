@@ -2710,6 +2710,38 @@ async fn handler_accounts_onboard(
 }
 
 #[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_accounts_onboard_multisig(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: crate::utils::extractors::NoritoJson<
+        crate::routing::MultisigAccountOnboardingRequestDto,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_accounts_onboard_multisig(
+            app.clone(),
+            request,
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        routing::ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG.trim_start_matches('/'),
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_accounts_onboard_multisig(app.clone(), request, app.telemetry.clone()).await
+}
+
+#[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct AccountsPortfolioQuery {
     #[norito(default)]
@@ -9947,6 +9979,112 @@ async fn handler_post_contract_call(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_contract_call_multisig_propose(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigContractCallProposeDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_propose"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/contracts/call/multisig/propose",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("call_multisig_propose"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_contract_call_multisig_propose(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_propose"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_contract_call_multisig_approve(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigContractCallApproveDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_approve"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/contracts/call/multisig/approve",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("call_multisig_approve"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_contract_call_multisig_approve(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_approve"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_sorafs_register_manifest(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -13512,6 +13650,8 @@ struct AccountOnboardingSigner {
     authority: AccountId,
     private_key: ExposedPrivateKey,
     allowed_domain: Option<DomainId>,
+    allowed_permissions: std::collections::BTreeSet<String>,
+    fee_sponsor_account: Option<AccountId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -14191,6 +14331,14 @@ impl Torii {
             #[cfg(feature = "app_api")]
             let group = group
                 .route("/v1/contracts/call", post(handler_post_contract_call))
+                .route(
+                    "/v1/contracts/call/multisig/propose",
+                    post(handler_post_contract_call_multisig_propose),
+                )
+                .route(
+                    "/v1/contracts/call/multisig/approve",
+                    post(handler_post_contract_call_multisig_approve),
+                )
                 .route("/v1/contracts/state", get(handler_get_contract_state));
             #[cfg(not(feature = "app_api"))]
             let group = group;
@@ -14476,6 +14624,10 @@ impl Torii {
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
+                .route(
+                    "/v1/accounts/onboard/multisig",
+                    post(handler_accounts_onboard_multisig),
+                )
                 .route(
                     "/v1/accounts/{uaid}/portfolio",
                     get(handler_accounts_portfolio),
@@ -15699,6 +15851,8 @@ impl Torii {
                 authority: cfg.authority.clone(),
                 private_key: cfg.private_key.clone(),
                 allowed_domain: cfg.allowed_domain.clone(),
+                allowed_permissions: cfg.allowed_permissions.iter().cloned().collect(),
+                fee_sponsor_account: cfg.fee_sponsor_account.clone(),
             });
         #[cfg(feature = "app_api")]
         let offline_issuer = config.offline_issuer.as_ref().map(|cfg| {

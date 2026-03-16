@@ -1414,36 +1414,97 @@ impl Actor {
                 }
                 let dwell_ms = now.saturating_duration_since(first_seen).as_millis();
                 let since_last_ms = now.saturating_duration_since(last_requested).as_millis();
-                warn!(
-                    height,
-                    view,
-                    dwell_ms,
-                    since_last_ms,
-                    attempts,
-                    "missing block dwell exceeded retry window; routing through frontier recovery"
-                );
-                if self
-                    .handoff_contiguous_frontier_missing_payload_recovery(
+                let committed_height = self.committed_height_snapshot();
+                let frontier_height = committed_height.saturating_add(1);
+                let frontier_window_owned = height == frontier_height
+                    && height == self.active_consensus_round_height()
+                    && self.frontier_recovery_owns_height_window(height, now);
+                if frontier_window_owned {
+                    debug!(
+                        height,
+                        view,
+                        block = ?block_hash,
+                        dwell_ms,
+                        since_last_ms,
+                        attempts,
+                        "missing payload dwell suppressed; frontier recovery already acted this window"
+                    );
+                } else {
+                    let handoff = self.handoff_contiguous_frontier_missing_payload_recovery(
                         height, view, first_seen, now,
-                    )
-                    .is_none()
-                {
-                    let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
-                    else {
-                        return deferred;
-                    };
-                    if stats.mark_view_change_if_due(now)
-                        && self.try_reserve_missing_qc_height_stall_rotation_window(
-                            height,
-                            ViewChangeCause::MissingPayload,
-                            now,
-                        )
-                    {
-                        self.trigger_view_change_with_cause(
-                            height,
-                            view,
-                            ViewChangeCause::MissingPayload,
-                        );
+                    );
+                    if let Some(action) = handoff {
+                        if matches!(action, super::FrontierRecoveryAdvance::None) {
+                            debug!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                frontier_recovery_advance = ?action,
+                                "missing block dwell exceeded retry window; frontier recovery evaluated the request without a new action"
+                            );
+                        } else {
+                            warn!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                frontier_recovery_advance = ?action,
+                                "missing block dwell exceeded retry window; routed through frontier recovery"
+                            );
+                        }
+                    } else {
+                        let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
+                        else {
+                            return deferred;
+                        };
+                        let direct_fallback_due = stats.mark_view_change_if_due(now);
+                        if direct_fallback_due
+                            && self.try_reserve_missing_qc_height_stall_rotation_window(
+                                height,
+                                ViewChangeCause::MissingPayload,
+                                now,
+                            )
+                        {
+                            warn!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded retry window; frontier controller not responsible, applying direct MissingPayload fallback"
+                            );
+                            self.trigger_view_change_with_cause(
+                                height,
+                                view,
+                                ViewChangeCause::MissingPayload,
+                            );
+                        } else if direct_fallback_due {
+                            debug!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded retry window; direct MissingPayload fallback was due but shared rotation budget denied it"
+                            );
+                        } else {
+                            debug!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded retry window; frontier controller not responsible but direct MissingPayload fallback is not due yet"
+                            );
+                        }
                     }
                 }
             }
@@ -1947,24 +2008,121 @@ impl Actor {
                         );
                         continue;
                     }
-                    warn!(
-                        height,
-                        view,
-                        dwell_ms,
-                        since_last_ms,
-                        attempts,
-                        "missing block dwell exceeded view-change window; routing through frontier recovery"
-                    );
+                    let frontier_height = committed_height.saturating_add(1);
+                    let frontier_window_owned = height == frontier_height
+                        && height == self.active_consensus_round_height()
+                        && self.frontier_recovery_owns_height_window(height, now);
                     let first_seen = self
                         .pending
                         .missing_block_requests
                         .get(&block_hash)
                         .map(|stats| stats.first_seen)
                         .unwrap_or(now);
-                    if let Some(action) = self.handoff_contiguous_frontier_missing_payload_recovery(
-                        height, view, first_seen, now,
-                    ) {
-                        if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                    if frontier_window_owned {
+                        debug!(
+                            height,
+                            view,
+                            block = ?block_hash,
+                            dwell_ms,
+                            since_last_ms,
+                            attempts,
+                            "missing payload dwell suppressed; frontier recovery already acted this window"
+                        );
+                    } else {
+                        let handoff = self.handoff_contiguous_frontier_missing_payload_recovery(
+                            height, view, first_seen, now,
+                        );
+                        if let Some(action) = handoff {
+                            if matches!(action, super::FrontierRecoveryAdvance::None) {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    frontier_recovery_advance = ?action,
+                                    "missing block dwell exceeded view-change window; frontier recovery evaluated the request without a new action"
+                                );
+                            } else {
+                                warn!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    frontier_recovery_advance = ?action,
+                                    "missing block dwell exceeded view-change window; routed through frontier recovery"
+                                );
+                            }
+                            if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                                let mut record_height_hard_cap_escalation = false;
+                                if let Some(budget) =
+                                    self.missing_block_height_recovery.get_mut(&recovery_key)
+                                {
+                                    if budget.escalated_view != Some(view) {
+                                        budget.escalated_view = Some(view);
+                                        record_height_hard_cap_escalation = true;
+                                    }
+                                }
+                                if record_height_hard_cap_escalation {
+                                    super::status::inc_consensus_missing_block_height_escalation();
+                                    #[cfg(feature = "telemetry")]
+                                    if let Some(telemetry) = self.telemetry_handle() {
+                                        telemetry.inc_consensus_missing_block_height_escalation();
+                                    }
+                                }
+                                if let Some(stats) =
+                                    self.pending.missing_block_requests.get_mut(&block_hash)
+                                {
+                                    let _ = stats.mark_view_change_if_due(now);
+                                }
+                                progress = true;
+                                break;
+                            }
+                            progress |= !matches!(action, super::FrontierRecoveryAdvance::None);
+                        } else if let Some(stats) =
+                            self.pending.missing_block_requests.get_mut(&block_hash)
+                        {
+                            let direct_fallback_due = stats.mark_view_change_if_due(now);
+                            if !direct_fallback_due {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    "missing block dwell exceeded view-change window; frontier controller not responsible but direct MissingPayload fallback is not due yet"
+                                );
+                                continue;
+                            }
+                            if !self.try_reserve_missing_qc_height_stall_rotation_window(
+                                height,
+                                ViewChangeCause::MissingPayload,
+                                now,
+                            ) {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    "missing block dwell exceeded view-change window; direct MissingPayload fallback was due but shared rotation budget denied it"
+                                );
+                                continue;
+                            }
+                            warn!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded view-change window; frontier controller not responsible, applying direct MissingPayload fallback"
+                            );
                             let mut record_height_hard_cap_escalation = false;
                             if let Some(budget) =
                                 self.missing_block_height_recovery.get_mut(&recovery_key)
@@ -1981,48 +2139,14 @@ impl Actor {
                                     telemetry.inc_consensus_missing_block_height_escalation();
                                 }
                             }
-                            if let Some(stats) =
-                                self.pending.missing_block_requests.get_mut(&block_hash)
-                            {
-                                let _ = stats.mark_view_change_if_due(now);
-                            }
+                            self.trigger_view_change_with_cause(
+                                height,
+                                view,
+                                ViewChangeCause::MissingPayload,
+                            );
                             progress = true;
                             break;
                         }
-                        progress |= !matches!(action, super::FrontierRecoveryAdvance::None);
-                    } else if self.try_reserve_missing_qc_height_stall_rotation_window(
-                        height,
-                        ViewChangeCause::MissingPayload,
-                        now,
-                    ) {
-                        let mut record_height_hard_cap_escalation = false;
-                        if let Some(budget) =
-                            self.missing_block_height_recovery.get_mut(&recovery_key)
-                        {
-                            if budget.escalated_view != Some(view) {
-                                budget.escalated_view = Some(view);
-                                record_height_hard_cap_escalation = true;
-                            }
-                        }
-                        if record_height_hard_cap_escalation {
-                            super::status::inc_consensus_missing_block_height_escalation();
-                            #[cfg(feature = "telemetry")]
-                            if let Some(telemetry) = self.telemetry_handle() {
-                                telemetry.inc_consensus_missing_block_height_escalation();
-                            }
-                        }
-                        if let Some(stats) =
-                            self.pending.missing_block_requests.get_mut(&block_hash)
-                        {
-                            let _ = stats.mark_view_change_if_due(now);
-                        }
-                        self.trigger_view_change_with_cause(
-                            height,
-                            view,
-                            ViewChangeCause::MissingPayload,
-                        );
-                        progress = true;
-                        break;
                     }
                 }
             }

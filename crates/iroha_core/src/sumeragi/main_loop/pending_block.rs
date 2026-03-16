@@ -194,9 +194,10 @@ impl PendingBlock {
     }
 
     pub(super) fn vote_backed_reschedule_due(&self, now: Instant, backoff: Duration) -> bool {
-        self.last_quorum_reschedule.is_none_or(|last| {
-            self.last_progress > last && now.saturating_duration_since(last) >= backoff
-        })
+        self.progress_age(now) >= backoff
+            && self
+                .last_quorum_reschedule
+                .is_none_or(|last| self.last_progress > last)
     }
 
     pub(super) fn mark_quorum_reschedule(&mut self, now: Instant) {
@@ -514,13 +515,20 @@ mod tests {
         let now = Instant::now();
         let backoff = Duration::from_millis(1);
 
+        pending.touch_progress(now);
         assert!(
-            pending.vote_backed_reschedule_due(now, backoff),
+            !pending.vote_backed_reschedule_due(now, backoff),
+            "vote-backed reschedule should wait for stale progress even on the first attempt"
+        );
+
+        let first_due = now + backoff + Duration::from_millis(1);
+        assert!(
+            pending.vote_backed_reschedule_due(first_due, backoff),
             "first vote-backed reschedule should be allowed"
         );
 
-        pending.mark_quorum_reschedule(now);
-        let later = now + backoff + Duration::from_millis(1);
+        pending.mark_quorum_reschedule(first_due);
+        let later = first_due + backoff + Duration::from_millis(1);
         assert!(
             !pending.vote_backed_reschedule_due(later, backoff),
             "duplicate vote-backed reschedule should wait for real progress"

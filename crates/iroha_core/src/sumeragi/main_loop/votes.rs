@@ -716,17 +716,13 @@ impl Actor {
                                 "deferring payload rebroadcast while waiting for roster-unavailability recovery"
                             );
                         } else {
-                            self.broadcast_block_created_for_block_sync(
-                                super::message::BlockCreated::from(&block),
-                                &topology_peers,
-                            );
-                            iroha_logger::info!(
+                            iroha_logger::debug!(
                                 height = vote.height,
                                 view = vote.view,
                                 block = %vote.block_hash,
                                 signer = vote.signer,
                                 targets = topology_peers.len(),
-                                "sending BlockCreated payload fallback to active targets while roster proof is unavailable"
+                                "skipping BlockCreated payload fallback after precommit vote because roster proof is unavailable"
                             );
                         }
                     } else {

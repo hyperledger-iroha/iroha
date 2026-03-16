@@ -1,6 +1,209 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-15
+Last updated: 2026-03-16
+
+Latest sync (2026-03-16 strict elapsed-window dwell ownership revalidation):
+`crates/iroha_core/src/sumeragi/main_loop.rs` now enforces contiguous-frontier
+owner windows via elapsed cooldown (`now - last_action_at < frontier_recovery_window`)
+for both `frontier_recovery_owns_height_window(...)` and
+`frontier_recovery_action_taken_in_current_window(...)`, and the same-height
+reset path now preserves the active frontier owner when an action already
+occurred in-window (so dependency-progress resets do not re-arm a second
+same-window catch-up action). Added regression
+`frontier_stall_does_not_emit_second_recovery_action_in_same_window`, and
+re-ran the ownership subset green
+(`contiguous_frontier_missing_payload_dwell_*`,
+`zero_vote_quorum_timeout_`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`frontier_recovery_rotates_once_after_cleanup_window_expires`). Fresh warmed
+keep-dirs probe
+(`/tmp/izanami_npos_healthy_probe_missing_payload_owner_20260316T230137.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_jLEG3t`)
+timed out at `quorum 55 / strict 56`, but peer logs showed one contiguous-frontier
+missing-block dwell routed handoff (`height=36`) and no direct `MissingPayload`
+fallback warnings. Immediate open work remains vote-backed commit-quorum
+convergence / queue-pressure collapse, not mid-window ownership duplication in
+contiguous-frontier missing-block dwell.
+
+Latest sync (2026-03-16 zero-vote same-window quorum-timeout suppression):
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now suppresses
+contiguous-frontier zero-vote quorum-timeout repeats while the frontier recovery
+owner already holds the current window (`frontier_recovery_owns_height_window`),
+instead of re-entering the same handoff path again in-window. Added focused
+regression
+`zero_vote_quorum_timeout_suppresses_same_window_repeat_while_frontier_owner_active`
+and re-ran the ownership subset (`zero_vote_quorum_timeout_*`,
+`contiguous_frontier_missing_payload_dwell_*`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`frontier_recovery_rotates_once_after_cleanup_window_expires`) green. Warmed
+keep-dirs runtime probes still time out before `target_blocks=120`, but the
+no-fault/latency-gated run
+(`/tmp/izanami_npos_healthy_probe_zero_vote_window_owner_f0_lg1000_20260316T221556.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_nxBw0A`)
+reduced commit-quorum reschedule churn relative to the previous comparable
+keep-dirs baseline (`WN2zje`): total warnings `34 -> 27`,
+`drop_pending=true` `12 -> 7`, and
+`drop_pending=true + frontier_recovery_advance=Some(None)` `6 -> 0`. Open work
+remains commit-quorum convergence (the run still stopped at `quorum/strict 64/64`),
+not contiguous-frontier ownership duplication.
+
+Latest sync (2026-03-16 dwell warning attribution cut):
+`crates/iroha_core/src/sumeragi/main_loop/qc.rs` now logs contiguous-frontier
+missing-block dwell escalation with per-request `block` context and post-handoff
+action attribution. Warn-level dwell lines now map to actual routed actions or
+explicit direct fallback (`frontier controller not responsible`), while no-op
+handoff (`FrontierRecoveryAdvance::None`) is emitted at debug-level to avoid
+overstating repeated work. Focused ownership subset remains green
+(`contiguous_frontier_missing_payload_dwell_*`,
+`zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_timeout_recovery`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`frontier_recovery_rotates_once_after_cleanup_window_expires`). Keep-dirs probe
+rerun to completion
+(`/tmp/izanami_npos_healthy_probe_frontier_dwell_window_owner_logcut_full_20260316T212527.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_UBttAh`)
+timed out at `quorum 62 / strict 69`. In that run, peer logs emitted none of the
+old generic `routing through frontier recovery` dwell strings and instead
+produced block-scoped direct-fallback warnings
+(`frontier controller not responsible ...`) only twice for the same
+`height=26`/hash pair. Immediate open work remains runtime convergence, not log
+attribution: vote-backed commit-quorum stalls still cap the run in the high-60s.
+
+Latest sync (2026-03-16 revalidation of contiguous-frontier dwell ownership):
+re-ran the focused ownership subset (`contiguous_frontier_missing_payload_dwell_*`,
+`zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_timeout_recovery`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`frontier_recovery_rotates_once_after_cleanup_window_expires`) and all remain
+green. Warmed 120-block healthy NPoS probe with keep-dirs
+(`/tmp/izanami_npos_healthy_probe_frontier_dwell_window_owner_keepdirs_20260316T204058.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_6IxdNP`)
+still timed out at `quorum 66 / strict 70`. Peer logs still include repeated
+`missing block dwell exceeded retry window; routing through frontier recovery`
+warnings (`42` lines), but `requested unified frontier recovery range pull` with
+`reason="missing_payload"` appeared once (height `69`), so the contiguous-frontier
+missing-payload handoff itself remains one-action in that window. Immediate open
+work is still vote-backed commit-quorum convergence beyond the low-70s and
+warning-path noise reduction (for example, include hash/context in the dwell warn
+line so same-height multi-request fan-out is distinguishable from repeated action).
+
+Latest sync (2026-03-16 vote-backed contiguous-frontier window ownership):
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now suppresses
+vote-backed contiguous-frontier quorum-timeout retransmit directly via
+`frontier_recovery_owns_height_window(height, now)` instead of using
+`last_quorum_reschedule`/cause heuristics, so same-window retries no longer use
+reschedule markers as a rearm signal. The focused regression
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`
+was expanded to assert same-window suppression without a prior marker, no direct
+`MissingQc`/`MissingPayload` fallback while frontier ownership is active, and
+next-window rearm behavior. Focused ownership subset remains green
+(`contiguous_frontier_missing_payload_dwell_*`,
+`zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_timeout_recovery`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`frontier_recovery_rotates_once_after_cleanup_window_expires`). Warmed
+120-block NPoS probe
+(`/tmp/izanami_npos_healthy_probe_vote_backed_window_owner_20260316T202521.log`)
+still timed out, but moved to `quorum 67 / strict 71` from the prior warmed
+`52 / 57` rerun. Immediate open work remains vote-backed commit-quorum
+convergence past the low-70s; this cut reduced duplicate same-window ownership
+but did not close the target-block gate.
+
+Latest sync (2026-03-16 contiguous-frontier missing-block dwell handoff-once):
+`crates/iroha_core/src/sumeragi/main_loop/{main_loop.rs,qc.rs}` now treats
+contiguous-frontier missing-block dwell as a pure handoff into the existing
+frontier controller at most once per recovery window. A new
+`frontier_recovery_owns_height_window(...)` helper gates retry-window and
+view-change-window dwell branches so they suppress both re-handoff and direct
+`MissingPayload` fallback when the current frontier owner already acted in the
+same window, and a debug-only suppression line was added. Focused regressions
+are green
+(`contiguous_frontier_missing_payload_dwell_hands_off_once_per_window`,
+`contiguous_frontier_missing_payload_dwell_does_not_fallback_to_direct_view_change_while_window_owned`,
+`contiguous_frontier_missing_payload_dwell_rearms_only_after_next_window`) and
+the earlier ownership subset remains green
+(`zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_timeout_recovery`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`frontier_recovery_rotates_once_after_cleanup_window_expires`). Warmed 120-block
+NPoS probes still timed out (`46/50`, rerun `52/57`, `46/51`, then `14/14` in a
+run with concurrent workload overflow failures), so the next bottleneck remains
+vote-backed commit-quorum convergence/reschedule churn rather than ownership
+duplication in contiguous-frontier missing-block dwell.
+
+Latest sync (2026-03-16 zero-vote frontier-owner handoff):
+simplified `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` so a
+zero-vote quorum-timeout drop on the contiguous frontier now immediately seeds
+and advances the existing `quorum_timeout` frontier controller instead of
+deleting the pending block and leaving an ownerless empty slot behind. Focused
+regressions are green
+(`zero_vote_quorum_timeout_drops_pending_and_hands_frontier_to_quorum_timeout_recovery`,
+`force_view_change_if_idle_suppresses_empty_frontier_missing_qc_while_quorum_timeout_recovery_owns_window`,
+`reschedule_defers_zero_vote_quorum_timeout_while_block_queue_backlogged`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set`). A fresh
+direct-binary healthy NPoS probe
+(`/tmp/izanami_npos_healthy_probe_zero_vote_owner_handoff_20260316T101333Z.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_WIrcsR`)
+shows the handoff firing live at height `50`
+(`drop_pending=true handoff_frontier_quorum_timeout_owner=true frontier_recovery_advance=Some(CatchUp)`),
+and the overall ceiling moved slightly from `quorum 65 / strict 69` to
+`quorum 67 / strict 73`. That is not enough. The dominant runtime owner is now
+clearer: repeated `missing block dwell exceeded retry window; routing through
+frontier recovery` is still driving the collapse, with late vote-backed
+quorum-reschedule warnings only as a secondary symptom. Immediate open work is
+to reduce the repeated missing-block dwell churn itself, not to add another
+timeout stage. The next useful cut is in the QC/missing-block path: make
+contiguous-frontier missing-block retry/reanchor idempotent within a window so
+the same height does not keep re-triggering frontier recovery after the first
+catch-up action.
+
+Latest sync (2026-03-15 vote-backed reschedule waits for stale progress):
+routed active-height lock rejection in
+`crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` through the
+same frontier recovery owner used by idle/quorum-timeout recovery, so that
+lock-rejected `BlockCreated` no longer performs a direct `MissingQc` view
+change on its own. Tightened
+`crates/iroha_core/src/sumeragi/main_loop/pending_block.rs` so
+`vote_backed_reschedule_due(...)` now requires one full backoff interval with
+no new vote/QC progress before retransmit is allowed. Focused regressions are
+green
+(`block_created_without_hint_reject_at_active_height_routes_through_unified_frontier_recovery`,
+`vote_backed_reschedule_requires_progress_after_last_attempt`,
+`reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent`,
+`reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress`),
+and a fresh direct-binary healthy NPoS probe moved the ceiling from
+`quorum 56 / strict 63` to `quorum 65 / strict 71`. Immediate open work is no
+longer the early `~200ms` vote-backed retransmit bug; it is the later low-70s
+stall where repeated executor trigger lookup failures
+(`Find(Trigger("repeat_trigger_0"))`) line up with renewed single-vote quorum
+misses. Next useful cuts are: isolate whether that executor noise is creating
+the consensus backlog, and inspect why the terminal frontier still falls back
+to `votes=1/3` after the pacing fix.
+
+Latest sync (2026-03-15 no-op quorum-reschedule suppression):
+simplified `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` so
+vote-backed quorum timeout handling no longer records a reschedule marker when
+it has no actionable work. If a stalled pending block already has a numerically
+full observed signer set and no missing retransmit targets, or if pacing/cooldown
+suppresses every retransmit action, the helper now leaves the pending block
+untouched and returns `false` instead of pretending progress happened. The
+pacemaker attempt logs in `propose.rs` now also report `tracked_height` instead
+of the committed tip height, so late proposal-gap analysis matches the actual
+frontier under evaluation. Focused regressions are green
+(`stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`zero_vote_quorum_timeout_drops_pending_without_immediate_view_change`,
+`reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress`).
+This cut also suppresses another duplicate edge: once the contiguous frontier is
+already inside a `quorum_timeout` recovery window, vote-backed pending no longer
+emits a second retransmit cycle inside that same window. Immediate open work is
+runtime validation, not another state branch: the currently running NPoS probe
+in session `95142` is stale for the latest tree because this suppression landed
+after it started, so the next useful action is a fresh short healthy NPoS probe
+on the current code and then comparison against the prior late churn around
+heights `77/92/100/102`.
 
 Latest sync (2026-03-15 matching frontier pending suppresses direct MissingQc):
 simplified `crates/iroha_core/src/sumeragi/main_loop.rs` so

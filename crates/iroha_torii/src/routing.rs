@@ -6686,15 +6686,19 @@ pub async fn handle_post_contract_call(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<ContractCallDto>,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{metadata::Metadata, name::Name, prelude as dm};
+    use base64::Engine as _;
+    use iroha_data_model::prelude as dm;
 
     let ContractCallDto {
         authority,
         private_key,
+        public_key_hex,
+        signature_b64,
         namespace,
         contract_id,
         entrypoint,
         payload,
+        creation_time_ms,
         gas_asset_id,
         fee_sponsor,
         gas_limit,
@@ -6712,6 +6716,176 @@ pub async fn handle_post_contract_call(
         manifest,
     } = prepared;
 
+    let metadata = build_contract_call_metadata(
+        &manifest,
+        &namespace,
+        &contract_id,
+        entrypoint.as_deref(),
+        payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+    );
+
+    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let builder = builder
+        .with_metadata(metadata)
+        .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
+            code_bytes,
+        )));
+    let code_hash_hex = hex::encode(code_hash.as_ref());
+    let abi_hash_hex = hex::encode(abi_hash.as_ref());
+    let response =
+        if let Some(private_key) = private_key {
+            let tx = builder.sign(&private_key.0);
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                "/v1/contracts/call",
+            )
+            .await?;
+            ContractCallResponseDto {
+                ok: true,
+                submitted: true,
+                namespace,
+                contract_id,
+                code_hash_hex,
+                abi_hash_hex,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                signed_transaction_b64: None,
+                signing_message_b64: None,
+                entrypoint,
+            }
+        } else if public_key_hex.is_some() || signature_b64.is_some() {
+            let public_key_hex = public_key_hex
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+            let signature_b64 = signature_b64
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+            let public_key_bytes = hex::decode(public_key_hex)
+                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let public_key = iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &public_key_bytes,
+            )
+            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let expected_authority = dm::AccountId::new(public_key.clone());
+            if authority != expected_authority {
+                return Err(conversion_error(
+                    "public_key_hex does not match authority".to_owned(),
+                ));
+            }
+            let signature_bytes = base64::engine::general_purpose::STANDARD
+                .decode(signature_b64.as_bytes())
+                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let mut tx = builder
+                .sign(
+                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                        .private_key(),
+                )
+                .with_authority(authority.clone().into());
+            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+                iroha_crypto::SignatureOf::<
+                    iroha_data_model::transaction::signed::TransactionPayload,
+                >::from_signature(signature),
+            ));
+            tx.verify_signature().map_err(|err| {
+                conversion_error(format!(
+                    "contract call detached signature verification failed: {err}"
+                ))
+            })?;
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                "/v1/contracts/call",
+            )
+            .await?;
+            ContractCallResponseDto {
+                ok: true,
+                submitted: true,
+                namespace,
+                contract_id,
+                code_hash_hex,
+                abi_hash_hex,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                signed_transaction_b64: None,
+                signing_message_b64: None,
+                entrypoint,
+            }
+        } else {
+            let scaffold_key =
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+            let tx = builder
+                .sign(scaffold_key.private_key())
+                .with_authority(authority.clone().into());
+            let signed_transaction_b64 = base64::engine::general_purpose::STANDARD
+                .encode(norito::codec::Encode::encode(&tx));
+            let signing_message_b64 = base64::engine::general_purpose::STANDARD
+                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+            ContractCallResponseDto {
+                ok: true,
+                submitted: false,
+                namespace,
+                contract_id,
+                code_hash_hex,
+                abi_hash_hex,
+                creation_time_ms,
+                tx_hash_hex: None,
+                signed_transaction_b64: Some(signed_transaction_b64),
+                signing_message_b64: Some(signing_message_b64),
+                entrypoint,
+            }
+        };
+
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+const DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT: u64 = 5_000;
+
+#[cfg(feature = "app_api")]
+fn current_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "app_api")]
+fn build_contract_call_metadata(
+    manifest: &manifest::ContractManifest,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: Option<&str>,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+) -> Metadata {
     let mut metadata = Metadata::default();
     let manifest_key =
         Name::from_str(manifest::MANIFEST_METADATA_KEY).expect("static manifest metadata key");
@@ -6719,24 +6893,24 @@ pub async fn handle_post_contract_call(
 
     let ns_key =
         Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
-    metadata.insert(ns_key, IrohaJson::new(namespace.clone()));
+    metadata.insert(ns_key, IrohaJson::new(namespace.to_owned()));
     let cid_key = Name::from_str("contract_id").expect("static metadata key `contract_id`");
-    metadata.insert(cid_key, IrohaJson::new(contract_id.clone()));
+    metadata.insert(cid_key, IrohaJson::new(contract_id.to_owned()));
 
-    if let Some(ref selector) = entrypoint {
+    if let Some(selector) = entrypoint {
         let ep_key = Name::from_str("contract_entrypoint")
             .expect("static metadata key `contract_entrypoint`");
-        metadata.insert(ep_key, IrohaJson::new(selector.clone()));
+        metadata.insert(ep_key, IrohaJson::new(selector.to_owned()));
     }
     if let Some(payload_value) = payload {
         let payload_key =
             Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
-        metadata.insert(payload_key, payload_value);
+        metadata.insert(payload_key, payload_value.clone());
     }
     if let Some(asset_id) = gas_asset_id {
         let gas_asset_key =
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
+        metadata.insert(gas_asset_key, IrohaJson::new(asset_id.to_owned()));
     }
     if let Some(sponsor) = fee_sponsor {
         let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
@@ -6744,30 +6918,612 @@ pub async fn handle_post_contract_call(
     }
     let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
     metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
+    metadata
+}
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
-        .with_metadata(metadata)
-        .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
-            code_bytes,
-        )))
-        .sign(&private_key.0);
+#[cfg(feature = "app_api")]
+fn derive_multisig_contract_call_trigger_id(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+    code_hash: &Hash,
+) -> Result<iroha_data_model::trigger::TriggerId> {
+    let payload_repr = payload
+        .map(|value| norito::json::to_json(value).unwrap_or_else(|_| "<payload>".to_owned()))
+        .unwrap_or_default();
+    let fee_sponsor_repr = fee_sponsor
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default();
+    let gas_asset_repr = gas_asset_id.unwrap_or_default();
+    let seed = format!(
+        "{multisig_account_id}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
+        hex::encode(code_hash.as_ref())
+    );
+    let digest = blake3_hash(seed.as_bytes());
+    let trigger_name = format!("msig_cc_{}", &hex::encode(digest.as_bytes())[..24]);
+    let trigger_name = Name::from_str(&trigger_name)
+        .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
+    Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
+}
 
-    let tx_hash_hex = hex::encode(tx.hash().as_ref());
-    let code_hash_hex = hex::encode(code_hash.as_ref());
-    let abi_hash_hex = hex::encode(abi_hash.as_ref());
-
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/contracts/call")
-        .await?;
-
-    let response = ContractCallResponseDto {
-        ok: true,
+#[cfg(feature = "app_api")]
+fn build_multisig_contract_call_instructions(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+    manifest: &manifest::ContractManifest,
+    code_hash: &Hash,
+    code_bytes: Vec<u8>,
+) -> Result<(
+    Vec<iroha_data_model::isi::InstructionBox>,
+    HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+)> {
+    let trigger_id = derive_multisig_contract_call_trigger_id(
+        multisig_account_id,
         namespace,
         contract_id,
-        code_hash_hex,
-        abi_hash_hex,
-        tx_hash_hex,
         entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+        code_hash,
+    )?;
+    let trigger_metadata = build_contract_call_metadata(
+        manifest,
+        namespace,
+        contract_id,
+        Some(entrypoint),
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+    );
+    let filter = iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+        .for_trigger(trigger_id.clone());
+    let action = iroha_data_model::trigger::action::Action::new(
+        iroha_data_model::transaction::Executable::Ivm(
+            iroha_data_model::transaction::IvmBytecode::from_compiled(code_bytes),
+        ),
+        iroha_data_model::trigger::action::Repeats::Exactly(1),
+        multisig_account_id.clone(),
+        filter,
+    )
+    .with_metadata(trigger_metadata);
+    let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
+    let instructions = vec![
+        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
+            trigger,
+        )),
+        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
+            trigger_id.clone(),
+        )),
+        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Unregister::trigger(
+            trigger_id,
+        )),
+    ];
+    let instructions_hash = HashOf::new(&instructions);
+    Ok((instructions, instructions_hash))
+}
+
+#[cfg(feature = "app_api")]
+const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
+#[cfg(feature = "app_api")]
+const MULTISIG_PROPOSAL_METADATA_PREFIX: &str = "multisig/proposals/";
+
+#[cfg(feature = "app_api")]
+fn load_multisig_spec(
+    state: &CoreState,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Result<iroha_executor_data_model::isi::multisig::MultisigSpec> {
+    let world = state.world_view();
+    let account = world.account(multisig_account_id).map_err(|_| {
+        conversion_error(format!("multisig account not found: {multisig_account_id}"))
+    })?;
+    let key =
+        Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("static multisig spec metadata key");
+    let value = account
+        .metadata()
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| conversion_error("multisig spec metadata missing".to_owned()))?;
+    value.try_into_any_norito().map_err(|err| {
+        conversion_error(format!("invalid multisig spec metadata on account: {err}"))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn load_multisig_proposal_value(
+    state: &CoreState,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+) -> Result<Option<iroha_executor_data_model::isi::multisig::MultisigProposalValue>> {
+    let world = state.world_view();
+    let account = world.account(multisig_account_id).map_err(|_| {
+        conversion_error(format!("multisig account not found: {multisig_account_id}"))
+    })?;
+    let key = Name::from_str(&format!(
+        "{MULTISIG_PROPOSAL_METADATA_PREFIX}{instructions_hash}"
+    ))
+    .map_err(|err| conversion_error(format!("invalid multisig proposal metadata key: {err}")))?;
+    let Some(value) = account.metadata().get(&key).cloned() else {
+        return Ok(None);
     };
+    value
+        .try_into_any_norito()
+        .map(Some)
+        .map_err(|err| conversion_error(format!("invalid multisig proposal metadata: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn approvals_reach_quorum(
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    approvals: &BTreeSet<iroha_data_model::account::AccountId>,
+) -> bool {
+    let approved_weight: u16 = spec
+        .signatories
+        .iter()
+        .filter_map(|(account_id, weight)| {
+            approvals.contains(account_id).then_some(u16::from(*weight))
+        })
+        .sum();
+    approved_weight >= u16::from(spec.quorum)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod multisig_contract_call_tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+
+    fn sample_account_id() -> iroha_data_model::account::AccountId {
+        let keypair = KeyPair::random();
+        iroha_data_model::account::AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn trigger_id_derivation_is_stable_and_sensitive_to_input() {
+        let multisig = sample_account_id();
+        let code_hash = Hash::new(b"code-hash".to_vec());
+        let payload = IrohaJson::new(norito::json!({ "n": 1 }));
+
+        let first = derive_multisig_contract_call_trigger_id(
+            &multisig,
+            "apps",
+            "calc.v1",
+            "main",
+            Some(&payload),
+            Some("aid:abcd"),
+            None,
+            5_000,
+            &code_hash,
+        )
+        .expect("trigger id");
+        let second = derive_multisig_contract_call_trigger_id(
+            &multisig,
+            "apps",
+            "calc.v1",
+            "main",
+            Some(&payload),
+            Some("aid:abcd"),
+            None,
+            5_000,
+            &code_hash,
+        )
+        .expect("trigger id");
+        assert_eq!(first, second);
+
+        let changed = derive_multisig_contract_call_trigger_id(
+            &multisig,
+            "apps",
+            "calc.v1",
+            "alternate",
+            Some(&payload),
+            Some("aid:abcd"),
+            None,
+            5_000,
+            &code_hash,
+        )
+        .expect("trigger id");
+        assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn multisig_contract_call_instruction_envelope_hashes_deterministically() {
+        let multisig = sample_account_id();
+        let manifest = manifest::ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let code_hash = Hash::new(b"code-hash".to_vec());
+        let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
+
+        let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
+            &multisig,
+            "apps",
+            "calc.v1",
+            "main",
+            Some(&payload),
+            Some("aid:abcd"),
+            Some(&multisig),
+            5_000,
+            &manifest,
+            &code_hash,
+            vec![0x01, 0x02, 0x03],
+        )
+        .expect("instructions");
+
+        assert_eq!(instructions.len(), 3);
+        assert_eq!(instructions_hash, HashOf::new(&instructions));
+    }
+}
+
+/// POST /v1/contracts/call/multisig/propose — propose a multisig participation envelope
+/// for a contract call.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_contract_call_multisig_propose(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(req): NoritoJson<MultisigContractCallProposeDto>,
+) -> Result<Response> {
+    use base64::Engine as _;
+    use iroha_data_model::prelude as dm;
+    use iroha_executor_data_model::isi::multisig::MultisigPropose;
+
+    let MultisigContractCallProposeDto {
+        multisig_account_id,
+        signer_account_id,
+        private_key,
+        public_key_hex,
+        signature_b64,
+        creation_time_ms,
+        namespace,
+        contract_id,
+        entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+    } = req;
+    if gas_limit.is_some_and(|value| value == 0) {
+        return Err(conversion_error("gas_limit must be positive".to_owned()));
+    }
+    let gas_limit = gas_limit.unwrap_or(DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT);
+
+    let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
+    let PreparedContractCall {
+        code_bytes,
+        code_hash,
+        abi_hash: _,
+        manifest,
+    } = prepared;
+    let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
+        &multisig_account_id,
+        &namespace,
+        &contract_id,
+        &entrypoint,
+        payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+        &manifest,
+        &code_hash,
+        code_bytes,
+    )?;
+
+    let proposal_id = hex::encode(proposal_hash.as_ref());
+    let instructions_hash = proposal_id.clone();
+    let propose_instruction =
+        MultisigPropose::new(multisig_account_id.clone(), proposal_instructions, None);
+    let will_execute = {
+        let spec = load_multisig_spec(&state, &multisig_account_id)?;
+        let mut approvals = BTreeSet::new();
+        approvals.insert(signer_account_id.clone());
+        approvals_reach_quorum(&spec, &approvals)
+    };
+    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+    let mut builder =
+        dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let builder = builder.with_instructions([dm::InstructionBox::from(propose_instruction)]);
+
+    let response =
+        if let Some(private_key) = private_key {
+            let tx = builder.sign(&private_key.0);
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+            )
+            .await?;
+            MultisigContractCallResponseDto {
+                ok: true,
+                submitted: Some(true),
+                proposal_id: Some(proposal_id),
+                instructions_hash: Some(instructions_hash),
+                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+                creation_time_ms: Some(creation_time_ms),
+                signing_message_b64: None,
+            }
+        } else if public_key_hex.is_some() || signature_b64.is_some() {
+            let public_key_hex = public_key_hex
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+            let signature_b64 = signature_b64
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+            let public_key_bytes = hex::decode(public_key_hex)
+                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let public_key = iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &public_key_bytes,
+            )
+            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let expected_authority = dm::AccountId::new(public_key.clone());
+            if signer_account_id != expected_authority {
+                return Err(conversion_error(
+                    "public_key_hex does not match signer_account_id".to_owned(),
+                ));
+            }
+            let signature_bytes = base64::engine::general_purpose::STANDARD
+                .decode(signature_b64.as_bytes())
+                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let mut tx = builder
+                .sign(
+                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                        .private_key(),
+                )
+                .with_authority(signer_account_id.clone().into());
+            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+                iroha_crypto::SignatureOf::<
+                    iroha_data_model::transaction::signed::TransactionPayload,
+                >::from_signature(signature),
+            ));
+            tx.verify_signature().map_err(|err| {
+                conversion_error(format!(
+                    "multisig contract-call propose detached signature verification failed: {err}"
+                ))
+            })?;
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+            )
+            .await?;
+            MultisigContractCallResponseDto {
+                ok: true,
+                submitted: Some(true),
+                proposal_id: Some(proposal_id),
+                instructions_hash: Some(instructions_hash),
+                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+                creation_time_ms: Some(creation_time_ms),
+                signing_message_b64: None,
+            }
+        } else {
+            let scaffold_key =
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+            let tx = builder
+                .sign(scaffold_key.private_key())
+                .with_authority(signer_account_id.clone().into());
+            let signing_message_b64 = base64::engine::general_purpose::STANDARD
+                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+            MultisigContractCallResponseDto {
+                ok: true,
+                submitted: Some(false),
+                proposal_id: Some(proposal_id),
+                instructions_hash: Some(instructions_hash),
+                executed_tx_hash_hex: None,
+                creation_time_ms: Some(creation_time_ms),
+                signing_message_b64: Some(signing_message_b64),
+            }
+        };
+
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/contracts/call/multisig/approve — approve a multisig participation envelope
+/// for a contract call.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_contract_call_multisig_approve(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(req): NoritoJson<MultisigContractCallApproveDto>,
+) -> Result<Response> {
+    use base64::Engine as _;
+    use iroha_data_model::prelude as dm;
+    use iroha_executor_data_model::isi::multisig::MultisigApprove;
+
+    let MultisigContractCallApproveDto {
+        multisig_account_id,
+        signer_account_id,
+        private_key,
+        public_key_hex,
+        signature_b64,
+        creation_time_ms,
+        proposal_id,
+        instructions_hash,
+    } = req;
+    let proposal_id_literal = proposal_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let instructions_hash_literal = instructions_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let hash_literal = instructions_hash_literal
+        .clone()
+        .or_else(|| proposal_id_literal.clone());
+    let Some(hash_literal) = hash_literal else {
+        return Err(conversion_error(
+            "proposal_id or instructions_hash is required".to_owned(),
+        ));
+    };
+    let instructions_hash = hash_literal
+        .parse::<HashOf<Vec<dm::InstructionBox>>>()
+        .map_err(|err| conversion_error(format!("invalid instructions_hash: {err}")))?;
+    let will_execute = {
+        let spec = load_multisig_spec(&state, &multisig_account_id)?;
+        let mut approvals =
+            load_multisig_proposal_value(&state, &multisig_account_id, &instructions_hash)?
+                .map(|proposal| proposal.approvals)
+                .unwrap_or_default();
+        approvals.insert(signer_account_id.clone());
+        approvals_reach_quorum(&spec, &approvals)
+    };
+    let approve_instruction = MultisigApprove::new(multisig_account_id, instructions_hash);
+
+    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+    let mut builder =
+        dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let builder = builder.with_instructions([dm::InstructionBox::from(approve_instruction)]);
+
+    let response =
+        if let Some(private_key) = private_key {
+            let tx = builder.sign(&private_key.0);
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
+            )
+            .await?;
+            MultisigContractCallResponseDto {
+                ok: true,
+                submitted: Some(true),
+                proposal_id: proposal_id_literal,
+                instructions_hash: Some(hash_literal),
+                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+                creation_time_ms: Some(creation_time_ms),
+                signing_message_b64: None,
+            }
+        } else if public_key_hex.is_some() || signature_b64.is_some() {
+            let public_key_hex = public_key_hex
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+            let signature_b64 = signature_b64
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+            let public_key_bytes = hex::decode(public_key_hex)
+                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let public_key = iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &public_key_bytes,
+            )
+            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let expected_authority = dm::AccountId::new(public_key.clone());
+            if signer_account_id != expected_authority {
+                return Err(conversion_error(
+                    "public_key_hex does not match signer_account_id".to_owned(),
+                ));
+            }
+            let signature_bytes = base64::engine::general_purpose::STANDARD
+                .decode(signature_b64.as_bytes())
+                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let mut tx = builder
+                .sign(
+                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                        .private_key(),
+                )
+                .with_authority(signer_account_id.clone().into());
+            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+                iroha_crypto::SignatureOf::<
+                    iroha_data_model::transaction::signed::TransactionPayload,
+                >::from_signature(signature),
+            ));
+            tx.verify_signature().map_err(|err| {
+                conversion_error(format!(
+                    "multisig contract-call approve detached signature verification failed: {err}"
+                ))
+            })?;
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
+            )
+            .await?;
+            MultisigContractCallResponseDto {
+                ok: true,
+                submitted: Some(true),
+                proposal_id: proposal_id_literal,
+                instructions_hash: Some(hash_literal),
+                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+                creation_time_ms: Some(creation_time_ms),
+                signing_message_b64: None,
+            }
+        } else {
+            let scaffold_key =
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+            let tx = builder
+                .sign(scaffold_key.private_key())
+                .with_authority(signer_account_id.into());
+            let signing_message_b64 = base64::engine::general_purpose::STANDARD
+                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+            MultisigContractCallResponseDto {
+                ok: true,
+                submitted: Some(false),
+                proposal_id: proposal_id_literal,
+                instructions_hash: Some(hash_literal),
+                executed_tx_hash_hex: None,
+                creation_time_ms: Some(creation_time_ms),
+                signing_message_b64: Some(signing_message_b64),
+            }
+        };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -7953,8 +8709,15 @@ pub struct DeployAndActivateInstanceResponseDto {
 pub struct ContractCallDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
-    /// Private key used to sign the transaction.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    /// Optional private key used to sign and submit the transaction directly.
+    #[norito(default)]
+    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
+    /// Optional Ed25519 public key (hex) used with a detached signature submit flow.
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
+    /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
     /// Target namespace hosting the contract instance.
     pub namespace: String,
     /// Logical contract identifier within the namespace.
@@ -7965,6 +8728,9 @@ pub struct ContractCallDto {
     /// Optional Norito JSON payload forwarded to the contract.
     #[norito(default)]
     pub payload: Option<IrohaJson>,
+    /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
     /// Optional gas asset id forwarded to transaction metadata.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
@@ -7981,6 +8747,8 @@ pub struct ContractCallDto {
 pub struct ContractCallResponseDto {
     /// Whether queuing succeeded.
     pub ok: bool,
+    /// Whether Torii submitted the transaction to the pipeline.
+    pub submitted: bool,
     /// Namespace targeted by the call.
     pub namespace: String,
     /// Contract id targeted by the call.
@@ -7989,11 +8757,126 @@ pub struct ContractCallResponseDto {
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash for the invoked bytecode.
     pub abi_hash_hex: String,
+    /// Creation timestamp used for the transaction payload.
+    pub creation_time_ms: u64,
     /// Hex-encoded transaction hash submitted to the queue.
-    pub tx_hash_hex: String,
+    #[norito(default)]
+    pub tx_hash_hex: Option<String>,
+    /// Base64-encoded transaction scaffold for client-side re-signing and submission.
+    #[norito(default)]
+    pub signed_transaction_b64: Option<String>,
+    /// Base64-encoded message bytes the caller must sign for detached submit flows.
+    #[norito(default)]
+    pub signing_message_b64: Option<String>,
     /// Entrypoint selector used for the call, if provided.
     #[norito(default)]
     pub entrypoint: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for proposing a multisig-wrapped contract call.
+pub struct MultisigContractCallProposeDto {
+    /// Canonical multisig account controlling the action.
+    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Signer account submitting this proposal participation.
+    pub signer_account_id: iroha_data_model::account::AccountId,
+    /// Optional private key used to sign and submit directly.
+    #[norito(default)]
+    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
+    /// Optional Ed25519 public key (hex) used for detached submit.
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
+    /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
+    /// Optional fixed creation timestamp for deterministic detached flows.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+    /// Target namespace hosting the contract instance.
+    pub namespace: String,
+    /// Logical contract identifier within the namespace.
+    pub contract_id: String,
+    /// Entrypoint selector.
+    pub entrypoint: String,
+    /// Optional payload forwarded to the contract.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    /// Optional gas asset id forwarded to transaction metadata.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account for gas/fees.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Optional gas limit (must be > 0 when provided).
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for approving a multisig-wrapped contract call proposal.
+pub struct MultisigContractCallApproveDto {
+    /// Canonical multisig account controlling the action.
+    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Signer account submitting this approval participation.
+    pub signer_account_id: iroha_data_model::account::AccountId,
+    /// Optional private key used to sign and submit directly.
+    #[norito(default)]
+    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
+    /// Optional Ed25519 public key (hex) used for detached submit.
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
+    /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
+    /// Optional fixed creation timestamp for deterministic detached flows.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+    /// Optional proposal identifier.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Optional deterministic hash of the proposal instructions.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for multisig contract-call participation endpoints.
+pub struct MultisigContractCallResponseDto {
+    /// Whether processing succeeded.
+    pub ok: bool,
+    /// Whether a transaction was submitted.
+    #[norito(default)]
+    pub submitted: Option<bool>,
+    /// Stable proposal id when available.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Deterministic instructions hash when available.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+    /// Executed tx hash once quorum has executed.
+    #[norito(default)]
+    pub executed_tx_hash_hex: Option<String>,
+    /// Creation timestamp for detached signing workflows.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+    /// Optional detached signing message bytes.
+    #[norito(default)]
+    pub signing_message_b64: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -14217,6 +15100,12 @@ const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE: &str = "/v1/contracts/call/multisig/approve";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
@@ -31451,11 +32340,16 @@ mod uaid_parsing_tests {
 #[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
 pub struct AccountOnboardingRequestDto {
     pub alias: String,
-    pub account_id: String,
+    #[norito(default)]
+    pub account_id: Option<String>,
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
     #[norito(default)]
     pub identity: Option<Map>,
     #[norito(default)]
     pub uaid: Option<String>,
+    #[norito(default)]
+    pub permissions: Vec<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -31468,10 +32362,41 @@ pub struct AccountOnboardingResponseDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+pub struct MultisigAccountOnboardingRequestDto {
+    pub alias: String,
+    pub required_signers: u8,
+    pub member_account_ids: Vec<String>,
+    #[norito(default)]
+    pub member_weights: Vec<u8>,
+    #[norito(default)]
+    pub transaction_ttl_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct MultisigAccountOnboardingResponseDto {
+    pub account_id: String,
+    pub tx_hash_hex: String,
+    pub status: &'static str,
+}
+
+#[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for AccountOnboardingRequestDto {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::json::from_slice::<Self>(bytes).map_err(|err| {
             norito::Error::Message(format!("invalid AccountOnboardingRequestDto: {err}"))
+        })
+    }
+}
+
+#[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for MultisigAccountOnboardingRequestDto {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::json::from_slice::<Self>(bytes).map_err(|err| {
+            norito::Error::Message(format!(
+                "invalid MultisigAccountOnboardingRequestDto: {err}"
+            ))
         })
     }
 }
@@ -31530,9 +32455,11 @@ pub async fn handle_v1_accounts_onboard(
 
     let AccountOnboardingRequestDto {
         alias,
-        account_id: account_literal,
+        account_id,
+        public_key_hex,
         identity,
         uaid,
+        permissions,
     } = req;
 
     let trimmed_alias = alias.trim();
@@ -31540,11 +32467,30 @@ pub async fn handle_v1_accounts_onboard(
     if trimmed_alias.is_empty() || alias_chars > 64 {
         return Err(onboarding_invalid_request("alias must be 1-64 characters"));
     }
-    let account_literal = account_literal.trim();
-
-    let account_id = AccountId::parse_encoded(account_literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| onboarding_invalid_request("invalid account id literal"))?;
+    let account_id = if let Some(account_literal) = account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        AccountId::parse_encoded(account_literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|_| onboarding_invalid_request("invalid account id literal"))?
+    } else if let Some(public_key_hex) = public_key_hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let bytes = hex::decode(public_key_hex)
+            .map_err(|_| onboarding_invalid_request("invalid public key hex"))?;
+        let public_key =
+            iroha_crypto::PublicKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &bytes)
+                .map_err(|_| onboarding_invalid_request("invalid public key hex"))?;
+        AccountId::new(public_key)
+    } else {
+        return Err(onboarding_invalid_request(
+            "either account_id or public_key_hex is required",
+        ));
+    };
 
     let expected_domain = signer
         .allowed_domain
@@ -31589,8 +32535,47 @@ pub async fn handle_v1_accounts_onboard(
             .with_uaid(Some(uaid)),
     );
 
-    let mut instructions = Vec::with_capacity(if should_publish_manifest { 2 } else { 1 });
+    let mut permission_instructions = Vec::new();
+    let mut requested_permissions = std::collections::BTreeSet::new();
+    for permission_name in permissions {
+        let normalized = permission_name.trim().to_owned();
+        if normalized.is_empty() || !requested_permissions.insert(normalized.clone()) {
+            continue;
+        }
+        if !signer.allowed_permissions.contains(&normalized) {
+            return Err(onboarding_invalid_request(
+                "requested permission is not allowed",
+            ));
+        }
+        let permission = iroha_data_model::permission::Permission::new(
+            normalized
+                .parse()
+                .map_err(|_| onboarding_invalid_request("invalid permission literal"))?,
+            IrohaJson::new(()),
+        );
+        permission_instructions.push(InstructionBox::from(Grant::account_permission(
+            permission,
+            account_id.clone(),
+        )));
+    }
+
+    if let Some(sponsor) = signer.fee_sponsor_account.as_ref() {
+        let permission = iroha_data_model::permission::Permission::from(
+            iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
+                sponsor: sponsor.clone(),
+            },
+        );
+        permission_instructions.push(InstructionBox::from(Grant::account_permission(
+            permission,
+            account_id.clone(),
+        )));
+    }
+
+    let mut instructions = Vec::with_capacity(
+        1 + permission_instructions.len() + usize::from(should_publish_manifest),
+    );
     instructions.push(InstructionBox::from(register));
+    instructions.extend(permission_instructions);
     if should_publish_manifest {
         let activation_epoch = app.state.committed_height().saturating_sub(1) as u64;
         let manifest = AssetPermissionManifest {
@@ -31638,6 +32623,157 @@ pub async fn handle_v1_accounts_onboard(
     let response = AccountOnboardingResponseDto {
         account_id: account_id.to_string(),
         uaid: uaid.to_string(),
+        tx_hash_hex,
+        status: "QUEUED",
+    };
+
+    let mut resp = Response::new(Body::from(
+        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+    ));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::ACCEPTED, resp))
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_accounts_onboard_multisig(
+    app: crate::SharedAppState,
+    crate::NoritoJson(req): crate::NoritoJson<MultisigAccountOnboardingRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    use iroha_data_model::account::{MultisigMember, MultisigPolicy};
+    use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
+    use std::num::{NonZeroU16, NonZeroU64};
+
+    let Some(signer) = app.uaid_onboarding.as_ref() else {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted("UAID onboarding disabled".into()),
+        ));
+    };
+
+    let MultisigAccountOnboardingRequestDto {
+        alias,
+        required_signers,
+        member_account_ids,
+        member_weights,
+        transaction_ttl_ms,
+    } = req;
+
+    let trimmed_alias = alias.trim();
+    if trimmed_alias.is_empty() || trimmed_alias.chars().count() > 64 {
+        return Err(onboarding_invalid_request("alias must be 1-64 characters"));
+    }
+    if member_account_ids.len() < 2 {
+        return Err(onboarding_invalid_request(
+            "multisig onboarding requires at least two member accounts",
+        ));
+    }
+
+    let mut parsed_members = Vec::with_capacity(member_account_ids.len());
+    for literal in member_account_ids {
+        let parsed = AccountId::parse_encoded(literal.trim())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|_| onboarding_invalid_request("invalid member account id literal"))?;
+        parsed_members.push(parsed);
+    }
+
+    let weights = if member_weights.is_empty() {
+        vec![1u8; parsed_members.len()]
+    } else {
+        if member_weights.len() != parsed_members.len() {
+            return Err(onboarding_invalid_request(
+                "member_weights must match member_account_ids length",
+            ));
+        }
+        member_weights
+    };
+    if weights.iter().any(|weight| *weight == 0) {
+        return Err(onboarding_invalid_request(
+            "member weights must be non-zero",
+        ));
+    }
+
+    let threshold = u16::from(required_signers.max(1));
+    let total_weight: u16 = weights.iter().map(|weight| u16::from(*weight)).sum();
+    if threshold > total_weight {
+        return Err(onboarding_invalid_request(
+            "required_signers exceeds total member weight",
+        ));
+    }
+
+    let mut policy_members = Vec::with_capacity(parsed_members.len());
+    let mut signatories_with_weights = BTreeMap::new();
+    for (account_id, weight) in parsed_members.iter().zip(weights.iter()) {
+        let signatory = account_id
+            .try_signatory()
+            .cloned()
+            .ok_or_else(|| onboarding_invalid_request("member account must be single-signature"))?;
+        policy_members.push(
+            MultisigMember::new(signatory, u16::from(*weight))
+                .map_err(|_| onboarding_invalid_request("invalid multisig member definition"))?,
+        );
+        if signatories_with_weights
+            .insert(account_id.clone(), *weight)
+            .is_some()
+        {
+            return Err(onboarding_invalid_request(
+                "duplicate member account ids are not allowed",
+            ));
+        }
+    }
+
+    let policy = MultisigPolicy::new(threshold, policy_members)
+        .map_err(|_| onboarding_invalid_request("invalid multisig policy"))?;
+    let multisig_account = AccountId::new_multisig(policy);
+    if app.state.world_view().account(&multisig_account).is_ok() {
+        let response = MultisigAccountOnboardingResponseDto {
+            account_id: multisig_account.to_string(),
+            tx_hash_hex: String::new(),
+            status: "EXISTS",
+        };
+        let mut resp = Response::new(Body::from(
+            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+        ));
+        resp.headers_mut().insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("application/json"),
+        );
+        return Ok((StatusCode::OK, resp));
+    }
+
+    let home_domain = signer
+        .allowed_domain
+        .clone()
+        .or_else(default_onboarding_domain)
+        .ok_or_else(|| onboarding_invalid_request("multisig home domain is not configured"))?;
+    let quorum = NonZeroU16::new(threshold)
+        .ok_or_else(|| onboarding_invalid_request("required_signers must be positive"))?;
+    let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
+        .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
+    let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
+    let instruction = MultisigRegister::with_account(multisig_account.clone(), home_domain, spec);
+
+    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
+        .with_instructions([InstructionBox::from(instruction)]);
+    builder.set_ttl(Duration::from_secs(60));
+    let tx = builder.sign(&signer.private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+
+    handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        telemetry,
+        ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG,
+    )
+    .await?;
+
+    let response = MultisigAccountOnboardingResponseDto {
+        account_id: multisig_account.to_string(),
         tx_hash_hex,
         status: "QUEUED",
     };

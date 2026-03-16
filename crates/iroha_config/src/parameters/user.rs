@@ -14570,6 +14570,11 @@ pub struct ToriiOnboarding {
     pub private_key: ExposedPrivateKey,
     /// Optional domain restriction for new accounts (defaults to node domain).
     pub allowed_domain: Option<String>,
+    /// Permission names that onboarding is allowed to grant to new accounts.
+    #[config(default)]
+    pub allowed_permissions: Vec<String>,
+    /// Optional sponsor account granted via `CanUseFeeSponsor`.
+    pub fee_sponsor_account: Option<String>,
 }
 
 impl ToriiOnboarding {
@@ -14591,10 +14596,24 @@ impl ToriiOnboarding {
                 panic!("invalid torii.onboarding.allowed_domain `{domain}`: {err}")
             })
         });
+        let allowed_permissions = self
+            .allowed_permissions
+            .into_iter()
+            .map(|permission| permission.trim().to_owned())
+            .filter(|permission| !permission.is_empty())
+            .collect();
+        let fee_sponsor_account = self.fee_sponsor_account.map(|account| {
+            AccountId::parse_encoded(&account).map_or_else(
+                |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
+                iroha_data_model::account::ParsedAccountId::into_account_id,
+            )
+        });
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
             allowed_domain,
+            allowed_permissions,
+            fee_sponsor_account,
         })
     }
 }

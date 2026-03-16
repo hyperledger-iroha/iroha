@@ -2158,7 +2158,7 @@ impl Actor {
                 .last_successful_proposal
                 .map(|ts| now.saturating_duration_since(ts));
             iroha_logger::info!(
-                height = view_height,
+                height = tracked_height,
                 view = current_view,
                 view_age_ms = view_age.map(|d| d.as_millis()),
                 pending_blocks = self.pending.pending_blocks.len(),
@@ -2275,12 +2275,12 @@ impl Actor {
                 queue_len = pending_queue_len,
                 topology_len = topology.as_ref().len(),
                 required,
-                height = view_height,
+                height = tracked_height,
                 "pacemaker evaluating proposal assembly with queued transactions"
             );
             if active_pending > 0 {
                 iroha_logger::debug!(
-                    height = view_height,
+                    height = tracked_height,
                     pending = active_pending,
                     "pending block already assembled for current slot; waiting for view-change"
                 );
@@ -2295,7 +2295,7 @@ impl Actor {
             .map(|((h, v), entry)| format!("{h}:{v}={}", entry.senders.len()))
             .collect();
         debug!(
-            height = view_height,
+            height = tracked_height,
             required,
             local_idx = ?local_idx,
             forced = ?self.subsystems.propose.forced_view_after_timeout,
@@ -2362,7 +2362,7 @@ impl Actor {
         }) else {
             debug!(
                 queue_len = pending_queue_len,
-                height = view_height,
+                height = tracked_height,
                 required,
                 local_idx = ?local_idx,
                 new_view_slots = ?new_view_summary,
