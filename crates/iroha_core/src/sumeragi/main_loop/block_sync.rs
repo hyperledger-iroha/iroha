@@ -1263,8 +1263,9 @@ impl Actor {
             .contains_key(&block_hash);
         let requested_missing_block_by_height = !requested_missing_block_by_hash
             && self.has_missing_block_request_for_height(block_height);
-        let mut requested_missing_block =
+        let explicit_requested_missing_block =
             requested_missing_block_by_hash || requested_missing_block_by_height;
+        let mut requested_missing_block = explicit_requested_missing_block;
         if requested_missing_block_by_height {
             debug!(
                 height = block_height,
@@ -2056,7 +2057,11 @@ impl Actor {
                             super::status::ConsensusMessageReason::SignatureMismatchDeferred,
                         );
                         let created = super::message::BlockCreated { block };
-                        let _ = self.handle_block_created(created, sender.clone());
+                        let _ = self.handle_block_created_from_block_sync(
+                            created,
+                            sender.clone(),
+                            true,
+                        );
                         return Ok(());
                     }
                     let has_roster_evidence = incoming_qc.is_some()
@@ -2488,7 +2493,7 @@ impl Actor {
             qc_evidence_present,
             commit_cert_present,
             checkpoint_present,
-            requested_missing_block,
+            explicit_requested_missing_block,
             block_height,
             local_height,
         );
@@ -2620,9 +2625,15 @@ impl Actor {
             "applying block sync update"
         );
 
+        let allow_frontier_owner_preserve_on_payload_mismatch =
+            !incoming_qc_usable && !block_quorum_met && !commit_cert_present && !checkpoint_present;
         let created = super::message::BlockCreated { block };
         let block_apply_start = Instant::now();
-        let creation_result = self.handle_block_created(created, sender.clone());
+        let creation_result = self.handle_block_created_from_block_sync(
+            created,
+            sender.clone(),
+            allow_frontier_owner_preserve_on_payload_mismatch,
+        );
         let block_apply_ms =
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let block_known_after_creation = self.block_known_locally(block_hash);

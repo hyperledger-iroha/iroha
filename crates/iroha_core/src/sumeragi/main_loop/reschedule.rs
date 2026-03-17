@@ -982,7 +982,7 @@ impl Actor {
             expected_epoch,
         )
         .is_some();
-        let _queue_depth = self.queue.queued_len();
+        let queue_depths = super::status::worker_queue_depth_snapshot();
         let state_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         let pending_parent = pending.block.header().prev_block_hash();
@@ -1054,6 +1054,12 @@ impl Actor {
                     && state.last_action_at.is_none()
                     && now.saturating_duration_since(state.last_progress_at) < frontier_window
             });
+        let frontier_same_height_dependency_backlog_active = contiguous_frontier
+            && self.frontier_recovery_same_height_dependency_backlog_active(
+                height,
+                now,
+                queue_depths,
+            );
         if frontier_window_owned && drop_pending {
             debug!(
                 block = %block_hash,
@@ -1082,6 +1088,23 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        if frontier_same_height_dependency_backlog_active && drop_pending {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "suppressing zero-vote quorum reschedule; same-height frontier recovery backlog is still converging"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         if frontier_window_owned && has_reschedule_votes && !drop_pending {
             debug!(
                 block = %block_hash,
@@ -1096,7 +1119,8 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        let handoff_frontier_quorum_timeout_owner = drop_pending && contiguous_frontier;
+        let handoff_frontier_quorum_timeout_owner =
+            contiguous_frontier && (drop_pending || has_reschedule_votes);
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
@@ -1125,6 +1149,21 @@ impl Actor {
                 )
                 .is_empty()
         {
+            if handoff_frontier_quorum_timeout_owner {
+                let created_frontier_owner =
+                    self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+                debug!(
+                    block = %block_hash,
+                    height,
+                    view,
+                    votes = vote_count,
+                    min_votes = min_votes_for_commit,
+                    pending_age_ms = pending_age.as_millis(),
+                    quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                    created_frontier_owner,
+                    "skipping no-op commit-quorum reschedule: preserved contiguous-frontier quorum-timeout recovery ownership"
+                );
+            }
             debug!(
                 block = %block_hash,
                 height,
@@ -1171,6 +1210,21 @@ impl Actor {
             || rebroadcast.block_sync
             || rebroadcast.block;
         if !action_taken {
+            if handoff_frontier_quorum_timeout_owner {
+                let created_frontier_owner =
+                    self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+                debug!(
+                    block = %block_hash,
+                    height,
+                    view,
+                    votes = vote_count,
+                    min_votes = min_votes_for_commit,
+                    pending_age_ms = pending_age.as_millis(),
+                    quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                    created_frontier_owner,
+                    "skipping no-op commit-quorum reschedule: preserved contiguous-frontier quorum-timeout recovery ownership after pacing"
+                );
+            }
             debug!(
                 block = %block_hash,
                 height,
@@ -1186,7 +1240,7 @@ impl Actor {
         }
         pending.mark_quorum_reschedule(now);
         let frontier_recovery_advance = if handoff_frontier_quorum_timeout_owner {
-            self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+            let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
             Some(self.advance_frontier_recovery(
                 "quorum_timeout",
                 height,
@@ -1413,6 +1467,9 @@ impl Actor {
         );
         let mut block_sync = false;
         if !drop_pending && !retransmit_targets.is_empty() {
+            let near_commit_quorum = min_votes_for_commit > 0
+                && vote_count < min_votes_for_commit
+                && vote_count.saturating_add(1) >= min_votes_for_commit;
             let mut update = block_sync_update_with_certified_roster(
                 &pending.block,
                 self.state.as_ref(),
@@ -1434,25 +1491,70 @@ impl Actor {
             );
             let commit_votes = update.commit_votes.len();
             let has_commit_qc = update.commit_qc.is_some();
-            if pending.should_broadcast_block_sync_update(view, commit_votes, has_commit_qc) {
+            let block_sync_progressed =
+                pending.should_broadcast_block_sync_update(view, commit_votes, has_commit_qc);
+            let force_near_quorum_rebroadcast =
+                !block_sync_progressed && near_commit_quorum && commit_votes > 0 && !has_commit_qc;
+            if force_near_quorum_rebroadcast {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    commit_votes,
+                    min_votes = min_votes_for_commit,
+                    vote_count,
+                    targets = retransmit_targets.len(),
+                    "forcing near-quorum block sync update rebroadcast without new commit evidence"
+                );
+            }
+            if block_sync_progressed || force_near_quorum_rebroadcast {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
                 if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
                     self.broadcast_block_sync_update(update, &retransmit_targets);
                     block_sync = true;
                 } else {
-                    self.note_round_recovery_bundle_source(
-                        height,
-                        super::RoundRecoveryBundleSource::RosterProofFallback,
-                        now,
-                    );
-                    warn!(
-                        height,
-                        view,
-                        block = %block_hash,
-                        commit_votes,
-                        targets = retransmit_targets.len(),
-                        "roster proof unavailable for block sync update; skipping payload fallback during quorum reschedule"
-                    );
+                    let committed_height = self.committed_height_snapshot();
+                    let active_height = self.active_consensus_round_height();
+                    let allow_hintless_near_quorum = near_commit_quorum
+                        && commit_votes > 0
+                        && !has_commit_qc
+                        && height == committed_height.saturating_add(1)
+                        && height == active_height;
+                    if allow_hintless_near_quorum
+                        && self.trim_block_sync_update_for_frame_cap(&mut update)
+                    {
+                        debug!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            commit_votes,
+                            min_votes = min_votes_for_commit,
+                            vote_count,
+                            targets = retransmit_targets.len(),
+                            "broadcasting near-quorum block sync update without certified roster evidence"
+                        );
+                        self.broadcast_block_sync_update(update, &retransmit_targets);
+                        block_sync = true;
+                    } else {
+                        self.note_round_recovery_bundle_source(
+                            height,
+                            super::RoundRecoveryBundleSource::RosterProofFallback,
+                            now,
+                        );
+                        let evidence =
+                            super::classify_block_sync_roster_evidence(&update, consensus_mode);
+                        warn!(
+                            height,
+                            view,
+                            block = %block_hash,
+                            commit_votes,
+                            targets = retransmit_targets.len(),
+                            active_height,
+                            allow_hintless_near_quorum,
+                            ?evidence,
+                            "roster proof unavailable for block sync update; skipping payload fallback during quorum reschedule"
+                        );
+                    }
                 }
             } else {
                 debug!(
