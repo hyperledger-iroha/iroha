@@ -1851,6 +1851,73 @@ async fn enforce_api_version(
     Ok(response)
 }
 
+fn is_json_content_type(raw: &str) -> bool {
+    let base = raw.split(';').next().map(str::trim).unwrap_or_default();
+    if base.is_empty() {
+        return false;
+    }
+    if base.eq_ignore_ascii_case("application/json") || base.eq_ignore_ascii_case("text/json") {
+        return true;
+    }
+    base.to_ascii_lowercase().ends_with("+json")
+}
+
+fn normalize_json_content_type(raw: &str) -> Option<String> {
+    if !is_json_content_type(raw) {
+        return None;
+    }
+
+    let mut parts = raw.split(';');
+    let media_type = parts.next()?.trim();
+    if media_type.is_empty() {
+        return None;
+    }
+
+    let mut normalized = String::from(media_type);
+    for part in parts {
+        let parameter = part.trim();
+        if parameter.is_empty() {
+            continue;
+        }
+        let is_charset = parameter.split_once('=').map_or(false, |(name, _)| {
+            name.trim().eq_ignore_ascii_case("charset")
+        });
+        if is_charset {
+            continue;
+        }
+
+        normalized.push_str("; ");
+        normalized.push_str(parameter);
+    }
+    normalized.push_str("; charset=utf-8");
+
+    Some(normalized)
+}
+
+fn normalize_json_response_content_type(headers: &mut HeaderMap) {
+    let raw = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    let Some(raw_content_type) = raw else {
+        return;
+    };
+    let Some(normalized) = normalize_json_content_type(raw_content_type) else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(&normalized) {
+        headers.insert(axum::http::header::CONTENT_TYPE, value);
+    }
+}
+
+async fn enforce_json_utf8_charset(
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    let mut response = next.run(req).await;
+    normalize_json_response_content_type(response.headers_mut());
+    Ok(response)
+}
+
 async fn record_http_metrics(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -1896,6 +1963,63 @@ async fn record_http_metrics(
     });
 
     Ok(response)
+}
+
+#[cfg(test)]
+mod content_type_utf8_tests {
+    use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
+
+    use super::{normalize_json_content_type, normalize_json_response_content_type};
+
+    #[test]
+    fn normalizes_json_media_type_with_utf8_charset() {
+        assert_eq!(
+            normalize_json_content_type("application/json"),
+            Some("application/json; charset=utf-8".to_string())
+        );
+    }
+
+    #[test]
+    fn keeps_non_charset_parameters_when_normalizing() {
+        assert_eq!(
+            normalize_json_content_type(
+                "application/problem+json; profile=\"urn:problem\"; charset=iso-8859-1"
+            ),
+            Some("application/problem+json; profile=\"urn:problem\"; charset=utf-8".to_string())
+        );
+    }
+
+    #[test]
+    fn leaves_non_json_content_type_untouched() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=iso-8859-1"),
+        );
+
+        normalize_json_response_content_type(&mut headers);
+
+        assert_eq!(
+            headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/plain; charset=iso-8859-1"))
+        );
+    }
+
+    #[test]
+    fn rewrites_header_in_place_for_json_responses() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=latin1"),
+        );
+
+        normalize_json_response_content_type(&mut headers);
+
+        assert_eq!(
+            headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/json; charset=utf-8"))
+        );
+    }
 }
 
 // Small helper to enforce token + rate limit
@@ -16554,6 +16678,7 @@ impl Torii {
                 enforce_api_version,
             ))
             .layer(axum::middleware::from_fn(inject_remote_addr_header))
+            .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 record_http_metrics,

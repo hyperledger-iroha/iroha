@@ -2,6 +2,44 @@
 
 Last updated: 2026-03-17
 
+## 2026-03-17 Follow-up: Android transfer encoder now validates Norito AssetId payloads and normalizes COMPACT_LEN inputs
+- Updated `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoder.java`:
+  - Norito `AssetId` parsing now accepts `COMPACT_LEN` layout flags and rejects other unsupported layout flags explicitly.
+  - Added structural decode/validation for preserved `AssetId.account` and `AssetId.scope` payloads (single/multisig controller parsing, scope discriminant validation), with explicit `Invalid AssetId.account payload` / `Invalid AssetId.scope payload` error context.
+  - Added semantic multisig validation during Norito account decode (supported version check, non-empty member set, positive weights, positive threshold, threshold <= total weight, duplicate-member rejection).
+  - Added the same multisig semantic validation on transfer-side account-controller encoding so I105-derived multisig payloads follow the same constraints as decoded Norito payloads.
+  - For `COMPACT_LEN` source payloads, account/scope are transcoded into canonical non-compact transfer payload form before re-encoding, keeping transfer payloads valid under current `flags=0` transaction encoding.
+- Added regression coverage in `java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoderTests.java`:
+  - accepts COMPACT_LEN Norito asset IDs and normalizes them to canonical transfer payload bytes,
+  - accepts COMPACT_LEN Norito asset IDs with dataspace scope and normalizes scope payloads to canonical non-compact transfer bytes,
+  - accepts COMPACT_LEN Norito asset IDs with multisig account payloads and normalizes them to canonical transfer bytes (including member ordering),
+  - rejects malformed Norito `AssetId.account` payloads,
+  - rejects malformed Norito `AssetId.scope` payloads,
+  - rejects structurally valid but semantically invalid multisig policies in Norito account payloads,
+  - rejects unsupported multisig policy versions in Norito account payloads,
+  - rejects unsupported Norito `AssetId` layout flags with a deterministic error.
+- Validation:
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` (pass).
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` (pass).
+
+## 2026-03-17 Follow-up: Android AssetId decoder now fully validates scope/trailing bytes and rejects negative field lengths
+- Updated `java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AssetIdDecoder.java`:
+  - `decode(...)` now validates the full `AssetId` payload shape by decoding and checking `scope` instead of stopping after account/definition fields.
+  - `decode(...)` now validates `AssetId.account` payload structure/semantics (single/multisig controller decode, multisig version/threshold/member checks) instead of only skipping bytes.
+  - Added explicit trailing-byte rejection after the scope field.
+  - Added non-negative + bounded length checks for account/definition/scope field lengths so malformed signed-u64 lengths fail deterministically with `IllegalArgumentException`.
+  - Added strict layout-flag validation for both `AssetId` and `AssetDefinitionId` decode paths: only `COMPACT_LEN` is accepted; other layout flags are rejected.
+- Added regression coverage in `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AssetIdDecoderTests.java`:
+  - rejects malformed `AssetId.account` payloads,
+  - rejects unsupported `AssetId` layout flags,
+  - rejects malformed `AssetId.scope` payloads,
+  - rejects trailing bytes after a valid scope field,
+  - rejects negative account-length prefixes.
+  - rejects unsupported `AssetDefinitionId` layout flags.
+- Validation:
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` (pass).
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` (pass).
+
 ## 2026-03-17 Follow-up: integration-test startup no longer hangs when one peer reaches block 1 before Torii `/status`
 - Updated `crates/iroha_test_network/src/lib.rs` startup gating:
   - `NetworkPeer::start_checked(...)` still prefers `ServerStarted` (`/status`-driven),
