@@ -9401,6 +9401,16 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         try OfflineNorito.assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
     }
 
+    /// Derive the deterministic asset definition ID from a human-readable alias.
+    ///
+    /// Uses blake3 hash — same algorithm as Iroha server-side `AssetDefinitionId::new`.
+    ///
+    /// - Parameter alias: Asset alias in `"name#domain"` format, e.g. `"usd#wonderland"`.
+    /// - Returns: Canonical asset definition ID, e.g. `"aid:bef53c1ccd1749e180dfbad6519bfd66"`.
+    public static func assetDefinitionId(fromAlias alias: String) throws -> String {
+        try OfflineNorito.assetDefinitionIdFromAlias(alias)
+    }
+
     public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
                                                     accountIdOrAlias: String) async throws -> String {
         let normalizedAssetInput = try ToriiRequestValidation.normalizedNonEmpty(

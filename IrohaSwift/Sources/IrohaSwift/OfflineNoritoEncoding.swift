@@ -74,7 +74,7 @@ struct OfflineNoritoWriter {
     }
 }
 
-enum OfflineNorito {
+public enum OfflineNorito {
     static let maxNumericScale: UInt32 = 28
     private static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
@@ -93,29 +93,24 @@ enum OfflineNorito {
         return writer.data
     }
 
+    /// Encode AccountId as controller-only, matching Rust `AccountId::NoritoSerialize`.
+    /// Rust writes only the controller field (no domain). Swift must do the same
+    /// so that receipt payloads, challenge preimages, and all other Norito structures
+    /// produce byte-identical output.
     static func encodeAccountId(_ value: String) throws -> Data {
         if isRunningXCTest {
             let canonical = try canonicalizeAccountIdWithoutNativeParse(value)
-            var writer = OfflineNoritoWriter()
-            let domainPayload = try encodeDomainId(AccountAddress.defaultDomainName)
-            writer.writeField(domainPayload)
-
             var accountControllerPayload = OfflineNoritoWriter()
             accountControllerPayload.writeUInt32LE(0)
             accountControllerPayload.writeField(encodeString(canonical))
-            writer.writeField(accountControllerPayload.data)
-            return writer.data
+            return accountControllerPayload.data
         }
         let canonical = try canonicalizeEncodedAccountId(value)
         let address = try AccountAddress.parseEncoded(
             canonical,
             expectedPrefix: defaultNetworkPrefix
         )
-        var writer = OfflineNoritoWriter()
-        let domainPayload = try encodeDomainId(AccountAddress.defaultDomainName)
-        writer.writeField(domainPayload)
-        writer.writeField(try address.noritoAccountControllerPayload())
-        return writer.data
+        return try address.noritoAccountControllerPayload()
     }
 
     static func encodeBool(_ value: Bool) -> Data {
@@ -320,6 +315,33 @@ enum OfflineNorito {
         }
 
         throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_encode_asset_id_literal")
+    }
+
+    /// Derive the deterministic `aid:<hex>` canonical literal from a human-readable alias.
+    ///
+    /// Algorithm matches Rust `AssetDefinitionId::new(domain, name)`:
+    ///   `blake3("name#domain")` → truncate to 16 bytes → force UUIDv4 bits → `"aid:<hex>"`
+    ///
+    /// - Parameter alias: Asset alias in `"name#domain"` format, e.g. `"usd#wonderland"`.
+    /// - Returns: Canonical asset definition ID, e.g. `"aid:bef53c1ccd1749e180dfbad6519bfd66"`.
+    static func assetDefinitionIdFromAlias(_ alias: String) throws -> String {
+        let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.contains("#") else {
+            throw OfflineNoritoError.invalidAssetId(alias)
+        }
+        let bridge = NoritoNativeBridge.shared
+        guard let hash = bridge.blake3Hash(data: Data(trimmed.utf8)) else {
+            throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_blake3_hash")
+        }
+        guard hash.count >= 16 else {
+            throw OfflineNoritoError.nativeBridgeUnavailable("blake3 hash too short")
+        }
+        var aidBytes = [UInt8](hash.prefix(16))
+        // Force UUIDv4 version (0100) and RFC4122 variant (10xx)
+        aidBytes[6] = (aidBytes[6] & 0x0f) | 0x40
+        aidBytes[8] = (aidBytes[8] & 0x3f) | 0x80
+        let hex = aidBytes.map { String(format: "%02x", $0) }.joined()
+        return "aid:\(hex)"
     }
 
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {
