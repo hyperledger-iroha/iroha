@@ -540,8 +540,7 @@ final class ToriiClientTests: XCTestCase {
 
     private func nodeCapabilitiesBody(dataModelVersion: Int = ToriiNodeCapabilities.expectedDataModelVersion) -> Data {
         let payload: [String: Any] = [
-            "supported_abi_versions": [1],
-            "default_compile_target": 1,
+            "abi_version": 1,
             "data_model_version": dataModelVersion
         ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
@@ -3677,7 +3676,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetNodeCapabilitiesAsync() async throws {
         let payload = """
-        {"supported_abi_versions":[1,2,3],"default_compile_target":2}
+        {"abi_version":1}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -3687,8 +3686,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let capabilities = try await makeClient().getNodeCapabilities()
-        XCTAssertEqual(capabilities.supportedAbiVersions, [1, 2, 3])
-        XCTAssertEqual(capabilities.defaultCompileTarget, 2)
+        XCTAssertEqual(capabilities.abiVersion, 1)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -3952,7 +3950,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetRuntimeMetricsAsync() async throws {
         let payload = """
-        {"active_abi_versions_count":4,"upgrade_events_total":{"proposed":5,"activated":6,"canceled":1}}
+        {"abi_version":1,"upgrade_events_total":{"proposed":5,"activated":6,"canceled":1}}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -3962,7 +3960,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
 
         let metrics = try await makeClient().getRuntimeMetrics()
-        XCTAssertEqual(metrics.activeAbiVersionsCount, 4)
+        XCTAssertEqual(metrics.abiVersion, 1)
         XCTAssertEqual(metrics.upgradeEventsTotal.proposed, 5)
         XCTAssertEqual(metrics.upgradeEventsTotal.activated, 6)
         XCTAssertEqual(metrics.upgradeEventsTotal.canceled, 1)
@@ -3971,7 +3969,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetRuntimeAbiActiveAsync() async throws {
         let payload = """
-        {"active_versions":[1,4,7],"default_compile_target":4}
+        {"abi_version":1}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -3981,8 +3979,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
 
         let snapshot = try await makeClient().getRuntimeAbiActive()
-        XCTAssertEqual(snapshot.activeVersions, [1, 4, 7])
-        XCTAssertEqual(snapshot.defaultCompileTarget, 4)
+        XCTAssertEqual(snapshot.abiVersion, 1)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4014,10 +4011,10 @@ final class ToriiClientHeaderTests: XCTestCase {
                 "manifest": {
                   "name": "Upgrade Foo",
                   "description": "Test upgrade",
-                  "abi_version": 2,
+                  "abi_version": 1,
                   "abi_hash": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-                  "added_syscalls": [42],
-                  "added_pointer_types": [7],
+                  "added_syscalls": [],
+                  "added_pointer_types": [],
                   "start_height": 100,
                   "end_height": 200
                 },
@@ -4049,9 +4046,9 @@ final class ToriiClientHeaderTests: XCTestCase {
         let manifest = item.record.manifest
         XCTAssertEqual(manifest.name, "Upgrade Foo")
         XCTAssertEqual(manifest.description, "Test upgrade")
-        XCTAssertEqual(manifest.abiVersion, 2)
-        XCTAssertEqual(manifest.addedSyscalls, [42])
-        XCTAssertEqual(manifest.addedPointerTypes, [7])
+        XCTAssertEqual(manifest.abiVersion, 1)
+        XCTAssertEqual(manifest.addedSyscalls, [])
+        XCTAssertEqual(manifest.addedPointerTypes, [])
         XCTAssertEqual(manifest.startHeight, 100)
         XCTAssertEqual(manifest.endHeight, 200)
         XCTAssertEqual(manifest.abiHashHex, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
@@ -4062,9 +4059,9 @@ final class ToriiClientHeaderTests: XCTestCase {
         let manifest = ToriiRuntimeUpgradeManifest(
             name: "Upgrade Foo",
             description: "Test",
-            abiVersion: 3,
+            abiVersion: 1,
             abiHashHex: "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-            addedSyscalls: [10, 11],
+            addedSyscalls: [],
             addedPointerTypes: [],
             startHeight: 123,
             endHeight: 456
@@ -4082,12 +4079,12 @@ final class ToriiClientHeaderTests: XCTestCase {
                 return (HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!, Data())
             }
             XCTAssertEqual(manifestJSON["name"] as? String, "Upgrade Foo")
-            XCTAssertEqual(manifestJSON["abi_version"] as? Int, 3)
+            XCTAssertEqual(manifestJSON["abi_version"] as? Int, 1)
             XCTAssertEqual(manifestJSON["abi_hash"] as? String, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
             XCTAssertEqual(manifestJSON["start_height"] as? Int, 123)
             XCTAssertEqual(manifestJSON["end_height"] as? Int, 456)
             if let syscalls = manifestJSON["added_syscalls"] as? [NSNumber] {
-                XCTAssertEqual(syscalls.map(\.intValue), [10, 11])
+                XCTAssertTrue(syscalls.isEmpty)
             }
             if let pointerTypes = manifestJSON["added_pointer_types"] as? [NSNumber] {
                 XCTAssertTrue(pointerTypes.isEmpty)
@@ -4100,6 +4097,48 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertTrue(action.ok)
         XCTAssertEqual(action.txInstructions.first?.wireId, "Upgrade")
         XCTAssertEqual(action.txInstructions.first?.payloadHex, "00")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListRuntimeUpgradesRejectsNonV1ManifestAsync() async throws {
+        let upgradeId = String(repeating: "9", count: 64)
+        let payload = """
+        {
+          "items": [
+            {
+              "id_hex": "\(upgradeId)",
+              "record": {
+                "manifest": {
+                  "name": "Upgrade Foo",
+                  "description": "Test upgrade",
+                  "abi_version": 2,
+                  "abi_hash": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+                  "added_syscalls": [],
+                  "added_pointer_types": [],
+                  "start_height": 100,
+                  "end_height": 200
+                },
+                "status": { "Proposed": null },
+                "proposer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "created_height": 90
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            return (response, payload)
+        }
+
+        do {
+            _ = try await makeClient().listRuntimeUpgrades()
+            XCTFail("expected listRuntimeUpgrades to reject non-v1 ABI manifests")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("abi_version must be 1"))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)

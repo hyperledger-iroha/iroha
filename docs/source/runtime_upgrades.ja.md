@@ -42,8 +42,8 @@ translation_last_reviewed: 2026-01-01
   - `description: String` — 運用向けの短い説明。
   - `abi_version: u16` — 有効化する対象 ABI バージョン (初回リリースでは 1 固定)。
   - `abi_hash: [u8; 32]` — 対象ポリシーの canonical ABI hash。
-  - `added_syscalls: Vec<u16>` — このバージョンで有効になる syscall 番号。
-  - `added_pointer_types: Vec<u16>` — アップグレードで追加される pointer 型 ID。
+  - `added_syscalls: Vec<u16>` — 予約済みの差分リスト。初回リリースでは空でなければなりません。
+  - `added_pointer_types: Vec<u16>` — 予約済みの差分リスト。初回リリースでは空でなければなりません。
   - `start_height: u64` — アクティベーションが許可される最初のブロック高。
   - `end_height: u64` — アクティベーションウィンドウの排他的上限。
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — アップグレード成果物の SBOM digest。
@@ -117,7 +117,7 @@ translation_last_reviewed: 2026-01-01
 
 Torii と CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (implemented)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
   - `GET /v1/runtime/upgrades` -> record 一覧 (implemented)。
   - `POST /v1/runtime/upgrades/propose` -> `ProposeRuntimeUpgrade` をラップ (instruction skeleton を返す; implemented)。
@@ -133,7 +133,7 @@ Torii と CLI
 
 Core Query API
 - Norito 単発クエリ (署名付き):
-  - `FindActiveAbiVersions` は Norito 構造体 `{ active_versions: [u16], default_compile_target: u16 }` を返す。
+  - `FindAbiVersion` は Norito 構造体 `{ abi_version: u16 }` を返す。
   - サンプル: `docs/source/samples/find_active_abi_versions.md` (型/フィールドと JSON 例)。
 
 実装ノート (v1 固定)
@@ -153,7 +153,7 @@ Core Query API
   - `abi_version = 1` を出力し、canonical v1 の `abi_hash` を `.to` manifest に埋め込む。
 
 Telemetry
-- `runtime.active_abi_versions` gauge と `runtime.upgrade_events_total{kind}` counter を追加。
+- `runtime.abi_version` gauge と `runtime.upgrade_events_total{kind}` counter を追加。
 
 Security Considerations
 - root/sudo のみが propose/activate/cancel 可能; manifest は適切に署名されていること。

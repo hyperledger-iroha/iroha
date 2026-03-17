@@ -10468,7 +10468,7 @@ mod cli_integration_harness {
     use std::collections::{BTreeMap, BTreeSet};
 
     use eyre::eyre;
-    use iroha::data_model::query::runtime::ActiveAbiVersions;
+    use iroha::data_model::query::runtime::AbiVersion;
     use iroha::data_model::{
         asset::{Asset, AssetId},
         executor::ExecutorDataModel,
@@ -10495,7 +10495,7 @@ mod cli_integration_harness {
         pub parameters: Option<Parameters>,
         pub proof_records: BTreeMap<ProofId, ProofRecord>,
         pub manifests: BTreeMap<Hash, ContractManifest>,
-        pub active_abi_versions: Option<ActiveAbiVersions>,
+        pub abi_version: Option<AbiVersion>,
         pub assets: BTreeMap<AssetId, Asset>,
     }
 
@@ -10514,7 +10514,7 @@ mod cli_integration_harness {
                 parameters: None,
                 proof_records: BTreeMap::new(),
                 manifests: BTreeMap::new(),
-                active_abi_versions: None,
+                abi_version: None,
                 assets: BTreeMap::new(),
             }
         }
@@ -10588,11 +10588,11 @@ mod cli_integration_harness {
                     .cloned()
                     .map(SingularQueryOutputBox::ContractManifest)
                     .ok_or_else(|| eyre!("contract manifest not found for supplied code hash")),
-                SingularQueryBox::FindActiveAbiVersions(_) => self
-                    .active_abi_versions
+                SingularQueryBox::FindAbiVersion(_) => self
+                    .abi_version
                     .clone()
-                    .map(SingularQueryOutputBox::ActiveAbiVersions)
-                    .ok_or_else(|| eyre!("active ABI versions not configured in MockQueryServer")),
+                    .map(SingularQueryOutputBox::AbiVersion)
+                    .ok_or_else(|| eyre!("ABI version not configured in MockQueryServer")),
                 SingularQueryBox::FindAssetById(req) => self
                     .assets
                     .get(&req.asset_id)
@@ -11459,7 +11459,7 @@ mod cli_integration_harness {
             parameter::Parameters,
             query::{
                 executor::prelude::{FindExecutorDataModel, FindParameters},
-                runtime::{ActiveAbiVersions, prelude::FindActiveAbiVersions},
+                runtime::{AbiVersion, prelude::FindAbiVersion},
             },
         };
         use std::collections::BTreeSet;
@@ -11473,10 +11473,7 @@ mod cli_integration_harness {
         };
         server.executor_data_model = Some(executor_model.clone());
         server.parameters = Some(Parameters::default());
-        server.active_abi_versions = Some(ActiveAbiVersions {
-            active_versions: vec![1, 2],
-            default_compile_target: 2,
-        });
+        server.abi_version = Some(AbiVersion { abi_version: 1 });
 
         let exec_out = server
             .execute_singular_query(SingularQueryBox::FindExecutorDataModel(
@@ -11497,17 +11494,14 @@ mod cli_integration_harness {
         }
 
         let abi_out = server
-            .execute_singular_query(SingularQueryBox::FindActiveAbiVersions(
-                FindActiveAbiVersions,
+            .execute_singular_query(SingularQueryBox::FindAbiVersion(
+                FindAbiVersion,
             ))
-            .expect("ABI versions present");
+            .expect("ABI version present");
         match abi_out {
-            SingularQueryOutputBox::ActiveAbiVersions(versions) => assert_eq!(
+            SingularQueryOutputBox::AbiVersion(versions) => assert_eq!(
                 versions,
-                ActiveAbiVersions {
-                    active_versions: vec![1, 2],
-                    default_compile_target: 2
-                }
+                AbiVersion { abi_version: 1 }
             ),
             other => panic!("unexpected output variant: {other:?}"),
         }

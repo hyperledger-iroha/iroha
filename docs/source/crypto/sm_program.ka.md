@@ -323,8 +323,7 @@ SM-5a/SM-4c.1-ით თვალყურის დევნილი ქმე
 
 ```json
 {
-  "supported_abi_versions": [1],
-  "default_compile_target": 1,
+  "abi_version": 1,
   "data_model_version": 1,
   "crypto": {
     "sm": {

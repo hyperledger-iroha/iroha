@@ -224,6 +224,37 @@ def test_runtime_manifest_rejects_alias_fields() -> None:
         raise AssertionError("expected RuntimeError for alias manifest fields")
 
 
+def test_runtime_manifest_rejects_non_v1_abi_version() -> None:
+    with pytest.raises(RuntimeError, match="abi_version must be 1"):
+        ToriiClient._normalize_runtime_manifest_payload(
+            {
+                "name": "upgrade-1",
+                "description": "First upgrade",
+                "abi_version": 2,
+                "abi_hash": "0" * 64,
+                "start_height": 1,
+                "end_height": 2,
+            },
+            context="runtime upgrade manifest",
+        )
+
+
+def test_runtime_manifest_rejects_non_empty_added_surfaces() -> None:
+    with pytest.raises(RuntimeError, match="added_syscalls must be empty"):
+        ToriiClient._normalize_runtime_manifest_payload(
+            {
+                "name": "upgrade-1",
+                "description": "First upgrade",
+                "abi_version": 1,
+                "abi_hash": "0" * 64,
+                "added_syscalls": [512],
+                "start_height": 1,
+                "end_height": 2,
+            },
+            context="runtime upgrade manifest",
+        )
+
+
 def test_get_node_version_returns_string() -> None:
     session = RecordingSession()
     session.queue(StubResponse(text="2.1.0-dev"))
@@ -382,8 +413,7 @@ def test_get_node_capabilities_parses_snapshot() -> None:
     session.queue(
         StubResponse(
             payload={
-                "supported_abi_versions": [1, 5],
-                "default_compile_target": 5,
+                "abi_version": 1,
                 "data_model_version": 1,
                 "crypto": {
                     "sm": {
@@ -412,8 +442,7 @@ def test_get_node_capabilities_parses_snapshot() -> None:
 
     capabilities = client.get_node_capabilities()
 
-    assert capabilities.supported_abi_versions == [1, 5]
-    assert capabilities.default_compile_target == 5
+    assert capabilities.abi_version == 1
     assert capabilities.data_model_version == 1
     assert capabilities.crypto.sm.allowed_signing == ["sm2"]
     assert capabilities.crypto.sm.acceleration.neon_sm3 is True
@@ -426,8 +455,7 @@ def test_get_runtime_abi_active_parses_payload() -> None:
     session.queue(
         StubResponse(
             payload={
-                "active_versions": [1, 3],
-                "default_compile_target": 3,
+                "abi_version": 1,
             }
         )
     )
@@ -435,8 +463,7 @@ def test_get_runtime_abi_active_parses_payload() -> None:
 
     snapshot = client.get_runtime_abi_active()
 
-    assert snapshot.active_versions == [1, 3]
-    assert snapshot.default_compile_target == 3
+    assert snapshot.abi_version == 1
 
 
 def test_get_runtime_abi_hash_parses_payload() -> None:
@@ -462,7 +489,7 @@ def test_get_runtime_metrics_parses_payload() -> None:
     session.queue(
         StubResponse(
             payload={
-                "active_abi_versions_count": 2,
+                "abi_version": 1,
                 "upgrade_events_total": {"proposed": 5, "activated": 3, "canceled": 1},
             }
         )
@@ -471,7 +498,7 @@ def test_get_runtime_metrics_parses_payload() -> None:
 
     metrics = client.get_runtime_metrics()
 
-    assert metrics.active_abi_versions_count == 2
+    assert metrics.abi_version == 1
     assert metrics.upgrade_events_total.proposed == 5
     assert metrics.upgrade_events_total.activated == 3
     assert metrics.upgrade_events_total.canceled == 1
@@ -487,12 +514,12 @@ def test_list_runtime_upgrades_parses_records() -> None:
                         "id_hex": "aa" * 32,
                         "record": {
                             "manifest": {
-                                "name": "ABI v3",
-                                "description": "roll forward",
-                                "abi_version": 3,
+                                "name": "ABI v1 refresh",
+                                "description": "scheduled rollout",
+                                "abi_version": 1,
                                 "abi_hash": "11" * 32,
-                                "added_syscalls": [512],
-                                "added_pointer_types": [900],
+                                "added_syscalls": [],
+                                "added_pointer_types": [],
                                 "start_height": 10,
                                 "end_height": 20,
                             },
@@ -505,9 +532,9 @@ def test_list_runtime_upgrades_parses_records() -> None:
                         "id_hex": "bb" * 32,
                         "record": {
                             "manifest": {
-                                "name": "ABI v4",
-                                "description": "next",
-                                "abi_version": 4,
+                                "name": "ABI v1 maintenance",
+                                "description": "next window",
+                                "abi_version": 1,
                                 "abi_hash": "22" * 32,
                                 "added_syscalls": [],
                                 "added_pointer_types": [],
@@ -547,13 +574,13 @@ def test_propose_runtime_upgrade_posts_manifest() -> None:
 
     result = client.propose_runtime_upgrade(
         {
-            "name": "ABI v5",
-            "description": "new opcodes",
-            "abi_version": 5,
+            "name": "ABI v1 maintenance",
+            "description": "roll out refreshed binaries",
+            "abi_version": 1,
             "abi_hash": "ff" * 32,
             "start_height": 50,
             "end_height": 60,
-            "added_syscalls": [600],
+            "added_syscalls": [],
             "added_pointer_types": [],
         }
     )
@@ -562,7 +589,7 @@ def test_propose_runtime_upgrade_posts_manifest() -> None:
     assert result.tx_instructions[0].wire_id == "ProposeRuntimeUpgrade"
     assert session.calls[0]["url"].endswith("/v1/runtime/upgrades/propose")
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert body["abi_version"] == 5
+    assert body["abi_version"] == 1
     assert body["abi_hash"] == "ff" * 32
 
 

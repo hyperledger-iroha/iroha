@@ -192,8 +192,7 @@ private final class PipelineURLProtocol: URLProtocol {
 
     private static var nodeCapabilitiesBody: Data {
         let body: [String: Any] = [
-            "supported_abi_versions": [1],
-            "default_compile_target": 0,
+            "abi_version": 1,
             "data_model_version": ToriiNodeCapabilities.expectedDataModelVersion
         ]
         return (try? JSONSerialization.data(withJSONObject: body)) ?? Data()

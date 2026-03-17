@@ -147,13 +147,9 @@ impl IvmCache {
             return Ok(hit);
         }
 
-        let abi_hash = {
-            let policy = match parsed.metadata.abi_version {
-                1 => SyscallPolicy::AbiV1,
-                v => SyscallPolicy::Experimental(v),
-            };
-            Hash::prehashed(ivm::syscalls::compute_abi_hash(policy))
-        };
+        // The first release has a single canonical ABI hash; admission rejects
+        // non-v1 headers after summary extraction.
+        let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(SyscallPolicy::AbiV1));
 
         let summary = ProgramSummary {
             metadata: parsed.metadata,

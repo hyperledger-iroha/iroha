@@ -20,10 +20,8 @@ const CURVE_REGISTRY_VERSION: u32 = 1;
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Node capabilities advert (subset)
 pub struct NodeCapabilitiesResponse {
-    /// Supported ABI versions on this node (active set)
-    pub supported_abi_versions: Vec<u16>,
-    /// Default Kotodama compile target (highest active ABI version)
-    pub default_compile_target: u16,
+    /// ABI version accepted by this node.
+    pub abi_version: u16,
     /// Data model compatibility version for SDK handshakes.
     pub data_model_version: u32,
     /// Cryptography capabilities (SM, default hashes, allow-lists)
@@ -85,8 +83,8 @@ pub struct NodeCurveCapabilities {
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// JSON summary of runtime-related metrics of interest
 pub struct RuntimeMetricsResponse {
-    /// Count of active ABI versions
-    pub active_abi_versions_count: u64,
+    /// ABI version accepted by the runtime.
+    pub abi_version: u16,
     /// Upgrade lifecycle event counters
     pub upgrade_events_total: UpgradeEventsCounters,
 }
@@ -100,8 +98,7 @@ pub struct UpgradeEventsCounters {
 
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct RuntimeAbiActiveResponse {
-    pub active_versions: Vec<u16>,
-    pub default_compile_target: u16,
+    pub abi_version: u16,
 }
 
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
@@ -132,24 +129,16 @@ pub async fn handle_runtime_abi_active(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeAbiActiveResponse, crate::Error> {
     let world = state.world_view();
-    let active = world.active_abi_versions();
-    let mut list: Vec<u16> = active.into_iter().collect();
-    list.sort_unstable();
-    let default = *list.last().unwrap_or(&1);
     Ok(RuntimeAbiActiveResponse {
-        active_versions: list,
-        default_compile_target: default,
+        abi_version: world.abi_version(),
     })
 }
 
-/// GET /v1/node/capabilities — advertise supported ABI versions and defaults
+/// GET /v1/node/capabilities — advertise the fixed runtime ABI version and defaults
 pub async fn handle_node_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<NodeCapabilitiesResponse, crate::Error> {
     let world = state.world_view();
-    let mut list: Vec<u16> = world.active_abi_versions().into_iter().collect();
-    list.sort_unstable();
-    let default = *list.last().unwrap_or(&1);
     let crypto_cfg = state.crypto();
     let allowed_signing: Vec<String> = crypto_cfg
         .allowed_signing
@@ -169,8 +158,7 @@ pub async fn handle_node_capabilities(
     #[cfg(not(feature = "sm"))]
     let (neon_sm3, neon_sm4, policy_string) = (false, false, "scalar-only".to_string());
     Ok(NodeCapabilitiesResponse {
-        supported_abi_versions: list,
-        default_compile_target: default,
+        abi_version: world.abi_version(),
         data_model_version: iroha_data_model::DATA_MODEL_VERSION,
         crypto: NodeCryptoCapabilities {
             sm: NodeSmCapabilities {
@@ -270,7 +258,6 @@ pub async fn handle_runtime_metrics(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeMetricsResponse, crate::Error> {
     let world = state.world_view();
-    let active_count = world.active_abi_versions().len() as u64;
     let mut proposed: u64 = 0;
     let mut activated: u64 = 0;
     let mut canceled: u64 = 0;
@@ -287,7 +274,7 @@ pub async fn handle_runtime_metrics(
         }
     }
     Ok(RuntimeMetricsResponse {
-        active_abi_versions_count: active_count,
+        abi_version: world.abi_version(),
         upgrade_events_total: UpgradeEventsCounters {
             proposed,
             activated,
@@ -489,7 +476,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn node_capabilities_contains_v1() {
+    async fn node_capabilities_reports_v1() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = iroha_core::state::World::default();
@@ -498,8 +485,7 @@ mod tests {
         let resp = handle_node_capabilities(std::sync::Arc::new(state))
             .await
             .expect("ok");
-        assert!(resp.supported_abi_versions.contains(&1));
-        assert_eq!(resp.default_compile_target, 1);
+        assert_eq!(resp.abi_version, 1);
         assert_eq!(resp.crypto.curves.registry_version, CURVE_REGISTRY_VERSION);
         assert!(
             resp.crypto
@@ -520,7 +506,7 @@ mod tests {
         let resp = handle_runtime_metrics(std::sync::Arc::new(state))
             .await
             .expect("ok");
-        assert_eq!(resp.active_abi_versions_count, 1);
+        assert_eq!(resp.abi_version, 1);
         assert_eq!(resp.upgrade_events_total.proposed, 0);
         assert_eq!(resp.upgrade_events_total.activated, 0);
         assert_eq!(resp.upgrade_events_total.canceled, 0);

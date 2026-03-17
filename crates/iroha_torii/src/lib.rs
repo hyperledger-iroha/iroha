@@ -18294,7 +18294,7 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
-        // Active ABI versions
+        // Active ABI version
         let resp = super::handler_runtime_abi_active(State(app.clone()), headers.clone(), None)
             .await
             .expect("ok");
@@ -18304,11 +18304,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let active: crate::runtime::RuntimeAbiActiveResponse =
             norito::json::from_slice(&bytes).expect("decode json");
-        assert!(active.active_versions.contains(&1));
-        assert_eq!(
-            active.default_compile_target,
-            *active.active_versions.iter().max().unwrap()
-        );
+        assert_eq!(active.abi_version, 1);
 
         // ABI hash
         let resp = super::handler_runtime_abi_hash(State(app), headers, None)
@@ -18828,7 +18824,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let metrics: crate::runtime::RuntimeMetricsResponse =
             norito::json::from_slice(&metrics_bytes).expect("decode json");
-        assert_eq!(metrics.active_abi_versions_count, 1);
+        assert_eq!(metrics.abi_version, 1);
 
         let caps_resp = super::handler_node_capabilities(State(app), headers, None)
             .await
@@ -18839,8 +18835,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let caps: crate::runtime::NodeCapabilitiesResponse =
             norito::json::from_slice(&caps_bytes).expect("decode json");
-        assert!(caps.supported_abi_versions.contains(&1));
-        assert_eq!(caps.default_compile_target, 1);
+        assert_eq!(caps.abi_version, 1);
         assert_eq!(
             caps.data_model_version,
             iroha_data_model::DATA_MODEL_VERSION

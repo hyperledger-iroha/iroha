@@ -4329,14 +4329,12 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
     public static let expectedDataModelVersion = 1
-    public let supportedAbiVersions: [Int]
-    public let defaultCompileTarget: Int
+    public let abiVersion: Int
     public let dataModelVersion: Int?
     public let crypto: ToriiNodeCryptoCapabilities?
 
     private enum CodingKeys: String, CodingKey {
-        case supportedAbiVersions = "supported_abi_versions"
-        case defaultCompileTarget = "default_compile_target"
+        case abiVersion = "abi_version"
         case dataModelVersion = "data_model_version"
         case crypto
     }
@@ -4526,22 +4524,20 @@ public struct ToriiRuntimeUpgradeCounters: Decodable, Sendable {
 }
 
 public struct ToriiRuntimeMetrics: Decodable, Sendable {
-    public let activeAbiVersionsCount: Int
+    public let abiVersion: Int
     public let upgradeEventsTotal: ToriiRuntimeUpgradeCounters
 
     private enum CodingKeys: String, CodingKey {
-        case activeAbiVersionsCount = "active_abi_versions_count"
+        case abiVersion = "abi_version"
         case upgradeEventsTotal = "upgrade_events_total"
     }
 }
 
 public struct ToriiRuntimeAbiActive: Decodable, Sendable {
-    public let activeVersions: [Int]
-    public let defaultCompileTarget: Int
+    public let abiVersion: Int
 
     private enum CodingKeys: String, CodingKey {
-        case activeVersions = "active_versions"
-        case defaultCompileTarget = "default_compile_target"
+        case abiVersion = "abi_version"
     }
 }
 
@@ -5230,9 +5226,20 @@ public struct ToriiRuntimeUpgradeManifest: Codable, Sendable {
         addedPointerTypes = try container.decodeIfPresent([UInt16].self, forKey: .addedPointerTypes) ?? []
         startHeight = try container.decode(UInt64.self, forKey: .startHeight)
         endHeight = try container.decode(UInt64.self, forKey: .endHeight)
+        try Self.validateFirstReleaseAbiForDecoding(
+            abiVersion: abiVersion,
+            addedSyscalls: addedSyscalls,
+            addedPointerTypes: addedPointerTypes,
+            codingPath: container.codingPath + [CodingKeys.abiVersion]
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
+        try Self.validateFirstReleaseAbiForEncoding(
+            abiVersion: abiVersion,
+            addedSyscalls: addedSyscalls,
+            addedPointerTypes: addedPointerTypes
+        )
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(description, forKey: .description)
@@ -5251,6 +5258,54 @@ public struct ToriiRuntimeUpgradeManifest: Codable, Sendable {
         }
         try container.encode(startHeight, forKey: .startHeight)
         try container.encode(endHeight, forKey: .endHeight)
+    }
+
+    private static func validateFirstReleaseAbiForDecoding(
+        abiVersion: UInt16,
+        addedSyscalls: [UInt16],
+        addedPointerTypes: [UInt16],
+        codingPath: [CodingKey]
+    ) throws {
+        if abiVersion != 1 {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "abi_version must be 1 in the first release"
+                )
+            )
+        }
+        if !addedSyscalls.isEmpty {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "added_syscalls must be empty in the first release"
+                )
+            )
+        }
+        if !addedPointerTypes.isEmpty {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(
+                    codingPath: codingPath,
+                    debugDescription: "added_pointer_types must be empty in the first release"
+                )
+            )
+        }
+    }
+
+    private static func validateFirstReleaseAbiForEncoding(
+        abiVersion: UInt16,
+        addedSyscalls: [UInt16],
+        addedPointerTypes: [UInt16]
+    ) throws {
+        if abiVersion != 1 {
+            throw ToriiClientError.invalidPayload("abi_version must be 1 in the first release.")
+        }
+        if !addedSyscalls.isEmpty {
+            throw ToriiClientError.invalidPayload("added_syscalls must be empty in the first release.")
+        }
+        if !addedPointerTypes.isEmpty {
+            throw ToriiClientError.invalidPayload("added_pointer_types must be empty in the first release.")
+        }
     }
 }
 

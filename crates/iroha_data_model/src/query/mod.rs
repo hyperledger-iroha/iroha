@@ -857,8 +857,8 @@ mod model {
         FindProofRecordById(proof::prelude::FindProofRecordById),
         /// Fetch a contract manifest by its code hash.
         FindContractManifestByCodeHash(smart_contract::prelude::FindContractManifestByCodeHash),
-        /// Fetch the set of active ABI versions.
-        FindActiveAbiVersions(runtime::prelude::FindActiveAbiVersions),
+        /// Fetch the active ABI version.
+        FindAbiVersion(runtime::prelude::FindAbiVersion),
         /// Fetch an asset by identifier.
         FindAssetById(asset::prelude::FindAssetById),
         /// Fetch a Twitter binding record by hash.
@@ -905,8 +905,8 @@ mod model {
         ProofRecord(crate::proof::ProofRecord),
         /// Smart contract manifest payload.
         ContractManifest(crate::smart_contract::manifest::ContractManifest),
-        /// Active ABI versions payload.
-        ActiveAbiVersions(runtime::ActiveAbiVersions),
+        /// Active ABI version payload.
+        AbiVersion(runtime::AbiVersion),
         /// Asset payload.
         Asset(crate::asset::value::Asset),
         /// Twitter binding payload.
@@ -2422,7 +2422,7 @@ impl_singular_queries! {
     domain::prelude::FindAccountIdsByDomainId => Vec<crate::account::AccountId>,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
-    runtime::prelude::FindActiveAbiVersions => crate::query::runtime::ActiveAbiVersions,
+    runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
     asset::prelude::FindAssetById => crate::asset::value::Asset,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
@@ -3160,19 +3160,20 @@ pub mod runtime {
     use derive_more::Display;
 
     queries! {
-        /// Find active ABI versions and the default compile target.
+        /// Find the active ABI version.
         #[derive(Copy, Display)]
-        #[display("Find active ABI versions")]
+        #[display("Find active ABI version")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindActiveAbiVersions;
+        pub struct FindAbiVersion;
     }
 
-    /// Response type for `FindActiveAbiVersions` query.
+    /// Response type for `FindAbiVersion` query.
     ///
-    /// Query for ABI versions currently active on the chain.
+    /// Query for the ABI version currently active on the chain.
     #[derive(
         Debug,
         Clone,
+        Copy,
         PartialEq,
         Eq,
         norito::codec::Decode,
@@ -3183,16 +3184,14 @@ pub mod runtime {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct ActiveAbiVersions {
-        /// Sorted list of active ABI versions.
-        pub active_versions: Vec<u16>,
-        /// Default target for compilers (highest active).
-        pub default_compile_target: u16,
+    pub struct AbiVersion {
+        /// The ABI version currently active on the node.
+        pub abi_version: u16,
     }
 
     pub mod prelude {
         //! Prelude re-exports.
-        pub use super::FindActiveAbiVersions;
+        pub use super::FindAbiVersion;
     }
 }
 

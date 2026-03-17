@@ -43,8 +43,8 @@ Objetos de estado (Modelo de dados)
   - `description: String` - descricao curta para operadores.
   - `abi_version: u16` - versao ABI alvo a ativar (deve ser 1 na primeira versao).
   - `abi_hash: [u8; 32]` - hash ABI canonico para a politica alvo.
-  - `added_syscalls: Vec<u16>` - numeros de syscalls que se tornam validos com esta versao.
-  - `added_pointer_types: Vec<u16>` - identificadores de tipos de ponteiro adicionados pela atualizacao.
+  - `added_syscalls: Vec<u16>` - lista delta reservada; deve ficar vazia na primeira versao.
+  - `added_pointer_types: Vec<u16>` - lista delta reservada; deve ficar vazia na primeira versao.
   - `start_height: u64` - primeira altura de bloco em que a ativacao e permitida.
   - `end_height: u64` - limite superior exclusivo da janela de ativacao.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` - digests SBOM para artefatos de atualizacao.
@@ -118,7 +118,7 @@ Rollout do operador (sem downtime)
 
 Torii e CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implementado)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (implementado)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implementado)
   - `GET /v1/runtime/upgrades` -> lista de registros (implementado).
   - `POST /v1/runtime/upgrades/propose` -> encapsula `ProposeRuntimeUpgrade` (retorna esqueleto de instrucao; implementado).
@@ -134,7 +134,7 @@ Torii e CLI
 
 API de consulta core
 - Consulta Norito singular (assinada):
-  - `FindActiveAbiVersions` retorna uma struct Norito `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` retorna uma struct Norito `{ abi_version: u16 }`.
   - Ver exemplo: `docs/source/samples/find_active_abi_versions.md` (tipo/campos e exemplo JSON).
 
 Notas de implementacao (somente v1)
@@ -154,7 +154,7 @@ Notas de implementacao (somente v1)
   - Emite `abi_version = 1` e embute o `abi_hash` canonico v1 em manifests `.to`.
 
 Telemetria
-- Adicionar gauge `runtime.active_abi_versions` e counter `runtime.upgrade_events_total{kind}`.
+- Adicionar gauge `runtime.abi_version` e counter `runtime.upgrade_events_total{kind}`.
 
 Consideracoes de seguranca
 - Apenas root/sudo pode propor/ativar/cancelar; manifests devem ser assinados apropriadamente.

@@ -16,10 +16,9 @@ translator: manual
 レスポンス（初回リリース・単一 ABI）
 ```json
 {
-  "active_versions": [1],
-  "default_compile_target": 1
+  "abi_version": 1
 }
 ```
 
 備考
-- 返却されるリストは昇順でソートされています。`default_compile_target` はアクティブな最大バージョンであり、初回リリースでは 1 です。
+- 初回リリースでは ABI バージョンは 1 に固定されているため、このエンドポイントは常に `1` を返します。

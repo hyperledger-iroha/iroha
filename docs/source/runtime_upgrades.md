@@ -11,14 +11,14 @@ Goals
 - Operator‑friendly rollout with capability visibility and clear failure modes.
 
 Non‑Goals
-- Introducing new ABI versions or expanding syscall/pointer-type surfaces (out of scope for this release).
+- Changing `abi_version` away from `1` or expanding syscall/pointer-type surfaces is out of scope for this release.
 - Changing existing syscall numbers or pointer-type IDs (forbidden).
 - Live patching nodes without deploying updated binaries.
 
 Definitions
-- ABI Version: Small integer declared in `ProgramMetadata.abi_version` that selects a `SyscallPolicy` and pointer-type allowlist. In the first release, this is fixed to `1`.
+- ABI Version: Small integer declared in `ProgramMetadata.abi_version`. In the first release, this is fixed to `1` and always selects the canonical v1 syscall/pointer surface.
 - ABI Hash: Deterministic digest of the ABI surface for a given version: syscall list (numbers+shapes), pointer‑type IDs/allowlist, and policy flags; computed by `ivm::syscalls::compute_abi_hash`.
-- Syscall Policy: Host mapping that decides whether a syscall number is allowed for a given ABI version and host policy.
+- Syscall Policy: The fixed first-release host allowlist for ABI v1.
 - Activation Window: Half‑open block‑height interval `[start, end)` in which activation is valid exactly once at `start`.
 
 State Objects (Data Model)
@@ -29,8 +29,8 @@ State Objects (Data Model)
   - `description: String` — short description for operators.
   - `abi_version: u16` — target ABI version to activate (must be 1 in the first release).
   - `abi_hash: [u8; 32]` — canonical ABI hash for the target policy.
-  - `added_syscalls: Vec<u16>` — syscall numbers that become valid with this version.
-  - `added_pointer_types: Vec<u16>` — pointer-type identifiers added by the upgrade.
+  - `added_syscalls: Vec<u16>` — reserved delta list; must be empty in the first release.
+  - `added_pointer_types: Vec<u16>` — reserved delta list; must be empty in the first release.
   - `start_height: u64` — first block height where activation is permitted.
   - `end_height: u64` — exclusive upper bound on the activation window.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — SBOM digests for upgrade artefacts.
@@ -86,10 +86,10 @@ Provenance Enforcement
 - Telemetry: `runtime_upgrade_provenance_rejections_total{reason}` counts provenance rejection reasons.
 
 Execution Rules
-- VM Host Policy: During program execution, derive `SyscallPolicy` from `ProgramMetadata.abi_version`. Unknown syscalls for that version map to `VMError::UnknownSyscall`.
-- Pointer‑ABI: Allowlist derived from `ProgramMetadata.abi_version`; types outside the allowlist for that version are rejected during decode/validation.
+- VM Host Policy: During program execution, only `ProgramMetadata.abi_version = 1` is valid, and the host enforces the canonical ABI v1 syscall surface. Unknown syscalls map to `VMError::UnknownSyscall`.
+- Pointer‑ABI: The host enforces the canonical ABI v1 pointer-type allowlist; non-v1 ABI annotations fail closed during pointer decode/validation.
 - Host Switching: Each block recomputes the active ABI set; in the first release this remains `{1}`, but activation is still recorded and is idempotent (validated by `runtime_upgrade_admission::activation_allows_v1_in_same_block`).
-  - Syscall policy binding: `CoreHost` reads the transaction's declared ABI version and enforces `ivm::syscalls::is_syscall_allowed`/`is_type_allowed_for_policy` against the per-block `SyscallPolicy`. The host reuses the transaction-scoped VM instance, so mid-block activations are safe—later transactions observe the updated policy while earlier ones continue with their original version.
+  - Syscall policy binding: `CoreHost` enforces `ivm::syscalls::is_syscall_allowed`/`is_type_allowed_for_policy` against the fixed v1 `SyscallPolicy`. The host reuses the transaction-scoped VM instance, so mid-block activations are safe—later transactions observe the updated active-upgrade record while earlier ones continue with the same v1 policy.
 
 Determinism & Safety Invariants
 - Activation occurs only at `start_height` and is idempotent; reorgs below `start_height` deterministically re‑apply once the block re‑lands.
@@ -104,7 +104,7 @@ Operator Rollout (No Downtime)
 
 Torii & CLI
 - Torii
-  - `GET /v1/runtime/abi/active` → `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/active` → `{ abi_version: u16 }` (implemented)
   - `GET /v1/runtime/abi/hash` → `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
   - `GET /v1/runtime/upgrades` → list of records (implemented).
   - `POST /v1/runtime/upgrades/propose` → wraps `ProposeRuntimeUpgrade` (returns instruction skeleton; implemented).
@@ -120,7 +120,7 @@ Torii & CLI
 
 Core Query API
 - Norito singular query (signed):
-  - `FindActiveAbiVersions` returns a Norito-encoded struct `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` returns a Norito-encoded struct `{ abi_version: u16 }`.
   - See sample: `docs/source/samples/find_active_abi_versions.md` (type/fields and JSON example).
 
 Implementation Notes (v1-only)
@@ -140,7 +140,7 @@ Implementation Notes (v1-only)
   - Emit `abi_version = 1` and embed the canonical v1 `abi_hash` in `.to` manifests.
 
 Telemetry
-- Add `runtime.active_abi_versions` gauge and `runtime.upgrade_events_total{kind}` counter.
+- Add `runtime.abi_version` gauge and `runtime.upgrade_events_total{kind}` counter.
 
 Security Considerations
 - Only root/sudo may propose/activate/cancel; manifests must be signed appropriately.

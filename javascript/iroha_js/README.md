@@ -2625,12 +2625,12 @@ sign via `TxBuilder`, so rollout automation no longer needs bespoke HTTP clients
 ```js
 const torii = new ToriiClient("http://localhost:8080");
 const caps = await torii.getNodeCapabilities();
-console.log("Active ABI versions", caps.supportedAbiVersions);
+console.log("ABI version", caps.abiVersion);
 console.log("Allowed curve IDs", caps.crypto.curves.allowedCurveIds);
 console.log("Allowed curve bitmap", caps.crypto.curves.allowedCurveBitmap);
 
 const abi = await torii.getRuntimeAbiActive();
-console.log(`Default compile target: ABI v${abi.defaultCompileTarget}`);
+console.log(`Runtime ABI v${abi.abiVersion}`);
 
 const upgrades = await torii.listRuntimeUpgrades();
 for (const item of upgrades) {
@@ -2638,9 +2638,9 @@ for (const item of upgrades) {
 }
 
 const manifest = {
-  name: "ABI v5",
-  description: "Enable new syscalls",
-  abiVersion: 5,
+  name: "ABI v1 maintenance",
+  description: "Schedule a no-ABI-change runtime rollout",
+  abiVersion: 1,
   abiHash: "0123...cdef",
   startHeight: 10_000,
   endHeight: 10_500,
