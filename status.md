@@ -2,6 +2,21 @@
 
 Last updated: 2026-03-17
 
+## 2026-03-17 Follow-up: integration-test startup no longer hangs when one peer reaches block 1 before Torii `/status`
+- Updated `crates/iroha_test_network/src/lib.rs` startup gating:
+  - `NetworkPeer::start_checked(...)` still prefers `ServerStarted` (`/status`-driven),
+    but during genesis bootstrap it now falls back after a grace window when the
+    peer is running and block 1 is already committed on storage.
+  - this removes the long hang shape where `start_checked` could wait until the
+    outer network timeout even though consensus had progressed.
+- Added unit coverage in `start_event_tests`:
+  - `storage_fallback_requires_bootstrap_grace_running_and_block_1`
+  - `storage_fallback_allows_ready_bootstrap_peer`
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_test_network start_event_tests -- --nocapture` (pass)
+  - `cargo test -p integration_tests explorer_instructions_emit_i105_literals -- --nocapture` (pass; targeted test finished `ok` in `316.83s`)
+
 ## 2026-03-17 Follow-up: first-release ABI surface normalized to v1 only
 - Normalized the first-release ABI surface to v1 only across the core IVM/runtime path and the public ABI API: removed experimental syscall-policy scaffolding, made `IVM::load_program` reject non-v1 ABI headers, made pointer-ABI validation fail closed for non-v1 annotations, collapsed runtime ABI queries/endpoints/telemetry to singular `abi_version = 1` payloads, and updated the canonical runtime-upgrade/syscall docs to describe `added_*` fields as reserved-and-empty in this release.
 - Extended the v1-only ABI cleanup through the runtime-upgrade SDK surface: Python, JavaScript, and Swift clients now reject runtime-upgrade manifests unless `abi_version = 1` and `added_syscalls`/`added_pointer_types` are empty, examples/tests were rewritten to match, and the remaining runtime-upgrade/nexus/threat-model docs were swept to remove stale multi-version ABI wording.

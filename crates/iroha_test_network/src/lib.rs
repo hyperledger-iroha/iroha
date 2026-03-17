@@ -5273,6 +5273,7 @@ impl PeerStartContext {
     }
 }
 
+#[cfg(test)]
 async fn wait_for_start_event(
     mut rx: broadcast::Receiver<PeerLifecycleEvent>,
 ) -> Option<PeerLifecycleEvent> {
@@ -5286,6 +5287,18 @@ async fn wait_for_start_event(
             Err(broadcast::error::RecvError::Closed) => return None,
         }
     }
+}
+
+const START_CHECKED_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const START_CHECKED_STORAGE_FALLBACK_GRACE: Duration = Duration::from_secs(30);
+
+fn start_checked_storage_fallback_ready(
+    has_genesis: bool,
+    elapsed: Duration,
+    is_running: bool,
+    has_block_1: bool,
+) -> bool {
+    has_genesis && elapsed >= START_CHECKED_STORAGE_FALLBACK_GRACE && is_running && has_block_1
 }
 
 /// Controls execution of `irohad` child process.
@@ -6013,44 +6026,74 @@ impl NetworkPeer {
         );
     }
 
-    /// Like [`Self::start`], but also ensures that server starts (responds to `/status`).
+    /// Like [`Self::start`], but also ensures that startup progresses far enough for tests.
     ///
-    /// Note: This method does not wait for the genesis block to be committed even if
-    /// a genesis is provided. Use higher-level helpers (e.g., `Network::start_all` or
-    /// explicit `once_block`) if you need to wait for block commits.
+    /// By default it waits for a `ServerStarted` lifecycle event (driven by `/status` success).
+    /// During genesis bootstrap, if Torii remains unavailable but the peer has committed block 1
+    /// and keeps running, this method falls back to storage-observed readiness after a grace
+    /// period so slow/contended hosts do not deadlock startup.
+    ///
+    /// Note: This method still does not wait for arbitrary later block commits; use higher-level
+    /// helpers (e.g., `Network::start_all` or explicit `once_block`) if you need that.
     pub async fn start_checked<T: AsRef<Table>>(
         &self,
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
-        let events = self.events();
+        let mut events = self.events();
+        let has_genesis = genesis.is_some();
         self.start(config_layers, genesis).await?;
         let context = self
             .startup_context_summary()
             .unwrap_or_else(|| "<startup context not initialized>".to_string());
-        match wait_for_start_event(events).await {
-            Some(PeerLifecycleEvent::ServerStarted) => Ok(()),
-            Some(PeerLifecycleEvent::Terminated { status }) => {
-                let err = if let Some(preview) = self.stderr_preview() {
-                    eyre!(
-                        "Peer exited unexpectedly ({status:?}); {context}; stderr preview:\n{preview}"
-                    )
-                } else {
-                    eyre!("Peer exited unexpectedly ({status:?}); {context}")
-                };
-                Err(err)
-            }
-            Some(PeerLifecycleEvent::Killed) => {
-                let err = if let Some(preview) = self.stderr_preview() {
-                    eyre!("Peer was killed before startup; {context}; stderr preview:\n{preview}")
-                } else {
-                    eyre!("Peer was killed before startup; {context}")
-                };
-                Err(err)
-            }
-            None => Err(eyre!("Peer event channel closed before startup")),
-            Some(PeerLifecycleEvent::Spawned | PeerLifecycleEvent::BlockApplied { .. }) => {
-                unreachable!("wait_for_start_event filters out intermediate lifecycle events")
+        let started_at = Instant::now();
+        let mut fallback_poll = tokio::time::interval(START_CHECKED_FALLBACK_POLL_INTERVAL);
+        fallback_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                event = events.recv() => match event {
+                    Ok(PeerLifecycleEvent::ServerStarted) => return Ok(()),
+                    Ok(PeerLifecycleEvent::Terminated { status }) => {
+                        let err = if let Some(preview) = self.stderr_preview() {
+                            eyre!(
+                                "Peer exited unexpectedly ({status:?}); {context}; stderr preview:\n{preview}"
+                            )
+                        } else {
+                            eyre!("Peer exited unexpectedly ({status:?}); {context}")
+                        };
+                        return Err(err);
+                    }
+                    Ok(PeerLifecycleEvent::Killed) => {
+                        let err = if let Some(preview) = self.stderr_preview() {
+                            eyre!("Peer was killed before startup; {context}; stderr preview:\n{preview}")
+                        } else {
+                            eyre!("Peer was killed before startup; {context}")
+                        };
+                        return Err(err);
+                    }
+                    Ok(PeerLifecycleEvent::Spawned | PeerLifecycleEvent::BlockApplied { .. }) => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => {
+                        return Err(eyre!("Peer event channel closed before startup; {context}"));
+                    }
+                },
+                _ = fallback_poll.tick(), if has_genesis => {
+                    let elapsed = started_at.elapsed();
+                    if start_checked_storage_fallback_ready(
+                        has_genesis,
+                        elapsed,
+                        self.is_running(),
+                        self.has_committed_block(1),
+                    ) {
+                        warn!(
+                            ?elapsed,
+                            mnemonic = self.mnemonic(),
+                            "peer startup fallback: block 1 observed before Torii /status readiness"
+                        );
+                        return Ok(());
+                    }
+                }
             }
         }
     }
@@ -6989,6 +7032,36 @@ mod start_event_tests {
 
         let event = wait_for_start_event(rx).await;
         assert!(matches!(event, Some(PeerLifecycleEvent::ServerStarted)));
+    }
+
+    #[test]
+    fn storage_fallback_requires_bootstrap_grace_running_and_block_1() {
+        let grace = START_CHECKED_STORAGE_FALLBACK_GRACE;
+        assert!(!start_checked_storage_fallback_ready(
+            false, grace, true, true
+        ));
+        assert!(!start_checked_storage_fallback_ready(
+            true,
+            grace.saturating_sub(Duration::from_millis(1)),
+            true,
+            true
+        ));
+        assert!(!start_checked_storage_fallback_ready(
+            true, grace, false, true
+        ));
+        assert!(!start_checked_storage_fallback_ready(
+            true, grace, true, false
+        ));
+    }
+
+    #[test]
+    fn storage_fallback_allows_ready_bootstrap_peer() {
+        assert!(start_checked_storage_fallback_ready(
+            true,
+            START_CHECKED_STORAGE_FALLBACK_GRACE,
+            true,
+            true
+        ));
     }
 }
 
