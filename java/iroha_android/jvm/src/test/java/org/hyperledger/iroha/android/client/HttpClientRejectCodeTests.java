@@ -3,8 +3,10 @@ package org.hyperledger.iroha.android.client;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.Executable;
@@ -38,7 +40,7 @@ public final class HttpClientRejectCodeTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000001")
-            .setAuthority("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+            .setAuthority(sampleAuthority((byte) 0x01))
             .setCreationTimeMs(1L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();
@@ -59,5 +61,16 @@ public final class HttpClientRejectCodeTests {
     assert response.statusCode() == 400 : "status should propagate from executor";
     assert "PRTRY:TX_SIGNATURE_MISSING".equals(response.rejectCode().orElse(null))
         : "reject header must propagate to ClientResponse";
+  }
+
+  private static String sampleAuthority(final byte seed) {
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, seed);
+    try {
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build sample authority", ex);
+    }
   }
 }
