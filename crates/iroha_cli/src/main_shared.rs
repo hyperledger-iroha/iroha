@@ -7303,6 +7303,70 @@ mod tests {
     }
 
     #[test]
+    fn resolve_scoped_account_for_subject_prefers_single_chain_match() {
+        let key_pair = KeyPair::from_seed(vec![10_u8; 32], Algorithm::Ed25519);
+        let parsed = ScopedAccountId::new(
+            "selector".parse().expect("selector domain"),
+            key_pair.public_key().clone(),
+        );
+        let chain_scoped = ScopedAccountId::new(
+            "nexus".parse().expect("nexus domain"),
+            key_pair.public_key().clone(),
+        );
+        let resolved = resolve_scoped_account_for_subject(
+            &parsed,
+            std::collections::BTreeSet::from([chain_scoped.clone()]),
+        )
+        .expect("subject-aware resolution");
+        assert_eq!(resolved, chain_scoped);
+    }
+
+    #[test]
+    fn resolve_scoped_account_for_subject_keeps_parsed_when_present_in_ambiguous_set() {
+        let key_pair = KeyPair::from_seed(vec![12_u8; 32], Algorithm::Ed25519);
+        let parsed = ScopedAccountId::new(
+            "alpha".parse().expect("alpha domain"),
+            key_pair.public_key().clone(),
+        );
+        let alternative = ScopedAccountId::new(
+            "beta".parse().expect("beta domain"),
+            key_pair.public_key().clone(),
+        );
+        let resolved = resolve_scoped_account_for_subject(
+            &parsed,
+            std::collections::BTreeSet::from([parsed.clone(), alternative]),
+        )
+        .expect("resolution should keep parsed literal");
+        assert_eq!(resolved, parsed);
+    }
+
+    #[test]
+    fn resolve_scoped_account_for_subject_rejects_ambiguous_subject_without_explicit_scope() {
+        let key_pair = KeyPair::from_seed(vec![15_u8; 32], Algorithm::Ed25519);
+        let parsed = ScopedAccountId::new(
+            "gamma".parse().expect("gamma domain"),
+            key_pair.public_key().clone(),
+        );
+        let first = ScopedAccountId::new(
+            "delta".parse().expect("delta domain"),
+            key_pair.public_key().clone(),
+        );
+        let second = ScopedAccountId::new(
+            "epsilon".parse().expect("epsilon domain"),
+            key_pair.public_key().clone(),
+        );
+        let err = resolve_scoped_account_for_subject(
+            &parsed,
+            std::collections::BTreeSet::from([first, second]),
+        )
+        .expect_err("ambiguous subject should be rejected");
+        assert!(
+            err.to_string().contains("multiple scoped accounts"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn stream_timeout_driver_propagates_errors() {
         let mut stream = stream::iter(vec![Result::<DummyEvent, eyre::Report>::Err(eyre!(
             "connection failed"

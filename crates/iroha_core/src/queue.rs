@@ -738,41 +738,12 @@ impl Queue {
                     "`gov_manifest_approvers` metadata entries must not be blank",
                 ));
             }
-            let canonical = if let Ok(account) = AccountId::parse_encoded(trimmed)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            {
-                account.canonical_i105().map_err(|err| {
-                    Self::enforcement_error(
-                        alias,
-                        format!(
-                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                        ),
-                    )
-                })?
-            } else {
-                let prefix = iroha_data_model::account::address::chain_discriminant();
-                let address =
-                    iroha_data_model::account::address::AccountAddress::from_i105_for_discriminant(
-                        trimmed,
-                        Some(prefix),
-                    )
-                    .map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                            ),
-                        )
-                    })?;
-                address.to_i105_for_discriminant(prefix).map_err(|err| {
-                    Self::enforcement_error(
-                        alias,
-                        format!(
-                            "invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"
-                        ),
-                    )
-                })?
-            };
+            let canonical = AccountId::canonicalize(trimmed).map_err(|err| {
+                Self::enforcement_error(
+                    alias,
+                    format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
+                )
+            })?;
             approvals.insert(canonical);
         }
         Ok(approvals)

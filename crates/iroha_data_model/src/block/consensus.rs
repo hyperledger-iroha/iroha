@@ -1859,6 +1859,12 @@ pub struct SumeragiStatusWire {
     /// Missing-block fetch counters after QC-first arrivals.
     #[norito(default)]
     pub missing_block_fetch: SumeragiMissingBlockFetchStatus,
+    /// Committed-edge conflicts reclassified as obsolete/non-actionable dependencies.
+    #[norito(default)]
+    pub committed_edge_conflict_obsolete_total: u64,
+    /// Repeated roster-sidecar mismatch tuples reclassified as obsolete/non-actionable.
+    #[norito(default)]
+    pub roster_sidecar_mismatch_obsolete_total: u64,
     /// DA availability telemetry and last-satisfied snapshot.
     #[norito(default)]
     pub da_gate: SumeragiDaGateStatus,

@@ -188,11 +188,15 @@ impl Actor {
         self.vote_validation_cache.clear();
         self.deferred_votes.clear();
         self.consensus_recovery.clear();
+        self.recovery_pending_baseline_restore.clear();
         self.deferred_qcs.clear();
         self.deferred_qc_roster_state.clear();
         self.deferred_missing_payload_qcs.clear();
         self.quarantined_block_sync_qcs.clear();
         self.vote_roster_cache.clear();
+        self.block_signer_cache.clear();
+        self.block_sync_roster_cache.clear();
+        self.lock_rejected_block_sinks.clear();
         let now = Instant::now();
         let (effective_mode, pacemaker_block_time, pacemaker_timeouts) = {
             let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
@@ -212,7 +216,6 @@ impl Actor {
         };
         let (_, redundant_r) = self.collector_plan_params_for_mode(effective_mode);
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
-        self.no_roster_fallback_recovery.clear();
         self.pending.missing_block_requests.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();
@@ -226,7 +229,19 @@ impl Actor {
         self.qc_missing_payload_range_pull_cooldowns.clear();
         self.block_sync_warning_log.clear();
         self.qc_insufficient_warning_log.clear();
-        self.sidecar_mismatch_action_cooldowns.clear();
+        self.roster_sidecar_mismatch_obsolete.clear();
+        self.sidecar_mismatch_window_gates.clear();
+        self.sidecar_mismatch_committed_edge_gates.clear();
+        self.frontier_catchup_window_gates.clear();
+        self.frontier_catchup_stall = None;
+        self.round_recovery_bundle_window_gates.clear();
+        self.round_liveness = super::RoundLivenessTracker {
+            state: super::RoundLivenessState::Steady,
+            entered_at: now,
+            last_window_at: now,
+            last_progress_height: self.state.committed_height() as u64,
+            stagnation_windows: 0,
+        };
         self.tick_lag_last_progress_at = now;
         self.tick_lag_last_progress_height = self.state.committed_height();
         self.tick_lag_last_progress_queue_len = self.queue.active_len();
@@ -250,6 +265,10 @@ impl Actor {
             &mut self.subsystems.propose.forced_view_after_timeout,
             &mut self.subsystems.propose.last_missing_qc_timeout_trigger,
             &mut self.subsystems.propose.last_missing_qc_reacquire_attempt,
+            &mut self
+                .subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at,
             &mut self.subsystems.propose.proposal_liveness,
             &mut self.subsystems.propose.last_pacemaker_attempt,
             &mut self.subsystems.propose.last_successful_proposal,

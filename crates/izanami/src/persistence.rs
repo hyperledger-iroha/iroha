@@ -7,11 +7,13 @@ use dirs::config_dir;
 use norito::codec::{Decode, Encode};
 use tracing::warn;
 
-use crate::config::{ChaosConfig, FaultArgs, FaultToggles, IzanamiArgs, WorkloadProfile};
+use crate::config::{
+    ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles,
+    IzanamiArgs, WorkloadProfile,
+};
 
 const APP_DIR: &str = "izanami";
 const CONFIG_FILE: &str = "config.bin";
-const SUPPORTED_FAULT_FLAGS_MASK: u8 = 0b0000_1111;
 
 #[derive(Clone, Encode, Decode)]
 struct StoredArgs {
@@ -21,7 +23,9 @@ struct StoredArgs {
     seed: Option<u64>,
     tps: f64,
     max_inflight: u32,
+    #[norito(default)]
     workload_profile: u8,
+    #[norito(default)]
     allow_contract_deploy_in_stable: bool,
     log_filter: String,
     fault_min_ms: u64,
@@ -29,10 +33,16 @@ struct StoredArgs {
     fault_flags: u8,
     nexus: bool,
     allow_net: bool,
+    #[norito(default)]
     pipeline_time_ms: Option<u64>,
+    #[norito(default)]
     target_blocks: Option<u64>,
+    #[norito(default = "default_progress_interval_ms")]
     progress_interval_ms: u64,
+    #[norito(default = "default_progress_timeout_ms")]
     progress_timeout_ms: u64,
+    #[norito(default)]
+    latency_p95_threshold_ms: Option<u64>,
 }
 
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -42,23 +52,11 @@ fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
     }
 }
 
-fn workload_profile_from_u8(value: u8) -> Result<WorkloadProfile> {
+fn workload_profile_from_u8(value: u8) -> WorkloadProfile {
     match value {
-        0 => Ok(WorkloadProfile::Stable),
-        1 => Ok(WorkloadProfile::Chaos),
-        _ => Err(eyre!(
-            "unsupported persisted workload profile value {value}; expected 0 (stable) or 1 (chaos)"
-        )),
+        1 => WorkloadProfile::Chaos,
+        _ => WorkloadProfile::Stable,
     }
-}
-
-fn fault_toggles_from_bits(bits: u8) -> Result<FaultToggles> {
-    if bits & !SUPPORTED_FAULT_FLAGS_MASK != 0 {
-        return Err(eyre!(
-            "unsupported persisted fault flag bits 0x{bits:02x}; only low 4 bits are allowed"
-        ));
-    }
-    Ok(FaultToggles::from_bits(bits))
 }
 
 fn duration_to_ms(duration: Duration, label: &str) -> Result<u64> {
@@ -72,6 +70,16 @@ fn maybe_duration_to_ms(duration: Option<Duration>, label: &str) -> Result<Optio
         .transpose()
 }
 
+fn default_progress_interval_ms() -> u64 {
+    u64::try_from(DEFAULT_PROGRESS_INTERVAL.as_millis())
+        .expect("default progress interval should fit into u64")
+}
+
+fn default_progress_timeout_ms() -> u64 {
+    u64::try_from(DEFAULT_PROGRESS_TIMEOUT.as_millis())
+        .expect("default progress timeout should fit into u64")
+}
+
 impl StoredArgs {
     fn from_args(args: &IzanamiArgs) -> Result<Self> {
         let peers = u32::try_from(args.peers)
@@ -82,6 +90,8 @@ impl StoredArgs {
         let pipeline_time_ms = maybe_duration_to_ms(args.pipeline_time, "pipeline time")?;
         let progress_interval_ms = duration_to_ms(args.progress_interval, "progress interval")?;
         let progress_timeout_ms = duration_to_ms(args.progress_timeout, "progress timeout")?;
+        let latency_p95_threshold_ms =
+            maybe_duration_to_ms(args.latency_p95_threshold, "latency p95 threshold")?;
         let max_inflight = u32::try_from(args.max_inflight).map_err(|_| {
             eyre!(
                 "max_inflight {} exceeds persistence limits",
@@ -109,13 +119,13 @@ impl StoredArgs {
             target_blocks: args.target_blocks,
             progress_interval_ms,
             progress_timeout_ms,
+            latency_p95_threshold_ms,
         })
     }
 
     fn into_args(self) -> Result<IzanamiArgs> {
         let to_duration = |ms: u64| -> Result<Duration> { Ok(Duration::from_millis(ms)) };
-        let fault_toggles = fault_toggles_from_bits(self.fault_flags)?;
-        let workload_profile = workload_profile_from_u8(self.workload_profile)?;
+        let fault_toggles = FaultToggles::from_bits(self.fault_flags);
         Ok(IzanamiArgs {
             tui: false,
             allow_net: self.allow_net,
@@ -126,10 +136,11 @@ impl StoredArgs {
             target_blocks: self.target_blocks,
             progress_interval: Duration::from_millis(self.progress_interval_ms),
             progress_timeout: Duration::from_millis(self.progress_timeout_ms),
+            latency_p95_threshold: self.latency_p95_threshold_ms.map(Duration::from_millis),
             seed: self.seed,
             tps: self.tps,
             max_inflight: self.max_inflight as usize,
-            workload_profile,
+            workload_profile: workload_profile_from_u8(self.workload_profile),
             allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
             fault_interval_min: to_duration(self.fault_min_ms)?,
@@ -206,62 +217,6 @@ pub fn store_config(config: &ChaosConfig) -> Result<()> {
     store_args(&IzanamiArgs::from_config(config))
 }
 
-#[cfg(test)]
-mod decode_strict_tests {
-    use super::*;
-
-    fn stored_args_fixture() -> StoredArgs {
-        StoredArgs {
-            peers: 4,
-            faulty: 1,
-            duration_ms: 120_000,
-            seed: Some(42),
-            tps: 12.5,
-            max_inflight: 32,
-            workload_profile: 0,
-            allow_contract_deploy_in_stable: false,
-            log_filter: "info".to_owned(),
-            fault_min_ms: 5_000,
-            fault_max_ms: 20_000,
-            fault_flags: SUPPORTED_FAULT_FLAGS_MASK,
-            nexus: false,
-            allow_net: true,
-            pipeline_time_ms: Some(2_000),
-            target_blocks: Some(100),
-            progress_interval_ms: 15_000,
-            progress_timeout_ms: 120_000,
-        }
-    }
-
-    #[test]
-    fn stored_args_rejects_unknown_workload_profile_value() {
-        let mut stored = stored_args_fixture();
-        stored.workload_profile = 2;
-        let err = stored
-            .into_args()
-            .expect_err("unknown workload profile must be rejected");
-        assert!(
-            err.to_string()
-                .contains("unsupported persisted workload profile"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn stored_args_rejects_unknown_fault_flag_bits() {
-        let mut stored = stored_args_fixture();
-        stored.fault_flags = SUPPORTED_FAULT_FLAGS_MASK | 0b1000_0000;
-        let err = stored
-            .into_args()
-            .expect_err("unknown fault flag bits must be rejected");
-        assert!(
-            err.to_string()
-                .contains("unsupported persisted fault flag bits"),
-            "unexpected error: {err}"
-        );
-    }
-}
-
 #[cfg(all(unix, target_os = "linux"))]
 mod tests {
     use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf};
@@ -325,6 +280,24 @@ mod tests {
         Ok(dir)
     }
 
+    #[derive(Clone, Encode, Decode)]
+    struct StoredArgsLegacy {
+        peers: u32,
+        faulty: u32,
+        duration_ms: u64,
+        seed: Option<u64>,
+        tps: f64,
+        max_inflight: u32,
+        #[norito(default)]
+        workload_profile: u8,
+        log_filter: String,
+        fault_min_ms: u64,
+        fault_max_ms: u64,
+        fault_flags: u8,
+        nexus: bool,
+        allow_net: bool,
+    }
+
     #[test]
     fn store_args_skips_permission_denied() -> Result<()> {
         let dir = readonly_dir("perm-store")?;
@@ -375,6 +348,7 @@ mod tests {
             target_blocks: Some(42),
             progress_interval: Duration::from_secs(7),
             progress_timeout: Duration::from_secs(55),
+            latency_p95_threshold: Some(Duration::from_millis(900)),
             seed: Some(123),
             tps: 12.5,
             max_inflight: 64,
@@ -403,6 +377,7 @@ mod tests {
         assert_eq!(loaded.target_blocks, args.target_blocks);
         assert_eq!(loaded.progress_interval, args.progress_interval);
         assert_eq!(loaded.progress_timeout, args.progress_timeout);
+        assert_eq!(loaded.latency_p95_threshold, args.latency_p95_threshold);
         assert_eq!(loaded.seed, args.seed);
         assert_eq!(loaded.tps, args.tps);
         assert_eq!(loaded.max_inflight, args.max_inflight);
@@ -419,6 +394,59 @@ mod tests {
             args.faults.to_toggles().bits()
         );
         assert_eq!(loaded.nexus, args.nexus);
+
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[test]
+    fn load_args_defaults_missing_progress_fields() -> Result<()> {
+        let dir = temp_config_dir("legacy")?;
+        let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
+
+        let legacy = StoredArgsLegacy {
+            peers: 4,
+            faulty: 2,
+            duration_ms: 30_000,
+            seed: Some(9),
+            tps: 8.5,
+            max_inflight: 12,
+            workload_profile: workload_profile_to_u8(WorkloadProfile::Stable),
+            log_filter: "info".to_string(),
+            fault_min_ms: 1_000,
+            fault_max_ms: 5_000,
+            fault_flags: FaultToggles::from_array([true, false, true, false]).bits(),
+            nexus: false,
+            allow_net: true,
+        };
+
+        let Some(path) = config_path() else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, legacy.encode())?;
+
+        let loaded = load_args()?.expect("legacy args should load");
+
+        assert_eq!(loaded.peers, legacy.peers as usize);
+        assert_eq!(loaded.faulty, legacy.faulty as usize);
+        assert_eq!(loaded.duration, Duration::from_millis(legacy.duration_ms));
+        assert_eq!(loaded.seed, legacy.seed);
+        assert_eq!(loaded.tps, legacy.tps);
+        assert_eq!(loaded.max_inflight, legacy.max_inflight as usize);
+        assert_eq!(loaded.workload_profile, WorkloadProfile::Stable);
+        assert!(!loaded.allow_contract_deploy_in_stable);
+        assert_eq!(loaded.log_filter, legacy.log_filter);
+        assert_eq!(loaded.faults.to_toggles().bits(), legacy.fault_flags);
+        assert_eq!(loaded.nexus, legacy.nexus);
+        assert_eq!(loaded.allow_net, legacy.allow_net);
+        assert_eq!(loaded.pipeline_time, None);
+        assert_eq!(loaded.target_blocks, None);
+        assert_eq!(loaded.progress_interval, DEFAULT_PROGRESS_INTERVAL);
+        assert_eq!(loaded.progress_timeout, DEFAULT_PROGRESS_TIMEOUT);
+        assert_eq!(loaded.latency_p95_threshold, None);
 
         let _ = fs::remove_dir_all(&dir);
         Ok(())

@@ -33,12 +33,8 @@ pub(super) fn ensure_locked_qc_allows(
         });
     }
     if highest_height == locked_height && highest.subject_block_hash != locked.subject_block_hash {
-        // Same-height lock conflicts can happen during view churn when nodes are temporarily on
-        // different branches. Allow a strictly newer view to replace the stale lock so progress
-        // can converge on a single branch.
-        if highest.view > locked.view {
-            return Ok(());
-        }
+        // Same-height hash divergence must fail closed; accepting cross-branch replacement at the
+        // same height can lead to non-deterministic lock transitions across peers.
         return Err(LockedQcRejection::HashMismatch {
             locked: locked.subject_block_hash,
             highest: highest.subject_block_hash,

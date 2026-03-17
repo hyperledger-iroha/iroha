@@ -700,6 +700,8 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         commit_pipeline_tick_total: rng.next_u64(),
         da_reschedule_total: rng.next_u64(),
         missing_block_fetch: rng_missing_block_fetch(rng),
+        committed_edge_conflict_obsolete_total: rng.next_u64(),
+        roster_sidecar_mismatch_obsolete_total: rng.next_u64(),
         da_gate: rng_da_gate(rng),
         kura_store: rng_kura_store(rng),
         rbc_store: rng_rbc_store(rng),
@@ -1422,6 +1424,8 @@ fn sumeragi_wire_status_roundtrip() {
             last_targets: 2,
             last_dwell_ms: 7,
         },
+        committed_edge_conflict_obsolete_total: 9,
+        roster_sidecar_mismatch_obsolete_total: 4,
         da_gate: SumeragiDaGateStatus {
             reason: SumeragiDaGateReason::MissingLocalData,
             last_satisfied: SumeragiDaGateSatisfaction::MissingDataRecovered,

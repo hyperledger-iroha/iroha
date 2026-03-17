@@ -193,6 +193,13 @@ impl PendingBlock {
             .is_none_or(|last| now.saturating_duration_since(last) >= backoff)
     }
 
+    pub(super) fn vote_backed_reschedule_due(&self, now: Instant, backoff: Duration) -> bool {
+        self.progress_age(now) >= backoff
+            && self
+                .last_quorum_reschedule
+                .is_none_or(|last| self.last_progress > last)
+    }
+
     pub(super) fn mark_quorum_reschedule(&mut self, now: Instant) {
         self.last_quorum_reschedule = Some(now);
     }
@@ -432,6 +439,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -498,5 +506,39 @@ mod tests {
         let age_after = pending.progress_age(now);
         assert!(age_before >= age_after);
         assert_eq!(age_after, Duration::ZERO);
+    }
+
+    #[test]
+    fn vote_backed_reschedule_requires_progress_after_last_attempt() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let now = Instant::now();
+        let backoff = Duration::from_millis(1);
+
+        pending.touch_progress(now);
+        assert!(
+            !pending.vote_backed_reschedule_due(now, backoff),
+            "vote-backed reschedule should wait for stale progress even on the first attempt"
+        );
+
+        let first_due = now + backoff + Duration::from_millis(1);
+        assert!(
+            pending.vote_backed_reschedule_due(first_due, backoff),
+            "first vote-backed reschedule should be allowed"
+        );
+
+        pending.mark_quorum_reschedule(first_due);
+        let later = first_due + backoff + Duration::from_millis(1);
+        assert!(
+            !pending.vote_backed_reschedule_due(later, backoff),
+            "duplicate vote-backed reschedule should wait for real progress"
+        );
+
+        pending.touch_progress(later);
+        let later_still = later + backoff + Duration::from_millis(1);
+        assert!(
+            pending.vote_backed_reschedule_due(later_still, backoff),
+            "fresh progress should rearm vote-backed reschedule"
+        );
     }
 }

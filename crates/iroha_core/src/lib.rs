@@ -614,6 +614,7 @@ mod tests {
             height: 1,
             view: 0,
             priority: None,
+            requester_roster_proof_known: None,
         };
         let fetch_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::FetchPendingBlock(fetch),

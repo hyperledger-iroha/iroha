@@ -22,6 +22,9 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::*,
 };
+use iroha_executor_data_model::permission::{
+    governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
+};
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
 };
@@ -843,6 +846,7 @@ fn generate_localnet_with_line<T: Write>(
         opts.consensus_mode,
         opts.next_consensus_mode,
     );
+    genesis = append_localnet_contract_permissions(genesis);
     genesis = append_peer_pop(genesis, &peers);
     if npos_bootstrap {
         let gas_account_id = gas_account_id
@@ -1812,6 +1816,23 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
         .build_raw()
 }
 
+fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGenesisTransaction {
+    let enact_governance: Permission = CanEnactGovernance.into();
+    let register_contract_code: Permission = CanRegisterSmartContractCode.into();
+    genesis
+        .into_builder()
+        .next_transaction()
+        .append_instruction(Grant::account_permission(
+            enact_governance,
+            ALICE_ID.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            register_contract_code,
+            ALICE_ID.clone(),
+        ))
+        .build_raw()
+}
+
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
     accounts: BTreeSet<AccountId>,
@@ -2277,6 +2298,7 @@ mod tests {
             opts.consensus_mode,
             opts.next_consensus_mode,
         );
+        genesis = append_localnet_contract_permissions(genesis);
         genesis = append_peer_pop(genesis, &peers);
         if npos_bootstrap {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key);

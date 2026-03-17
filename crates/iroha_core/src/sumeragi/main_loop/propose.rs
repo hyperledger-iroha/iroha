@@ -5,6 +5,10 @@ use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
 use core::num::{NonZeroU64, NonZeroUsize};
+use iroha_data_model::consensus::{
+    CommitStakeSnapshot as ModelCommitStakeSnapshot,
+    CommitStakeSnapshotEntry as ModelCommitStakeSnapshotEntry, PreviousRosterEvidence,
+};
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
 pub(super) fn resolve_prev_block_for_proposal(
@@ -54,6 +58,37 @@ fn precommit_qc_for_view_change(
         (None, Some(committed)) => Some(committed),
         (None, None) => None,
     }
+}
+
+fn model_stake_snapshot(
+    snapshot: crate::sumeragi::stake_snapshot::CommitStakeSnapshot,
+) -> ModelCommitStakeSnapshot {
+    ModelCommitStakeSnapshot {
+        validator_set_hash: snapshot.validator_set_hash,
+        entries: snapshot
+            .entries
+            .into_iter()
+            .map(|entry| ModelCommitStakeSnapshotEntry {
+                peer_id: entry.peer_id,
+                stake: entry.stake,
+            })
+            .collect(),
+    }
+}
+
+fn previous_roster_evidence_for_parent(
+    state: &State,
+    parent_block: &SignedBlock,
+) -> Option<PreviousRosterEvidence> {
+    let parent_height = parent_block.header().height().get();
+    let parent_hash = parent_block.hash();
+    let snapshot = state.commit_roster_snapshot_for_block(parent_height, parent_hash)?;
+    Some(PreviousRosterEvidence {
+        height: parent_height,
+        block_hash: parent_hash,
+        validator_checkpoint: snapshot.validator_checkpoint,
+        stake_snapshot: snapshot.stake_snapshot.map(model_stake_snapshot),
+    })
 }
 
 fn next_cached_slot_timeout_streak(
@@ -935,6 +970,9 @@ impl Actor {
             .cloned()
             .zip(routing_batch.iter().copied())
             .collect();
+        let previous_roster_evidence = prev_block
+            .as_deref()
+            .and_then(|parent| previous_roster_evidence_for_parent(self.state.as_ref(), parent));
         let mut removed_for_chunk_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
             Vec::new();
         let mut removed_for_frame_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
@@ -961,6 +999,13 @@ impl Actor {
                 let lane_config = nexus.lane_config.clone();
                 let mut builder =
                     BlockBuilder::new(tx_batch.clone()).chain(view, prev_block.as_deref());
+                if proposal_height > 2 && previous_roster_evidence.is_none() {
+                    return Err(eyre!(
+                        "missing previous-roster evidence for parent block at height {}",
+                        proposal_height.saturating_sub(1),
+                    ));
+                }
+                builder = builder.with_previous_roster_evidence(previous_roster_evidence.clone());
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();
@@ -1981,6 +2026,19 @@ impl Actor {
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_pacemaker_propose_ready(&mut self, now: Instant) -> bool {
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
+        if self.round_liveness_isolated() {
+            self.subsystems.propose.pacemaker.next_deadline = now
+                .checked_add(
+                    self.subsystems
+                        .propose
+                        .pacemaker
+                        .propose_interval
+                        .max(Duration::from_millis(1)),
+                )
+                .unwrap_or(now);
+            debug!("suppressing proposal path while round liveness catch-up isolation is active");
+            return false;
+        }
         let prev_attempt = self.subsystems.propose.last_pacemaker_attempt.replace(now);
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
@@ -2037,7 +2095,7 @@ impl Actor {
             .drop_below_height(tracked_height);
 
         if topology_peers.is_empty() {
-            let _ = self.handle_empty_commit_topology_recovery(
+            let _ = self.handle_roster_unavailable_recovery(
                 tracked_height,
                 tracked_view,
                 tip_hash,
@@ -2100,7 +2158,7 @@ impl Actor {
                 .last_successful_proposal
                 .map(|ts| now.saturating_duration_since(ts));
             iroha_logger::info!(
-                height = view_height,
+                height = tracked_height,
                 view = current_view,
                 view_age_ms = view_age.map(|d| d.as_millis()),
                 pending_blocks = self.pending.pending_blocks.len(),
@@ -2217,12 +2275,12 @@ impl Actor {
                 queue_len = pending_queue_len,
                 topology_len = topology.as_ref().len(),
                 required,
-                height = view_height,
+                height = tracked_height,
                 "pacemaker evaluating proposal assembly with queued transactions"
             );
             if active_pending > 0 {
                 iroha_logger::debug!(
-                    height = view_height,
+                    height = tracked_height,
                     pending = active_pending,
                     "pending block already assembled for current slot; waiting for view-change"
                 );
@@ -2237,7 +2295,7 @@ impl Actor {
             .map(|((h, v), entry)| format!("{h}:{v}={}", entry.senders.len()))
             .collect();
         debug!(
-            height = view_height,
+            height = tracked_height,
             required,
             local_idx = ?local_idx,
             forced = ?self.subsystems.propose.forced_view_after_timeout,
@@ -2304,7 +2362,7 @@ impl Actor {
         }) else {
             debug!(
                 queue_len = pending_queue_len,
-                height = view_height,
+                height = tracked_height,
                 required,
                 local_idx = ?local_idx,
                 new_view_slots = ?new_view_summary,
@@ -2487,21 +2545,46 @@ impl Actor {
                         height,
                         view_idx,
                     );
-                    warn!(
-                        height,
-                        view = view_idx,
-                        queue_len = pending_queue_len,
-                        wait_age_ms,
-                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
-                        base_quorum_timeout_ms = quorum_timeout.as_millis(),
-                        timeout_streak,
-                        "cached proposal slot stalled past quorum timeout; forcing view change"
-                    );
-                    self.trigger_view_change_with_cause(
-                        height,
-                        view_idx,
-                        ViewChangeCause::QuorumTimeout,
-                    );
+                    let committed_height = self.committed_height_snapshot();
+                    let contiguous_frontier = height == committed_height.saturating_add(1);
+                    if contiguous_frontier {
+                        warn!(
+                            height,
+                            view = view_idx,
+                            queue_len = pending_queue_len,
+                            wait_age_ms,
+                            quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                            base_quorum_timeout_ms = quorum_timeout.as_millis(),
+                            timeout_streak,
+                            "cached proposal slot stalled past quorum timeout; routing through unified frontier recovery"
+                        );
+                        self.seed_frontier_recovery_for_quorum_timeout(height, view_idx, now);
+                        let _ = self.advance_frontier_recovery(
+                            "quorum_timeout",
+                            height,
+                            view_idx,
+                            false,
+                            true,
+                            true,
+                            now,
+                        );
+                    } else {
+                        warn!(
+                            height,
+                            view = view_idx,
+                            queue_len = pending_queue_len,
+                            wait_age_ms,
+                            quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                            base_quorum_timeout_ms = quorum_timeout.as_millis(),
+                            timeout_streak,
+                            "cached proposal slot stalled past quorum timeout; forcing view change"
+                        );
+                        self.trigger_view_change_with_cause(
+                            height,
+                            view_idx,
+                            ViewChangeCause::QuorumTimeout,
+                        );
+                    }
                     self.subsystems.propose.last_cached_slot_timeout_trigger =
                         Some(CachedSlotTimeoutTrigger {
                             height,
@@ -2520,6 +2603,9 @@ impl Actor {
                     queue_len = pending_queue_len,
                     "proposal already cached for this slot; waiting for votes/view change"
                 );
+                // Provide one cooldown-gated NEW_VIEW assist while waiting so peers that
+                // missed prior messages can converge without immediate view rotation.
+                self.maybe_rebroadcast_new_view_votes(height, now);
             } else {
                 trace!(
                     height,
@@ -2681,19 +2767,36 @@ impl Actor {
                         );
                     }
                     if highest_missing {
-                        iroha_logger::info!(
-                            ?reason,
-                            height,
-                            view = view_idx,
-                            queue_len = pending_queue_len,
-                            highest_hash = ?highest_qc.subject_block_hash,
-                            locked_hash = ?locked_hash,
-                            "highest QC block missing locally; deferring proposal"
-                        );
                         if self
-                            .mark_highest_qc_missing_defer_for_round(height, view_idx, highest_qc)
+                            .suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal")
                         {
+                            self.clear_missing_block_view_change(&highest_qc.subject_block_hash);
+                            return false;
+                        }
+                        let first_defer_in_round = self
+                            .mark_highest_qc_missing_defer_for_round(height, view_idx, highest_qc);
+                        if first_defer_in_round {
                             self.observe_new_view_highest_qc(highest_qc);
+                        }
+                        if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                            ProposalDeferWarningKind::HighestQcMissing,
+                            height,
+                            view_idx,
+                            highest_qc.subject_block_hash,
+                            now,
+                            Duration::from_secs(5),
+                        ) {
+                            iroha_logger::warn!(
+                                ?reason,
+                                height,
+                                view = view_idx,
+                                queue_len = pending_queue_len,
+                                highest_hash = ?highest_qc.subject_block_hash,
+                                locked_hash = ?locked_hash,
+                                suppressed_since_last,
+                                first_defer_in_round,
+                                "highest QC block missing locally; deferring proposal"
+                            );
                         }
                         return false;
                     }
@@ -2809,7 +2912,7 @@ impl Actor {
 
         let proposal_roster = active_topology_peers;
         if proposal_roster.is_empty() {
-            let _ = self.handle_empty_commit_topology_recovery(
+            let _ = self.handle_roster_unavailable_recovery(
                 height,
                 view_idx,
                 Some(highest_qc.subject_block_hash),

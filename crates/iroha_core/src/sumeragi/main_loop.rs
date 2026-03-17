@@ -2749,7 +2749,8 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::InvalidGenesis(_)
         | BlockValidationError::BlockInThePast
         | BlockValidationError::BlockInTheFuture
-        | BlockValidationError::TransactionInTheFuture => VALIDATION_REASON_STATELESS,
+        | BlockValidationError::TransactionInTheFuture
+        | BlockValidationError::PreviousRosterEvidenceInvalid(_) => VALIDATION_REASON_STATELESS,
     }
 }
 
@@ -3006,6 +3007,22 @@ fn note_missing_block_request_dependency_progress(
     true
 }
 
+fn touch_missing_block_request_control_activity(
+    requests: &mut BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    now: Instant,
+) -> bool {
+    let Some(stats) = requests.get_mut(&block_hash) else {
+        return false;
+    };
+    if stats.height != height {
+        return false;
+    }
+    stats.last_requested = now;
+    true
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum MissingBlockFetchDecision {
     Requested {
@@ -3053,6 +3070,7 @@ fn plan_missing_block_fetch(
         view_change_window,
         signer_fallback_attempts,
         MissingBlockFetchMode::Default,
+        false,
     )
 }
 
@@ -3072,8 +3090,11 @@ fn plan_missing_block_fetch_with_mode(
     view_change_window: Option<Duration>,
     signer_fallback_attempts: u32,
     mode: MissingBlockFetchMode,
+    // Force one fetch emission even when the retry window has not elapsed.
+    // Callers are responsible for applying their own per-window gate.
+    force_retry_now: bool,
 ) -> MissingBlockFetchDecision {
-    if !touch_missing_block_request(
+    let retry_due = touch_missing_block_request(
         requests,
         block_hash,
         height,
@@ -3083,7 +3104,8 @@ fn plan_missing_block_fetch_with_mode(
         now,
         retry_window,
         view_change_window,
-    ) {
+    );
+    if !retry_due && !force_retry_now {
         return MissingBlockFetchDecision::Backoff;
     }
 
@@ -3131,24 +3153,18 @@ fn block_sync_quorum_available(
     block_height: u64,
     local_height: u64,
 ) -> bool {
-    // Require commit evidence unless we explicitly requested this missing payload.
-    if commit_cert_present || qc_evidence_present || signature_quorum_met || checkpoint_present {
-        return true;
-    }
-
-    if block_signers == 0 {
-        return missing_block_requested;
-    }
-
-    if !missing_block_requested {
-        return false;
-    }
-
-    // For recovery we can request payloads far ahead of the local tip (for example after
-    // prolonged lag). Keep accepting sparse signatures for explicitly requested hashes so the
-    // FSM can hydrate pending payloads and converge back to the canonical chain.
-    let _ = (block_height, local_height);
-    true
+    // Sparse block-sync payloads are only accepted without commit-role quorum when the node has an
+    // explicit contiguous-frontier missing-block request for this height and the payload still
+    // carries at least one validated block signature. Finalization still requires the usual
+    // downstream QC / vote thresholds.
+    let explicit_frontier_sparse_recovery = missing_block_requested
+        && block_height == local_height.saturating_add(1)
+        && block_signers > 0;
+    commit_cert_present
+        || qc_evidence_present
+        || signature_quorum_met
+        || checkpoint_present
+        || explicit_frontier_sparse_recovery
 }
 
 fn block_sync_commit_cert_present(
@@ -3159,6 +3175,30 @@ fn block_sync_commit_cert_present(
     commit_cert_hint_present && incoming_qc_validated && !conflicts_locked
 }
 
+fn build_fetch_pending_block_request(
+    requester: PeerId,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    priority: MissingBlockPriority,
+    requester_roster_proof_known: bool,
+) -> super::message::FetchPendingBlock {
+    let priority = match priority {
+        MissingBlockPriority::Consensus => {
+            Some(super::message::FetchPendingBlockPriority::Consensus)
+        }
+        MissingBlockPriority::Background => None,
+    };
+    super::message::FetchPendingBlock {
+        requester,
+        block_hash,
+        height,
+        view,
+        priority,
+        requester_roster_proof_known: requester_roster_proof_known.then_some(true),
+    }
+}
+
 fn send_missing_block_request(
     network: &IrohaNetwork,
     peer_id: &PeerId,
@@ -3166,25 +3206,21 @@ fn send_missing_block_request(
     height: u64,
     view: u64,
     priority: MissingBlockPriority,
+    requester_roster_proof_known: bool,
     targets: &[PeerId],
 ) {
     if targets.is_empty() {
         return;
     }
 
-    let priority = match priority {
-        MissingBlockPriority::Consensus => {
-            Some(super::message::FetchPendingBlockPriority::Consensus)
-        }
-        MissingBlockPriority::Background => None,
-    };
-    let request = super::message::FetchPendingBlock {
-        requester: peer_id.clone(),
+    let request = build_fetch_pending_block_request(
+        peer_id.clone(),
         block_hash,
         height,
         view,
         priority,
-    };
+        requester_roster_proof_known,
+    );
     let message = Arc::new(BlockMessage::FetchPendingBlock(request));
     let encoded = Arc::new(BlockMessageWire::encode_message(message.as_ref()));
     let post = crate::NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::with_encoded(
@@ -3285,6 +3321,7 @@ where
         view_change_window,
         signer_fallback_attempts,
         mode,
+        false,
     );
     let (dwell, since_last_request, attempts) = requests.get(&block_hash).map_or(
         (Duration::ZERO, Duration::ZERO, 0),
@@ -3392,6 +3429,396 @@ fn clear_missing_block_request(
 }
 
 impl Actor {
+    const fn deferred_qc_phase_payload_hint_rank(phase: crate::sumeragi::consensus::Phase) -> u8 {
+        match phase {
+            crate::sumeragi::consensus::Phase::Commit => 3,
+            crate::sumeragi::consensus::Phase::Prepare => 2,
+            crate::sumeragi::consensus::Phase::NewView => 1,
+        }
+    }
+
+    fn lock_rejected_block_sink_ttl(&self) -> Duration {
+        self.frontier_catchup_stall_window()
+            .max(self.missing_qc_height_stall_window())
+            .max(self.recovery_missing_block_height_ttl())
+            .max(Duration::from_millis(1))
+            .saturating_mul(4)
+    }
+
+    fn lock_rejected_block_sink_max_dwell(&self) -> Duration {
+        self.lock_rejected_block_sink_ttl()
+            .max(Duration::from_millis(1))
+            .saturating_mul(2)
+    }
+
+    fn lock_rejected_block_sink_active(
+        &self,
+        state: LockRejectedBlockSinkState,
+        now: Instant,
+    ) -> bool {
+        if now.saturating_duration_since(state.first_seen)
+            > self.lock_rejected_block_sink_max_dwell()
+        {
+            return false;
+        }
+        if now.saturating_duration_since(state.last_seen) > self.lock_rejected_block_sink_ttl() {
+            return false;
+        }
+        if self.committed_height_snapshot() >= state.height {
+            return false;
+        }
+        if self.block_payload_available_locally(state.block_hash) {
+            return false;
+        }
+        let Some(lock) = self.locked_qc else {
+            return false;
+        };
+        lock.height == state.locked_height && lock.subject_block_hash == state.locked_hash
+    }
+
+    fn prune_lock_rejected_block_sinks(&mut self, now: Instant) {
+        let ttl = self.lock_rejected_block_sink_ttl();
+        let max_dwell = self.lock_rejected_block_sink_max_dwell();
+        let committed_height = self.committed_height_snapshot();
+        let lock = self.locked_qc;
+        let stale: Vec<_> = self
+            .lock_rejected_block_sinks
+            .iter()
+            .filter_map(|(key, state)| {
+                let lock_matches = lock.is_some_and(|locked| {
+                    locked.height == state.locked_height
+                        && locked.subject_block_hash == state.locked_hash
+                });
+                let active = now.saturating_duration_since(state.last_seen) <= ttl
+                    && now.saturating_duration_since(state.first_seen) <= max_dwell
+                    && committed_height < state.height
+                    && !self.block_payload_available_locally(state.block_hash)
+                    && lock_matches;
+                (!active).then_some(*key)
+            })
+            .collect();
+        for key in stale {
+            self.lock_rejected_block_sinks.remove(&key);
+        }
+    }
+
+    fn clear_lock_rejected_block_sinks_for_height(&mut self, height: u64) -> usize {
+        let before = self.lock_rejected_block_sinks.len();
+        self.lock_rejected_block_sinks
+            .retain(|(entry_height, _), _| *entry_height != height);
+        before.saturating_sub(self.lock_rejected_block_sinks.len())
+    }
+
+    fn active_lock_rejected_block_sink(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<LockRejectedBlockSinkState> {
+        let now = Instant::now();
+        self.prune_lock_rejected_block_sinks(now);
+        let key = (height, block_hash);
+        let state = self.lock_rejected_block_sinks.get(&key).copied()?;
+        if !self.lock_rejected_block_sink_active(state, now) {
+            return None;
+        }
+        if let Some(entry) = self.lock_rejected_block_sinks.get_mut(&key) {
+            entry.last_seen = now;
+        }
+        Some(state)
+    }
+
+    fn note_lock_rejected_block(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        locked_height: u64,
+        locked_hash: HashOf<BlockHeader>,
+        source: &'static str,
+    ) {
+        if block_hash == locked_hash {
+            return;
+        }
+        let now = Instant::now();
+        self.prune_lock_rejected_block_sinks(now);
+        match self.lock_rejected_block_sinks.entry((height, block_hash)) {
+            Entry::Occupied(mut occupied) => {
+                let state = occupied.get_mut();
+                if state.locked_height != locked_height || state.locked_hash != locked_hash {
+                    *state = LockRejectedBlockSinkState {
+                        height,
+                        block_hash,
+                        locked_height,
+                        locked_hash,
+                        first_seen: now,
+                        last_seen: now,
+                        rejections: 1,
+                        fetch_suppressions: 0,
+                        last_reject_source: source,
+                    };
+                } else {
+                    state.last_seen = now;
+                    state.rejections = state.rejections.saturating_add(1);
+                    state.last_reject_source = source;
+                }
+            }
+            Entry::Vacant(vacant) => {
+                vacant.insert(LockRejectedBlockSinkState {
+                    height,
+                    block_hash,
+                    locked_height,
+                    locked_hash,
+                    first_seen: now,
+                    last_seen: now,
+                    rejections: 1,
+                    fetch_suppressions: 0,
+                    last_reject_source: source,
+                });
+            }
+        }
+    }
+
+    fn should_suppress_lock_rejected_block_fetch(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        source: &'static str,
+    ) -> bool {
+        let Some(state) = self.active_lock_rejected_block_sink(height, block_hash) else {
+            return false;
+        };
+        if let Some(entry) = self
+            .lock_rejected_block_sinks
+            .get_mut(&(height, block_hash))
+        {
+            entry.fetch_suppressions = entry.fetch_suppressions.saturating_add(1);
+        }
+        let updated = self
+            .lock_rejected_block_sinks
+            .get(&(height, block_hash))
+            .copied()
+            .unwrap_or(state);
+        debug!(
+            height,
+            block = %block_hash,
+            locked_height = updated.locked_height,
+            locked_hash = %updated.locked_hash,
+            sink_dwell_ms = Instant::now()
+                .saturating_duration_since(updated.first_seen)
+                .as_millis(),
+            rejections = updated.rejections,
+            fetch_suppressions = updated.fetch_suppressions,
+            last_reject_source = updated.last_reject_source,
+            source,
+            "suppressing missing-block fetch for lock-rejected branch hash"
+        );
+        true
+    }
+
+    fn purge_lock_rejected_block_artifacts(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> (
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+    ) {
+        let vote_keys: Vec<_> = self
+            .vote_log
+            .iter()
+            .filter(|(_, vote)| vote.height == height && vote.block_hash == block_hash)
+            .map(|(key, _)| *key)
+            .collect();
+        let vote_removed = vote_keys.len();
+        for key in vote_keys {
+            self.vote_log.remove(&key);
+            self.vote_validation_cache.remove(&key);
+        }
+
+        let qc_cache_before = self.qc_cache.len();
+        self.qc_cache.retain(|(_, hash, entry_height, _, _), _| {
+            *entry_height != height || *hash != block_hash
+        });
+        let qc_cache_removed = qc_cache_before.saturating_sub(self.qc_cache.len());
+
+        let qc_tally_before = self.qc_signer_tally.len();
+        self.qc_signer_tally
+            .retain(|(_, hash, entry_height, _, _), _| {
+                *entry_height != height || *hash != block_hash
+            });
+        let qc_tally_removed = qc_tally_before.saturating_sub(self.qc_signer_tally.len());
+
+        let deferred_roster_before = self.deferred_qc_roster_state.len();
+        self.deferred_qc_roster_state
+            .retain(|(_, hash, entry_height, _, _), _| {
+                *entry_height != height || *hash != block_hash
+            });
+        let deferred_roster_removed =
+            deferred_roster_before.saturating_sub(self.deferred_qc_roster_state.len());
+
+        let known_work_before = self.known_block_qc_work.len();
+        self.known_block_qc_work
+            .retain(|(_, hash, entry_height, _, _), _| {
+                *entry_height != height || *hash != block_hash
+            });
+        let known_work_removed = known_work_before.saturating_sub(self.known_block_qc_work.len());
+
+        let deferred_updates_before = self.deferred_block_sync_updates.len();
+        self.deferred_block_sync_updates
+            .retain(|(entry_height, _, hash), _| *entry_height != height || *hash != block_hash);
+        let deferred_updates_removed =
+            deferred_updates_before.saturating_sub(self.deferred_block_sync_updates.len());
+
+        let markers_before = self
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .len();
+        self.subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .retain(|(entry_height, _, hash)| *entry_height != height || *hash != block_hash);
+        let markers_removed = markers_before.saturating_sub(
+            self.subsystems
+                .propose
+                .highest_qc_missing_defer_markers
+                .len(),
+        );
+        let hints_removed = usize::from(
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(height, view)
+                .is_some(),
+        );
+        let proposals_removed = usize::from(
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(height, view)
+                .is_some(),
+        );
+
+        self.vote_roster_cache.remove(&block_hash);
+        self.block_signer_cache.remove_block(&block_hash);
+        self.pending.pending_fetch_requests.remove(&block_hash);
+        self.clear_missing_payload_fetch_window_gate_for_block(height, block_hash);
+        self.clear_missing_block_view_change(&block_hash);
+        let pending_removed =
+            usize::from(self.pending.pending_blocks.remove(&block_hash).is_some());
+        if pending_removed > 0 {
+            self.subsystems.validation.inflight.remove(&block_hash);
+            self.subsystems
+                .validation
+                .superseded_results
+                .remove(&block_hash);
+        }
+        self.clean_rbc_sessions_for_block(block_hash, height);
+
+        (
+            vote_removed,
+            qc_cache_removed,
+            qc_tally_removed,
+            deferred_roster_removed,
+            known_work_removed,
+            deferred_updates_removed,
+            markers_removed,
+            pending_removed,
+            hints_removed,
+            proposals_removed,
+        )
+    }
+
+    fn contiguous_frontier_qc_payload_hint_hash(
+        &self,
+        frontier_height: u64,
+    ) -> Option<HashOf<BlockHeader>> {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        let deferred_hint = self
+            .deferred_missing_payload_qcs
+            .values()
+            .filter(|entry| {
+                entry.qc.height == frontier_height
+                    && !self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+            .max_by_key(|entry| {
+                (
+                    Self::deferred_qc_phase_payload_hint_rank(entry.qc.phase),
+                    entry.qc.view,
+                    entry.qc.subject_block_hash,
+                )
+            })
+            .map(|entry| entry.qc.subject_block_hash);
+        if deferred_hint.is_some() {
+            return deferred_hint;
+        }
+        self.subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .iter()
+            .filter(|(height, _, hash)| {
+                *height == frontier_height
+                    && !self.missing_hash_is_non_actionable_dependency(
+                        *height,
+                        *hash,
+                        committed_height,
+                        now,
+                    )
+            })
+            .max_by_key(|(_, view, hash)| (*view, *hash))
+            .map(|(_, _, hash)| *hash)
+    }
+
+    fn should_retarget_contiguous_frontier_parent_from_qc_hint(
+        &self,
+        frontier_height: u64,
+        local_height: u64,
+    ) -> bool {
+        if self.frontier_catchup_stall_mode_active_at_frontier(frontier_height, local_height) {
+            return true;
+        }
+        let dependency_progress_now =
+            self.frontier_catchup_unresolved_dependency_progress_at_height(frontier_height);
+        self.canonical_frontier_reanchor_dependency_progress_since_last_emit_unchanged(
+            frontier_height,
+            frontier_height,
+            dependency_progress_now,
+        )
+    }
+
+    fn should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
+        &self,
+        frontier_height: u64,
+        local_height: u64,
+    ) -> bool {
+        if self.sidecar_quarantined_for_height(frontier_height) {
+            return false;
+        }
+        if self.frontier_catchup_stall_mode_active_at_frontier(frontier_height, local_height) {
+            return false;
+        }
+        let dependency_progress_now =
+            self.frontier_catchup_unresolved_dependency_progress_at_height(frontier_height);
+        !self.canonical_frontier_reanchor_dependency_progress_since_last_emit_unchanged(
+            frontier_height,
+            frontier_height,
+            dependency_progress_now,
+        )
+    }
+
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn request_missing_parent(
         &mut self,
@@ -3405,38 +3832,125 @@ impl Actor {
         actual_height: Option<usize>,
         trigger: &'static str,
     ) {
-        if self.block_payload_available_locally(parent_hash) {
-            return;
-        }
         let local_height = self.committed_height_snapshot();
         if block_height <= local_height.saturating_add(1) {
             return;
         }
-        let gap = block_height.saturating_sub(local_height.saturating_add(1));
+        let frontier_height = local_height.saturating_add(1);
+        let direct_parent_height_ceiling = frontier_height.saturating_add(1);
         let parent_height = block_height.saturating_sub(1);
+        if parent_height > direct_parent_height_ceiling {
+            // Invariant A: recover contiguously from committed_height + 1 instead of
+            // repeatedly chasing far-future parent branches.
+            let now = Instant::now();
+            let requested_pull =
+                self.request_range_pull_from_anchor(frontier_height, "frontier_gap_realign", now);
+            debug!(
+                height = block_height,
+                view = block_view,
+                expected_height = ?expected_height,
+                actual_height = ?actual_height,
+                local_height,
+                frontier_height,
+                direct_parent_height_ceiling,
+                block = %block_hash,
+                missing_parent = ?parent_hash,
+                trigger,
+                requested_pull,
+                "skipping far-future missing-parent fetch and reanchoring committed-anchor range pull"
+            );
+            return;
+        }
+        let mut target_parent_hash = parent_hash;
+        if parent_height == frontier_height
+            && let Some(qc_hint_hash) =
+                self.contiguous_frontier_qc_payload_hint_hash(frontier_height)
+            && qc_hint_hash != target_parent_hash
+            && self.should_retarget_contiguous_frontier_parent_from_qc_hint(
+                frontier_height,
+                local_height,
+            )
+        {
+            debug!(
+                height = block_height,
+                view = block_view,
+                local_height,
+                frontier_height,
+                expected_parent = %target_parent_hash,
+                qc_hint_parent = %qc_hint_hash,
+                trigger,
+                "retargeting contiguous missing-parent fetch to deferred-QC payload hint"
+            );
+            target_parent_hash = qc_hint_hash;
+        }
+        if let Some((known_parent_height, _)) = self.local_block_height_view(target_parent_hash)
+            && known_parent_height != parent_height
+        {
+            // Deterministic fence: reject impossible parent mappings where the requested hash is
+            // already known locally at a different height. Reanchor contiguous recovery instead
+            // of repeatedly scheduling missing-parent fetches for an invalid pair.
+            let now = Instant::now();
+            let requested_pull =
+                self.request_range_pull_from_anchor(frontier_height, "frontier_gap_realign", now);
+            debug!(
+                height = block_height,
+                view = block_view,
+                local_height,
+                frontier_height,
+                parent_height,
+                known_parent_height,
+                block = %block_hash,
+                missing_parent = %target_parent_hash,
+                trigger,
+                requested_pull,
+                "suppressing missing-parent fetch for impossible hash/height mapping and reanchoring frontier pull"
+            );
+            return;
+        }
+        if self.should_suppress_lock_rejected_block_fetch(
+            parent_height,
+            target_parent_hash,
+            "request_missing_parent",
+        ) {
+            self.clear_missing_block_view_change(&target_parent_hash);
+            let now = Instant::now();
+            let requested_pull =
+                self.request_range_pull_from_anchor(frontier_height, "frontier_gap_realign", now);
+            debug!(
+                height = block_height,
+                view = block_view,
+                local_height,
+                frontier_height,
+                parent_height,
+                block = %block_hash,
+                missing_parent = %target_parent_hash,
+                trigger,
+                requested_pull,
+                "suppressing missing-parent fetch for active lock-rejected branch hash and reanchoring frontier pull"
+            );
+            return;
+        }
+        if self.block_payload_available_locally(target_parent_hash) {
+            return;
+        }
+        let gap = block_height.saturating_sub(frontier_height);
         let (consensus_mode, _mode_tag, _prf_seed) =
             self.consensus_context_for_height(parent_height);
-        self.observe_sidecar_mismatch_for_height(
-            parent_height,
-            parent_hash,
-            "request_missing_parent",
-        );
-        let allow_sidecar = !self.sidecar_quarantined_for_height(parent_height);
         let (roster, roster_source) = if let Some(selection) = persisted_roster_for_block(
             self.state.as_ref(),
             &self.kura,
             consensus_mode,
             parent_height,
-            parent_hash,
+            target_parent_hash,
             None,
             &self.roster_validation_cache,
             None,
-            allow_sidecar,
+            false,
         )
         .or_else(|| {
             block_sync_history_roster_for_block(
                 consensus_mode,
-                parent_hash,
+                target_parent_hash,
                 parent_height,
                 None,
                 &self.chain_id,
@@ -3465,7 +3979,7 @@ impl Actor {
                 height = block_height,
                 view = block_view,
                 block = %block_hash,
-                missing_parent = ?parent_hash,
+                missing_parent = ?target_parent_hash,
                 trigger,
                 "skipping missing-parent fetch: empty roster"
             );
@@ -3483,14 +3997,21 @@ impl Actor {
         let now = Instant::now();
         let signers = BTreeSet::new();
         let view_change_window = if gap == 1 { Some(retry_window) } else { None };
+        // Contiguous missing parents are consensus-critical; background priority suppresses
+        // hard-cap escalation and can trap recovery in deterministic reanchor loops.
+        let missing_priority = if gap == 1 {
+            MissingBlockPriority::Consensus
+        } else {
+            MissingBlockPriority::Background
+        };
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
         let decision = plan_missing_block_fetch(
             &mut requests,
-            parent_hash,
+            target_parent_hash,
             parent_height,
             block_view,
             crate::sumeragi::consensus::Phase::Commit,
-            MissingBlockPriority::Background,
+            missing_priority,
             &signers,
             &topology,
             now,
@@ -3502,7 +4023,7 @@ impl Actor {
         let dwell = self
             .pending
             .missing_block_requests
-            .get(&parent_hash)
+            .get(&target_parent_hash)
             .map(|stats| now.saturating_duration_since(stats.first_seen))
             .unwrap_or_default();
         let targets_len = match &decision {
@@ -3515,7 +4036,7 @@ impl Actor {
         match &decision {
             MissingBlockFetchDecision::Requested { target_kind, .. } => {
                 self.note_missing_block_height_attempt(
-                    parent_hash,
+                    target_parent_hash,
                     parent_height,
                     block_view,
                     MissingBlockRecoveryStage::ParentFetch,
@@ -3525,7 +4046,7 @@ impl Actor {
             }
             MissingBlockFetchDecision::NoTargets => {
                 self.note_missing_block_height_attempt(
-                    parent_hash,
+                    target_parent_hash,
                     parent_height,
                     block_view,
                     MissingBlockRecoveryStage::ParentFetch,
@@ -3534,8 +4055,8 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
-                    parent_hash,
+                self.note_missing_block_height_backoff(
+                    target_parent_hash,
                     parent_height,
                     block_view,
                     MissingBlockRecoveryStage::ParentFetch,
@@ -3544,7 +4065,7 @@ impl Actor {
             }
         }
         let _ = self.maybe_escalate_missing_block_height_recovery(
-            parent_hash,
+            target_parent_hash,
             parent_height,
             block_view,
             now,
@@ -3556,10 +4077,10 @@ impl Actor {
                 target_kind,
             } => {
                 self.request_missing_block(
-                    parent_hash,
+                    target_parent_hash,
                     parent_height,
                     block_view,
-                    MissingBlockPriority::Background,
+                    missing_priority,
                     &targets,
                 );
                 info!(
@@ -3570,7 +4091,7 @@ impl Actor {
                     local_height,
                     gap,
                     block = %block_hash,
-                    missing_parent = ?parent_hash,
+                    missing_parent = ?target_parent_hash,
                     targets = ?targets,
                     target_kind = target_kind.label(),
                     roster_source,
@@ -3589,7 +4110,7 @@ impl Actor {
                     local_height,
                     gap,
                     block = %block_hash,
-                    missing_parent = ?parent_hash,
+                    missing_parent = ?target_parent_hash,
                     roster_source,
                     trigger,
                     retry_window_ms = retry_window.as_millis(),
@@ -3606,7 +4127,7 @@ impl Actor {
                     local_height,
                     gap,
                     block = %block_hash,
-                    missing_parent = ?parent_hash,
+                    missing_parent = ?target_parent_hash,
                     roster_source,
                     trigger,
                     retry_window_ms = retry_window.as_millis(),
@@ -4085,6 +4606,30 @@ impl RbcBacklogSummary {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct IdleBacklogSignals {
+    existing_worker_backlog: bool,
+    queue_active_backlog: bool,
+    residual_round_backlog: bool,
+    unresolved_rbc_backlog: bool,
+    near_quorum_queue_backlog_raw: bool,
+    near_quorum_rbc_backlog_raw: bool,
+    consensus_queue_backlog: bool,
+    rbc_backlog: bool,
+    near_quorum_queue_backlog: bool,
+    near_quorum_rbc_backlog: bool,
+}
+
+impl IdleBacklogSignals {
+    fn has_backlog(self) -> bool {
+        self.consensus_queue_backlog || self.rbc_backlog
+    }
+
+    fn near_quorum_fast_timeout_gate_open(self) -> bool {
+        !self.near_quorum_queue_backlog && !self.near_quorum_rbc_backlog
+    }
+}
+
 #[allow(
     dead_code,
     clippy::large_types_passed_by_value,
@@ -4150,6 +4695,56 @@ impl Actor {
             .is_some()
     }
 
+    fn slot_has_vote_backed_consensus_evidence(&self, height: u64, view: u64) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        self.vote_log.values().any(|vote| {
+            matches!(
+                vote.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && vote.height == height
+                && vote.view == view
+                && vote.epoch == expected_epoch
+        }) || self.qc_cache.values().any(|qc| {
+            matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && qc.height == height
+                && qc.view == view
+                && qc.epoch == expected_epoch
+        })
+    }
+
+    fn pending_block_has_consensus_evidence(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> bool {
+        pending.precommit_vote_sent
+            || pending.commit_qc_seen
+            || self.slot_has_proposal_evidence(pending.height, pending.view)
+            || self.pending_block_has_votes(block_hash, pending.height, pending.view)
+            || self.pending_block_has_qc(block_hash, pending.height, pending.view)
+    }
+
+    fn pending_block_is_active_for_tip(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        !pending.aborted
+            && pending_extends_tip(
+                pending.height,
+                pending.block.header().prev_block_hash(),
+                tip_height,
+                tip_hash,
+            )
+            && self.pending_block_has_consensus_evidence(block_hash, pending)
+    }
+
     fn pending_fast_unblock_due(
         &self,
         pending: &PendingBlock,
@@ -4185,16 +4780,11 @@ impl Actor {
     ) -> usize {
         self.pending
             .pending_blocks
-            .values()
-            // Only pending blocks that extend the current tip should gate proposals/view changes.
-            .filter(|pending| {
-                !pending.aborted
-                    && pending_extends_tip(
-                        pending.height,
-                        pending.block.header().prev_block_hash(),
-                        tip_height,
-                        tip_hash,
-                    )
+            .iter()
+            // Only consensus-owned pending blocks should gate proposals/view changes. Payload-only
+            // BlockCreated cache entries stay locally available, but they are not a live round.
+            .filter(|(hash, pending)| {
+                self.pending_block_is_active_for_tip(**hash, pending, tip_height, tip_hash)
             })
             .count()
     }
@@ -4202,15 +4792,173 @@ impl Actor {
     fn has_active_pending_blocks(&self) -> bool {
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
-        self.pending.pending_blocks.values().any(|pending| {
+        self.pending.pending_blocks.iter().any(|(hash, pending)| {
+            self.pending_block_is_active_for_tip(*hash, pending, tip_height, tip_hash)
+        })
+    }
+
+    fn frontier_non_missing_qc_recovery_cause(&self, frontier_height: u64) -> Option<&'static str> {
+        self.frontier_recovery.as_ref().and_then(|state| {
+            (state.frontier_height == frontier_height && state.last_cause != "missing_qc")
+                .then_some(state.last_cause)
+        })
+    }
+
+    fn frontier_recovery_exists_at_height(&self, frontier_height: u64) -> bool {
+        self.frontier_recovery
+            .is_some_and(|state| state.frontier_height == frontier_height)
+    }
+
+    fn frontier_recovery_owned_by_quorum_timeout(&self, frontier_height: u64) -> bool {
+        self.frontier_non_missing_qc_recovery_cause(frontier_height) == Some("quorum_timeout")
+    }
+
+    fn frontier_recovery_owns_height_window(&self, frontier_height: u64, now: Instant) -> bool {
+        let Some(state) = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == frontier_height)
+        else {
+            return false;
+        };
+        let Some(last_action_at) = state.last_action_at else {
+            return false;
+        };
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        now.saturating_duration_since(last_action_at) < window
+    }
+
+    fn frontier_recovery_inbound_backlog_active(
+        &self,
+        frontier_height: u64,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0
+            || self.has_residual_round_backlog_for_height(frontier_height)
+    }
+
+    fn frontier_recovery_same_height_dependency_backlog_active(
+        &self,
+        frontier_height: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        let Some(state) = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == frontier_height)
+        else {
+            return false;
+        };
+        let dependency_progress_at = match (
+            state.last_dependency_progress_at,
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height),
+        ) {
+            (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+            (Some(value), None) | (None, Some(value)) => Some(value),
+            (None, None) => None,
+        };
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        dependency_progress_at
+            .is_some_and(|progress| now.saturating_duration_since(progress) < window)
+            && self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths)
+    }
+
+    fn frontier_dependency_recovery_cause(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> Option<&'static str> {
+        if self.frontier_vote_backed_recovery_active(frontier_height, now)
+            || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+        {
+            return Some("quorum_timeout");
+        }
+
+        (self.has_commit_phase_missing_qc_dependency_for_height(frontier_height)
+            || self.missing_qc_height_has_unresolved_dependency_at_height(frontier_height)
+            || self.frontier_catchup_has_unresolved_dependency(frontier_height)
+            || self.has_residual_round_backlog_for_height(frontier_height)
+            || self.sidecar_quarantined_for_height(frontier_height))
+        .then_some("missing_payload")
+    }
+
+    fn frontier_vote_backed_recovery_active(&self, frontier_height: u64, now: Instant) -> bool {
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let window = self.frontier_recovery_window();
+        let pending_vote_backed = self.pending.pending_blocks.iter().any(|(hash, pending)| {
             !pending.aborted
+                && pending.height == frontier_height
                 && pending_extends_tip(
                     pending.height,
                     pending.block.header().prev_block_hash(),
                     tip_height,
                     tip_hash,
                 )
-        })
+                && (self.pending_block_has_consensus_evidence(*hash, pending)
+                    || pending
+                        .last_quorum_reschedule
+                        .is_some_and(|last| now.saturating_duration_since(last) < window))
+        });
+        let inflight_vote_backed =
+            self.subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.height == frontier_height
+                        && pending_extends_tip(
+                            inflight.pending.height,
+                            inflight.pending.block.header().prev_block_hash(),
+                            tip_height,
+                            tip_hash,
+                        )
+                        && self.pending_block_has_consensus_evidence(
+                            inflight.block_hash,
+                            &inflight.pending,
+                        )
+                });
+        pending_vote_backed
+            || inflight_vote_backed
+            || self.frontier_recovery_owned_by_quorum_timeout(frontier_height)
+    }
+
+    fn seed_frontier_recovery_for_quorum_timeout(
+        &mut self,
+        frontier_height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if self.frontier_recovery_exists_at_height(frontier_height) {
+            return false;
+        }
+
+        let window = self.frontier_recovery_window();
+        let elapsed = saturating_mul_duration(window, 2);
+        let started_at = now.checked_sub(elapsed).unwrap_or(now);
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
+        self.frontier_recovery = Some(FrontierRecoveryState {
+            frontier_height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: started_at,
+            last_progress_at: started_at,
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: None,
+            no_progress_windows: 2,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: "quorum_timeout",
+        });
+        true
     }
 
     fn blocking_pending_blocks_len(&self) -> usize {
@@ -4220,15 +4968,9 @@ impl Actor {
         let fast_timeout = self.pending_fast_path_timeout_current();
         self.pending
             .pending_blocks
-            .values()
-            .filter(|pending| {
-                !pending.aborted
-                    && pending_extends_tip(
-                        pending.height,
-                        pending.block.header().prev_block_hash(),
-                        tip_height,
-                        tip_hash,
-                    )
+            .iter()
+            .filter(|(hash, pending)| {
+                self.pending_block_is_active_for_tip(**hash, pending, tip_height, tip_hash)
                     && (pending.commit_qc_seen
                         || (pending.last_quorum_reschedule.is_none()
                             && !self.pending_fast_unblock_due(pending, now, fast_timeout)))
@@ -4637,8 +5379,127 @@ impl Actor {
         self.rbc_backlog_summary().has_backlog()
     }
 
+    fn pending_entry_durably_resolved(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> bool {
+        self.kura.get_block_height_by_hash(block_hash).is_some()
+            || matches!(pending.validation_status, ValidationStatus::Invalid)
+    }
+
+    fn rbc_session_has_residual_round_backlog(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) -> bool {
+        if session.is_invalid() {
+            return false;
+        }
+        let total_chunks = session.total_chunks();
+        let received_chunks = session.received_chunks();
+        let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
+        let roster = self.rbc_session_roster(key);
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Init);
+        let ready_quorum = if !roster.is_empty() && roster_source.is_authoritative() {
+            let topology = super::network_topology::Topology::new(roster);
+            session.ready_signatures.len() >= self.rbc_deliver_quorum(&topology)
+        } else {
+            false
+        };
+        let payload_available = self.block_payload_available_locally(key.0) || session.delivered;
+        let fully_converged = session.delivered && !missing_chunks && ready_quorum;
+        !fully_converged || !payload_available
+    }
+
+    fn has_residual_round_backlog_for_height(&self, height: u64) -> bool {
+        if self.pending.pending_blocks.iter().any(|(hash, pending)| {
+            pending.height == height
+                && pending.aborted
+                && !self.pending_entry_durably_resolved(*hash, pending)
+        }) {
+            return true;
+        }
+        if self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                inflight.pending.height == height
+                    && inflight.pending.aborted
+                    && !self.pending_entry_durably_resolved(inflight.block_hash, &inflight.pending)
+            })
+        {
+            return true;
+        }
+        if self
+            .pending
+            .missing_block_requests
+            .values()
+            .any(|request| request.height == height)
+        {
+            return true;
+        }
+        if !self.runtime_da_enabled() {
+            return false;
+        }
+        self.subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .iter()
+            .any(|(key, session)| {
+                key.1 == height && self.rbc_session_has_residual_round_backlog(*key, session)
+            })
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .pending
+                .keys()
+                .any(|key| key.1 == height)
+    }
+
     fn has_near_quorum_rbc_backlog(&self, summary: RbcBacklogSummary) -> bool {
         self.rbc_backlog_exceeds_pacemaker_soft_limits(summary)
+    }
+
+    fn idle_backlog_signals_for_height(
+        &self,
+        evaluated_height: u64,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> IdleBacklogSignals {
+        let existing_worker_backlog = Self::consensus_queue_backlog(queue_depths);
+        let queue_active_backlog = self.queue.active_len() > 0;
+        let residual_round_backlog = self.has_residual_round_backlog_for_height(evaluated_height);
+        let near_quorum_queue_backlog_raw =
+            self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
+        let rbc_backlog_summary = self.rbc_backlog_summary();
+        let unresolved_rbc_backlog = rbc_backlog_summary.has_backlog();
+        let near_quorum_rbc_backlog_raw = self.has_near_quorum_rbc_backlog(rbc_backlog_summary);
+
+        let consensus_queue_backlog =
+            existing_worker_backlog || queue_active_backlog || residual_round_backlog;
+        let rbc_backlog = unresolved_rbc_backlog || residual_round_backlog;
+        let near_quorum_queue_backlog =
+            near_quorum_queue_backlog_raw || queue_active_backlog || residual_round_backlog;
+        let near_quorum_rbc_backlog = near_quorum_rbc_backlog_raw || residual_round_backlog;
+
+        IdleBacklogSignals {
+            existing_worker_backlog,
+            queue_active_backlog,
+            residual_round_backlog,
+            unresolved_rbc_backlog,
+            near_quorum_queue_backlog_raw,
+            near_quorum_rbc_backlog_raw,
+            consensus_queue_backlog,
+            rbc_backlog,
+            near_quorum_queue_backlog,
+            near_quorum_rbc_backlog,
+        }
     }
 
     fn consensus_queue_backlog(queue_depths: super::status::WorkerQueueDepthSnapshot) -> bool {
@@ -4764,43 +5625,124 @@ const QUARANTINED_BLOCK_SYNC_QC_MAX_ATTEMPTS: u32 = 4;
 const DEFERRED_MISSING_PAYLOAD_QC_PER_TICK: usize = 4;
 const DEFERRED_MISSING_PAYLOAD_QC_CAP: usize = 256;
 const DEFERRED_MISSING_PAYLOAD_QC_MAX_ATTEMPTS: u32 = 4;
-const EMPTY_COMMIT_TOPOLOGY_RECOVERY_MAX_RETRIES: u32 = 3;
 const EMPTY_COMMIT_TOPOLOGY_RECOVERY_LOG_COOLDOWN: Duration = Duration::from_secs(5);
 const ROSTER_SIDECAR_MISMATCH_LOG_COOLDOWN: Duration = Duration::from_secs(5);
+const ROSTER_SIDECAR_MISMATCH_OBSOLETE_TTL: Duration = Duration::from_secs(5);
 const RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const QC_MISSING_PAYLOAD_RANGE_PULL_DEDUP_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const LOCK_LAG_PRUNE_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const LOCK_LAG_FRONTIER_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
+const FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
+const MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
+const NO_PROPOSAL_STORM_FORCE_BREAK_STREAK: u32 = 4;
 const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 2;
+const ROUND_LIVENESS_STAGNATION_WINDOWS_TO_ISOLATE: u32 = 3;
+const ROUND_LIVENESS_GAP_TO_ISOLATE: u64 = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ConsensusRecoveryState {
-    RefreshTopology,
-    BlockSync,
-    WaitingForDependencies,
-    ViewChangeEscalation,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RosterRecoveryState {
+    Steady,
+    ReelectRoster,
+    WaitCandidates,
+    RotateView,
 }
 
-impl ConsensusRecoveryState {
+impl RosterRecoveryState {
     const fn as_str(self) -> &'static str {
         match self {
-            Self::RefreshTopology => "refresh_topology",
-            Self::BlockSync => "block_sync",
-            Self::WaitingForDependencies => "wait",
-            Self::ViewChangeEscalation => "view_change",
+            Self::Steady => "steady",
+            Self::ReelectRoster => "reelect_roster",
+            Self::WaitCandidates => "wait_candidates",
+            Self::RotateView => "rotate_view",
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RosterRecoveryEvent {
+    RosterUnavailable,
+    CandidatesAvailable,
+    CandidatesEmpty,
+    RoundAdvanced,
+}
+
+impl RosterRecoveryEvent {
+    #[cfg(test)]
+    const ALL: [Self; 4] = [
+        Self::RosterUnavailable,
+        Self::CandidatesAvailable,
+        Self::CandidatesEmpty,
+        Self::RoundAdvanced,
+    ];
+}
+
+fn step_roster_recovery_state(
+    state: RosterRecoveryState,
+    event: RosterRecoveryEvent,
+) -> RosterRecoveryState {
+    match (state, event) {
+        (RosterRecoveryState::Steady, RosterRecoveryEvent::RosterUnavailable) => {
+            RosterRecoveryState::ReelectRoster
+        }
+        (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesAvailable) => {
+            RosterRecoveryState::RotateView
+        }
+        (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::CandidatesEmpty) => {
+            RosterRecoveryState::WaitCandidates
+        }
+        (RosterRecoveryState::ReelectRoster, RosterRecoveryEvent::RoundAdvanced) => {
+            RosterRecoveryState::Steady
+        }
+        (RosterRecoveryState::WaitCandidates, RosterRecoveryEvent::CandidatesAvailable) => {
+            RosterRecoveryState::ReelectRoster
+        }
+        (RosterRecoveryState::WaitCandidates, RosterRecoveryEvent::RoundAdvanced) => {
+            RosterRecoveryState::Steady
+        }
+        (RosterRecoveryState::RotateView, _) => RosterRecoveryState::Steady,
+        _ => state,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoundLivenessState {
+    Steady,
+    CatchUpIsolated,
+    Rejoin,
+}
+
 #[derive(Debug, Clone, Copy)]
-struct ConsensusRecoveryEntry {
-    state: ConsensusRecoveryState,
+struct RoundLivenessTracker {
+    state: RoundLivenessState,
+    entered_at: Instant,
+    last_window_at: Instant,
+    last_progress_height: u64,
+    stagnation_windows: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct RosterElectionAttemptKey {
+    height: u64,
+    view: u64,
+    latest_committed_hash: HashOf<BlockHeader>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct RosterRecoveryEpisodeKey {
+    height: u64,
+    latest_committed_hash: HashOf<BlockHeader>,
+}
+
+#[derive(Debug, Clone)]
+struct RosterRecoveryEntry {
+    state: RosterRecoveryState,
     first_seen: Instant,
+    state_entered_at: Instant,
     last_attempt: Instant,
-    retries: u32,
-    dependency_requested: bool,
-    dependency_event_seq: u64,
-    waiting_since: Option<Instant>,
-    last_observed_dependency_seq: u64,
+    last_view: u64,
+    election_attempts: BTreeSet<RosterElectionAttemptKey>,
+    dwell_ms: BTreeMap<&'static str, u64>,
 }
 
 #[derive(Debug)]
@@ -4868,6 +5810,78 @@ enum MissingBlockRecoveryStage {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MissingBlockRecoveryTransition {
+    Keep,
+    HashFetchAttempt,
+    ParentFetchAttempt,
+    RangePullRequested,
+    DependencyProgressObserved,
+}
+
+fn transition_for_missing_block_stage_observation(
+    observed_stage: MissingBlockRecoveryStage,
+) -> MissingBlockRecoveryTransition {
+    match observed_stage {
+        MissingBlockRecoveryStage::HashFetch => MissingBlockRecoveryTransition::HashFetchAttempt,
+        MissingBlockRecoveryStage::ParentFetch => {
+            MissingBlockRecoveryTransition::ParentFetchAttempt
+        }
+        MissingBlockRecoveryStage::RangePullFromAnchor => {
+            MissingBlockRecoveryTransition::RangePullRequested
+        }
+        // Apply-and-revalidate must be entered through dependency progress from a prior range pull.
+        MissingBlockRecoveryStage::ApplyAndRevalidate => MissingBlockRecoveryTransition::Keep,
+    }
+}
+
+fn step_missing_block_recovery_stage(
+    state: MissingBlockRecoveryStage,
+    transition: MissingBlockRecoveryTransition,
+) -> MissingBlockRecoveryStage {
+    match (state, transition) {
+        (current, MissingBlockRecoveryTransition::Keep) => current,
+        (_, MissingBlockRecoveryTransition::HashFetchAttempt) => {
+            MissingBlockRecoveryStage::HashFetch
+        }
+        (_, MissingBlockRecoveryTransition::ParentFetchAttempt) => {
+            MissingBlockRecoveryStage::ParentFetch
+        }
+        (_, MissingBlockRecoveryTransition::RangePullRequested) => {
+            MissingBlockRecoveryStage::RangePullFromAnchor
+        }
+        (
+            MissingBlockRecoveryStage::RangePullFromAnchor,
+            MissingBlockRecoveryTransition::DependencyProgressObserved,
+        ) => MissingBlockRecoveryStage::ApplyAndRevalidate,
+        (
+            MissingBlockRecoveryStage::HashFetch | MissingBlockRecoveryStage::ParentFetch,
+            MissingBlockRecoveryTransition::DependencyProgressObserved,
+        ) => state,
+        (
+            MissingBlockRecoveryStage::ApplyAndRevalidate,
+            MissingBlockRecoveryTransition::DependencyProgressObserved,
+        ) => MissingBlockRecoveryStage::ApplyAndRevalidate,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HintlessBlockSyncResponsePolicy {
+    AllowHintlessBlockSync,
+    DowngradeToBlockCreated,
+}
+
+fn decide_hintless_block_sync_response_policy(
+    requester_roster_proof_known: bool,
+    allow_hintless_block_sync_bypass: bool,
+) -> HintlessBlockSyncResponsePolicy {
+    if allow_hintless_block_sync_bypass && requester_roster_proof_known {
+        HintlessBlockSyncResponsePolicy::AllowHintlessBlockSync
+    } else {
+        HintlessBlockSyncResponsePolicy::DowngradeToBlockCreated
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RangePullCandidateTier {
     VoteRoster,
     CommitTopology,
@@ -4918,6 +5932,211 @@ impl RangePullEscalationState {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct LockLagPruneCooldownState {
+    catchup_frontier_height: u64,
+    expires_at: Instant,
+    consecutive_without_pull: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LockLagFrontierStallState {
+    frontier_height: u64,
+    entered_at: Instant,
+    last_window_at: Instant,
+    windows_without_progress: u32,
+    mode_active: bool,
+    window_index: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LockLagFrontierStallSnapshot {
+    frontier_height: u64,
+    entered_at: Instant,
+    stall_window: Duration,
+    mode_active: bool,
+    window_index: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrontierCatchupStallState {
+    frontier_height: u64,
+    local_height_at_entry: u64,
+    entered_at: Instant,
+    last_window_at: Instant,
+    inactive_since: Option<Instant>,
+    windows_without_commit_progress: u32,
+    mode_active: bool,
+    window_index: u64,
+    last_rotation_at: Option<Instant>,
+    last_reanchor_emit_at: Option<Instant>,
+    last_far_ahead_replay_window_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrontierCatchupWindowSnapshot {
+    frontier_height: u64,
+    local_height_at_entry: u64,
+    entered_at: Instant,
+    stall_window: Duration,
+    mode_active: bool,
+    window_index: u64,
+    windows_without_commit_progress: u32,
+    canonical_height: u64,
+    last_rotation_at: Option<Instant>,
+    last_reanchor_emit_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrontierCatchupWindowGateState {
+    frontier_height: u64,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_reanchor_window_index: Option<u64>,
+    last_rotation_at: Option<Instant>,
+    last_reanchor_emit_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CanonicalFrontierReanchorWindowSnapshot {
+    entered_at: Instant,
+    window_index: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CanonicalFrontierReanchorWindowGateState {
+    frontier_height: u64,
+    canonical_height: u64,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_action_window_index: Option<u64>,
+    last_dependency_progress_at_emit: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrontierStallResetWindowGateState {
+    frontier_height: u64,
+    entered_at: Instant,
+    last_reset_at: Instant,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingQcHeightStallState {
+    height: u64,
+    dependency_height: u64,
+    committed_height: u64,
+    entered_at: Instant,
+    last_window_at: Instant,
+    windows_without_commit_progress: u32,
+    mode_active: bool,
+    window_index: u64,
+    last_rotation_at: Option<Instant>,
+    last_rotation_window_index: Option<u64>,
+    last_reacquire_window_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingQcHeightStallSnapshot {
+    height: u64,
+    entered_at: Instant,
+    stall_window: Duration,
+    mode_active: bool,
+    window_index: u64,
+    last_rotation_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontierRecoveryPhase {
+    CatchUp,
+    RotateArmed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontierRecoveryAdvance {
+    None,
+    CatchUp,
+    Rotate,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrontierRecoveryState {
+    frontier_height: u64,
+    phase: FrontierRecoveryPhase,
+    entered_at: Instant,
+    last_progress_at: Instant,
+    last_dependency_progress_at: Option<Instant>,
+    last_action_at: Option<Instant>,
+    no_progress_windows: u32,
+    cleanup_done: bool,
+    last_view: u64,
+    last_rotation_view: Option<u64>,
+    last_cause: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoundRecoveryBundleSource {
+    CommitQuorumReschedule,
+    RosterProofFallback,
+    RangePullExpiry,
+    PayloadMismatchRecovery,
+}
+
+impl RoundRecoveryBundleSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::CommitQuorumReschedule => "commit_quorum_reschedule",
+            Self::RosterProofFallback => "roster_proof_fallback",
+            Self::RangePullExpiry => "range_pull_expiry",
+            Self::PayloadMismatchRecovery => "payload_mismatch_recovery",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RoundRecoveryBundleWindowGateState {
+    height: u64,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_bundle_window_index: Option<u64>,
+    last_bundle_source: Option<RoundRecoveryBundleSource>,
+    last_bundle_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RoundRecoveryBundleWindowSnapshot {
+    height: u64,
+    entered_at: Instant,
+    window: Duration,
+    window_index: u64,
+    last_bundle_window_index: Option<u64>,
+    last_bundle_source: Option<RoundRecoveryBundleSource>,
+    last_bundle_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingPayloadFetchWindowGateState {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_targeted_fetch_window_index: Option<u64>,
+    last_targeted_fetch_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MissingPayloadFetchWindowSnapshot {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    entered_at: Instant,
+    stall_window: Duration,
+    window_index: u64,
+    last_targeted_fetch_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct MissingBlockHeightRecoveryBudget {
     first_seen: Instant,
     last_seen: Instant,
@@ -4939,7 +6158,10 @@ impl MissingBlockHeightRecoveryBudget {
         stage: MissingBlockRecoveryStage,
     ) -> Self {
         let mut range_pull = RangePullEscalationState::new(now);
-        range_pull.stage = stage;
+        range_pull.stage = step_missing_block_recovery_stage(
+            range_pull.stage,
+            transition_for_missing_block_stage_observation(stage),
+        );
         Self {
             first_seen: now,
             last_seen: now,
@@ -4965,6 +6187,61 @@ struct SidecarMismatchRecoveryEntry {
     final_dropped: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SidecarMismatchEscalationWindowGateState {
+    height: u64,
+    reason_group: &'static str,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_escalation_window_index: Option<u64>,
+    last_escalation_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SidecarMismatchCommittedEdgeGateState {
+    height: u64,
+    reason_group: &'static str,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_observation_window_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HighestQcForceFetchWindowGateState {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    reason_group: &'static str,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_force_window_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CommittedEdgeConflictWindowGateState {
+    height: u64,
+    reason_group: &'static str,
+    entered_at: Instant,
+    last_window_at: Instant,
+    window_index: u64,
+    last_action_window_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LockRejectedBlockSinkState {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    locked_height: u64,
+    locked_hash: HashOf<BlockHeader>,
+    first_seen: Instant,
+    last_seen: Instant,
+    rejections: u32,
+    fetch_suppressions: u32,
+    last_reject_source: &'static str,
+}
+
 #[derive(Debug, Clone)]
 struct DeterministicActiveSet {
     scored: Vec<(PeerId, u64)>,
@@ -4975,60 +6252,6 @@ struct FanoutCommittee {
     peers: Vec<PeerId>,
     required_commit_votes: usize,
     redundancy_margin: usize,
-}
-
-#[derive(Debug, Clone)]
-struct NoRosterFallbackBudget {
-    allowed_views: BTreeSet<u64>,
-    escalated_views: BTreeSet<u64>,
-    refresh_attempts_by_view: BTreeMap<u64, u32>,
-    bootstrap_by_view: BTreeMap<u64, NoRosterBootstrapEntry>,
-    last_seen: Instant,
-}
-
-impl NoRosterFallbackBudget {
-    fn new(now: Instant) -> Self {
-        Self {
-            allowed_views: BTreeSet::new(),
-            escalated_views: BTreeSet::new(),
-            refresh_attempts_by_view: BTreeMap::new(),
-            bootstrap_by_view: BTreeMap::new(),
-            last_seen: now,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NoRosterBootstrapState {
-    RosterReady,
-    RosterBootstrapPending,
-    RosterBootstrapExhausted,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct NoRosterBootstrapEntry {
-    state: NoRosterBootstrapState,
-    first_seen: Instant,
-    last_seen: Instant,
-    refresh_then_fallback_used: bool,
-}
-
-impl NoRosterBootstrapEntry {
-    fn pending(now: Instant) -> Self {
-        Self {
-            state: NoRosterBootstrapState::RosterBootstrapPending,
-            first_seen: now,
-            last_seen: now,
-            refresh_then_fallback_used: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NoRosterFallbackDecision {
-    AllowFallback,
-    BootstrapPending,
-    FailClosed,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5044,13 +6267,291 @@ struct DeterministicRecoveryProfile {
     range_pull_escalation_after_hash_misses: u32,
     missing_qc_reacquire_window: Duration,
     max_forced_proposal_attempts_per_view: u32,
-    no_roster_fallback_views: u32,
-    no_roster_refresh_retry_per_view: u32,
     rotate_after_reacquire_exhausted: bool,
     missing_request_stale_height_margin: u64,
     pending_block_sync_cap: usize,
     pending_proposal_cap: usize,
     missing_fetch_aggressive_after_attempts: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RecoveryFsmReason {
+    FrontierGapRealign,
+    FrontierStallReset,
+    MissingBlockHeightHardCap,
+    IdleMissingQcReacquire,
+    LockLagFuturePrune,
+    SidecarMismatch,
+    HighestQcCommittedConflict,
+    Other,
+}
+
+impl RecoveryFsmReason {
+    fn from_reason(reason: &'static str) -> Self {
+        match reason {
+            "frontier_gap_realign" => Self::FrontierGapRealign,
+            "frontier_stall_reset" => Self::FrontierStallReset,
+            "missing_block_height_hard_cap" => Self::MissingBlockHeightHardCap,
+            "idle_missing_qc_reacquire" => Self::IdleMissingQcReacquire,
+            "lock_lag_future_prune" => Self::LockLagFuturePrune,
+            "sidecar_mismatch" => Self::SidecarMismatch,
+            "highest_qc_committed_conflict" => Self::HighestQcCommittedConflict,
+            _ => Self::Other,
+        }
+    }
+
+    const fn rank(self) -> u8 {
+        match self {
+            Self::FrontierGapRealign => 0,
+            Self::FrontierStallReset => 1,
+            Self::MissingBlockHeightHardCap => 2,
+            Self::IdleMissingQcReacquire => 3,
+            Self::LockLagFuturePrune => 4,
+            Self::SidecarMismatch => 5,
+            Self::HighestQcCommittedConflict => 6,
+            Self::Other => 7,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecoveryFsmEvent {
+    height: u64,
+    reason: RecoveryFsmReason,
+    peer_id: PeerId,
+}
+
+fn stable_sort_recovery_events(events: &mut [RecoveryFsmEvent]) {
+    events.sort_by(|lhs, rhs| {
+        (lhs.height, lhs.reason.rank(), &lhs.peer_id).cmp(&(
+            rhs.height,
+            rhs.reason.rank(),
+            &rhs.peer_id,
+        ))
+    });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecoveryFsmState {
+    frontier_height: u64,
+    local_height_at_entry: u64,
+    no_progress_window_count: u32,
+    emission_window_token: Option<u64>,
+    dependency_progress_watermark: Option<Instant>,
+    missing_qc_rotation_reservation: Option<u64>,
+    committed_edge_conflict_reservation: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecoveryFsmObservations {
+    height: u64,
+    reason: RecoveryFsmReason,
+    peer_id: PeerId,
+    window_index: u64,
+    frontier_identity_unchanged: bool,
+    committed_height_advanced: bool,
+    unresolved_dependency: bool,
+    gap_exceeds: bool,
+    stride_window_suppressed: bool,
+    emission_window_suppressed: bool,
+    dependency_progress_since_emit_unchanged: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RecoveryFsmActions {
+    keep_stall_active: bool,
+    allow_reanchor_emit: bool,
+    allow_missing_qc_rotation: bool,
+    allow_committed_edge_bundle: bool,
+}
+
+// Closed transition machine for deterministic recovery gating. Each axis has a
+// finite state set and an explicit transition relation, so invalid intermediate
+// states and implicit fall-through behavior are unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryStallState {
+    Active,
+    Cleared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryStallTransition {
+    Keep,
+    Clear,
+}
+
+impl RecoveryStallTransition {
+    const fn from_observation(observation: &RecoveryFsmObservations) -> Self {
+        if observation.frontier_identity_unchanged && !observation.committed_height_advanced {
+            Self::Keep
+        } else {
+            Self::Clear
+        }
+    }
+}
+
+impl RecoveryStallState {
+    const fn transition(self, event: RecoveryStallTransition) -> Self {
+        match (self, event) {
+            (Self::Active, RecoveryStallTransition::Keep) => Self::Active,
+            (Self::Active, RecoveryStallTransition::Clear) => Self::Cleared,
+            (Self::Cleared, RecoveryStallTransition::Keep | RecoveryStallTransition::Clear) => {
+                Self::Cleared
+            }
+        }
+    }
+
+    const fn is_active(self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryReanchorState {
+    Blocked,
+    Allowed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryReanchorTransition {
+    KeepBlocked,
+    Allow,
+}
+
+impl RecoveryReanchorState {
+    const fn transition(self, event: RecoveryReanchorTransition) -> Self {
+        match (self, event) {
+            (Self::Blocked, RecoveryReanchorTransition::KeepBlocked) => Self::Blocked,
+            (Self::Blocked, RecoveryReanchorTransition::Allow) => Self::Allowed,
+            (
+                Self::Allowed,
+                RecoveryReanchorTransition::KeepBlocked | RecoveryReanchorTransition::Allow,
+            ) => Self::Allowed,
+        }
+    }
+
+    const fn is_allowed(self) -> bool {
+        matches!(self, Self::Allowed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryRotationState {
+    Open,
+    Suppressed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecoveryRotationTransition {
+    KeepOpen,
+    Suppress,
+}
+
+impl RecoveryRotationState {
+    const fn transition(self, event: RecoveryRotationTransition) -> Self {
+        match (self, event) {
+            (Self::Open, RecoveryRotationTransition::KeepOpen) => Self::Open,
+            (Self::Open, RecoveryRotationTransition::Suppress) => Self::Suppressed,
+            (
+                Self::Suppressed,
+                RecoveryRotationTransition::KeepOpen | RecoveryRotationTransition::Suppress,
+            ) => Self::Suppressed,
+        }
+    }
+
+    const fn is_open(self) -> bool {
+        matches!(self, Self::Open)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RecoveryFsmFiniteState {
+    stall: RecoveryStallState,
+    reanchor: RecoveryReanchorState,
+    missing_qc_rotation: RecoveryRotationState,
+    committed_edge_bundle: RecoveryRotationState,
+}
+
+impl Default for RecoveryFsmFiniteState {
+    fn default() -> Self {
+        Self {
+            stall: RecoveryStallState::Active,
+            reanchor: RecoveryReanchorState::Blocked,
+            missing_qc_rotation: RecoveryRotationState::Open,
+            committed_edge_bundle: RecoveryRotationState::Open,
+        }
+    }
+}
+
+fn step_recovery_fsm(
+    state: RecoveryFsmState,
+    observations: &[RecoveryFsmObservations],
+) -> RecoveryFsmActions {
+    let mut ordered = observations.to_vec();
+    ordered.sort_by(|lhs, rhs| {
+        (lhs.height, lhs.reason.rank(), &lhs.peer_id).cmp(&(
+            rhs.height,
+            rhs.reason.rank(),
+            &rhs.peer_id,
+        ))
+    });
+    if ordered.is_empty() {
+        return RecoveryFsmActions::default();
+    }
+
+    let mut finite = RecoveryFsmFiniteState::default();
+
+    for observation in &ordered {
+        let transition = RecoveryStallTransition::from_observation(observation);
+        finite.stall = finite.stall.transition(transition);
+    }
+
+    for observation in &ordered {
+        let emitted_this_window = state.emission_window_token == Some(observation.window_index);
+        let eligible = finite.stall.is_active()
+            && observation.unresolved_dependency
+            && observation.gap_exceeds
+            && !observation.stride_window_suppressed
+            && !observation.emission_window_suppressed
+            && !emitted_this_window;
+        let transition = if eligible {
+            RecoveryReanchorTransition::Allow
+        } else {
+            RecoveryReanchorTransition::KeepBlocked
+        };
+        finite.reanchor = finite.reanchor.transition(transition);
+    }
+
+    for observation in &ordered {
+        let emitted_this_window = state.emission_window_token == Some(observation.window_index);
+        let suppress = observation.unresolved_dependency
+            && (observation.emission_window_suppressed || emitted_this_window)
+            && observation.dependency_progress_since_emit_unchanged
+            && state.missing_qc_rotation_reservation == Some(observation.window_index);
+        let transition = if suppress {
+            RecoveryRotationTransition::Suppress
+        } else {
+            RecoveryRotationTransition::KeepOpen
+        };
+        finite.missing_qc_rotation = finite.missing_qc_rotation.transition(transition);
+    }
+
+    for observation in &ordered {
+        let suppress = state.committed_edge_conflict_reservation == Some(observation.window_index);
+        let transition = if suppress {
+            RecoveryRotationTransition::Suppress
+        } else {
+            RecoveryRotationTransition::KeepOpen
+        };
+        finite.committed_edge_bundle = finite.committed_edge_bundle.transition(transition);
+    }
+
+    RecoveryFsmActions {
+        keep_stall_active: finite.stall.is_active(),
+        allow_reanchor_emit: finite.reanchor.is_allowed(),
+        allow_missing_qc_rotation: finite.missing_qc_rotation.is_open(),
+        allow_committed_edge_bundle: finite.committed_edge_bundle.is_open(),
+    }
 }
 
 struct QcBuildContext {
@@ -5201,17 +6702,39 @@ pub(super) struct Actor {
         HashOf<BlockHeader>,
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
     >,
-    consensus_recovery: BTreeMap<(u64, u64), ConsensusRecoveryEntry>,
+    consensus_recovery: BTreeMap<RosterRecoveryEpisodeKey, RosterRecoveryEntry>,
+    recovery_pending_baseline_restore: BTreeMap<u64, Vec<PeerId>>,
     dependency_event_seq: u64,
     missing_block_height_recovery:
         BTreeMap<MissingBlockHeightRecoveryKey, MissingBlockHeightRecoveryBudget>,
-    no_roster_fallback_recovery: BTreeMap<MissingBlockHeightRecoveryKey, NoRosterFallbackBudget>,
+    missing_block_range_pull_expiry_streaks: BTreeMap<MissingBlockHeightRecoveryKey, u32>,
+    frontier_recovery: Option<FrontierRecoveryState>,
     sidecar_mismatch_recovery: BTreeMap<u64, SidecarMismatchRecoveryEntry>,
-    sidecar_mismatch_action_cooldowns:
-        BTreeMap<(u64, HashOf<BlockHeader>, HashOf<BlockHeader>, &'static str), Instant>,
+    roster_sidecar_mismatch_obsolete:
+        BTreeMap<(u64, HashOf<BlockHeader>, HashOf<BlockHeader>), Instant>,
+    sidecar_mismatch_window_gates:
+        BTreeMap<(u64, &'static str), SidecarMismatchEscalationWindowGateState>,
+    sidecar_mismatch_committed_edge_gates:
+        BTreeMap<(u64, &'static str), SidecarMismatchCommittedEdgeGateState>,
+    highest_qc_force_fetch_window_gates:
+        BTreeMap<(u64, HashOf<BlockHeader>, &'static str), HighestQcForceFetchWindowGateState>,
+    committed_edge_conflict_window_gates:
+        BTreeMap<(u64, &'static str), CommittedEdgeConflictWindowGateState>,
+    lock_rejected_block_sinks: BTreeMap<(u64, HashOf<BlockHeader>), LockRejectedBlockSinkState>,
     sidecar_observation_suppression_depth: u32,
     qc_missing_payload_range_pull_cooldowns: BTreeMap<(u64, u64, HashOf<BlockHeader>), Instant>,
-    range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64), Instant>,
+    range_pull_escalation_cooldowns: BTreeMap<(PeerId, u64, u64, &'static str), Instant>,
+    lock_lag_prune_cooldown: Option<LockLagPruneCooldownState>,
+    lock_lag_frontier_stall: Option<LockLagFrontierStallState>,
+    frontier_catchup_stall: Option<FrontierCatchupStallState>,
+    frontier_catchup_window_gates: BTreeMap<u64, FrontierCatchupWindowGateState>,
+    canonical_frontier_reanchor_window_gates:
+        BTreeMap<(u64, u64), CanonicalFrontierReanchorWindowGateState>,
+    frontier_stall_reset_window_gates: BTreeMap<u64, FrontierStallResetWindowGateState>,
+    missing_qc_height_stall: Option<MissingQcHeightStallState>,
+    round_recovery_bundle_window_gates: BTreeMap<u64, RoundRecoveryBundleWindowGateState>,
+    missing_payload_fetch_window_gates:
+        BTreeMap<(u64, HashOf<BlockHeader>), MissingPayloadFetchWindowGateState>,
     deferred_qcs: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     deferred_qc_roster_state: BTreeMap<QcVoteKey, DeferredRosterQcEntry>,
     deferred_missing_payload_qcs: BTreeMap<QcVoteKey, DeferredQcEntry>,
@@ -5232,6 +6755,7 @@ pub(super) struct Actor {
     pending_mode_flip: Option<ConsensusMode>,
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     locked_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
+    round_liveness: RoundLivenessTracker,
     tick_counter: u64,
     tick_in_progress: bool,
     last_tick_heartbeat_log: Instant,
@@ -5256,7 +6780,6 @@ pub(super) struct Actor {
     block_sync_warning_log: BlockSyncWarningThrottle,
     qc_insufficient_warning_log: QcInsufficientWarningThrottle,
     proposal_defer_warning_log: ProposalDeferWarningThrottle,
-    missing_qc_warning_log: MissingQcWarningThrottle,
     roster_validation_cache: RosterValidationCache,
     #[cfg(test)]
     background_request_log: Option<Arc<Mutex<Vec<BackgroundRequestLogEntry>>>>,
@@ -5311,7 +6834,6 @@ impl From<ConsensusMode> for BlockSyncRosterCacheMode {
 struct BlockSyncRosterCacheKey {
     block_hash: HashOf<BlockHeader>,
     height: u64,
-    view: u64,
     consensus_mode: BlockSyncRosterCacheMode,
     cert_hash: Option<Hash>,
     checkpoint_hash: Option<Hash>,
@@ -5322,7 +6844,7 @@ impl BlockSyncRosterCacheKey {
     fn from_hints(
         block_hash: HashOf<BlockHeader>,
         block_height: u64,
-        block_view: u64,
+        _block_view: u64,
         consensus_mode: ConsensusMode,
         commit_qc: Option<&Qc>,
         checkpoint: Option<&ValidatorSetCheckpoint>,
@@ -5334,13 +6856,12 @@ impl BlockSyncRosterCacheKey {
         if matches!(consensus_mode, ConsensusMode::Npos) && stake_snapshot.is_none() {
             return None;
         }
-        let cert_hash = commit_qc.map(|cert| Hash::from(HashOf::new(cert)));
-        let checkpoint_hash = checkpoint.map(|chk| Hash::from(HashOf::new(chk)));
+        let cert_hash = commit_qc.map(|cert| Hash::from(cert.validator_set_hash.clone()));
+        let checkpoint_hash = checkpoint.map(|chk| Hash::from(chk.validator_set_hash.clone()));
         let stake_snapshot_hash = stake_snapshot.map(|snapshot| Hash::from(HashOf::new(snapshot)));
         Some(Self {
             block_hash,
             height: block_height,
-            view: block_view,
             consensus_mode: BlockSyncRosterCacheMode::from(consensus_mode),
             cert_hash,
             checkpoint_hash,
@@ -5904,12 +7425,18 @@ impl MergeCommitteeState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingFetchRequestMeta {
+    priority: super::message::FetchPendingBlockPriority,
+    requester_roster_proof_known: bool,
+}
+
 #[derive(Debug)]
 struct PendingBlockState {
     pending_blocks: BTreeMap<HashOf<BlockHeader>, PendingBlock>,
     missing_block_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     pending_fetch_requests:
-        BTreeMap<HashOf<BlockHeader>, BTreeMap<PeerId, super::message::FetchPendingBlockPriority>>,
+        BTreeMap<HashOf<BlockHeader>, BTreeMap<PeerId, PendingFetchRequestMeta>>,
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
     last_commit_pipeline_run: Instant,
@@ -6099,6 +7626,45 @@ enum ProposalLivenessState {
     RecoveryAcquireDependencies,
 }
 
+fn step_proposal_liveness_state(
+    current: ProposalLivenessState,
+    requested: ProposalLivenessState,
+) -> ProposalLivenessState {
+    match (current, requested) {
+        (ProposalLivenessState::Normal, ProposalLivenessState::Normal) => {
+            ProposalLivenessState::Normal
+        }
+        (ProposalLivenessState::Normal, ProposalLivenessState::AwaitingProposalAfterMissingQc) => {
+            ProposalLivenessState::AwaitingProposalAfterMissingQc
+        }
+        (ProposalLivenessState::Normal, ProposalLivenessState::RecoveryAcquireDependencies) => {
+            ProposalLivenessState::RecoveryAcquireDependencies
+        }
+        (ProposalLivenessState::AwaitingProposalAfterMissingQc, ProposalLivenessState::Normal) => {
+            ProposalLivenessState::Normal
+        }
+        (
+            ProposalLivenessState::AwaitingProposalAfterMissingQc,
+            ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        ) => ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        (
+            ProposalLivenessState::AwaitingProposalAfterMissingQc,
+            ProposalLivenessState::RecoveryAcquireDependencies,
+        ) => ProposalLivenessState::RecoveryAcquireDependencies,
+        (ProposalLivenessState::RecoveryAcquireDependencies, ProposalLivenessState::Normal) => {
+            ProposalLivenessState::Normal
+        }
+        (
+            ProposalLivenessState::RecoveryAcquireDependencies,
+            ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        ) => ProposalLivenessState::RecoveryAcquireDependencies,
+        (
+            ProposalLivenessState::RecoveryAcquireDependencies,
+            ProposalLivenessState::RecoveryAcquireDependencies,
+        ) => ProposalLivenessState::RecoveryAcquireDependencies,
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ProposalLivenessSlot {
     height: u64,
@@ -6129,6 +7695,7 @@ struct ProposeState {
     last_cached_slot_timeout_trigger: Option<CachedSlotTimeoutTrigger>,
     last_missing_qc_timeout_trigger: Option<CachedSlotTimeoutTrigger>,
     last_missing_qc_reacquire_attempt: Option<(u64, u64)>,
+    last_missing_qc_reacquire_without_dependency_at: BTreeMap<u64, Instant>,
     proposal_liveness: Option<ProposalLivenessSlot>,
     proposal_cache: ProposalCache,
     collector_plan: Option<CollectorPlan>,
@@ -6233,6 +7800,7 @@ fn reset_runtime_state_for_mode_flip(
     forced_view_after_timeout: &mut Option<(u64, u64)>,
     last_missing_qc_timeout_trigger: &mut Option<CachedSlotTimeoutTrigger>,
     last_missing_qc_reacquire_attempt: &mut Option<(u64, u64)>,
+    last_missing_qc_reacquire_without_dependency_at: &mut BTreeMap<u64, Instant>,
     proposal_liveness: &mut Option<ProposalLivenessSlot>,
     last_pacemaker_attempt: &mut Option<Instant>,
     last_successful_proposal: &mut Option<Instant>,
@@ -6254,6 +7822,7 @@ fn reset_runtime_state_for_mode_flip(
     *forced_view_after_timeout = None;
     *last_missing_qc_timeout_trigger = None;
     *last_missing_qc_reacquire_attempt = None;
+    last_missing_qc_reacquire_without_dependency_at.clear();
     *proposal_liveness = None;
     *last_pacemaker_attempt = None;
     *last_successful_proposal = None;
@@ -6318,7 +7887,9 @@ enum BlockSyncRosterSource {
     ValidatorCheckpointHint,
     QcHistory,
     ValidatorCheckpointHistory,
+    #[cfg(test)]
     RosterSidecar,
+    PreviousBlockEvidence,
     CommitRosterJournal,
     CommitTopologySnapshot,
 }
@@ -6331,7 +7902,9 @@ impl BlockSyncRosterSource {
             Self::ValidatorCheckpointHint => "validator_checkpoint_hint",
             Self::QcHistory => "commit_qc_history",
             Self::ValidatorCheckpointHistory => "validator_checkpoint_history",
+            #[cfg(test)]
             Self::RosterSidecar => "roster_sidecar",
+            Self::PreviousBlockEvidence => "previous_block_evidence",
             Self::CommitRosterJournal => "commit_roster_journal",
             Self::CommitTopologySnapshot => "commit_topology_snapshot",
         }
@@ -6405,15 +7978,35 @@ fn apply_roster_selection_to_block_sync_update(
 }
 
 // Block sync updates are only verifiable when they carry roster evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockSyncRosterEvidenceState {
+    Verifiable,
+    MissingCommitProof,
+    MissingStakeSnapshot,
+}
+
+fn classify_block_sync_roster_evidence(
+    update: &super::message::BlockSyncUpdate,
+    consensus_mode: ConsensusMode,
+) -> BlockSyncRosterEvidenceState {
+    let has_commit_proof = update.commit_qc.is_some() || update.validator_checkpoint.is_some();
+    if !has_commit_proof {
+        return BlockSyncRosterEvidenceState::MissingCommitProof;
+    }
+    if matches!(consensus_mode, ConsensusMode::Npos) && update.stake_snapshot.is_none() {
+        return BlockSyncRosterEvidenceState::MissingStakeSnapshot;
+    }
+    BlockSyncRosterEvidenceState::Verifiable
+}
+
 fn block_sync_update_has_roster(
     update: &super::message::BlockSyncUpdate,
     consensus_mode: ConsensusMode,
 ) -> bool {
-    let has_roster_hint = update.commit_qc.is_some() || update.validator_checkpoint.is_some();
-    match consensus_mode {
-        ConsensusMode::Permissioned => has_roster_hint,
-        ConsensusMode::Npos => has_roster_hint && update.stake_snapshot.is_some(),
-    }
+    matches!(
+        classify_block_sync_roster_evidence(update, consensus_mode),
+        BlockSyncRosterEvidenceState::Verifiable
+    )
 }
 
 fn block_sync_update_wire_len(origin: &PeerId, update: &super::message::BlockSyncUpdate) -> usize {
@@ -6425,6 +8018,7 @@ enum ViewChangeCause {
     CommitFailure,
     QuorumTimeout,
     StakeQuorumTimeout,
+    RosterUnavailable,
     CensorshipEvidence,
     MissingPayload,
     MissingQc,
@@ -6437,6 +8031,7 @@ impl ViewChangeCause {
             Self::CommitFailure => "commit_failure",
             Self::QuorumTimeout => "quorum_timeout",
             Self::StakeQuorumTimeout => "stake_quorum_timeout",
+            Self::RosterUnavailable => "roster_unavailable",
             Self::CensorshipEvidence => "censorship_evidence",
             Self::MissingPayload => "missing_payload",
             Self::MissingQc => "missing_qc",
@@ -6889,8 +8484,27 @@ fn persisted_roster_for_block(
     block_view: Option<u64>,
     roster_cache: &RosterValidationCache,
     selection_cache: Option<&mut BlockSyncRosterSelectionCache>,
-    allow_sidecar: bool,
+    _allow_sidecar: bool,
 ) -> Option<BlockSyncRosterSelection> {
+    fn stake_snapshot_from_previous_roster_evidence(
+        snapshot: &iroha_data_model::consensus::CommitStakeSnapshot,
+    ) -> CommitStakeSnapshot {
+        CommitStakeSnapshot {
+            validator_set_hash: snapshot.validator_set_hash,
+            entries: snapshot
+                .entries
+                .iter()
+                .cloned()
+                .map(
+                    |entry| crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                        peer_id: entry.peer_id,
+                        stake: entry.stake,
+                    },
+                )
+                .collect(),
+        }
+    }
+
     let mode_tag = match consensus_mode {
         ConsensusMode::Permissioned => PERMISSIONED_TAG,
         ConsensusMode::Npos => NPOS_TAG,
@@ -6945,72 +8559,254 @@ fn persisted_roster_for_block(
         );
     }
 
-    if allow_sidecar && let Some(meta) = kura.read_roster_metadata(block_height) {
-        if meta.block_hash != block_hash {
-            if let Some(suppressed_since_last) =
-                allow_roster_sidecar_mismatch_warning(block_height, block_hash, meta.block_hash)
-            {
+    let successor_height = block_height
+        .checked_add(1)
+        .and_then(|height| usize::try_from(height).ok())
+        .and_then(NonZeroUsize::new);
+    if let Some(successor_height) = successor_height
+        && let Some(successor) = kura.get_block(successor_height)
+    {
+        if successor.header().prev_block_hash() == Some(block_hash) {
+            if let Some(evidence) = successor.previous_roster_evidence() {
+                if evidence.height != block_height || evidence.block_hash != block_hash {
+                    if let Some(suppressed_since_last) = allow_roster_sidecar_mismatch_warning(
+                        block_height,
+                        block_hash,
+                        evidence.block_hash,
+                    ) {
+                        warn!(
+                            expected_height = block_height,
+                            expected = %block_hash,
+                            evidence_height = evidence.height,
+                            evidence_hash = %evidence.block_hash,
+                            successor_height = successor_height.get(),
+                            suppressed_since_last,
+                            "ignoring previous roster evidence with mismatched target"
+                        );
+                    }
+                    return None;
+                }
+                let stake_snapshot = evidence
+                    .stake_snapshot
+                    .as_ref()
+                    .map(stake_snapshot_from_previous_roster_evidence);
+                let key_view = block_view.unwrap_or(evidence.validator_checkpoint.view);
+                let cache_key = BlockSyncRosterCacheKey::from_hints(
+                    block_hash,
+                    block_height,
+                    key_view,
+                    consensus_mode,
+                    None,
+                    Some(&evidence.validator_checkpoint),
+                    stake_snapshot.as_ref(),
+                );
+                if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
+                    if let Some(selection) = cache.get(key) {
+                        return Some(selection);
+                    }
+                }
+                if let Some(selection) = selection_from_roster_artifacts(
+                    None,
+                    Some(&evidence.validator_checkpoint),
+                    stake_snapshot.as_ref(),
+                    block_hash,
+                    block_height,
+                    block_view,
+                    BlockSyncRosterSource::PreviousBlockEvidence,
+                    consensus_mode,
+                    &state.chain_id,
+                    mode_tag,
+                    roster_cache,
+                ) {
+                    if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
+                        if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                            cache.insert(key, selection.clone());
+                        }
+                    }
+                    if let Some(checkpoint) = selection.checkpoint.as_ref() {
+                        status::record_validator_checkpoint(checkpoint.clone());
+                    }
+                    return Some(selection);
+                }
                 warn!(
-                    expected = %block_hash,
-                    stored = %meta.block_hash,
                     height = block_height,
-                    suppressed_since_last,
-                    "ignoring roster sidecar with mismatched hash"
+                    block = %block_hash,
+                    successor_height = successor_height.get(),
+                    "previous block roster evidence present but failed validation"
                 );
             }
-            return None;
         }
-        let key_view = block_view
-            .or_else(|| meta.commit_qc.as_ref().map(|qc| qc.view))
-            .or_else(|| meta.validator_checkpoint.as_ref().map(|chk| chk.view))
-            .unwrap_or(0);
-        let cache_key = BlockSyncRosterCacheKey::from_hints(
-            block_hash,
-            block_height,
-            key_view,
-            consensus_mode,
-            meta.commit_qc.as_ref(),
-            meta.validator_checkpoint.as_ref(),
-            meta.stake_snapshot.as_ref(),
-        );
-        if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
-            if let Some(selection) = cache.get(key) {
-                return Some(selection);
-            }
-        }
-        if let Some(selection) = selection_from_roster_artifacts(
-            meta.commit_qc.as_ref(),
-            meta.validator_checkpoint.as_ref(),
-            meta.stake_snapshot.as_ref(),
-            block_hash,
-            block_height,
-            block_view,
-            BlockSyncRosterSource::RosterSidecar,
-            consensus_mode,
-            &state.chain_id,
-            mode_tag,
-            roster_cache,
-        ) {
-            if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
-                if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
-                    cache.insert(key, selection.clone());
-                }
-            }
-            if let Some(cert) = selection.commit_qc.as_ref() {
-                status::record_commit_qc(cert.clone());
-            }
-            if let Some(checkpoint) = selection.checkpoint.as_ref() {
-                status::record_validator_checkpoint(checkpoint.clone());
-            }
-            return Some(selection);
-        }
-        warn!(
-            height = block_height,
-            block = %block_hash,
-            "roster sidecar present but failed validation"
-        );
     }
     None
+}
+
+#[cfg(test)]
+mod persisted_roster_for_block_tests {
+    use std::{num::NonZeroU64, sync::Arc};
+
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        block::{BlockHeader, SignedBlock},
+        consensus::{
+            PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+        },
+        peer::PeerId,
+    };
+
+    use super::*;
+    use crate::{
+        block::ValidBlock, prelude::World, query::store::LiveQueryStore, sumeragi::status,
+    };
+
+    fn sample_checkpoint() -> ValidatorSetCheckpoint {
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let block_hash = header.hash();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer = PeerId::new(keypair.public_key().clone());
+        let roster = vec![peer];
+        let signers_bitmap = vec![0b0000_0001];
+        let aggregate = vec![0xAB; 96];
+        let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+        ValidatorSetCheckpoint::new(
+            1,
+            0,
+            block_hash,
+            zero_root,
+            zero_root,
+            roster,
+            signers_bitmap,
+            aggregate,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        )
+    }
+
+    fn successor_block_with_evidence(
+        parent_hash: HashOf<BlockHeader>,
+        evidence: Option<PreviousRosterEvidence>,
+    ) -> SignedBlock {
+        let keypair = KeyPair::random();
+        let mut block: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(2).expect("non-zero height"));
+                header.set_prev_block_hash(Some(parent_hash));
+            })
+            .into();
+        block.set_previous_roster_evidence(evidence);
+        block
+    }
+
+    fn store_placeholder_parent(kura: &Arc<Kura>) {
+        let keypair = KeyPair::random();
+        let placeholder: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+            })
+            .into();
+        kura.store_block(Arc::new(placeholder))
+            .expect("store placeholder parent block");
+    }
+
+    #[test]
+    fn uses_previous_block_evidence_when_commit_journal_missing() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let checkpoint = sample_checkpoint();
+        let block_hash = checkpoint.block_hash;
+        let evidence = PreviousRosterEvidence {
+            height: checkpoint.height,
+            block_hash,
+            validator_checkpoint: checkpoint.clone(),
+            stake_snapshot: None,
+        };
+        store_placeholder_parent(&kura);
+        let successor = successor_block_with_evidence(block_hash, Some(evidence));
+        kura.store_block(Arc::new(successor))
+            .expect("store successor block");
+        let roster_cache = {
+            let view = state.view();
+            RosterValidationCache::from_world(view.world(), 1, None)
+        };
+
+        let selection = persisted_roster_for_block(
+            &state,
+            kura.as_ref(),
+            ConsensusMode::Permissioned,
+            checkpoint.height,
+            block_hash,
+            Some(checkpoint.view),
+            &roster_cache,
+            None,
+            false,
+        )
+        .expect("selection should use previous block evidence fallback");
+        assert_eq!(
+            selection.source,
+            BlockSyncRosterSource::PreviousBlockEvidence
+        );
+        assert!(selection.commit_qc.is_none());
+        assert_eq!(selection.checkpoint, Some(checkpoint));
+    }
+
+    #[test]
+    fn ignores_previous_block_evidence_when_target_mismatched() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let checkpoint = sample_checkpoint();
+        let block_hash = checkpoint.block_hash;
+        let mismatched_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xCD; Hash::LENGTH]));
+        let evidence = PreviousRosterEvidence {
+            height: checkpoint.height,
+            block_hash: mismatched_hash,
+            validator_checkpoint: checkpoint.clone(),
+            stake_snapshot: None,
+        };
+        store_placeholder_parent(&kura);
+        let successor = successor_block_with_evidence(block_hash, Some(evidence));
+        kura.store_block(Arc::new(successor))
+            .expect("store successor block");
+        let roster_cache = {
+            let view = state.view();
+            RosterValidationCache::from_world(view.world(), 1, None)
+        };
+
+        let selection = persisted_roster_for_block(
+            &state,
+            kura.as_ref(),
+            ConsensusMode::Permissioned,
+            checkpoint.height,
+            block_hash,
+            Some(checkpoint.view),
+            &roster_cache,
+            None,
+            false,
+        );
+        assert!(
+            selection.is_none(),
+            "mismatched previous roster evidence must not be selected"
+        );
+    }
 }
 
 fn block_sync_update_with_roster(
@@ -7021,6 +8817,41 @@ fn block_sync_update_with_roster(
     _trusted: &iroha_config::parameters::actual::TrustedPeers,
     _me: &PeerId,
     roster_cache: &RosterValidationCache,
+) -> super::message::BlockSyncUpdate {
+    block_sync_update_with_roster_inner(
+        block,
+        state,
+        kura,
+        fallback_consensus_mode,
+        roster_cache,
+        true,
+    )
+}
+
+fn block_sync_update_with_certified_roster(
+    block: &SignedBlock,
+    state: &State,
+    kura: &Kura,
+    fallback_consensus_mode: ConsensusMode,
+    roster_cache: &RosterValidationCache,
+) -> super::message::BlockSyncUpdate {
+    block_sync_update_with_roster_inner(
+        block,
+        state,
+        kura,
+        fallback_consensus_mode,
+        roster_cache,
+        false,
+    )
+}
+
+fn block_sync_update_with_roster_inner(
+    block: &SignedBlock,
+    state: &State,
+    kura: &Kura,
+    fallback_consensus_mode: ConsensusMode,
+    roster_cache: &RosterValidationCache,
+    allow_uncertified_fallback: bool,
 ) -> super::message::BlockSyncUpdate {
     let block_hash = block.hash();
     let block_height = block.header().height().get();
@@ -7045,7 +8876,7 @@ fn block_sync_update_with_roster(
         Some(block_view),
         roster_cache,
         None,
-        true,
+        false,
     )
     .or_else(|| {
         block_sync_history_roster_for_block(
@@ -7058,6 +8889,9 @@ fn block_sync_update_with_roster(
         )
     })
     .or_else(|| {
+        if !allow_uncertified_fallback {
+            return None;
+        }
         // Use committed topology state for uncertified block-sync fallback.
         let world = state.world.view();
         let commit_topology = state.commit_topology.view();
@@ -7610,13 +9444,88 @@ fn select_block_sync_roster(
     checkpoint_hint: Option<&ValidatorSetCheckpoint>,
     stake_snapshot_hint: Option<&CommitStakeSnapshot>,
     state: &State,
-    _trusted: &iroha_config::parameters::actual::TrustedPeers,
-    _me: &PeerId,
+    trusted: &iroha_config::parameters::actual::TrustedPeers,
+    me: &PeerId,
     consensus_mode: ConsensusMode,
     mode_tag: &'static str,
     allow_uncertified: bool,
     roster_cache: &RosterValidationCache,
 ) -> Option<BlockSyncRosterSelection> {
+    fn uncertified_roster_from_local_state(
+        state: &State,
+        trusted: &iroha_config::parameters::actual::TrustedPeers,
+        me: &PeerId,
+        consensus_mode: ConsensusMode,
+        block_height: u64,
+    ) -> Vec<PeerId> {
+        let world = state.world_view();
+        let commit_topology = state.commit_topology_snapshot();
+        let base_roster = if commit_topology.is_empty() {
+            world.peers().iter().cloned().collect::<Vec<_>>()
+        } else {
+            commit_topology.clone()
+        };
+        let mut filtered = roster::canonicalize_roster_for_mode(
+            roster::filter_roster_with_live_consensus_keys_at_height_world(
+                &world,
+                base_roster.clone(),
+                block_height.saturating_add(1),
+            ),
+            consensus_mode,
+        );
+        if !filtered.is_empty() {
+            return filtered;
+        }
+        filtered = roster::canonicalize_roster_for_mode(
+            roster::filter_roster_with_live_consensus_keys_at_height_world(
+                &world,
+                base_roster.clone(),
+                block_height,
+            ),
+            consensus_mode,
+        );
+        if !filtered.is_empty() {
+            debug!(
+                height = block_height,
+                roster_len = filtered.len(),
+                "using uncertified block-sync roster from current-height live-key filter fallback"
+            );
+            return filtered;
+        }
+
+        let derived = roster::derive_active_topology_for_mode_from_world(
+            &world,
+            &commit_topology,
+            block_height.saturating_sub(1),
+            trusted,
+            me,
+            consensus_mode,
+        );
+        if !derived.is_empty() {
+            debug!(
+                height = block_height,
+                roster_len = derived.len(),
+                "using uncertified block-sync roster from active-topology fallback"
+            );
+            return derived;
+        }
+
+        let trusted_fallback = roster::canonicalize_roster_for_mode(
+            crate::sumeragi::filter_validators_from_trusted(trusted),
+            consensus_mode,
+        );
+        if !trusted_fallback.is_empty() {
+            debug!(
+                height = block_height,
+                roster_len = trusted_fallback.len(),
+                "using uncertified block-sync roster from trusted-topology fallback"
+            );
+            return trusted_fallback;
+        }
+
+        roster::canonicalize_roster_for_mode(base_roster, consensus_mode)
+    }
+
     let block_view = block.header().view_change_index();
     if let Some(selection) = persisted {
         return Some(selection);
@@ -7709,19 +9618,8 @@ fn select_block_sync_roster(
     }
 
     if allow_uncertified {
-        let world = state.world_view();
-        let commit_topology = state.commit_topology_snapshot();
-        let mut roster = if commit_topology.is_empty() {
-            world.peers().iter().cloned().collect()
-        } else {
-            commit_topology
-        };
-        roster = roster::filter_roster_with_live_consensus_keys_at_height_world(
-            &world,
-            roster,
-            block_height.saturating_add(1),
-        );
-        roster = roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        let roster =
+            uncertified_roster_from_local_state(state, trusted, me, consensus_mode, block_height);
         let source = BlockSyncRosterSource::CommitTopologySnapshot;
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Npos => roster_cache.stake_snapshot_for_roster(&roster),
@@ -9082,39 +10980,6 @@ impl Actor {
             || self.kura.block_payload_available_by_hash(hash)
     }
 
-    fn force_rbc_delivery_for_block_sync(
-        &mut self,
-        key: super::rbc_store::SessionKey,
-        payload_hash: Hash,
-    ) -> bool {
-        if !self.runtime_da_enabled() {
-            return false;
-        }
-        let snapshot = {
-            let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) else {
-                return false;
-            };
-            if session.is_invalid() || session.delivered {
-                return false;
-            }
-            if session.payload_hash() != Some(payload_hash) {
-                return false;
-            }
-            if session.received_chunks() != session.total_chunks() {
-                return false;
-            }
-            session.delivered = true;
-            session.deliver_sender = None;
-            session.deliver_signature = None;
-            session.sent_ready = true;
-            session.clone()
-        };
-        self.update_rbc_status_entry(key, &snapshot, false);
-        self.persist_rbc_session(key, &snapshot);
-        self.publish_rbc_backlog_snapshot();
-        true
-    }
-
     fn block_payload_available_for_progress(&self, hash: HashOf<BlockHeader>) -> bool {
         if let Some(pending) = self.pending.pending_blocks.get(&hash) {
             return !matches!(pending.validation_status, ValidationStatus::Invalid);
@@ -9251,6 +11116,131 @@ impl Actor {
         )
     }
 
+    fn lock_lag_catchup_frontier_for_highest(
+        &self,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> Option<u64> {
+        let lock = self.locked_qc?;
+        if !self.block_known_for_lock(lock.subject_block_hash) {
+            return None;
+        }
+        if highest_qc.height <= lock.height.saturating_add(1) {
+            return None;
+        }
+        matches!(
+            chain_extends_tip(
+                highest_qc.subject_block_hash,
+                highest_qc.height,
+                lock.height,
+                lock.subject_block_hash,
+                |hash, height| self.parent_hash_for(hash, height),
+            ),
+            None
+        )
+        .then_some(lock.height.saturating_add(1))
+    }
+
+    fn lock_lag_catchup_frontier_height(&self) -> Option<u64> {
+        let highest_qc = self.highest_qc.or(self.latest_committed_qc())?;
+        self.lock_lag_catchup_frontier_for_highest(highest_qc)
+    }
+
+    fn reset_diverged_recovery_state_after_locked_realign(
+        &mut self,
+        committed_height: u64,
+        committed_hash: HashOf<BlockHeader>,
+        now: Instant,
+    ) {
+        let frontier_height = u64::try_from(committed_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let frontier_has_actionable_dependency =
+            self.missing_qc_height_has_unresolved_dependency_at_height(frontier_height);
+        let (
+            future_pending_removed,
+            future_missing_removed,
+            future_deferred_updates_removed,
+            future_deferred_qcs_removed,
+            future_hints_removed,
+            future_proposals_removed,
+            future_seen_removed,
+        ) = self.prune_future_consensus_state_above_height(frontier_height, now, true);
+        let (
+            frontier_pending_removed,
+            frontier_missing_removed,
+            frontier_deferred_updates_removed,
+            frontier_deferred_qcs_removed,
+            frontier_hints_removed,
+            frontier_proposals_removed,
+            frontier_seen_removed,
+        ) = self.prune_consensus_state_for_missing_block_height(frontier_height);
+
+        let missing_removed_total = future_missing_removed.saturating_add(frontier_missing_removed);
+        if missing_removed_total > 0 {
+            super::status::inc_missing_request_pruned_stale_height(
+                u64::try_from(missing_removed_total).unwrap_or(u64::MAX),
+            );
+            self.update_missing_block_gauges();
+        }
+
+        let evicted_total = future_pending_removed
+            .saturating_add(future_deferred_updates_removed)
+            .saturating_add(future_deferred_qcs_removed)
+            .saturating_add(future_hints_removed)
+            .saturating_add(future_proposals_removed)
+            .saturating_add(future_seen_removed)
+            .saturating_add(frontier_pending_removed)
+            .saturating_add(frontier_deferred_updates_removed)
+            .saturating_add(frontier_deferred_qcs_removed)
+            .saturating_add(frontier_hints_removed)
+            .saturating_add(frontier_proposals_removed)
+            .saturating_add(frontier_seen_removed);
+        if evicted_total > 0 {
+            super::status::inc_pending_queue_evictions_total(
+                u64::try_from(evicted_total).unwrap_or(u64::MAX),
+            );
+        }
+
+        // Preserve contiguous-frontier shared-window gates so deterministic reanchor
+        // stride does not reset on repeated same-height lock realignments.
+        self.clear_missing_block_recovery_for_height_preserving_frontier_state(
+            frontier_height,
+            now,
+        );
+        if !frontier_has_actionable_dependency {
+            self.clear_sidecar_mismatch_for_height_preserving_frontier_windows(frontier_height);
+        }
+        if let Some(current_view) = self.phase_tracker.current_view(frontier_height) {
+            self.clear_consensus_recovery_for_round(frontier_height, current_view);
+        }
+
+        let requested_pull =
+            self.request_range_pull_from_anchor(frontier_height, "frontier_gap_realign", now);
+        if evicted_total > 0 || missing_removed_total > 0 || requested_pull {
+            warn!(
+                committed_height,
+                frontier_height,
+                committed_hash = %committed_hash,
+                future_pending_removed,
+                future_missing_removed,
+                future_deferred_updates_removed,
+                future_deferred_qcs_removed,
+                future_hints_removed,
+                future_proposals_removed,
+                future_seen_removed,
+                frontier_pending_removed,
+                frontier_missing_removed,
+                frontier_deferred_updates_removed,
+                frontier_deferred_qcs_removed,
+                frontier_hints_removed,
+                frontier_proposals_removed,
+                frontier_seen_removed,
+                requested_pull,
+                "reset deterministic frontier/future recovery state after locked-QC realignment"
+            );
+        }
+    }
+
     fn maybe_realign_locked_to_committed_tip(&mut self) -> bool {
         let Some(committed_qc) = self.latest_committed_qc() else {
             return false;
@@ -9279,6 +11269,13 @@ impl Actor {
                 committed_qc.height,
                 committed_qc.view,
                 Some(committed_hash),
+            );
+            // Keep the consensus FSM deterministic after lock realignment by dropping
+            // diverged frontier/future recovery artifacts before reanchoring to committed+1.
+            self.reset_diverged_recovery_state_after_locked_realign(
+                committed_qc.height,
+                committed_hash,
+                Instant::now(),
             );
             return true;
         }
@@ -9927,6 +11924,7 @@ impl Actor {
             last_cached_slot_timeout_trigger: None,
             last_missing_qc_timeout_trigger: None,
             last_missing_qc_reacquire_attempt: None,
+            last_missing_qc_reacquire_without_dependency_at: BTreeMap::new(),
             proposal_liveness: None,
             proposal_cache: ProposalCache::new(config.recovery.pending_proposal_cap.max(1)),
             collector_plan: None,
@@ -10025,14 +12023,30 @@ impl Actor {
             vote_validation_cache: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
             consensus_recovery: BTreeMap::new(),
+            recovery_pending_baseline_restore: BTreeMap::new(),
             dependency_event_seq: 0,
             missing_block_height_recovery: BTreeMap::new(),
-            no_roster_fallback_recovery: BTreeMap::new(),
+            missing_block_range_pull_expiry_streaks: BTreeMap::new(),
+            frontier_recovery: None,
             sidecar_mismatch_recovery: BTreeMap::new(),
-            sidecar_mismatch_action_cooldowns: BTreeMap::new(),
+            roster_sidecar_mismatch_obsolete: BTreeMap::new(),
+            sidecar_mismatch_window_gates: BTreeMap::new(),
+            sidecar_mismatch_committed_edge_gates: BTreeMap::new(),
+            highest_qc_force_fetch_window_gates: BTreeMap::new(),
+            committed_edge_conflict_window_gates: BTreeMap::new(),
+            lock_rejected_block_sinks: BTreeMap::new(),
             sidecar_observation_suppression_depth: 0,
             qc_missing_payload_range_pull_cooldowns: BTreeMap::new(),
             range_pull_escalation_cooldowns: BTreeMap::new(),
+            lock_lag_prune_cooldown: None,
+            lock_lag_frontier_stall: None,
+            frontier_catchup_stall: None,
+            frontier_catchup_window_gates: BTreeMap::new(),
+            canonical_frontier_reanchor_window_gates: BTreeMap::new(),
+            frontier_stall_reset_window_gates: BTreeMap::new(),
+            missing_qc_height_stall: None,
+            round_recovery_bundle_window_gates: BTreeMap::new(),
+            missing_payload_fetch_window_gates: BTreeMap::new(),
             deferred_qcs: BTreeMap::new(),
             deferred_qc_roster_state: BTreeMap::new(),
             deferred_missing_payload_qcs: BTreeMap::new(),
@@ -10062,6 +12076,13 @@ impl Actor {
             pending_mode_flip: None,
             highest_qc: None,
             locked_qc: None,
+            round_liveness: RoundLivenessTracker {
+                state: RoundLivenessState::Steady,
+                entered_at: now,
+                last_window_at: now,
+                last_progress_height: initial_committed_height as u64,
+                stagnation_windows: 0,
+            },
             tick_counter: 0,
             tick_in_progress: false,
             last_tick_heartbeat_log: now,
@@ -10086,7 +12107,6 @@ impl Actor {
             block_sync_warning_log: BlockSyncWarningThrottle::default(),
             qc_insufficient_warning_log: QcInsufficientWarningThrottle::default(),
             proposal_defer_warning_log: ProposalDeferWarningThrottle::default(),
-            missing_qc_warning_log: MissingQcWarningThrottle::default(),
             roster_validation_cache,
             #[cfg(test)]
             background_request_log: None,
@@ -10679,12 +12699,7 @@ impl Actor {
                 continue;
             }
 
-            if !pending_extends_tip(
-                pending.height,
-                pending.block.header().prev_block_hash(),
-                tip_height,
-                tip_hash,
-            ) {
+            if !self.pending_block_is_active_for_tip(*hash, pending, tip_height, tip_hash) {
                 continue;
             }
 
@@ -11102,6 +13117,7 @@ impl Actor {
         let rbc_persist_progress = self.poll_rbc_persist_results_inner();
         let rbc_seed_progress = self.poll_rbc_seed_results_inner();
         let now = tick_start;
+        self.prune_lock_rejected_block_sinks(now);
         let tick_deadline = self.tick_work_budget_deadline(tick_start);
         let queue_len = self.queue.active_len();
         let adaptive_progress = self.apply_adaptive_observability(now);
@@ -11167,6 +13183,10 @@ impl Actor {
             let progress = self.force_view_change_if_idle(now);
             (progress, step_start.elapsed())
         };
+        let round_liveness_progress = {
+            let _view_ctx = StateViewContextGuard::new("sumeragi.tick.round_liveness_fsm");
+            self.drive_round_liveness_fsm(now)
+        };
         let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
         let rbc_outbound_progress = self.flush_rbc_outbound_chunks(now);
         let rbc_session_ttl_progress = self.prune_stale_rbc_sessions(SystemTime::now());
@@ -11187,6 +13207,7 @@ impl Actor {
             || missing_block_progress
             || reschedule_progress
             || idle_view_progress
+            || round_liveness_progress
             || rbc_rebroadcast_progress
             || rbc_outbound_progress
             || rbc_session_ttl_progress;
@@ -12243,10 +14264,42 @@ impl Actor {
         update: &mut super::message::BlockSyncUpdate,
         consensus_mode: ConsensusMode,
     ) -> bool {
+        let block_hash = update.block.hash();
+        let header = update.block.header();
+        let height = header.height().get();
+        let view = header.view_change_index();
+
         if !self.trim_block_sync_update_for_frame_cap(update) {
+            let evidence = classify_block_sync_roster_evidence(update, consensus_mode);
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                mode = ?consensus_mode,
+                evidence = ?evidence,
+                has_commit_qc = update.commit_qc.is_some(),
+                has_checkpoint = update.validator_checkpoint.is_some(),
+                has_stake_snapshot = update.stake_snapshot.is_some(),
+                "dropping BlockSyncUpdate broadcast because payload exceeds frame cap"
+            );
             return false;
         }
-        block_sync_update_has_roster(update, consensus_mode)
+        let evidence = classify_block_sync_roster_evidence(update, consensus_mode);
+        if !matches!(evidence, BlockSyncRosterEvidenceState::Verifiable) {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                mode = ?consensus_mode,
+                evidence = ?evidence,
+                has_commit_qc = update.commit_qc.is_some(),
+                has_checkpoint = update.validator_checkpoint.is_some(),
+                has_stake_snapshot = update.stake_snapshot.is_some(),
+                "block sync update missing verifiable roster evidence after frame-cap trimming"
+            );
+            return false;
+        }
+        true
     }
 
     fn trim_block_sync_update_for_frame_cap(
@@ -14967,12 +17020,6 @@ impl Actor {
                 .recovery
                 .max_forced_proposal_attempts_per_view
                 .max(1),
-            no_roster_fallback_views: self.config.recovery.no_roster_fallback_views,
-            no_roster_refresh_retry_per_view: self
-                .config
-                .recovery
-                .no_roster_refresh_retry_per_view
-                .max(1),
             rotate_after_reacquire_exhausted: self.config.recovery.rotate_after_reacquire_exhausted,
             missing_request_stale_height_margin: self
                 .config
@@ -15031,69 +17078,1530 @@ impl Actor {
             .range_pull_escalation_after_hash_misses
     }
 
-    fn recovery_no_roster_fallback_views_cap(&self) -> u32 {
-        self.deterministic_recovery_profile()
-            .no_roster_fallback_views
-    }
-
-    fn no_roster_recovery_timings_for_height(&self, height: u64) -> (Duration, Duration) {
-        let world = self.state.world_view();
-        let (mode, _, _) = self.consensus_context_for_height(height);
-        let block_time = self.block_time_for_mode_from_world(&world, mode);
-        let commit_time = self.commit_timeout_for_mode_from_world(&world, mode);
-        let da_enabled = world.parameters().sumeragi().da_enabled();
-        let quorum_timeout = commit_quorum_timeout_from_durations(
-            block_time,
-            commit_time,
-            da_enabled,
-            self.da_quorum_timeout_multiplier(),
-        );
-        let propose_timeout = if matches!(mode, ConsensusMode::Npos) {
-            super::resolve_npos_timeouts_from_world(&world, &self.config.npos).propose
-        } else {
-            SumeragiNposTimeouts::from_block_time(block_time).propose
-        };
-        (
-            quorum_timeout.max(Duration::from_millis(1)),
-            propose_timeout.max(Duration::from_millis(1)),
-        )
-    }
-
-    fn effective_no_roster_fallback_views(&self, height: u64) -> u32 {
-        let cap = self.recovery_no_roster_fallback_views_cap();
-        if cap == 0 {
-            return 0;
-        }
-        let (quorum_timeout, propose_timeout) = self.no_roster_recovery_timings_for_height(height);
-        let ratio = quorum_timeout
-            .as_millis()
-            .saturating_add(propose_timeout.as_millis().saturating_sub(1))
-            .checked_div(propose_timeout.as_millis())
-            .unwrap_or(1);
-        let derived = u32::try_from(ratio).unwrap_or(u32::MAX).max(1);
-        derived.min(cap)
-    }
-
-    fn no_roster_bootstrap_dwell_window(&self, height: u64) -> Duration {
-        let (quorum_timeout, propose_timeout) = self.no_roster_recovery_timings_for_height(height);
-        quorum_timeout
-            .saturating_add(propose_timeout)
-            .max(Duration::from_millis(1))
-    }
-
     fn recovery_missing_qc_reacquire_window(&self) -> Duration {
         self.deterministic_recovery_profile()
             .missing_qc_reacquire_window
     }
 
+    fn lock_lag_range_pull_cooldown_floor(&self) -> Duration {
+        self.commit_quorum_timeout()
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(Duration::from_secs(1))
+    }
+
+    fn lock_lag_range_pull_scope_for_height(&self, height: u64) -> (Option<u64>, bool, bool, u64) {
+        let frontier = self.lock_lag_catchup_frontier_height().or_else(|| {
+            self.lock_lag_frontier_stall
+                .filter(|stall| stall.mode_active)
+                .map(|stall| stall.frontier_height)
+        });
+        let lock_lag_active = frontier.is_some_and(|frontier| height >= frontier);
+        let far_future = frontier.is_some_and(|frontier| height > frontier.saturating_add(1));
+        let canonical_height = if lock_lag_active {
+            frontier.unwrap_or(height)
+        } else {
+            height
+        };
+        (frontier, lock_lag_active, far_future, canonical_height)
+    }
+
+    fn lock_lag_range_pull_active_for_height(&self, height: u64) -> bool {
+        let (_, lock_lag_active, _, _) = self.lock_lag_range_pull_scope_for_height(height);
+        lock_lag_active
+    }
+
+    fn lock_lag_prune_cooldown_window(&self) -> Duration {
+        self.lock_lag_range_pull_cooldown_floor()
+            .max(self.rebroadcast_cooldown())
+            .max(LOCK_LAG_PRUNE_COOLDOWN_FLOOR)
+    }
+
+    fn lock_lag_frontier_stall_timings(&self) -> (Duration, Duration) {
+        let ttl = self
+            .recovery_missing_block_height_ttl()
+            .max(Duration::from_millis(1));
+        let stall_window = self.lock_lag_range_pull_cooldown_floor().max(ttl);
+        (ttl, stall_window)
+    }
+
+    fn lock_lag_frontier_unresolved_dependency_progress(
+        &self,
+        frontier_height: u64,
+    ) -> Option<Instant> {
+        self.pending
+            .missing_block_requests
+            .iter()
+            .filter_map(|(hash, request)| {
+                (request.height == frontier_height && !self.block_payload_available_locally(*hash))
+                    .then_some(request.last_dependency_progress)
+            })
+            .max()
+    }
+
+    fn lock_lag_frontier_has_unresolved_dependency(&self, frontier_height: u64) -> bool {
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height >= frontier_height && !self.block_payload_available_locally(*hash)
+            })
+    }
+
+    fn lock_lag_frontier_stall_snapshot(
+        &mut self,
+        now: Instant,
+    ) -> Option<LockLagFrontierStallSnapshot> {
+        let Some(frontier_height) = self.lock_lag_catchup_frontier_height() else {
+            self.lock_lag_frontier_stall = None;
+            return None;
+        };
+        if self.committed_height_snapshot() >= frontier_height {
+            self.lock_lag_frontier_stall = None;
+            return None;
+        }
+        if !self.lock_lag_frontier_has_unresolved_dependency(frontier_height) {
+            self.lock_lag_frontier_stall = None;
+            return None;
+        }
+        let frontier_progress_at =
+            self.lock_lag_frontier_unresolved_dependency_progress(frontier_height);
+        let (_, stall_window) = self.lock_lag_frontier_stall_timings();
+        let mut stall = match self.lock_lag_frontier_stall {
+            Some(existing) if existing.frontier_height == frontier_height => existing,
+            _ => LockLagFrontierStallState {
+                frontier_height,
+                entered_at: now,
+                last_window_at: now,
+                windows_without_progress: 0,
+                mode_active: false,
+                window_index: 0,
+            },
+        };
+        let was_mode_active = stall.mode_active;
+        if let Some(frontier_progress_at) = frontier_progress_at {
+            if frontier_progress_at > stall.last_window_at {
+                stall.entered_at = frontier_progress_at;
+                stall.last_window_at = frontier_progress_at;
+                if !stall.mode_active {
+                    stall.windows_without_progress = 0;
+                }
+            }
+        }
+
+        let elapsed_window_count = {
+            let window_nanos = stall_window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(stall.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            stall.last_window_at = now;
+            let increment = u32::try_from(elapsed_window_count).unwrap_or(u32::MAX);
+            stall.windows_without_progress =
+                stall.windows_without_progress.saturating_add(increment);
+            if stall.mode_active {
+                stall.window_index = stall.window_index.saturating_add(elapsed_window_count);
+            } else if stall.windows_without_progress >= LOCK_LAG_FRONTIER_STALL_WINDOWS_TO_ACTIVATE
+            {
+                stall.mode_active = true;
+                stall.entered_at = now;
+                stall.window_index = 0;
+            }
+        }
+        if !was_mode_active && stall.mode_active {
+            warn!(
+                frontier_height,
+                stall_window_ms = stall_window.as_millis(),
+                windows_without_progress = stall.windows_without_progress,
+                "entered lock-lag frontier stall dampening mode"
+            );
+        }
+        self.lock_lag_frontier_stall = Some(stall);
+        Some(LockLagFrontierStallSnapshot {
+            frontier_height,
+            entered_at: stall.entered_at,
+            stall_window,
+            mode_active: stall.mode_active,
+            window_index: stall.window_index,
+        })
+    }
+
+    fn missing_qc_height_stall_window(&self) -> Duration {
+        self.commit_quorum_timeout()
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(self.recovery_missing_block_height_ttl())
+            .max(Duration::from_millis(1))
+    }
+
+    fn round_recovery_bundle_window(&self) -> Duration {
+        self.commit_quorum_timeout()
+            .max(self.subsystems.propose.pacemaker.propose_interval)
+            .max(Duration::from_millis(1))
+    }
+
+    fn prune_round_recovery_bundle_windows(&mut self, now: Instant) {
+        let committed_height = self.committed_height_snapshot();
+        let retention = saturating_mul_duration(self.round_recovery_bundle_window(), 8)
+            .max(self.round_recovery_bundle_window());
+        self.round_recovery_bundle_window_gates
+            .retain(|height, state| {
+                *height >= committed_height.saturating_sub(1)
+                    && now.saturating_duration_since(state.last_window_at) <= retention
+            });
+    }
+
+    fn round_recovery_bundle_window_snapshot(
+        &mut self,
+        height: u64,
+        now: Instant,
+    ) -> RoundRecoveryBundleWindowSnapshot {
+        self.prune_round_recovery_bundle_windows(now);
+        let window = self.round_recovery_bundle_window();
+        let mut state = self
+            .round_recovery_bundle_window_gates
+            .get(&height)
+            .copied()
+            .unwrap_or(RoundRecoveryBundleWindowGateState {
+                height,
+                entered_at: now,
+                last_window_at: now,
+                window_index: 0,
+                last_bundle_window_index: None,
+                last_bundle_source: None,
+                last_bundle_at: None,
+            });
+
+        let elapsed_window_count = {
+            let window_nanos = window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(state.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            state.last_window_at = now;
+            state.window_index = state.window_index.saturating_add(elapsed_window_count);
+        }
+        state.height = height;
+        self.round_recovery_bundle_window_gates
+            .insert(height, state);
+        RoundRecoveryBundleWindowSnapshot {
+            height: state.height,
+            entered_at: state.entered_at,
+            window,
+            window_index: state.window_index,
+            last_bundle_window_index: state.last_bundle_window_index,
+            last_bundle_source: state.last_bundle_source,
+            last_bundle_at: state.last_bundle_at,
+        }
+    }
+
+    fn note_round_recovery_bundle_source(
+        &mut self,
+        height: u64,
+        source: RoundRecoveryBundleSource,
+        now: Instant,
+    ) {
+        let _ = self.round_recovery_bundle_window_snapshot(height, now);
+        if let Some(state) = self.round_recovery_bundle_window_gates.get_mut(&height) {
+            state.last_bundle_source = Some(source);
+            state.last_bundle_at = Some(now);
+        }
+    }
+
+    fn try_reserve_round_recovery_bundle_window(
+        &mut self,
+        height: u64,
+        source: RoundRecoveryBundleSource,
+        now: Instant,
+    ) -> bool {
+        let snapshot = self.round_recovery_bundle_window_snapshot(height, now);
+        if snapshot.last_bundle_window_index == Some(snapshot.window_index) {
+            debug!(
+                height = snapshot.height,
+                source = source.as_str(),
+                reserved_source = ?snapshot.last_bundle_source.map(|value| value.as_str()),
+                window_index = snapshot.window_index,
+                window_ms = snapshot.window.as_millis(),
+                window_dwell_ms = now.saturating_duration_since(snapshot.entered_at).as_millis(),
+                reserved_at_ms = snapshot
+                    .last_bundle_at
+                    .map(|at| now.saturating_duration_since(at).as_millis()),
+                "suppressing repeated same-height round recovery bundle in the current window"
+            );
+            return false;
+        }
+        if let Some(state) = self.round_recovery_bundle_window_gates.get_mut(&height) {
+            state.last_bundle_window_index = Some(snapshot.window_index);
+            state.last_bundle_source = Some(source);
+            state.last_bundle_at = Some(now);
+        }
+        true
+    }
+
+    fn frontier_catchup_stall_window(&self) -> Duration {
+        self.recovery_missing_block_height_ttl()
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(self.commit_quorum_timeout())
+            .max(Duration::from_millis(1))
+    }
+
+    fn missing_hash_is_obsolete_committed_edge_conflict(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        committed_height: u64,
+    ) -> bool {
+        height <= committed_height
+            && self
+                .committed_block_hash_for_height(height)
+                .is_some_and(|committed_hash| committed_hash != block_hash)
+    }
+
+    fn missing_hash_is_non_actionable_dependency(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.missing_hash_is_obsolete_committed_edge_conflict(height, block_hash, committed_height)
+            || self
+                .lock_rejected_block_sinks
+                .get(&(height, block_hash))
+                .copied()
+                .is_some_and(|state| self.lock_rejected_block_sink_active(state, now))
+    }
+
+    pub(super) const fn missing_dependency_subject_height_for_phase(
+        phase: crate::sumeragi::consensus::Phase,
+        height: u64,
+    ) -> u64 {
+        match phase {
+            // NEW_VIEW votes/QCs carry the parent/highest-QC subject hash while the vote/QC round
+            // height points to the next block. Use the subject height for dependency classification.
+            crate::sumeragi::consensus::Phase::NewView => height.saturating_sub(1),
+            crate::sumeragi::consensus::Phase::Prepare
+            | crate::sumeragi::consensus::Phase::Commit => height,
+        }
+    }
+
+    fn missing_qc_dependency_is_non_actionable(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
+        self.missing_hash_is_non_actionable_dependency(
+            subject_height,
+            block_hash,
+            committed_height,
+            now,
+        )
+    }
+
+    fn deferred_missing_payload_qc_is_non_actionable_dependency(
+        &self,
+        entry: &DeferredQcEntry,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.missing_qc_dependency_is_non_actionable(
+            entry.qc.phase,
+            entry.qc.height,
+            entry.qc.subject_block_hash,
+            committed_height,
+            now,
+        )
+    }
+
+    fn missing_block_request_is_non_actionable_dependency(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.missing_qc_dependency_is_non_actionable(
+            request.phase,
+            request.height,
+            block_hash,
+            committed_height,
+            now,
+        )
+    }
+
+    fn missing_block_request_has_actionable_dependency(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        !self.block_payload_available_locally(block_hash)
+            && !self.missing_block_request_is_non_actionable_dependency(
+                block_hash,
+                request,
+                committed_height,
+                now,
+            )
+    }
+
+    fn deferred_missing_payload_qc_has_actionable_dependency(
+        &self,
+        entry: &DeferredQcEntry,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        !self.block_payload_available_locally(entry.qc.subject_block_hash)
+            && !self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                entry,
+                committed_height,
+                now,
+            )
+    }
+
+    fn missing_request_hash_has_actionable_dependency(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_some_and(|request| {
+                self.missing_block_request_has_actionable_dependency(
+                    block_hash,
+                    request,
+                    committed_height,
+                    now,
+                )
+            })
+    }
+
+    fn has_actionable_missing_block_requests(&self) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                self.missing_block_request_has_actionable_dependency(
+                    *hash,
+                    request,
+                    committed_height,
+                    now,
+                )
+            })
+    }
+
+    fn has_actionable_deferred_missing_payload_qcs(&self) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.deferred_missing_payload_qcs.values().any(|entry| {
+            self.deferred_missing_payload_qc_has_actionable_dependency(entry, committed_height, now)
+        })
+    }
+
+    fn has_contiguous_frontier_pressure(&self, local_height: u64) -> bool {
+        let frontier_height = local_height.saturating_add(1);
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height >= frontier_height
+                    && !self.block_payload_available_locally(*hash)
+                    && !self.missing_block_request_is_non_actionable_dependency(
+                        *hash,
+                        request,
+                        local_height,
+                        now,
+                    )
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.height >= frontier_height
+                    && !self.block_payload_available_locally(entry.qc.subject_block_hash)
+                    && !self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                        entry,
+                        local_height,
+                        now,
+                    )
+            })
+            || self.sidecar_quarantined_for_height(local_height)
+            || self.sidecar_quarantined_for_height(frontier_height)
+    }
+
+    fn frontier_catchup_target_height(&self, local_height: u64) -> Option<u64> {
+        let contiguous_frontier_height = local_height.saturating_add(1);
+        if self.has_contiguous_frontier_pressure(local_height) {
+            // Keep deterministic range-pull scheduling pinned to the contiguous frontier while
+            // any edge pressure remains. This avoids frontier identity flapping to far-ahead
+            // missing heights, which can repeatedly reset per-window reanchor gates.
+            return Some(contiguous_frontier_height);
+        }
+        let missing_frontier = self.lowest_unresolved_missing_block_height(local_height);
+        let lock_lag_frontier = self
+            .lock_lag_catchup_frontier_height()
+            .filter(|frontier| self.lock_lag_frontier_has_unresolved_dependency(*frontier));
+        match (missing_frontier, lock_lag_frontier) {
+            (Some(lhs), Some(rhs)) => Some(lhs.min(rhs)),
+            (Some(height), None) | (None, Some(height)) => Some(height),
+            (None, None) => None,
+        }
+    }
+
+    fn canonical_frontier_reanchor_gate_heights(
+        &self,
+        local_height: u64,
+        canonical_height: u64,
+    ) -> Option<(u64, u64)> {
+        let frontier_height = self
+            .frontier_catchup_target_height(local_height)
+            .filter(|frontier_height| canonical_height >= *frontier_height)?;
+        // Collapse all frontier-equivalent paths onto one deterministic shared-window gate.
+        Some((frontier_height, frontier_height))
+    }
+
+    fn frontier_catchup_stall_mode_active_at_frontier(
+        &self,
+        frontier_height: u64,
+        local_height: u64,
+    ) -> bool {
+        self.frontier_catchup_stall.as_ref().is_some_and(|stall| {
+            stall.mode_active
+                && stall.frontier_height == frontier_height
+                && stall.local_height_at_entry == local_height
+        })
+    }
+
+    fn frontier_catchup_has_unresolved_dependency(&self, frontier_height: u64) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height >= frontier_height
+                    && !self.block_payload_available_locally(*hash)
+                    && !self.missing_block_request_is_non_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.height >= frontier_height
+                    && !self.block_payload_available_locally(entry.qc.subject_block_hash)
+                    && !self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.lock_lag_frontier_has_unresolved_dependency(frontier_height)
+            || {
+                let local_height = self.committed_height_snapshot();
+                frontier_height == local_height.saturating_add(1)
+                    && self.has_contiguous_frontier_pressure(local_height)
+            }
+    }
+
+    fn frontier_catchup_gap_exceeds_threshold(
+        &self,
+        frontier_height: u64,
+        canonical_height: u64,
+    ) -> bool {
+        let highest_known_height = self
+            .highest_qc
+            .or(self.latest_committed_qc())
+            .map_or_else(|| self.committed_height_snapshot(), |qc| qc.height);
+        if highest_known_height.max(canonical_height) > frontier_height.saturating_add(1) {
+            return true;
+        }
+
+        // Some failure modes pin the local frontier at `committed + 1` while sidecar quarantine
+        // or deterministic height recovery remains unresolved at that same edge. In that case,
+        // enter the same stall-window damping used for larger frontier gaps.
+        let local_height = self.committed_height_snapshot();
+        if frontier_height != local_height.saturating_add(1) {
+            return false;
+        }
+        true
+    }
+
+    const fn frontier_catchup_reanchor_stride(windows_without_commit_progress: u32) -> u64 {
+        match windows_without_commit_progress {
+            0..=8 => 1,
+            9..=26 => 2,
+            27..=80 => 4,
+            _ => 8,
+        }
+    }
+
+    fn frontier_catchup_unresolved_dependency_progress_at_height(
+        &self,
+        frontier_height: u64,
+    ) -> Option<Instant> {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .filter_map(|(hash, request)| {
+                (request.height >= frontier_height && !self.block_payload_available_locally(*hash))
+                    .then_some((
+                        request,
+                        self.missing_block_request_is_non_actionable_dependency(
+                            *hash,
+                            request,
+                            committed_height,
+                            now,
+                        ),
+                    ))
+            })
+            .filter_map(|(request, non_actionable_dependency)| {
+                (!non_actionable_dependency).then_some(request.last_dependency_progress)
+            })
+            .max()
+    }
+
+    fn missing_qc_height_has_unresolved_dependency_at_height(&self, height: u64) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height == height
+                    && self.missing_block_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.height == height
+                    && self.deferred_missing_payload_qc_has_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self
+                .subsystems
+                .propose
+                .highest_qc_missing_defer_markers
+                .iter()
+                .any(|(marker_height, _, hash)| {
+                    *marker_height == height
+                        && !self.block_payload_available_locally(*hash)
+                        && !self.missing_hash_is_non_actionable_dependency(
+                            *marker_height,
+                            *hash,
+                            committed_height,
+                            now,
+                        )
+                })
+    }
+
+    fn missing_qc_height_unresolved_dependency_progress_at_height(
+        &self,
+        height: u64,
+    ) -> Option<Instant> {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .filter_map(|(hash, request)| {
+                (request.height == height
+                    && !self.block_payload_available_locally(*hash)
+                    && !self.missing_block_request_is_non_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    ))
+                .then_some(request.last_dependency_progress)
+            })
+            .max()
+    }
+
+    fn clear_non_actionable_missing_dependencies_for_height(
+        &mut self,
+        height: u64,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        let stale_missing: Vec<_> = self
+            .pending
+            .missing_block_requests
+            .iter()
+            .filter_map(|(hash, request)| {
+                if request.height != height {
+                    return None;
+                }
+                if self.block_payload_available_locally(*hash) {
+                    return Some((*hash, MissingBlockClearReason::PayloadAvailable));
+                }
+                self.missing_block_request_is_non_actionable_dependency(
+                    *hash,
+                    request,
+                    committed_height,
+                    now,
+                )
+                .then_some((*hash, MissingBlockClearReason::Obsolete))
+            })
+            .collect();
+        for (hash, reason) in stale_missing.iter().copied() {
+            self.clear_missing_block_request(&hash, reason);
+        }
+
+        let stale_deferred: Vec<_> = self
+            .deferred_missing_payload_qcs
+            .iter()
+            .filter_map(|(key, entry)| {
+                (entry.qc.height == height
+                    && (self.block_payload_available_locally(entry.qc.subject_block_hash)
+                        || self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                            entry,
+                            committed_height,
+                            now,
+                        )))
+                .then_some(*key)
+            })
+            .collect();
+        let mut deferred_removed = 0usize;
+        for key in stale_deferred {
+            if self.deferred_missing_payload_qcs.remove(&key).is_some() {
+                deferred_removed = deferred_removed.saturating_add(1);
+            }
+        }
+        if deferred_removed > 0 {
+            self.note_missing_block_dependency_event(now);
+        }
+
+        self.prune_highest_qc_missing_defer_markers(committed_height);
+        !stale_missing.is_empty() || deferred_removed > 0
+    }
+
+    fn clear_frontier_catchup_window_gate_for_height(&mut self, frontier_height: u64) {
+        self.frontier_catchup_window_gates.remove(&frontier_height);
+    }
+
+    fn clear_frontier_catchup_stall_state(&mut self) {
+        if let Some(stall) = self.frontier_catchup_stall.take() {
+            self.clear_frontier_stall_reset_window_gate_for_height(stall.frontier_height);
+        }
+    }
+
+    fn canonical_frontier_reanchor_window(&self) -> Duration {
+        self.frontier_catchup_stall_window()
+            .max(self.missing_qc_height_stall_window())
+            .max(Duration::from_millis(1))
+    }
+
+    fn canonical_frontier_reanchor_stride_for_window(window_index: u64) -> u64 {
+        let windows_without_commit_progress = u32::try_from(window_index).unwrap_or(u32::MAX);
+        Self::frontier_catchup_reanchor_stride(windows_without_commit_progress).max(1)
+    }
+
+    fn clear_canonical_frontier_reanchor_window_gate_for_height(&mut self, frontier_height: u64) {
+        self.canonical_frontier_reanchor_window_gates
+            .retain(|(entry_height, _), _| *entry_height != frontier_height);
+    }
+
+    fn canonical_frontier_reanchor_window_snapshot(
+        &mut self,
+        frontier_height: u64,
+        canonical_height: u64,
+        now: Instant,
+    ) -> CanonicalFrontierReanchorWindowSnapshot {
+        let window = self.canonical_frontier_reanchor_window();
+        let key = (frontier_height, canonical_height);
+        let gate = self
+            .canonical_frontier_reanchor_window_gates
+            .entry(key)
+            .or_insert(CanonicalFrontierReanchorWindowGateState {
+                frontier_height,
+                canonical_height,
+                entered_at: now,
+                last_window_at: now,
+                window_index: 0,
+                last_action_window_index: None,
+                last_dependency_progress_at_emit: None,
+            });
+        debug_assert_eq!(gate.frontier_height, frontier_height);
+        debug_assert_eq!(gate.canonical_height, canonical_height);
+        let elapsed_window_count = {
+            let window_nanos = window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(gate.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            gate.last_window_at = now;
+            gate.window_index = gate.window_index.saturating_add(elapsed_window_count);
+        }
+        CanonicalFrontierReanchorWindowSnapshot {
+            entered_at: gate.entered_at,
+            window_index: gate.window_index,
+        }
+    }
+
+    fn canonical_frontier_reanchor_window_already_emitted(
+        &self,
+        frontier_height: u64,
+        canonical_height: u64,
+        window_index: u64,
+    ) -> bool {
+        self.canonical_frontier_reanchor_window_gates
+            .get(&(frontier_height, canonical_height))
+            .is_some_and(|state| state.last_action_window_index == Some(window_index))
+    }
+
+    fn canonical_frontier_reanchor_dependency_progress_unchanged(
+        &self,
+        frontier_height: u64,
+        canonical_height: u64,
+        window_index: u64,
+        dependency_progress_now: Option<Instant>,
+    ) -> bool {
+        let Some(state) = self
+            .canonical_frontier_reanchor_window_gates
+            .get(&(frontier_height, canonical_height))
+        else {
+            return false;
+        };
+        if state.last_action_window_index != Some(window_index) {
+            return false;
+        }
+        Self::canonical_frontier_reanchor_dependency_progress_is_unchanged(
+            state.last_dependency_progress_at_emit,
+            dependency_progress_now,
+        )
+    }
+
+    fn canonical_frontier_reanchor_dependency_progress_since_last_emit_unchanged(
+        &self,
+        frontier_height: u64,
+        canonical_height: u64,
+        dependency_progress_now: Option<Instant>,
+    ) -> bool {
+        let Some(state) = self
+            .canonical_frontier_reanchor_window_gates
+            .get(&(frontier_height, canonical_height))
+        else {
+            return false;
+        };
+        if state.last_action_window_index.is_none() {
+            return false;
+        }
+        Self::canonical_frontier_reanchor_dependency_progress_is_unchanged(
+            state.last_dependency_progress_at_emit,
+            dependency_progress_now,
+        )
+    }
+
+    fn canonical_frontier_reanchor_dependency_progress_is_unchanged(
+        previous_progress: Option<Instant>,
+        dependency_progress_now: Option<Instant>,
+    ) -> bool {
+        match (previous_progress, dependency_progress_now) {
+            (Some(previous), Some(current)) => current <= previous,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => true,
+        }
+    }
+
+    fn mark_canonical_frontier_reanchor_window_emitted(
+        &mut self,
+        frontier_height: u64,
+        canonical_height: u64,
+        window_index: u64,
+        now: Instant,
+        dependency_progress_at_emit: Option<Instant>,
+    ) {
+        let key = (frontier_height, canonical_height);
+        let state = self
+            .canonical_frontier_reanchor_window_gates
+            .entry(key)
+            .or_insert(CanonicalFrontierReanchorWindowGateState {
+                frontier_height,
+                canonical_height,
+                entered_at: now,
+                last_window_at: now,
+                window_index,
+                last_action_window_index: None,
+                last_dependency_progress_at_emit: None,
+            });
+        debug_assert_eq!(state.frontier_height, frontier_height);
+        debug_assert_eq!(state.canonical_height, canonical_height);
+        if window_index < state.window_index {
+            state.entered_at = now;
+            state.last_window_at = now;
+            state.window_index = window_index;
+            state.last_action_window_index = None;
+        } else if window_index > state.window_index {
+            state.last_window_at = now;
+            state.window_index = window_index;
+        }
+        state.last_action_window_index = Some(window_index);
+        state.last_dependency_progress_at_emit = dependency_progress_at_emit;
+    }
+
+    fn clear_frontier_stall_reset_window_gate_for_height(&mut self, frontier_height: u64) {
+        self.frontier_stall_reset_window_gates
+            .remove(&frontier_height);
+    }
+
+    fn allow_frontier_stall_reset_action(&mut self, frontier_height: u64, now: Instant) -> bool {
+        let window = self.frontier_catchup_stall_window();
+        let gate = self
+            .frontier_stall_reset_window_gates
+            .entry(frontier_height)
+            .or_insert(FrontierStallResetWindowGateState {
+                frontier_height,
+                entered_at: now,
+                last_reset_at: now.checked_sub(window).unwrap_or(now),
+            });
+        debug_assert_eq!(gate.frontier_height, frontier_height);
+        if now.saturating_duration_since(gate.last_reset_at) < window {
+            debug!(
+                frontier_height,
+                cooldown_ms = window.as_millis(),
+                dwell_ms = now.saturating_duration_since(gate.entered_at).as_millis(),
+                "suppressing repeated deterministic frontier-stall reset in the current window"
+            );
+            return false;
+        }
+        gate.last_reset_at = now;
+        true
+    }
+
+    fn frontier_catchup_window_snapshot(
+        &mut self,
+        canonical_height: u64,
+        now: Instant,
+    ) -> Option<FrontierCatchupWindowSnapshot> {
+        let local_height = self.committed_height_snapshot();
+        let stall_window = self.frontier_catchup_stall_window();
+        let frontier_height = match self.frontier_catchup_target_height(local_height) {
+            Some(frontier_height) => frontier_height,
+            None => {
+                let Some(stall) = self
+                    .frontier_catchup_stall
+                    .filter(|existing| existing.local_height_at_entry == local_height)
+                else {
+                    self.clear_frontier_catchup_stall_state();
+                    return None;
+                };
+                let frontier_height = stall.frontier_height;
+                self.frontier_catchup_stall = Some(stall);
+                frontier_height
+            }
+        };
+        if local_height >= frontier_height {
+            self.clear_frontier_catchup_stall_state();
+            self.clear_frontier_catchup_window_gate_for_height(frontier_height);
+            self.clear_canonical_frontier_reanchor_window_gate_for_height(frontier_height);
+            return None;
+        }
+        let unresolved = self.frontier_catchup_has_unresolved_dependency(frontier_height);
+        let gap_exceeds =
+            self.frontier_catchup_gap_exceeds_threshold(frontier_height, canonical_height);
+        let mut preserve_stall_during_transient_blip = false;
+        if !unresolved || !gap_exceeds {
+            if let Some(mut stall) = self.frontier_catchup_stall.filter(|existing| {
+                existing.frontier_height == frontier_height
+                    && existing.local_height_at_entry == local_height
+            }) {
+                preserve_stall_during_transient_blip = true;
+                stall.inactive_since = Some(now);
+                self.frontier_catchup_stall = Some(stall);
+            }
+            if !preserve_stall_during_transient_blip {
+                self.clear_frontier_catchup_stall_state();
+                self.clear_frontier_catchup_window_gate_for_height(frontier_height);
+                // Keep canonical shared-window gate state across transient unresolved/gap blips
+                // while frontier identity is unchanged. This preserves single-emit suppression for
+                // frontier-equivalent reasons even before stall mode fully activates.
+                return None;
+            }
+        }
+        if self
+            .frontier_catchup_stall
+            .is_some_and(|existing| existing.frontier_height != frontier_height)
+            && let Some(previous_frontier) = self
+                .frontier_catchup_stall
+                .map(|stall| stall.frontier_height)
+        {
+            self.clear_frontier_catchup_window_gate_for_height(previous_frontier);
+            self.clear_canonical_frontier_reanchor_window_gate_for_height(previous_frontier);
+        }
+        let mut stall = match self.frontier_catchup_stall {
+            Some(existing)
+                if existing.frontier_height == frontier_height
+                    && existing.local_height_at_entry == local_height =>
+            {
+                existing
+            }
+            _ => FrontierCatchupStallState {
+                frontier_height,
+                local_height_at_entry: local_height,
+                entered_at: now,
+                last_window_at: now,
+                inactive_since: None,
+                windows_without_commit_progress: 0,
+                mode_active: false,
+                window_index: 0,
+                last_rotation_at: None,
+                last_reanchor_emit_at: None,
+                last_far_ahead_replay_window_index: None,
+            },
+        };
+        if local_height != stall.local_height_at_entry {
+            self.clear_frontier_catchup_stall_state();
+            self.clear_frontier_catchup_window_gate_for_height(frontier_height);
+            self.clear_canonical_frontier_reanchor_window_gate_for_height(frontier_height);
+            return None;
+        }
+        if !preserve_stall_during_transient_blip {
+            stall.inactive_since = None;
+        }
+
+        let elapsed_window_count = {
+            let window_nanos = stall_window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(stall.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            stall.last_window_at = now;
+            let increment = u32::try_from(elapsed_window_count).unwrap_or(u32::MAX);
+            stall.windows_without_commit_progress = stall
+                .windows_without_commit_progress
+                .saturating_add(increment);
+            if stall.mode_active {
+                stall.window_index = stall.window_index.saturating_add(elapsed_window_count);
+            } else if stall.windows_without_commit_progress
+                >= FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE
+            {
+                stall.mode_active = true;
+                stall.entered_at = now;
+                stall.window_index = 0;
+                stall.last_rotation_at = None;
+                stall.last_reanchor_emit_at = None;
+                stall.last_far_ahead_replay_window_index = None;
+                warn!(
+                    frontier_height,
+                    canonical_height,
+                    local_height,
+                    stall_window_ms = stall_window.as_millis(),
+                    windows_without_commit_progress = stall.windows_without_commit_progress,
+                    "entered frontier catch-up stall dampening mode"
+                );
+            }
+        }
+        self.frontier_catchup_stall = Some(stall);
+
+        let gate = self
+            .frontier_catchup_window_gates
+            .entry(frontier_height)
+            .or_insert(FrontierCatchupWindowGateState {
+                frontier_height,
+                entered_at: now,
+                last_window_at: now,
+                window_index: stall.window_index,
+                last_reanchor_window_index: None,
+                last_rotation_at: stall.last_rotation_at,
+                last_reanchor_emit_at: stall.last_reanchor_emit_at,
+            });
+        if stall.window_index < gate.window_index {
+            gate.entered_at = now;
+            gate.last_window_at = now;
+            gate.window_index = stall.window_index;
+            gate.last_reanchor_window_index = None;
+            gate.last_rotation_at = None;
+            gate.last_reanchor_emit_at = None;
+        } else if stall.window_index > gate.window_index {
+            gate.last_window_at = now;
+            gate.window_index = stall.window_index;
+        }
+
+        Some(FrontierCatchupWindowSnapshot {
+            frontier_height,
+            local_height_at_entry: stall.local_height_at_entry,
+            entered_at: gate.entered_at,
+            stall_window,
+            mode_active: stall.mode_active,
+            window_index: stall.window_index,
+            windows_without_commit_progress: stall.windows_without_commit_progress,
+            canonical_height,
+            last_rotation_at: gate.last_rotation_at,
+            last_reanchor_emit_at: gate.last_reanchor_emit_at,
+        })
+    }
+
+    fn frontier_catchup_window_already_emitted(
+        &self,
+        frontier_height: u64,
+        window_index: u64,
+    ) -> bool {
+        self.frontier_catchup_window_gates
+            .get(&frontier_height)
+            .is_some_and(|state| state.last_reanchor_window_index == Some(window_index))
+    }
+
+    fn mark_frontier_catchup_window_emitted(
+        &mut self,
+        frontier_height: u64,
+        window_index: u64,
+        now: Instant,
+    ) {
+        let state = self
+            .frontier_catchup_window_gates
+            .entry(frontier_height)
+            .or_insert(FrontierCatchupWindowGateState {
+                frontier_height,
+                entered_at: now,
+                last_window_at: now,
+                window_index,
+                last_reanchor_window_index: None,
+                last_rotation_at: None,
+                last_reanchor_emit_at: None,
+            });
+        debug_assert_eq!(state.frontier_height, frontier_height);
+        if window_index < state.window_index {
+            state.entered_at = now;
+            state.last_window_at = now;
+            state.window_index = window_index;
+            state.last_reanchor_window_index = None;
+            state.last_rotation_at = None;
+            state.last_reanchor_emit_at = None;
+        } else if window_index > state.window_index {
+            state.last_window_at = now;
+            state.window_index = window_index;
+        }
+        state.last_reanchor_window_index = Some(window_index);
+        state.last_rotation_at = Some(now);
+        state.last_reanchor_emit_at = Some(now);
+        if let Some(stall) = self.frontier_catchup_stall.as_mut()
+            && stall.frontier_height == frontier_height
+            && stall.mode_active
+        {
+            stall.last_rotation_at = Some(now);
+            stall.last_reanchor_emit_at = Some(now);
+        }
+    }
+
+    pub(super) fn frontier_catchup_far_ahead_replay_allowed(
+        &mut self,
+        replay_height: u64,
+        now: Instant,
+    ) -> bool {
+        let local_height = self.committed_height_snapshot();
+        let canonical_reference_height = self
+            .highest_qc
+            .or(self.latest_committed_qc())
+            .map_or(local_height.saturating_add(1), |qc| {
+                qc.height.max(local_height.saturating_add(1))
+            });
+        let Some(snapshot) = self.frontier_catchup_window_snapshot(canonical_reference_height, now)
+        else {
+            return true;
+        };
+        if !snapshot.mode_active {
+            return true;
+        }
+        let far_ahead = replay_height > snapshot.local_height_at_entry.saturating_add(1);
+        if !far_ahead {
+            return true;
+        }
+        let Some(stall) = self
+            .frontier_catchup_stall
+            .as_mut()
+            .filter(|stall| stall.frontier_height == snapshot.frontier_height && stall.mode_active)
+        else {
+            return true;
+        };
+        if stall.last_far_ahead_replay_window_index == Some(snapshot.window_index) {
+            debug!(
+                frontier_height = snapshot.frontier_height,
+                replay_height,
+                window_index = snapshot.window_index,
+                stall_window_ms = snapshot.stall_window.as_millis(),
+                "suppressing far-ahead deferred QC replay in the current frontier catch-up window"
+            );
+            return false;
+        }
+        stall.last_far_ahead_replay_window_index = Some(snapshot.window_index);
+        true
+    }
+
+    fn missing_qc_dependency_height_for_active_round(
+        &self,
+        active_height: u64,
+        committed_height: u64,
+    ) -> Option<u64> {
+        let contiguous_frontier = committed_height.saturating_add(1);
+        if active_height > contiguous_frontier
+            && self.frontier_catchup_has_unresolved_dependency(contiguous_frontier)
+        {
+            return Some(contiguous_frontier);
+        }
+        let mut dependency_height = self
+            .missing_qc_height_has_unresolved_dependency_at_height(active_height)
+            .then_some(active_height);
+        if active_height == committed_height.saturating_add(1)
+            && self.missing_qc_height_has_unresolved_dependency_at_height(committed_height)
+        {
+            dependency_height = Some(
+                dependency_height.map_or(committed_height, |height| height.min(committed_height)),
+            );
+        }
+        dependency_height
+    }
+
+    fn missing_qc_height_has_unresolved_dependency(&self, height: u64) -> bool {
+        self.missing_qc_dependency_height_for_active_round(height, self.committed_height_snapshot())
+            .is_some()
+    }
+
+    fn missing_qc_height_stall_snapshot(
+        &mut self,
+        active_height: u64,
+        now: Instant,
+    ) -> Option<MissingQcHeightStallSnapshot> {
+        if self.active_consensus_round_height() != active_height {
+            self.missing_qc_height_stall = None;
+            return None;
+        }
+        let committed_height = self.committed_height_snapshot();
+        let Some(mut dependency_height) =
+            self.missing_qc_dependency_height_for_active_round(active_height, committed_height)
+        else {
+            self.missing_qc_height_stall = None;
+            return None;
+        };
+        if let Some(existing) = self.missing_qc_height_stall
+            && existing.height == active_height
+            && self
+                .missing_qc_height_has_unresolved_dependency_at_height(existing.dependency_height)
+        {
+            dependency_height = existing.dependency_height;
+        }
+        let dependency_progress =
+            self.missing_qc_height_unresolved_dependency_progress_at_height(dependency_height);
+        let stall_window = self.missing_qc_height_stall_window();
+        let mut stall = match self.missing_qc_height_stall {
+            // Keep stall continuity scoped to the active round height so dependency-height
+            // reclassification (active edge <-> committed edge) cannot bypass window budgets.
+            Some(existing) if existing.height == active_height => {
+                if committed_height > existing.committed_height {
+                    self.missing_qc_height_stall = None;
+                    return None;
+                }
+                existing
+            }
+            _ => MissingQcHeightStallState {
+                height: active_height,
+                dependency_height,
+                committed_height,
+                entered_at: now,
+                last_window_at: now,
+                windows_without_commit_progress: 0,
+                mode_active: false,
+                window_index: 0,
+                last_rotation_at: None,
+                last_rotation_window_index: None,
+                last_reacquire_window_index: None,
+            },
+        };
+
+        if let Some(progress_at) = dependency_progress
+            && progress_at > stall.last_window_at
+        {
+            stall.entered_at = progress_at;
+            stall.last_window_at = progress_at;
+            stall.windows_without_commit_progress = 0;
+            if stall.mode_active {
+                stall.mode_active = false;
+                stall.window_index = 0;
+                stall.last_rotation_at = None;
+                stall.last_rotation_window_index = None;
+                stall.last_reacquire_window_index = None;
+            }
+        }
+
+        let elapsed_window_count = {
+            let window_nanos = stall_window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(stall.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            stall.last_window_at = now;
+            let increment = u32::try_from(elapsed_window_count).unwrap_or(u32::MAX);
+            stall.windows_without_commit_progress = stall
+                .windows_without_commit_progress
+                .saturating_add(increment);
+            if stall.mode_active {
+                stall.window_index = stall.window_index.saturating_add(elapsed_window_count);
+            } else if stall.windows_without_commit_progress
+                >= MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE
+            {
+                stall.mode_active = true;
+                stall.entered_at = now;
+                stall.window_index = 0;
+                stall.last_rotation_at = None;
+                stall.last_rotation_window_index = None;
+                stall.last_reacquire_window_index = None;
+                warn!(
+                    height = active_height,
+                    dependency_height,
+                    committed_height,
+                    stall_window_ms = stall_window.as_millis(),
+                    windows_without_commit_progress = stall.windows_without_commit_progress,
+                    "entered same-height missing-QC stall dampening mode"
+                );
+            }
+        }
+        stall.dependency_height = dependency_height;
+        stall.committed_height = committed_height;
+        self.missing_qc_height_stall = Some(stall);
+        Some(MissingQcHeightStallSnapshot {
+            height: stall.height,
+            entered_at: stall.entered_at,
+            stall_window,
+            mode_active: stall.mode_active,
+            window_index: stall.window_index,
+            last_rotation_at: stall.last_rotation_at,
+        })
+    }
+
+    fn mark_missing_qc_height_stall_range_pull_window(&mut self, height: u64, window_index: u64) {
+        if let Some(stall) = self.missing_qc_height_stall.as_mut()
+            && stall.height == height
+            && stall.mode_active
+        {
+            stall.last_reacquire_window_index = Some(window_index);
+        }
+    }
+
+    fn mark_missing_qc_height_stall_rotation_window(
+        &mut self,
+        height: u64,
+        window_index: u64,
+        now: Instant,
+    ) {
+        if let Some(stall) = self.missing_qc_height_stall.as_mut()
+            && stall.height == height
+            && stall.mode_active
+        {
+            stall.last_rotation_at = Some(now);
+            stall.last_rotation_window_index = Some(window_index);
+        }
+    }
+
+    fn try_reserve_missing_qc_height_stall_rotation_window(
+        &mut self,
+        height: u64,
+        cause: ViewChangeCause,
+        now: Instant,
+    ) -> bool {
+        let Some(stall) = self
+            .missing_qc_height_stall_snapshot(height, now)
+            .filter(|stall| stall.mode_active && stall.height == height)
+        else {
+            return true;
+        };
+        let rotation_suppressed = self.missing_qc_height_stall.as_ref().is_some_and(|state| {
+            state.height == stall.height
+                && state.mode_active
+                && state.last_rotation_window_index == Some(stall.window_index)
+        });
+        if rotation_suppressed {
+            debug!(
+                height,
+                cause = cause.as_str(),
+                window_index = stall.window_index,
+                stall_window_ms = stall.stall_window.as_millis(),
+                stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis(),
+                last_rotation_at_ms = stall
+                    .last_rotation_at
+                    .map(|at| now.saturating_duration_since(at).as_millis()),
+                "suppressing repeated same-height stall rotation in the current window"
+            );
+            return false;
+        }
+        self.mark_missing_qc_height_stall_rotation_window(height, stall.window_index, now);
+        true
+    }
+
+    fn missing_payload_fetch_has_unresolved_dependency(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_some_and(|request| {
+                request.height == height && !self.block_payload_available_locally(block_hash)
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.height == height
+                    && entry.qc.subject_block_hash == block_hash
+                    && !self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+    }
+
+    fn missing_payload_fetch_window_snapshot(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        now: Instant,
+    ) -> Option<MissingPayloadFetchWindowSnapshot> {
+        let key = (height, block_hash);
+        if self.active_consensus_round_height() != height {
+            self.missing_payload_fetch_window_gates.remove(&key);
+            return None;
+        }
+        let Some(stall) = self
+            .missing_qc_height_stall_snapshot(height, now)
+            .filter(|stall| stall.mode_active && stall.height == height)
+        else {
+            self.missing_payload_fetch_window_gates.remove(&key);
+            return None;
+        };
+        if !self.missing_payload_fetch_has_unresolved_dependency(height, block_hash) {
+            self.missing_payload_fetch_window_gates.remove(&key);
+            return None;
+        }
+        let gate = self
+            .missing_payload_fetch_window_gates
+            .entry(key)
+            .or_insert(MissingPayloadFetchWindowGateState {
+                height,
+                block_hash,
+                entered_at: now,
+                last_window_at: now,
+                window_index: stall.window_index,
+                last_targeted_fetch_window_index: None,
+                last_targeted_fetch_at: None,
+            });
+        if stall.window_index < gate.window_index {
+            gate.entered_at = now;
+            gate.last_window_at = now;
+            gate.window_index = stall.window_index;
+            gate.last_targeted_fetch_window_index = None;
+            gate.last_targeted_fetch_at = None;
+        } else if stall.window_index > gate.window_index {
+            gate.last_window_at = now;
+            gate.window_index = stall.window_index;
+        }
+        Some(MissingPayloadFetchWindowSnapshot {
+            height: gate.height,
+            block_hash: gate.block_hash,
+            entered_at: gate.entered_at,
+            stall_window: stall.stall_window,
+            window_index: gate.window_index,
+            last_targeted_fetch_at: gate.last_targeted_fetch_at,
+        })
+    }
+
+    fn missing_payload_fetch_window_already_emitted(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        window_index: u64,
+    ) -> bool {
+        self.missing_payload_fetch_window_gates
+            .get(&(height, block_hash))
+            .is_some_and(|state| state.last_targeted_fetch_window_index == Some(window_index))
+    }
+
+    fn mark_missing_payload_fetch_window_emitted(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        window_index: u64,
+        now: Instant,
+    ) {
+        if let Some(state) = self
+            .missing_payload_fetch_window_gates
+            .get_mut(&(height, block_hash))
+        {
+            state.last_targeted_fetch_window_index = Some(window_index);
+            state.last_targeted_fetch_at = Some(now);
+        }
+    }
+
+    fn clear_missing_payload_fetch_window_gate_for_height(&mut self, height: u64) {
+        self.missing_payload_fetch_window_gates
+            .retain(|(entry_height, _), _| *entry_height != height);
+    }
+
+    fn clear_missing_payload_fetch_window_gate_for_block(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) {
+        self.missing_payload_fetch_window_gates
+            .remove(&(height, block_hash));
+    }
+
+    fn effective_hash_miss_escalation_cap(
+        &self,
+        height: u64,
+        base_cap: u32,
+        attempt_cap: u32,
+    ) -> u32 {
+        let (frontier, lock_lag_active, far_future, _) =
+            self.lock_lag_range_pull_scope_for_height(height);
+        if !lock_lag_active {
+            return base_cap;
+        }
+        let Some(frontier_height) = frontier else {
+            return base_cap;
+        };
+        let max_cap = attempt_cap.max(base_cap);
+        let near_frontier_cap = base_cap.saturating_add(2).max(attempt_cap.div_ceil(3));
+        let selected_cap = if far_future && height > frontier_height.saturating_add(1) {
+            near_frontier_cap.max(attempt_cap.div_ceil(2))
+        } else {
+            near_frontier_cap
+        };
+        selected_cap.min(max_cap)
+    }
+
     fn recovery_max_forced_proposal_attempts_per_view(&self) -> u32 {
         self.deterministic_recovery_profile()
             .max_forced_proposal_attempts_per_view
-    }
-
-    fn recovery_no_roster_refresh_retry_per_view(&self) -> u32 {
-        self.deterministic_recovery_profile()
-            .no_roster_refresh_retry_per_view
     }
 
     fn recovery_rotate_after_reacquire_exhausted(&self) -> bool {
@@ -15171,8 +18679,14 @@ impl Actor {
             return base_timeout;
         }
         let backlog_grace =
-            saturating_mul_duration(self.rebroadcast_cooldown(), 8).max(Duration::from_secs(2));
-        base_timeout.saturating_add(backlog_grace)
+            saturating_mul_duration(self.rebroadcast_cooldown(), 8).max(Duration::from_millis(400));
+        let extended = base_timeout.saturating_add(backlog_grace);
+        let cap_floor = self
+            .recovery_deferred_qc_ttl()
+            .saturating_add(self.rebroadcast_cooldown())
+            .max(base_timeout);
+        let cap = saturating_mul_duration(base_timeout, 2).max(cap_floor);
+        extended.min(cap)
     }
 
     fn missing_block_recovery_key_for_height(&self, height: u64) -> MissingBlockHeightRecoveryKey {
@@ -15185,16 +18699,29 @@ impl Actor {
     }
 
     fn note_missing_block_dependency_event(&mut self, now: Instant) {
+        let _ = now;
         self.dependency_event_seq = self.dependency_event_seq.saturating_add(1);
-        for budget in self.missing_block_height_recovery.values_mut() {
-            budget.range_pull.last_progress = now;
-            budget.range_pull.candidate_tier = RangePullCandidateTier::VoteRoster;
-            if budget.range_pull.stage == MissingBlockRecoveryStage::RangePullFromAnchor {
-                budget.range_pull.stage = MissingBlockRecoveryStage::ApplyAndRevalidate;
-            }
-            budget.range_pull.hash_misses = 0;
-            budget.range_pull.inflight = false;
-        }
+    }
+
+    fn range_pull_expiry_streak_for_key(&self, key: MissingBlockHeightRecoveryKey) -> u32 {
+        self.missing_block_range_pull_expiry_streaks
+            .get(&key)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn note_range_pull_expiry_for_key(&mut self, key: MissingBlockHeightRecoveryKey) -> u32 {
+        let entry = self
+            .missing_block_range_pull_expiry_streaks
+            .entry(key)
+            .or_insert(0);
+        *entry = entry.saturating_add(1);
+        super::status::observe_blocksync_range_pull_expiry_streak(*entry);
+        *entry
+    }
+
+    fn clear_range_pull_expiry_streak_for_key(&mut self, key: MissingBlockHeightRecoveryKey) {
+        self.missing_block_range_pull_expiry_streaks.remove(&key);
     }
 
     fn note_missing_block_request_dependency_progress(
@@ -15220,11 +18747,28 @@ impl Actor {
         if let Some(budget) = self.missing_block_height_recovery.get_mut(&key) {
             budget.range_pull.last_progress = now;
             budget.range_pull.hash_misses = 0;
-            if budget.range_pull.stage == MissingBlockRecoveryStage::RangePullFromAnchor {
-                budget.range_pull.stage = MissingBlockRecoveryStage::ApplyAndRevalidate;
-            }
+            budget.range_pull.no_progress_windows = 0;
+            budget.range_pull.stage = step_missing_block_recovery_stage(
+                budget.range_pull.stage,
+                MissingBlockRecoveryTransition::DependencyProgressObserved,
+            );
         }
+        self.clear_range_pull_expiry_streak_for_key(key);
         true
+    }
+
+    fn touch_missing_block_request_control_activity(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        now: Instant,
+    ) -> bool {
+        touch_missing_block_request_control_activity(
+            &mut self.pending.missing_block_requests,
+            block_hash,
+            height,
+            now,
+        )
     }
 
     fn note_missing_block_height_attempt(
@@ -15245,7 +18789,10 @@ impl Actor {
         entry.last_view = view;
         entry.last_hash = block_hash;
         entry.attempts = entry.attempts.saturating_add(1);
-        entry.range_pull.stage = stage;
+        entry.range_pull.stage = step_missing_block_recovery_stage(
+            entry.range_pull.stage,
+            transition_for_missing_block_stage_observation(stage),
+        );
         match stage {
             MissingBlockRecoveryStage::ParentFetch => {
                 entry.parent_fetch_attempts = entry.parent_fetch_attempts.saturating_add(1);
@@ -15281,11 +18828,41 @@ impl Actor {
         entry.last_seen = now;
         entry.last_view = view;
         entry.last_hash = block_hash;
-        entry.range_pull.stage = stage;
+        entry.range_pull.stage = step_missing_block_recovery_stage(
+            entry.range_pull.stage,
+            transition_for_missing_block_stage_observation(stage),
+        );
         entry.range_pull.hash_misses = entry.range_pull.hash_misses.saturating_add(1);
     }
 
-    fn clear_missing_block_recovery_for_height(&mut self, height: u64, now: Instant) {
+    fn note_missing_block_height_backoff(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        stage: MissingBlockRecoveryStage,
+        now: Instant,
+    ) {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let entry = self
+            .missing_block_height_recovery
+            .entry(key)
+            .or_insert_with(|| MissingBlockHeightRecoveryBudget::new(now, block_hash, view, stage));
+        entry.last_seen = now;
+        entry.last_view = view;
+        entry.last_hash = block_hash;
+        entry.range_pull.stage = step_missing_block_recovery_stage(
+            entry.range_pull.stage,
+            transition_for_missing_block_stage_observation(stage),
+        );
+    }
+
+    fn clear_missing_block_recovery_for_height_with_policy(
+        &mut self,
+        height: u64,
+        now: Instant,
+        clear_frontier_state: bool,
+    ) {
         let mut cleared_any = false;
         self.missing_block_height_recovery.retain(|key, _| {
             let retain = key.height != height;
@@ -15294,15 +18871,58 @@ impl Actor {
             }
             retain
         });
-        let had_no_roster = self
-            .no_roster_fallback_recovery
-            .keys()
-            .any(|key| key.height == height);
-        self.clear_no_roster_fallback_for_height(height);
-        cleared_any |= had_no_roster;
+        self.clear_missing_payload_fetch_window_gate_for_height(height);
+        self.clear_highest_qc_force_fetch_window_gates_for_height(height);
+        self.clear_committed_edge_conflict_window_gates_for_height(height);
+        self.clear_frontier_stall_reset_window_gate_for_height(height);
+        if clear_frontier_state {
+            let committed_height = self.committed_height_snapshot();
+            let contiguous_frontier_height = committed_height.saturating_add(1);
+            let frontier_identity_active = self.frontier_catchup_stall.is_some_and(|stall| {
+                stall.frontier_height == contiguous_frontier_height
+                    && stall.local_height_at_entry == committed_height
+            }) || self
+                .frontier_catchup_window_gates
+                .contains_key(&contiguous_frontier_height)
+                || self
+                    .canonical_frontier_reanchor_window_gates
+                    .keys()
+                    .any(|(entry_height, _)| *entry_height == contiguous_frontier_height);
+            let preserve_frontier_window_state = height == contiguous_frontier_height
+                && (self.has_contiguous_frontier_pressure(committed_height)
+                    || frontier_identity_active);
+            if !preserve_frontier_window_state {
+                let had_frontier_gate = self.frontier_catchup_window_gates.contains_key(&height);
+                let had_canonical_frontier_gate = self
+                    .canonical_frontier_reanchor_window_gates
+                    .keys()
+                    .any(|(entry_height, _)| *entry_height == height);
+                self.clear_frontier_catchup_window_gate_for_height(height);
+                self.clear_canonical_frontier_reanchor_window_gate_for_height(height);
+                if self
+                    .frontier_catchup_stall
+                    .is_some_and(|stall| stall.frontier_height == height)
+                {
+                    self.clear_frontier_catchup_stall_state();
+                }
+                cleared_any |= had_frontier_gate || had_canonical_frontier_gate;
+            }
+        }
         if cleared_any {
             self.note_missing_block_dependency_event(now);
         }
+    }
+
+    fn clear_missing_block_recovery_for_height(&mut self, height: u64, now: Instant) {
+        self.clear_missing_block_recovery_for_height_with_policy(height, now, true);
+    }
+
+    fn clear_missing_block_recovery_for_height_preserving_frontier_state(
+        &mut self,
+        height: u64,
+        now: Instant,
+    ) {
+        self.clear_missing_block_recovery_for_height_with_policy(height, now, false);
     }
 
     fn prune_stale_missing_requests_for_committed_height(
@@ -15330,6 +18950,7 @@ impl Actor {
             }
             pruned = pruned.saturating_add(1);
             cleared_heights.insert(request_height);
+            self.clear_missing_payload_fetch_window_gate_for_block(request_height, hash);
             self.pending.pending_fetch_requests.remove(&hash);
 
             if self
@@ -15358,6 +18979,7 @@ impl Actor {
         for height in cleared_heights {
             self.clear_missing_block_recovery_for_height(height, now);
             self.clear_sidecar_mismatch_for_height(height);
+            let _ = self.clear_lock_rejected_block_sinks_for_height(height);
         }
 
         if pruned > 0 {
@@ -15384,6 +19006,23 @@ impl Actor {
             key.height > committed_height
                 && now.saturating_duration_since(entry.last_seen) <= ttl.saturating_mul(8)
         });
+        let unresolved_recovery_heights: BTreeSet<_> = self
+            .pending
+            .missing_block_requests
+            .values()
+            .filter(|request| request.height > committed_height)
+            .map(|request| request.height)
+            .chain(
+                self.deferred_missing_payload_qcs
+                    .values()
+                    .filter(|entry| entry.qc.height > committed_height)
+                    .map(|entry| entry.qc.height),
+            )
+            .collect();
+        self.missing_block_range_pull_expiry_streaks
+            .retain(|key, _| {
+                key.height > committed_height && unresolved_recovery_heights.contains(&key.height)
+            });
         self.range_pull_escalation_cooldowns
             .retain(|_, expires| now < *expires);
         self.qc_missing_payload_range_pull_cooldowns
@@ -15398,379 +19037,76 @@ impl Actor {
             }
             now.saturating_duration_since(entry.last_seen) <= sidecar_expiry
         });
-        self.sidecar_mismatch_action_cooldowns
-            .retain(|_, expires| now < *expires);
-        self.no_roster_fallback_recovery.retain(|key, entry| {
-            key.height > committed_height
-                && now.saturating_duration_since(entry.last_seen) <= ttl.saturating_mul(8)
+        let committed_sidecar_gate_heights: BTreeSet<_> = self
+            .sidecar_mismatch_window_gates
+            .keys()
+            .map(|(height, _)| *height)
+            .filter(|height| self.committed_block_hash_for_height(*height).is_some())
+            .collect();
+        self.sidecar_mismatch_window_gates
+            .retain(|(height, _), gate| {
+                if *height <= committed_height || committed_sidecar_gate_heights.contains(height) {
+                    return false;
+                }
+                now.saturating_duration_since(gate.last_window_at) <= sidecar_expiry
+            });
+        self.sidecar_mismatch_committed_edge_gates
+            .retain(|(height, _), gate| {
+                *height >= committed_height
+                    && now.saturating_duration_since(gate.last_window_at) <= sidecar_expiry
+            });
+        self.roster_sidecar_mismatch_obsolete
+            .retain(|(height, _, _), expires_at| *height >= committed_height && now < *expires_at);
+        self.highest_qc_force_fetch_window_gates
+            .retain(|(height, _, _), gate| {
+                *height > committed_height
+                    && now.saturating_duration_since(gate.last_window_at) <= sidecar_expiry
+            });
+        self.committed_edge_conflict_window_gates
+            .retain(|(height, _), gate| {
+                *height >= committed_height
+                    && now.saturating_duration_since(gate.last_window_at) <= sidecar_expiry
+            });
+        self.canonical_frontier_reanchor_window_gates
+            .retain(|(height, _), gate| {
+                *height > committed_height
+                    && now.saturating_duration_since(gate.last_window_at) <= ttl.saturating_mul(8)
+            });
+        self.frontier_catchup_window_gates.retain(|height, gate| {
+            *height > committed_height
+                && now.saturating_duration_since(gate.last_window_at) <= ttl.saturating_mul(8)
         });
-    }
-
-    fn clear_no_roster_fallback_for_height(&mut self, height: u64) {
-        self.no_roster_fallback_recovery
-            .retain(|key, _| key.height != height);
-    }
-
-    fn allow_no_roster_fallback_for_round(
-        &mut self,
-        height: u64,
-        view: u64,
-        now: Instant,
-    ) -> (bool, u32) {
-        let allowed_views =
-            usize::try_from(self.effective_no_roster_fallback_views(height)).unwrap_or(usize::MAX);
-        if allowed_views == 0 {
-            return (false, 0);
+        self.frontier_stall_reset_window_gates
+            .retain(|height, gate| {
+                debug_assert_eq!(gate.frontier_height, *height);
+                *height > committed_height
+                    && now.saturating_duration_since(gate.last_reset_at) <= ttl.saturating_mul(8)
+            });
+        if self
+            .frontier_catchup_stall
+            .is_some_and(|stall| stall.frontier_height <= committed_height)
+        {
+            self.clear_frontier_catchup_stall_state();
         }
-        let key = self.missing_block_recovery_key_for_height(height);
-        let budget = self
-            .no_roster_fallback_recovery
-            .entry(key)
-            .or_insert_with(|| NoRosterFallbackBudget::new(now));
-        budget.last_seen = now;
-        if budget.allowed_views.contains(&view) {
-            let bootstrap = budget
-                .bootstrap_by_view
-                .entry(view)
-                .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
-            bootstrap.state = NoRosterBootstrapState::RosterReady;
-            bootstrap.last_seen = now;
-            let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
-            let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
-            return (true, remaining);
-        }
-        if budget.allowed_views.len() < allowed_views {
-            budget.allowed_views.insert(view);
-            let bootstrap = budget
-                .bootstrap_by_view
-                .entry(view)
-                .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
-            bootstrap.state = NoRosterBootstrapState::RosterReady;
-            bootstrap.last_seen = now;
-            super::status::inc_consensus_no_roster_fallback();
-            let remaining = allowed_views.saturating_sub(budget.allowed_views.len());
-            let remaining = u32::try_from(remaining).unwrap_or(u32::MAX);
-            return (true, remaining);
-        }
-        (false, 0)
-    }
-
-    fn no_roster_bootstrap_state(
-        &mut self,
-        height: u64,
-        view: u64,
-        now: Instant,
-    ) -> NoRosterBootstrapState {
-        let key = self.missing_block_recovery_key_for_height(height);
-        let budget = self
-            .no_roster_fallback_recovery
-            .entry(key)
-            .or_insert_with(|| NoRosterFallbackBudget::new(now));
-        budget.last_seen = now;
-        let bootstrap = budget
-            .bootstrap_by_view
-            .entry(view)
-            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
-        bootstrap.last_seen = now;
-        bootstrap.state
-    }
-
-    fn update_no_roster_bootstrap_state_after_attempt(
-        &mut self,
-        height: u64,
-        view: u64,
-        now: Instant,
-        made_progress: bool,
-    ) -> NoRosterBootstrapState {
-        let attempt_cap = self.recovery_no_roster_refresh_retry_per_view();
-        let dwell_window = self.no_roster_bootstrap_dwell_window(height);
-        let key = self.missing_block_recovery_key_for_height(height);
-        let budget = self
-            .no_roster_fallback_recovery
-            .entry(key)
-            .or_insert_with(|| NoRosterFallbackBudget::new(now));
-        budget.last_seen = now;
-        let attempts = budget
-            .refresh_attempts_by_view
-            .get(&view)
-            .copied()
-            .unwrap_or_default();
-        let bootstrap = budget
-            .bootstrap_by_view
-            .entry(view)
-            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
-        bootstrap.last_seen = now;
-        if matches!(bootstrap.state, NoRosterBootstrapState::RosterReady) {
-            return NoRosterBootstrapState::RosterReady;
-        }
-        if made_progress {
-            bootstrap.state = NoRosterBootstrapState::RosterBootstrapPending;
-            return bootstrap.state;
-        }
-        let attempts_exhausted = !no_roster_refresh_retry_allowed(attempts, attempt_cap);
-        let dwell_exhausted = now.saturating_duration_since(bootstrap.first_seen) >= dwell_window;
-        if attempts_exhausted && dwell_exhausted {
-            bootstrap.state = NoRosterBootstrapState::RosterBootstrapExhausted;
-        } else {
-            bootstrap.state = NoRosterBootstrapState::RosterBootstrapPending;
-        }
-        bootstrap.state
-    }
-
-    fn mark_no_roster_refresh_then_fallback_used(
-        &mut self,
-        height: u64,
-        view: u64,
-        now: Instant,
-    ) -> bool {
-        let key = self.missing_block_recovery_key_for_height(height);
-        let budget = self
-            .no_roster_fallback_recovery
-            .entry(key)
-            .or_insert_with(|| NoRosterFallbackBudget::new(now));
-        budget.last_seen = now;
-        let bootstrap = budget
-            .bootstrap_by_view
-            .entry(view)
-            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
-        bootstrap.last_seen = now;
-        if bootstrap.refresh_then_fallback_used {
-            return false;
-        }
-        bootstrap.refresh_then_fallback_used = true;
-        true
-    }
-
-    fn try_no_roster_bootstrap_recovery_once(
-        &mut self,
-        height: u64,
-        view: u64,
-        now: Instant,
-    ) -> bool {
-        let attempt_cap = self.recovery_no_roster_refresh_retry_per_view();
-        let key = self.missing_block_recovery_key_for_height(height);
-        let allowed = {
-            let budget = self
-                .no_roster_fallback_recovery
-                .entry(key)
-                .or_insert_with(|| NoRosterFallbackBudget::new(now));
-            budget.last_seen = now;
-            let attempt = budget.refresh_attempts_by_view.entry(view).or_insert(0);
-            if !no_roster_refresh_retry_allowed(*attempt, attempt_cap) {
-                false
-            } else {
-                *attempt = attempt.saturating_add(1);
-                true
-            }
-        };
-        if !allowed {
-            return false;
-        }
-        super::status::inc_consensus_no_roster_refresh_retry();
-        super::status::inc_consensus_no_roster_refresh_attempt();
-        let mut made_progress = false;
-        let committed_height = self.committed_height_snapshot();
-        let frontier_height = committed_height.saturating_add(1);
-        let frontier_window_ceiling = frontier_height.saturating_add(1);
-        let has_frontier_window_request = self
+        let unresolved_payload_fetch_keys = self
             .pending
             .missing_block_requests
-            .values()
-            .any(|request| request.height <= frontier_window_ceiling);
-        let has_far_future_request = self
-            .pending
-            .missing_block_requests
-            .values()
-            .any(|request| request.height > frontier_window_ceiling);
-        let has_far_future_pending = self
-            .pending
-            .pending_blocks
-            .values()
-            .any(|pending| pending.height > frontier_window_ceiling);
-        let prioritize_frontier =
-            !has_frontier_window_request && (has_far_future_request || has_far_future_pending);
-
-        if prioritize_frontier {
-            debug!(
-                committed_height,
-                frontier_height,
-                frontier_window_ceiling,
-                has_far_future_request,
-                has_far_future_pending,
-                "no-roster bootstrap prioritizing committed frontier realign over highest-QC fetch"
-            );
-        } else if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-            let already_tracked = self
-                .pending
-                .missing_block_requests
-                .get(&highest.subject_block_hash)
-                .is_some_and(|request| {
-                    request.height == highest.height
-                        && !self.block_payload_available_locally(highest.subject_block_hash)
-                });
-            let requested = if already_tracked {
-                debug!(
-                    height = highest.height,
-                    view = highest.view,
-                    block = %highest.subject_block_hash,
-                    "skipping duplicate no-roster bootstrap fetch: highest QC missing request already tracked"
-                );
-                false
-            } else {
-                self.request_missing_block_for_highest_qc_force(highest, "no_roster_bootstrap")
-            };
-            if requested || already_tracked {
-                let _ = self.note_missing_block_request_dependency_progress(
-                    highest.subject_block_hash,
-                    highest.height,
-                    highest.view,
-                    now,
-                    false,
-                );
-            }
-            made_progress |= requested || already_tracked;
-        }
-        let missing_before = self.pending.missing_block_requests.len();
-        let roster_hint = self.effective_commit_topology();
-        self.request_missing_parents_for_gap(
-            roster_hint.as_slice(),
-            Some(roster_hint.as_slice()),
-            "no_roster_bootstrap",
-        );
-        made_progress |= self.pending.missing_block_requests.len() > missing_before;
-        let (range_pull_height, range_pull_reason) = if prioritize_frontier {
-            (frontier_height, "no_roster_frontier_realign")
-        } else {
-            (height, "no_roster_bootstrap")
-        };
-        made_progress |=
-            self.request_range_pull_from_anchor(range_pull_height, range_pull_reason, now);
-        let current = self.state.commit_topology_snapshot();
-        let refreshed = self.effective_commit_topology();
-        if refreshed != current {
-            let refreshed_state = self.refresh_commit_topology_state(&refreshed);
-            made_progress |= !matches!(refreshed_state, CommitTopologyChange::None);
-        }
-        if made_progress {
-            super::status::inc_consensus_no_roster_refresh_success();
-        }
-        made_progress
-    }
-
-    fn escalate_no_roster_fail_closed(
-        &mut self,
-        height: u64,
-        view: u64,
-        block_hash: HashOf<BlockHeader>,
-        cause: ViewChangeCause,
-        reason: &'static str,
-        now: Instant,
-    ) {
-        let key = self.missing_block_recovery_key_for_height(height);
-        let budget = self
-            .no_roster_fallback_recovery
-            .entry(key)
-            .or_insert_with(|| NoRosterFallbackBudget::new(now));
-        budget.last_seen = now;
-        let bootstrap = budget
-            .bootstrap_by_view
-            .entry(view)
-            .or_insert_with(|| NoRosterBootstrapEntry::pending(now));
-        bootstrap.last_seen = now;
-        bootstrap.state = NoRosterBootstrapState::RosterBootstrapExhausted;
-        if !budget.escalated_views.insert(view) {
-            return;
-        }
-        super::status::inc_consensus_no_roster_fail_closed();
-        let _ = self.request_range_pull_from_anchor(height, "no_roster_fail_closed", now);
-        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-            self.request_missing_block_for_highest_qc_force(highest, "no_roster_fail_closed");
-        }
-        self.trigger_view_change_with_cause(height, view, cause);
-        warn!(
-            height,
-            view,
-            epoch = key.epoch,
-            block = %block_hash,
-            reason,
-            budget_remaining = 0_u32,
-            "no-roster fallback budget exhausted; fail-closed recovery escalation"
-        );
-    }
-
-    fn decide_no_roster_fallback_or_fail_closed(
-        &mut self,
-        height: u64,
-        view: u64,
-        block_hash: HashOf<BlockHeader>,
-        cause: ViewChangeCause,
-        reason: &'static str,
-    ) -> NoRosterFallbackDecision {
-        let now = Instant::now();
-        let (allowed, budget_remaining) =
-            self.allow_no_roster_fallback_for_round(height, view, now);
-        if allowed {
-            debug!(
-                height,
-                view,
-                block = %block_hash,
-                budget_remaining,
-                reason,
-                "allowing bounded no-roster fallback broadcast"
-            );
-            return NoRosterFallbackDecision::AllowFallback;
-        }
-        let bootstrap_state = self.no_roster_bootstrap_state(height, view, now);
-        if matches!(
-            bootstrap_state,
-            NoRosterBootstrapState::RosterBootstrapPending | NoRosterBootstrapState::RosterReady
-        ) {
-            let made_progress = self.try_no_roster_bootstrap_recovery_once(height, view, now);
-            if made_progress && self.mark_no_roster_refresh_then_fallback_used(height, view, now) {
-                super::status::inc_consensus_no_roster_fallback();
-                debug!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    reason,
-                    "allowing bounded no-roster fallback broadcast after deterministic bootstrap refresh"
-                );
-                return NoRosterFallbackDecision::AllowFallback;
-            }
-            let state = self.update_no_roster_bootstrap_state_after_attempt(
-                height,
-                view,
-                now,
-                made_progress,
-            );
-            if matches!(state, NoRosterBootstrapState::RosterBootstrapPending) {
-                debug!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    reason,
-                    made_progress,
-                    "deferring no-roster fail-closed escalation while roster bootstrap is pending"
-                );
-                return NoRosterFallbackDecision::BootstrapPending;
-            }
-        }
-        self.escalate_no_roster_fail_closed(height, view, block_hash, cause, reason, now);
-        NoRosterFallbackDecision::FailClosed
-    }
-
-    fn allow_no_roster_fallback_or_fail_closed(
-        &mut self,
-        height: u64,
-        view: u64,
-        block_hash: HashOf<BlockHeader>,
-        cause: ViewChangeCause,
-        reason: &'static str,
-    ) -> bool {
-        matches!(
-            self.decide_no_roster_fallback_or_fail_closed(height, view, block_hash, cause, reason),
-            NoRosterFallbackDecision::AllowFallback
-        )
+            .iter()
+            .filter_map(|(hash, request)| {
+                (!self.block_payload_available_locally(*hash)).then_some((request.height, *hash))
+            })
+            .chain(
+                self.deferred_missing_payload_qcs
+                    .values()
+                    .map(|entry| (entry.qc.height, entry.qc.subject_block_hash)),
+            )
+            .collect::<BTreeSet<_>>();
+        self.missing_payload_fetch_window_gates
+            .retain(|(height, block_hash), entry| {
+                *height > committed_height
+                    && now.saturating_duration_since(entry.last_window_at) <= ttl.saturating_mul(8)
+                    && unresolved_payload_fetch_keys.contains(&(*height, *block_hash))
+            });
     }
 
     fn deterministic_active_set_from_commit_evidence(
@@ -15900,6 +19236,7 @@ impl Actor {
         height: u64,
         tier: RangePullCandidateTier,
     ) -> Vec<PeerId> {
+        let local_peer_id = self.common_config.peer.id();
         let mut targets = match tier {
             RangePullCandidateTier::VoteRoster => {
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -15915,6 +19252,7 @@ impl Actor {
                 .map(|peer| peer.id().clone())
                 .collect(),
         };
+        targets.retain(|peer| peer != local_peer_id);
         targets.sort_by(|lhs, rhs| {
             lhs.public_key()
                 .cmp(rhs.public_key())
@@ -15965,6 +19303,93 @@ impl Actor {
         true
     }
 
+    fn reason_is_lock_lag_frontier_reanchor(reason: &'static str) -> bool {
+        matches!(
+            reason,
+            "lock_lag_future_prune"
+                | "frontier_gap_realign"
+                | "frontier_stall_reset"
+                | "missing_block_height_hard_cap"
+                | "missing_block_range_pull_no_progress"
+                | "missing_block_attempt_streak"
+                | "missing_block_hash_miss_streak"
+                | "qc_missing_payload_quorum_fast_recovery"
+                | "sidecar_mismatch"
+                | "highest_qc_committed_conflict"
+        )
+    }
+
+    fn reason_is_canonical_frontier_reanchor(reason: &'static str) -> bool {
+        matches!(
+            reason,
+            "frontier_gap_realign"
+                | "frontier_stall_reset"
+                | "missing_block_height_hard_cap"
+                | "missing_block_range_pull_no_progress"
+                | "missing_block_attempt_streak"
+                | "missing_block_hash_miss_streak"
+                | "idle_missing_qc_reacquire"
+                | "qc_missing_payload_quorum_fast_recovery"
+                | "lock_lag_future_prune"
+                | "sidecar_mismatch"
+                | "highest_qc_committed_conflict"
+        )
+    }
+
+    fn reason_is_missing_qc_stall_reanchor(reason: &'static str) -> bool {
+        matches!(
+            reason,
+            "idle_missing_qc_reacquire"
+                | "qc_missing_payload_quorum_fast_recovery"
+                | "missing_block_height_hard_cap"
+                | "highest_qc_committed_conflict"
+        )
+    }
+
+    fn reason_prefers_prev_committed_anchor(
+        reason: &'static str,
+        canonical_frontier_reanchor_active: bool,
+    ) -> bool {
+        if reason == "idle_missing_qc_reacquire" {
+            return canonical_frontier_reanchor_active;
+        }
+        matches!(
+            reason,
+            "frontier_gap_realign"
+                | "frontier_stall_reset"
+                | "missing_block_height_hard_cap"
+                | "lock_lag_future_prune"
+                | "sidecar_mismatch"
+                | "highest_qc_committed_conflict"
+        )
+    }
+
+    fn range_pull_anchor_hashes(
+        &self,
+        reason: &'static str,
+        canonical_frontier_reanchor_active: bool,
+    ) -> Option<(
+        Option<HashOf<BlockHeader>>,
+        Option<HashOf<BlockHeader>>,
+        &'static str,
+    )> {
+        let latest_hash = self.state.latest_block_hash_fast()?;
+        if Self::reason_prefers_prev_committed_anchor(reason, canonical_frontier_reanchor_active)
+            && let Some(prev_hash) = self.state.prev_block_hash_fast()
+        {
+            return Some((Some(prev_hash), Some(latest_hash), "prev_latest"));
+        }
+        let mode = if Self::reason_prefers_prev_committed_anchor(
+            reason,
+            canonical_frontier_reanchor_active,
+        ) {
+            "latest_latest_fallback"
+        } else {
+            "latest_latest"
+        };
+        Some((Some(latest_hash), Some(latest_hash), mode))
+    }
+
     fn request_range_pull_from_anchor_with_tier(
         &mut self,
         height: u64,
@@ -15972,15 +19397,487 @@ impl Actor {
         now: Instant,
         tier: Option<RangePullCandidateTier>,
     ) -> bool {
+        let (lock_lag_frontier, lock_lag_active, lock_lag_far_future, canonical_height) =
+            self.lock_lag_range_pull_scope_for_height(height);
         let local_height = self.committed_height_snapshot();
-        let Some(anchor_hash) = self.state.latest_block_hash_fast() else {
+        let canonical_frontier_reanchor_reason =
+            Self::reason_is_canonical_frontier_reanchor(reason);
+        let canonical_frontier_gate_heights =
+            self.canonical_frontier_reanchor_gate_heights(local_height, canonical_height);
+        let canonical_frontier_reanchor_active =
+            canonical_frontier_reanchor_reason && canonical_frontier_gate_heights.is_some();
+        let Some((anchor_prev_hash, anchor_latest_hash, anchor_mode)) =
+            self.range_pull_anchor_hashes(reason, canonical_frontier_reanchor_active)
+        else {
             return false;
         };
+        let lock_lag_stall_reason = lock_lag_active
+            && (Self::reason_is_lock_lag_frontier_reanchor(reason)
+                || (reason == "idle_missing_qc_reacquire"
+                    && lock_lag_frontier == Some(canonical_height)));
+        let lock_lag_stall = if lock_lag_stall_reason {
+            self.lock_lag_frontier_stall_snapshot(now)
+        } else {
+            None
+        };
+        let missing_qc_stall_reason = Self::reason_is_missing_qc_stall_reanchor(reason);
+        let active_round_height = self.active_consensus_round_height();
+        let missing_qc_stall = if missing_qc_stall_reason {
+            self.missing_qc_height_stall_snapshot(active_round_height, now)
+        } else {
+            None
+        };
+        let frontier_catchup_reason = Self::reason_is_canonical_frontier_reanchor(reason);
+        let frontier_catchup_canonical_height = canonical_frontier_gate_heights
+            .map_or(canonical_height, |(_, canonical_gate_height)| {
+                canonical_gate_height
+            });
+        let frontier_catchup_stall = if frontier_catchup_reason {
+            self.frontier_catchup_window_snapshot(frontier_catchup_canonical_height, now)
+        } else {
+            None
+        };
         let tier_label = tier.map(RangePullCandidateTier::label).unwrap_or("auto");
-        let targets = tier.map_or_else(
+        let mut targets = tier.map_or_else(
             || self.range_pull_targets_for_height(height),
             |tier| self.range_pull_targets_for_height_tier(height, tier),
         );
+        let mut lock_lag_stall_mode = false;
+        let mut lock_lag_stall_window_index = 0_u64;
+        let mut lock_lag_stall_all_peers = false;
+        let mut lock_lag_stall_dwell_ms = 0_u128;
+        let mut lock_lag_frontier_window_gate_applied = false;
+        let mut lock_lag_frontier_window_gate_height: Option<u64> = None;
+        let mut missing_qc_stall_mode = false;
+        let mut missing_qc_stall_window_index = 0_u64;
+        let mut missing_qc_stall_all_peers = false;
+        let mut missing_qc_stall_dwell_ms = 0_u128;
+        let mut missing_qc_stall_height: Option<u64> = None;
+        let mut missing_qc_stall_window: Option<Duration> = None;
+        let mut missing_qc_stall_window_suppressed = false;
+        let mut frontier_catchup_stall_mode = false;
+        let mut frontier_catchup_stall_window_index = 0_u64;
+        let mut frontier_catchup_stall_all_peers = false;
+        let mut frontier_catchup_stall_dwell_ms = 0_u128;
+        let mut frontier_catchup_stall_frontier_height: Option<u64> = None;
+        let mut frontier_catchup_stall_local_height_at_entry: Option<u64> = None;
+        let mut frontier_catchup_stall_window: Option<Duration> = None;
+        let mut frontier_catchup_last_rotation_at_ms: Option<u128> = None;
+        let mut frontier_catchup_last_reanchor_emit_at_ms: Option<u128> = None;
+        let mut frontier_catchup_reanchor_stride = 1_u64;
+        let mut frontier_catchup_emit_window_index = 0_u64;
+        let mut frontier_catchup_stride_suppressed = false;
+        let mut frontier_catchup_stall_window_suppressed = false;
+        let mut canonical_frontier_window_gate_applied = false;
+        let mut canonical_frontier_window_gate_height: Option<u64> = None;
+        let mut canonical_frontier_window_gate_canonical_height: Option<u64> = None;
+        let mut canonical_frontier_window_gate_index = 0_u64;
+        let mut canonical_frontier_window_gate_dwell_ms = 0_u128;
+        let mut canonical_frontier_dependency_progress_at_emit: Option<Instant> = None;
+        let mut canonical_frontier_reanchor_stride = 1_u64;
+        let mut canonical_frontier_emit_window_index = 0_u64;
+        let mut canonical_frontier_stride_suppressed = false;
+        let mut canonical_frontier_stall_all_peers = false;
+        let mut canonical_frontier_window_gate_suppressed = false;
+        if let Some(stall) = lock_lag_stall
+            .filter(|stall| stall.mode_active && lock_lag_frontier == Some(stall.frontier_height))
+        {
+            targets.sort_by(|lhs, rhs| {
+                lhs.public_key()
+                    .cmp(rhs.public_key())
+                    .then_with(|| lhs.cmp(rhs))
+            });
+            targets.dedup();
+            lock_lag_stall_mode = true;
+            lock_lag_stall_window_index = stall.window_index;
+            lock_lag_stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis();
+            let peer_count = targets.len();
+            if peer_count > 2 {
+                if stall.window_index % 3 == 2 {
+                    lock_lag_stall_all_peers = true;
+                } else {
+                    let peer_count_u64 = u64::try_from(peer_count).unwrap_or(u64::MAX).max(1);
+                    let start_idx =
+                        usize::try_from(stall.window_index % peer_count_u64).unwrap_or(0);
+                    let second_idx = (start_idx + 1) % peer_count;
+                    let mut cohort = Vec::with_capacity(2);
+                    cohort.push(targets[start_idx].clone());
+                    if second_idx != start_idx {
+                        cohort.push(targets[second_idx].clone());
+                    }
+                    targets = cohort;
+                }
+            } else {
+                lock_lag_stall_all_peers = true;
+            }
+        }
+        if lock_lag_stall_mode
+            && (Self::reason_is_lock_lag_frontier_reanchor(reason)
+                || reason == "idle_missing_qc_reacquire")
+            && lock_lag_frontier == Some(canonical_height)
+        {
+            lock_lag_frontier_window_gate_applied = true;
+            lock_lag_frontier_window_gate_height = lock_lag_frontier;
+        }
+        if let Some(stall) = missing_qc_stall.filter(|stall| {
+            stall.mode_active
+                && canonical_height == stall.height
+                && active_round_height == stall.height
+        }) {
+            missing_qc_stall_mode = true;
+            missing_qc_stall_window_index = stall.window_index;
+            missing_qc_stall_height = Some(stall.height);
+            missing_qc_stall_window = Some(stall.stall_window);
+            missing_qc_stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis();
+
+            let already_emitted = self.missing_qc_height_stall.as_ref().is_some_and(|state| {
+                state.height == stall.height
+                    && state.mode_active
+                    && state.last_reacquire_window_index == Some(stall.window_index)
+            });
+            if already_emitted {
+                missing_qc_stall_window_suppressed = true;
+            } else {
+                targets.sort_by(|lhs, rhs| {
+                    lhs.public_key()
+                        .cmp(rhs.public_key())
+                        .then_with(|| lhs.cmp(rhs))
+                });
+                targets.dedup();
+                let peer_count = targets.len();
+                if peer_count > 2 {
+                    if stall.window_index % 3 == 2 {
+                        missing_qc_stall_all_peers = true;
+                    } else {
+                        let peer_count_u64 = u64::try_from(peer_count).unwrap_or(u64::MAX).max(1);
+                        let start_idx =
+                            usize::try_from(stall.window_index % peer_count_u64).unwrap_or(0);
+                        let second_idx = (start_idx + 1) % peer_count;
+                        let mut cohort = Vec::with_capacity(2);
+                        cohort.push(targets[start_idx].clone());
+                        if second_idx != start_idx {
+                            cohort.push(targets[second_idx].clone());
+                        }
+                        targets = cohort;
+                    }
+                } else {
+                    missing_qc_stall_all_peers = true;
+                }
+            }
+        }
+        if let Some(stall) = frontier_catchup_stall.filter(|stall| {
+            stall.mode_active
+                && canonical_height >= stall.frontier_height
+                && stall.canonical_height == frontier_catchup_canonical_height
+        }) {
+            frontier_catchup_stall_mode = true;
+            frontier_catchup_stall_window_index = stall.window_index;
+            frontier_catchup_stall_frontier_height = Some(stall.frontier_height);
+            frontier_catchup_stall_local_height_at_entry = Some(stall.local_height_at_entry);
+            frontier_catchup_stall_window = Some(stall.stall_window);
+            frontier_catchup_stall_dwell_ms =
+                now.saturating_duration_since(stall.entered_at).as_millis();
+            frontier_catchup_last_rotation_at_ms = stall
+                .last_rotation_at
+                .map(|at| now.saturating_duration_since(at).as_millis());
+            frontier_catchup_last_reanchor_emit_at_ms = stall
+                .last_reanchor_emit_at
+                .map(|at| now.saturating_duration_since(at).as_millis());
+            frontier_catchup_reanchor_stride =
+                Self::frontier_catchup_reanchor_stride(stall.windows_without_commit_progress)
+                    .max(1);
+            frontier_catchup_emit_window_index = stall
+                .window_index
+                .checked_div(frontier_catchup_reanchor_stride)
+                .unwrap_or(0);
+            if stall.window_index % frontier_catchup_reanchor_stride != 0 {
+                frontier_catchup_stride_suppressed = true;
+                frontier_catchup_stall_window_suppressed = true;
+            } else {
+                targets.sort_by(|lhs, rhs| {
+                    lhs.public_key()
+                        .cmp(rhs.public_key())
+                        .then_with(|| lhs.cmp(rhs))
+                });
+                targets.dedup();
+                let peer_count = targets.len();
+                if peer_count > 2 {
+                    if frontier_catchup_emit_window_index % 3 == 2 {
+                        frontier_catchup_stall_all_peers = true;
+                    } else {
+                        let peer_count_u64 = u64::try_from(peer_count).unwrap_or(u64::MAX).max(1);
+                        let start_idx =
+                            usize::try_from(frontier_catchup_emit_window_index % peer_count_u64)
+                                .unwrap_or(0);
+                        let second_idx = (start_idx + 1) % peer_count;
+                        let mut cohort = Vec::with_capacity(2);
+                        cohort.push(targets[start_idx].clone());
+                        if second_idx != start_idx {
+                            cohort.push(targets[second_idx].clone());
+                        }
+                        targets = cohort;
+                    }
+                } else {
+                    frontier_catchup_stall_all_peers = true;
+                }
+            }
+        }
+        if canonical_frontier_reanchor_reason
+            && let Some((frontier_height, canonical_frontier_height)) =
+                canonical_frontier_gate_heights
+        {
+            canonical_frontier_window_gate_applied = true;
+            canonical_frontier_window_gate_height = Some(frontier_height);
+            canonical_frontier_window_gate_canonical_height = Some(canonical_frontier_height);
+            canonical_frontier_dependency_progress_at_emit =
+                self.frontier_catchup_unresolved_dependency_progress_at_height(frontier_height);
+            if frontier_catchup_stall_mode
+                && frontier_catchup_stall_frontier_height == Some(frontier_height)
+            {
+                canonical_frontier_window_gate_index = frontier_catchup_stall_window_index;
+                canonical_frontier_window_gate_dwell_ms = frontier_catchup_stall_dwell_ms;
+            } else {
+                let snapshot = self.canonical_frontier_reanchor_window_snapshot(
+                    frontier_height,
+                    canonical_frontier_height,
+                    now,
+                );
+                canonical_frontier_window_gate_index = snapshot.window_index;
+                canonical_frontier_window_gate_dwell_ms = now
+                    .saturating_duration_since(snapshot.entered_at)
+                    .as_millis();
+            }
+            canonical_frontier_reanchor_stride =
+                Self::canonical_frontier_reanchor_stride_for_window(
+                    canonical_frontier_window_gate_index,
+                );
+            canonical_frontier_emit_window_index = canonical_frontier_window_gate_index
+                .checked_div(canonical_frontier_reanchor_stride)
+                .unwrap_or(0);
+            canonical_frontier_window_gate_suppressed = self
+                .canonical_frontier_reanchor_window_already_emitted(
+                    frontier_height,
+                    canonical_frontier_height,
+                    canonical_frontier_window_gate_index,
+                );
+            if !canonical_frontier_window_gate_suppressed
+                && canonical_frontier_window_gate_index % canonical_frontier_reanchor_stride != 0
+            {
+                canonical_frontier_stride_suppressed = true;
+                canonical_frontier_window_gate_suppressed = true;
+            } else if !canonical_frontier_window_gate_suppressed
+                && !frontier_catchup_stall_mode
+                && !missing_qc_stall_mode
+                && !lock_lag_stall_mode
+            {
+                targets.sort_by(|lhs, rhs| {
+                    lhs.public_key()
+                        .cmp(rhs.public_key())
+                        .then_with(|| lhs.cmp(rhs))
+                });
+                targets.dedup();
+                let peer_count = targets.len();
+                if peer_count > 2 {
+                    if canonical_frontier_emit_window_index % 3 == 2 {
+                        canonical_frontier_stall_all_peers = true;
+                    } else {
+                        let peer_count_u64 = u64::try_from(peer_count).unwrap_or(u64::MAX).max(1);
+                        let start_idx =
+                            usize::try_from(canonical_frontier_emit_window_index % peer_count_u64)
+                                .unwrap_or(0);
+                        let second_idx = (start_idx + 1) % peer_count;
+                        let mut cohort = Vec::with_capacity(2);
+                        cohort.push(targets[start_idx].clone());
+                        if second_idx != start_idx {
+                            cohort.push(targets[second_idx].clone());
+                        }
+                        targets = cohort;
+                    }
+                } else {
+                    canonical_frontier_stall_all_peers = true;
+                }
+            }
+        }
+        let recovery_reason = RecoveryFsmReason::from_reason(reason);
+        let mut recovery_transition_events = targets
+            .iter()
+            .cloned()
+            .map(|peer_id| RecoveryFsmEvent {
+                height: canonical_height,
+                reason: recovery_reason,
+                peer_id,
+            })
+            .collect::<Vec<_>>();
+        stable_sort_recovery_events(&mut recovery_transition_events);
+        let recovery_transition_event_count = recovery_transition_events.len();
+        let frontier_height_for_fsm = canonical_frontier_window_gate_height
+            .or(frontier_catchup_stall_frontier_height)
+            .unwrap_or(canonical_height);
+        let local_height_at_entry_for_fsm =
+            frontier_catchup_stall_local_height_at_entry.unwrap_or(local_height);
+        let no_progress_window_count_for_fsm =
+            frontier_catchup_stall.map_or(0, |stall| stall.windows_without_commit_progress);
+        let emission_window_token = canonical_frontier_window_gate_height
+            .zip(canonical_frontier_window_gate_canonical_height)
+            .and_then(|(frontier_height, canonical_frontier_height)| {
+                self.canonical_frontier_reanchor_window_gates
+                    .get(&(frontier_height, canonical_frontier_height))
+                    .and_then(|state| state.last_action_window_index)
+            });
+        let dependency_progress_watermark = canonical_frontier_window_gate_height
+            .zip(canonical_frontier_window_gate_canonical_height)
+            .and_then(|(frontier_height, canonical_frontier_height)| {
+                self.canonical_frontier_reanchor_window_gates
+                    .get(&(frontier_height, canonical_frontier_height))
+                    .and_then(|state| state.last_dependency_progress_at_emit)
+            });
+        let missing_qc_rotation_reservation = self
+            .missing_qc_height_stall
+            .filter(|stall| stall.height == active_round_height && stall.mode_active)
+            .and_then(|stall| stall.last_rotation_window_index);
+        let committed_edge_conflict_reservation = if reason == "highest_qc_committed_conflict" {
+            self.committed_edge_conflict_window_gates
+                .get(&(canonical_height, "highest_qc_committed_conflict"))
+                .and_then(|state| state.last_action_window_index)
+        } else {
+            None
+        };
+        let frontier_identity_unchanged = frontier_catchup_stall_frontier_height
+            .zip(frontier_catchup_stall_local_height_at_entry)
+            .is_none_or(|(frontier_height, entry_height)| {
+                frontier_height == frontier_height_for_fsm && entry_height == local_height
+            });
+        let unresolved_dependency =
+            canonical_frontier_window_gate_height.is_none_or(|frontier_height| {
+                self.frontier_catchup_has_unresolved_dependency(frontier_height)
+            });
+        let gap_exceeds = canonical_frontier_window_gate_height.is_none_or(|frontier_height| {
+            self.frontier_catchup_gap_exceeds_threshold(frontier_height, canonical_height)
+        });
+        let observation_window_index = if canonical_frontier_window_gate_applied {
+            canonical_frontier_window_gate_index
+        } else {
+            frontier_catchup_stall_window_index
+        };
+        let recovery_fsm_state = RecoveryFsmState {
+            frontier_height: frontier_height_for_fsm,
+            local_height_at_entry: local_height_at_entry_for_fsm,
+            no_progress_window_count: no_progress_window_count_for_fsm,
+            emission_window_token,
+            dependency_progress_watermark,
+            missing_qc_rotation_reservation,
+            committed_edge_conflict_reservation,
+        };
+        let dependency_progress_since_emit_unchanged = canonical_frontier_window_gate_height
+            .zip(canonical_frontier_window_gate_canonical_height)
+            .is_some_and(|(frontier_height, canonical_frontier_height)| {
+                self.canonical_frontier_reanchor_dependency_progress_unchanged(
+                    frontier_height,
+                    canonical_frontier_height,
+                    canonical_frontier_window_gate_index,
+                    canonical_frontier_dependency_progress_at_emit,
+                )
+            });
+        let recovery_fsm_observations = recovery_transition_events
+            .iter()
+            .map(|event| RecoveryFsmObservations {
+                height: event.height,
+                reason: event.reason,
+                peer_id: event.peer_id.clone(),
+                window_index: observation_window_index,
+                frontier_identity_unchanged,
+                committed_height_advanced: false,
+                unresolved_dependency,
+                gap_exceeds,
+                stride_window_suppressed: frontier_catchup_stride_suppressed
+                    || canonical_frontier_stride_suppressed,
+                emission_window_suppressed: frontier_catchup_stall_window_suppressed
+                    || missing_qc_stall_window_suppressed
+                    || canonical_frontier_window_gate_suppressed,
+                dependency_progress_since_emit_unchanged,
+            })
+            .collect::<Vec<_>>();
+        let recovery_fsm_actions =
+            step_recovery_fsm(recovery_fsm_state, &recovery_fsm_observations);
+        if canonical_frontier_reanchor_reason
+            && !recovery_fsm_actions.allow_reanchor_emit
+            && (frontier_catchup_stall_window_suppressed
+                || canonical_frontier_window_gate_suppressed)
+        {
+            debug!(
+                height,
+                canonical_height,
+                reason,
+                frontier_height_for_fsm,
+                local_height_at_entry_for_fsm,
+                no_progress_window_count_for_fsm,
+                observation_window_index,
+                "recovery_fsm suppressed canonical-frontier reanchor emission in this window"
+            );
+            return false;
+        }
+        if missing_qc_stall_mode && !recovery_fsm_actions.allow_missing_qc_rotation {
+            debug!(
+                height,
+                canonical_height,
+                reason,
+                missing_qc_stall_height = ?missing_qc_stall_height,
+                missing_qc_stall_window_index,
+                "recovery_fsm suppressed same-height missing-qc reanchor in this window"
+            );
+            return false;
+        }
+        if reason == "highest_qc_committed_conflict"
+            && !recovery_fsm_actions.allow_committed_edge_bundle
+        {
+            debug!(
+                height,
+                canonical_height,
+                reason,
+                observation_window_index,
+                "recovery_fsm suppressed committed-edge conflict bundle in this window"
+            );
+            return false;
+        }
+        if frontier_catchup_stall_window_suppressed {
+            debug!(
+                height,
+                canonical_height,
+                reason,
+                frontier_catchup_stall_frontier_height = ?frontier_catchup_stall_frontier_height,
+                frontier_catchup_stall_window_index,
+                frontier_catchup_reanchor_stride,
+                frontier_catchup_stride_suppressed,
+                "suppressing frontier catch-up reanchor in the current stall window"
+            );
+            return false;
+        }
+        if missing_qc_stall_window_suppressed {
+            debug!(
+                height,
+                canonical_height,
+                reason,
+                missing_qc_stall_height = ?missing_qc_stall_height,
+                missing_qc_stall_window_index,
+                "suppressing same-height missing-QC reanchor in the current stall window"
+            );
+            return false;
+        }
+        if canonical_frontier_window_gate_suppressed {
+            debug!(
+                height,
+                canonical_height,
+                reason,
+                canonical_frontier_window_gate_height = ?canonical_frontier_window_gate_height,
+                canonical_frontier_window_gate_index,
+                canonical_frontier_window_gate_dwell_ms,
+                canonical_frontier_reanchor_stride,
+                canonical_frontier_emit_window_index,
+                canonical_frontier_stride_suppressed,
+                "suppressing canonical-frontier reanchor in the current shared window"
+            );
+            return false;
+        }
         if targets.is_empty() {
             return false;
         }
@@ -15994,10 +19891,40 @@ impl Actor {
                     .max(Duration::from_secs(1)),
             );
         }
+        if lock_lag_active {
+            // Under lock-lag catch-up, bound anchor range-pull dedup by the
+            // consensus timeout envelope to avoid per-view pull storms.
+            cooldown = cooldown.max(self.lock_lag_range_pull_cooldown_floor());
+        }
+        if lock_lag_far_future {
+            cooldown = cooldown.max(saturating_mul_duration(
+                self.recovery_missing_block_height_ttl(),
+                2,
+            ));
+        }
+        if lock_lag_stall_mode {
+            // During lock-lag frontier stall, keep reanchor retries bounded under a wider
+            // in-flight dedup floor to avoid re-prune/reanchor churn in the same window.
+            cooldown = cooldown.max(saturating_mul_duration(
+                self.recovery_missing_block_height_ttl(),
+                2,
+            ));
+        }
+        if missing_qc_stall_mode {
+            cooldown = cooldown.max(
+                missing_qc_stall_window.unwrap_or_else(|| self.missing_qc_height_stall_window()),
+            );
+        }
+        if frontier_catchup_stall_mode {
+            cooldown = cooldown.max(
+                frontier_catchup_stall_window
+                    .unwrap_or_else(|| self.frontier_catchup_stall_window()),
+            );
+        }
         let expires = now.checked_add(cooldown).unwrap_or(now);
         let mut sent = 0usize;
         for peer in targets {
-            let dedup_key = (peer.clone(), local_height, height);
+            let dedup_key = (peer.clone(), local_height, canonical_height, reason);
             if self
                 .range_pull_escalation_cooldowns
                 .get(&dedup_key)
@@ -16009,8 +19936,8 @@ impl Actor {
                 .insert(dedup_key, expires);
             let request = crate::block_sync::message::GetBlocksAfter::new(
                 self.common_config.peer.id().clone(),
-                Some(anchor_hash),
-                Some(anchor_hash),
+                anchor_prev_hash,
+                anchor_latest_hash,
                 BTreeSet::new(),
             );
             self.network.post(Post {
@@ -16026,6 +19953,43 @@ impl Actor {
         if sent == 0 {
             return false;
         }
+        if let Some(stalled_height) = missing_qc_stall_height.filter(|_| missing_qc_stall_mode) {
+            self.mark_missing_qc_height_stall_range_pull_window(
+                stalled_height,
+                missing_qc_stall_window_index,
+            );
+        }
+        if let Some(frontier_height) =
+            lock_lag_frontier_window_gate_height.filter(|_| lock_lag_frontier_window_gate_applied)
+        {
+            self.mark_frontier_catchup_window_emitted(
+                frontier_height,
+                lock_lag_stall_window_index,
+                now,
+            );
+        }
+        if let Some(frontier_height) =
+            frontier_catchup_stall_frontier_height.filter(|_| frontier_catchup_stall_mode)
+        {
+            self.mark_frontier_catchup_window_emitted(
+                frontier_height,
+                frontier_catchup_stall_window_index,
+                now,
+            );
+        }
+        if let Some((frontier_height, frontier_canonical_height)) =
+            canonical_frontier_window_gate_height
+                .zip(canonical_frontier_window_gate_canonical_height)
+                .filter(|_| canonical_frontier_window_gate_applied)
+        {
+            self.mark_canonical_frontier_reanchor_window_emitted(
+                frontier_height,
+                frontier_canonical_height,
+                canonical_frontier_window_gate_index,
+                now,
+                canonical_frontier_dependency_progress_at_emit,
+            );
+        }
 
         super::status::inc_blocksync_range_pull_escalation();
         #[cfg(feature = "telemetry")]
@@ -16034,8 +19998,46 @@ impl Actor {
         }
         info!(
             height,
+            canonical_height,
             local_height,
-            anchor = %anchor_hash,
+            lock_lag_active,
+            lock_lag_far_future,
+            lock_lag_frontier = ?lock_lag_frontier,
+            lock_lag_stall_mode,
+            lock_lag_stall_window_index,
+            lock_lag_stall_all_peers,
+            lock_lag_stall_dwell_ms,
+            lock_lag_frontier_window_gate_applied,
+            lock_lag_frontier_window_gate_height = ?lock_lag_frontier_window_gate_height,
+            missing_qc_stall_mode,
+            missing_qc_stall_height = ?missing_qc_stall_height,
+            missing_qc_stall_window_index,
+            missing_qc_stall_all_peers,
+            missing_qc_stall_dwell_ms,
+            frontier_catchup_stall_mode,
+            frontier_catchup_stall_frontier_height = ?frontier_catchup_stall_frontier_height,
+            frontier_catchup_stall_local_height_at_entry = ?frontier_catchup_stall_local_height_at_entry,
+            frontier_catchup_stall_window_index,
+            frontier_catchup_reanchor_stride,
+            frontier_catchup_emit_window_index,
+            frontier_catchup_stride_suppressed,
+            frontier_catchup_stall_all_peers,
+            frontier_catchup_stall_dwell_ms,
+            frontier_catchup_last_rotation_at_ms,
+            frontier_catchup_last_reanchor_emit_at_ms,
+            canonical_frontier_window_gate_applied,
+            canonical_frontier_window_gate_height = ?canonical_frontier_window_gate_height,
+            canonical_frontier_window_gate_canonical_height = ?canonical_frontier_window_gate_canonical_height,
+            canonical_frontier_window_gate_index,
+            canonical_frontier_window_gate_dwell_ms,
+            canonical_frontier_reanchor_stride,
+            canonical_frontier_emit_window_index,
+            canonical_frontier_stride_suppressed,
+            canonical_frontier_stall_all_peers,
+            recovery_transition_event_count,
+            anchor_prev = ?anchor_prev_hash,
+            anchor_latest = ?anchor_latest_hash,
+            anchor_mode,
             targets = sent,
             tier = tier_label,
             reason,
@@ -16079,6 +20081,29 @@ impl Actor {
             .min()
     }
 
+    fn should_skip_missing_block_recovery_escalation(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        let key = self.missing_block_recovery_key_for_height(height);
+        let Some(budget) = self.missing_block_height_recovery.get(&key) else {
+            return false;
+        };
+        if budget.last_hash != block_hash || budget.last_view != view {
+            return false;
+        }
+        if !budget.range_pull.inflight {
+            return false;
+        }
+        let ttl = self
+            .recovery_missing_block_height_ttl()
+            .max(Duration::from_millis(1));
+        now.saturating_duration_since(budget.range_pull.last_progress) < ttl
+    }
+
     fn maybe_escalate_missing_block_height_recovery(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -16090,14 +20115,50 @@ impl Actor {
         let Some(mut budget) = self.missing_block_height_recovery.get(&key).copied() else {
             return false;
         };
+        let committed_height = self.committed_height_snapshot();
+        let actionable_missing_request = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_some_and(|request| {
+                request.height == height
+                    && self.missing_block_request_has_actionable_dependency(
+                        block_hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            });
+        let actionable_deferred_dependency =
+            self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.height == height
+                    && self.deferred_missing_payload_qc_has_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            });
+        if !actionable_missing_request && !actionable_deferred_dependency {
+            self.clear_range_pull_expiry_streak_for_key(key);
+            let _ = self.clear_non_actionable_missing_dependencies_for_height(
+                height,
+                committed_height,
+                now,
+            );
+            self.clear_missing_block_recovery_for_height(height, now);
+            return false;
+        }
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
         let attempt_cap = self.recovery_missing_block_height_attempt_cap().max(1);
         let range_pull_attempt_threshold = (attempt_cap / 2).max(2);
-        let range_pull_hash_miss_cap = self
-            .recovery_range_pull_escalation_after_hash_misses()
-            .max(1);
+        let range_pull_hash_miss_cap = self.effective_hash_miss_escalation_cap(
+            height,
+            self.recovery_range_pull_escalation_after_hash_misses()
+                .max(1),
+            attempt_cap,
+        );
         let request_progress = self
             .pending
             .missing_block_requests
@@ -16120,14 +20181,22 @@ impl Actor {
         let view_change_already_triggered =
             request_progress.is_some_and(|(_, _, triggered, _)| triggered);
         let can_trigger_view_change = request_progress.is_some_and(|(_, _, _, allowed)| allowed);
+        let contiguous_frontier_height = committed_height.saturating_add(1);
+        let height_is_contiguous = height <= contiguous_frontier_height;
         let active_height = self.active_consensus_round_height();
         let height_is_active = height == active_height;
+        let mut range_pull_expiry_streak = self
+            .range_pull_expiry_streak_for_key(key)
+            .max(budget.range_pull.no_progress_windows);
+        budget.range_pull.no_progress_windows = range_pull_expiry_streak;
 
         if budget.range_pull.inflight
             && now.saturating_duration_since(budget.range_pull.last_progress) >= ttl
             && recent_dependency_progress.is_none()
         {
             budget.range_pull.inflight = false;
+            range_pull_expiry_streak = self.note_range_pull_expiry_for_key(key);
+            budget.range_pull.no_progress_windows = range_pull_expiry_streak;
             super::status::inc_blocksync_range_pull_failure();
             #[cfg(feature = "telemetry")]
             if let Some(telemetry) = self.telemetry_handle() {
@@ -16138,11 +20207,15 @@ impl Actor {
                 view,
                 block = %block_hash,
                 ttl_ms = ttl.as_millis(),
+                expiry_streak = range_pull_expiry_streak,
                 "range-pull recovery window expired without progress"
             );
         }
         if let Some(progress_at) = recent_dependency_progress {
             budget.range_pull.last_progress = progress_at;
+            budget.range_pull.no_progress_windows = 0;
+            range_pull_expiry_streak = 0;
+            self.clear_range_pull_expiry_streak_for_key(key);
         }
         let inflight_range_pull_converging = budget.range_pull.inflight
             && now.saturating_duration_since(budget.range_pull.last_progress) < ttl;
@@ -16169,16 +20242,139 @@ impl Actor {
             self.missing_block_height_recovery.insert(key, budget);
             return false;
         }
-        let attempt_streak_due = budget.attempts >= range_pull_attempt_threshold;
-        let hash_miss_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap;
+        let mut attempt_streak_due = budget.attempts >= range_pull_attempt_threshold;
+        let mut hash_miss_due = budget.range_pull.hash_misses >= range_pull_hash_miss_cap;
         let no_progress_due = now.saturating_duration_since(budget.range_pull.last_progress) >= ttl;
+        if self.lock_lag_range_pull_active_for_height(height)
+            && budget.range_pull.inflight
+            && !no_progress_due
+        {
+            attempt_streak_due = false;
+            hash_miss_due = false;
+        }
         let range_pull_due = attempt_streak_due || hash_miss_due || no_progress_due;
         if !hard_cap_due && !range_pull_due {
             self.missing_block_height_recovery.insert(key, budget);
             return false;
         }
+        if height == contiguous_frontier_height
+            && height_is_active
+            && (no_progress_due || hard_cap_due)
+        {
+            let lock_lag_hard_cap_override = hard_cap_due
+                && self.lock_lag_range_pull_active_for_height(height)
+                && can_trigger_view_change
+                && !view_change_already_triggered
+                && !self
+                    .phase_tracker
+                    .current_view(height)
+                    .is_some_and(|current| current > view)
+                && budget.escalated_view != Some(view);
+            if lock_lag_hard_cap_override {
+                self.clear_missing_block_recovery_for_height(height, now);
+                budget.escalated_view = Some(view);
+                super::status::inc_consensus_missing_block_height_escalation();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_consensus_missing_block_height_escalation();
+                }
+                if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+                    stats.view_change_triggered_view = Some(view);
+                }
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    attempts = budget.attempts,
+                    attempt_cap,
+                    dwell_ms = dwell.as_millis(),
+                    "lock-lag frontier hard cap bypassed catch-up controller and escalated deterministically"
+                );
+                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
+                self.missing_block_height_recovery.insert(key, budget);
+                return true;
+            }
+            let recovery_reason = if hard_cap_due {
+                "missing_block_height_hard_cap"
+            } else {
+                "missing_block_range_pull_no_progress"
+            };
+            let active_same_height_recovery = self
+                .frontier_recovery
+                .is_some_and(|state| state.frontier_height == height);
+            if no_progress_due && range_pull_expiry_streak >= 2 && !active_same_height_recovery {
+                let window = self.frontier_recovery_window();
+                let elapsed = saturating_mul_duration(window, range_pull_expiry_streak);
+                let started_at = now.checked_sub(elapsed).unwrap_or(now);
+                let seeded_dependency_progress =
+                    self.same_height_no_proposal_storm_dependency_progress_at(height);
+                let mut seeded_state = self
+                    .frontier_recovery
+                    .filter(|state| state.frontier_height == height)
+                    .unwrap_or(FrontierRecoveryState {
+                        frontier_height: height,
+                        phase: FrontierRecoveryPhase::CatchUp,
+                        entered_at: started_at,
+                        last_progress_at: started_at,
+                        last_dependency_progress_at: seeded_dependency_progress,
+                        last_action_at: None,
+                        no_progress_windows: range_pull_expiry_streak,
+                        cleanup_done: false,
+                        last_view: view,
+                        last_rotation_view: None,
+                        last_cause: recovery_reason,
+                    });
+                seeded_state.phase = FrontierRecoveryPhase::CatchUp;
+                seeded_state.entered_at = started_at;
+                seeded_state.last_progress_at = started_at;
+                seeded_state.last_dependency_progress_at = seeded_dependency_progress;
+                seeded_state.last_action_at = None;
+                seeded_state.no_progress_windows = seeded_state
+                    .no_progress_windows
+                    .max(range_pull_expiry_streak);
+                seeded_state.cleanup_done = false;
+                seeded_state.last_view = view.max(seeded_state.last_view);
+                seeded_state.last_cause = recovery_reason;
+                self.frontier_recovery = Some(seeded_state);
+            }
+            let allow_rotation = can_trigger_view_change
+                && !view_change_already_triggered
+                && !self
+                    .phase_tracker
+                    .current_view(height)
+                    .is_some_and(|current| current > view)
+                && budget.escalated_view != Some(view);
+            let recovery_action = self.advance_frontier_recovery(
+                recovery_reason,
+                height,
+                view,
+                false,
+                true,
+                allow_rotation,
+                now,
+            );
+            budget.range_pull.stage = step_missing_block_recovery_stage(
+                budget.range_pull.stage,
+                MissingBlockRecoveryTransition::RangePullRequested,
+            );
+            budget.range_pull.last_requested = Some(now);
+            budget.range_pull.hash_misses = 0;
+            budget.range_pull.inflight =
+                matches!(recovery_action, FrontierRecoveryAdvance::CatchUp);
+            if budget.range_pull.inflight {
+                budget.range_pull.last_progress = now;
+            }
+            if matches!(recovery_action, FrontierRecoveryAdvance::Rotate) {
+                budget.escalated_view = Some(view);
+            }
+            self.missing_block_height_recovery.insert(key, budget);
+            return !matches!(recovery_action, FrontierRecoveryAdvance::None);
+        }
 
         let mut defer_hard_cap_escalation = false;
+        let mut force_expiry_reanchor = false;
+        let mut expiry_cooldowns_cleared = 0usize;
+        let mut expiry_window_reserved = false;
         if no_progress_due {
             if let Some(next_tier) = budget.range_pull.candidate_tier.advance() {
                 budget.range_pull.candidate_tier = next_tier;
@@ -16192,9 +20388,55 @@ impl Actor {
                     "range-pull recovery exhausted current targets; advancing deterministic tier"
                 );
             }
+            if range_pull_expiry_streak >= 2
+                && let Some(next_tier) = budget.range_pull.candidate_tier.advance()
+            {
+                budget.range_pull.candidate_tier = next_tier;
+                super::status::inc_blocksync_range_pull_candidate_exhausted();
+                defer_hard_cap_escalation = true;
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    expiry_streak = range_pull_expiry_streak,
+                    tier = next_tier.label(),
+                    "repeated range-pull expiry streak triggered immediate extra tier escalation"
+                );
+            }
+            if range_pull_expiry_streak >= 2 {
+                expiry_window_reserved = self.try_reserve_round_recovery_bundle_window(
+                    height,
+                    RoundRecoveryBundleSource::RangePullExpiry,
+                    now,
+                );
+                if expiry_window_reserved {
+                    budget.range_pull.candidate_tier = RangePullCandidateTier::TrustedPeers;
+                    expiry_cooldowns_cleared =
+                        self.clear_range_pull_escalation_cooldowns_for_height(height);
+                    if contiguous_frontier_height != height {
+                        expiry_cooldowns_cleared = expiry_cooldowns_cleared.saturating_add(
+                            self.clear_range_pull_escalation_cooldowns_for_height(
+                                contiguous_frontier_height,
+                            ),
+                        );
+                    }
+                    force_expiry_reanchor = true;
+                } else {
+                    debug!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        expiry_streak = range_pull_expiry_streak,
+                        "suppressing repeated no-progress range-pull tier/window re-entry in the current recovery window"
+                    );
+                }
+            }
         }
 
-        budget.range_pull.stage = MissingBlockRecoveryStage::RangePullFromAnchor;
+        budget.range_pull.stage = step_missing_block_recovery_stage(
+            budget.range_pull.stage,
+            MissingBlockRecoveryTransition::RangePullRequested,
+        );
         budget.range_pull.last_requested = Some(now);
         let escalation_reason = if hard_cap_due {
             "missing_block_height_hard_cap"
@@ -16205,29 +20447,72 @@ impl Actor {
         } else {
             "missing_block_hash_miss_streak"
         };
+        let range_pull_height = if height_is_contiguous {
+            height
+        } else {
+            contiguous_frontier_height
+        };
+        if force_expiry_reanchor {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                expiry_streak = range_pull_expiry_streak,
+                expiry_window_reserved,
+                expiry_cooldowns_cleared,
+                range_pull_height,
+                "repeated no-progress range-pull expiry forced canonical all-target reanchor attempt"
+            );
+        }
         let mut inflight = self.request_range_pull_from_anchor_with_tier(
-            height,
+            range_pull_height,
             escalation_reason,
             now,
-            Some(budget.range_pull.candidate_tier),
+            Some(if force_expiry_reanchor {
+                RangePullCandidateTier::TrustedPeers
+            } else {
+                budget.range_pull.candidate_tier
+            }),
         );
-        while !inflight {
+        let suppress_no_progress_tier_fallback = escalation_reason
+            == "missing_block_range_pull_no_progress"
+            && self
+                .frontier_catchup_target_height(self.committed_height_snapshot())
+                .is_some_and(|frontier_height| {
+                    frontier_height == height
+                        && self.frontier_catchup_has_unresolved_dependency(frontier_height)
+                });
+        while !inflight && !suppress_no_progress_tier_fallback {
             let Some(next_tier) = budget.range_pull.candidate_tier.advance() else {
                 break;
             };
             budget.range_pull.candidate_tier = next_tier;
             super::status::inc_blocksync_range_pull_candidate_exhausted();
             inflight = self.request_range_pull_from_anchor_with_tier(
-                height,
+                range_pull_height,
                 escalation_reason,
                 now,
                 Some(next_tier),
             );
         }
+        if !inflight && suppress_no_progress_tier_fallback {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                tier = budget.range_pull.candidate_tier.label(),
+                "suppressing same-attempt no-progress tier fanout while contiguous frontier reanchor window is gated"
+            );
+        }
         budget.range_pull.inflight = inflight;
+        if force_expiry_reanchor && inflight {
+            budget.range_pull.last_progress = now;
+        }
         budget.range_pull.hash_misses = 0;
-        budget.range_pull.no_progress_windows =
-            budget.range_pull.no_progress_windows.saturating_add(1);
+        if !no_progress_due && recent_dependency_progress.is_some() {
+            budget.range_pull.no_progress_windows = 0;
+            self.clear_range_pull_expiry_streak_for_key(key);
+        }
         let inflight_range_pull_converging_now = budget.range_pull.inflight
             && now.saturating_duration_since(budget.range_pull.last_progress) < ttl;
 
@@ -16245,6 +20530,16 @@ impl Actor {
                 dwell_ms = dwell.as_millis(),
                 "suppressing missing-block hard-cap view change for non-active round height"
             );
+        } else if hard_cap_due && !height_is_contiguous {
+            debug!(
+                height,
+                view,
+                contiguous_frontier_height,
+                block = %block_hash,
+                attempts = budget.attempts,
+                dwell_ms = dwell.as_millis(),
+                "suppressing missing-block hard-cap view change for non-contiguous frontier height"
+            );
         } else if hard_cap_due
             && !defer_hard_cap_escalation
             && !defer_view_change
@@ -16256,47 +20551,79 @@ impl Actor {
                 .is_some_and(|current| current > view)
             && budget.escalated_view != Some(view)
         {
-            let (pending_removed, missing_removed, hints_removed, proposals_removed, seen_removed) =
-                self.prune_consensus_state_for_missing_block_height(height);
-            if pending_removed > 0
-                || missing_removed > 0
-                || hints_removed > 0
-                || proposals_removed > 0
-                || seen_removed > 0
-            {
-                info!(
+            let bypass_same_height_stall_window =
+                self.lock_lag_range_pull_active_for_height(height);
+            if bypass_same_height_stall_window
+                || self.try_reserve_missing_qc_height_stall_rotation_window(
                     height,
-                    view,
-                    block = %block_hash,
+                    ViewChangeCause::MissingPayload,
+                    now,
+                )
+            {
+                let (
                     pending_removed,
                     missing_removed,
+                    deferred_updates_removed,
+                    deferred_qcs_removed,
                     hints_removed,
                     proposals_removed,
                     seen_removed,
-                    "cleared stale consensus state for missing-block hard-cap recovery"
+                ) = self.prune_consensus_state_for_missing_block_height(height);
+                if pending_removed > 0
+                    || missing_removed > 0
+                    || deferred_updates_removed > 0
+                    || deferred_qcs_removed > 0
+                    || hints_removed > 0
+                    || proposals_removed > 0
+                    || seen_removed > 0
+                {
+                    info!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        pending_removed,
+                        missing_removed,
+                        deferred_updates_removed,
+                        deferred_qcs_removed,
+                        hints_removed,
+                        proposals_removed,
+                        seen_removed,
+                        "cleared stale consensus state for missing-block hard-cap recovery"
+                    );
+                }
+                self.clear_missing_block_recovery_for_height(height, now);
+                budget.escalated_view = Some(view);
+                super::status::inc_consensus_missing_block_height_escalation();
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_consensus_missing_block_height_escalation();
+                }
+                if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
+                    stats.view_change_triggered_view = Some(view);
+                }
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    attempts = budget.attempts,
+                    attempt_cap,
+                    dwell_ms = dwell.as_millis(),
+                    "missing-block height recovery hard cap tripped; escalating deterministically"
+                );
+                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
+                progressed = true;
+            } else {
+                debug!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    attempts = budget.attempts,
+                    attempt_cap,
+                    dwell_ms = dwell.as_millis(),
+                    bypass_same_height_stall_window,
+                    "suppressing missing-block hard-cap escalation in same-height stall window"
                 );
             }
-            self.clear_missing_block_recovery_for_height(height, now);
-            budget.escalated_view = Some(view);
-            super::status::inc_consensus_missing_block_height_escalation();
-            #[cfg(feature = "telemetry")]
-            if let Some(telemetry) = self.telemetry_handle() {
-                telemetry.inc_consensus_missing_block_height_escalation();
-            }
-            if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                stats.view_change_triggered_view = Some(view);
-            }
-            warn!(
-                height,
-                view,
-                block = %block_hash,
-                attempts = budget.attempts,
-                attempt_cap,
-                dwell_ms = dwell.as_millis(),
-                "missing-block height recovery hard cap tripped; escalating deterministically"
-            );
-            self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingPayload);
-            progressed = true;
         } else if hard_cap_due && view_change_already_triggered {
             budget.escalated_view = Some(view);
             debug!(
@@ -16337,7 +20664,7 @@ impl Actor {
     fn prune_consensus_state_for_missing_block_height(
         &mut self,
         height: u64,
-    ) -> (usize, usize, usize, usize, usize) {
+    ) -> (usize, usize, usize, usize, usize, usize, usize) {
         let stale_pending: Vec<_> = self
             .pending
             .pending_blocks
@@ -16395,19 +20722,177 @@ impl Actor {
             .retain(|(entry_height, _)| *entry_height != height);
         let seen_removed = seen_before.saturating_sub(self.subsystems.propose.proposals_seen.len());
 
+        let stale_deferred_updates: Vec<_> = self
+            .deferred_block_sync_updates
+            .keys()
+            .copied()
+            .filter(|(entry_height, _, _)| *entry_height == height)
+            .collect();
+        let mut deferred_updates_removed = 0usize;
+        for key in stale_deferred_updates {
+            if self.deferred_block_sync_updates.remove(&key).is_some() {
+                deferred_updates_removed = deferred_updates_removed.saturating_add(1);
+            }
+        }
+
+        let stale_deferred_qcs: Vec<_> = self
+            .deferred_missing_payload_qcs
+            .keys()
+            .copied()
+            .filter(|(_, _, entry_height, _, _)| *entry_height == height)
+            .collect();
+        let mut deferred_qcs_removed = 0usize;
+        for key in stale_deferred_qcs {
+            if self.deferred_missing_payload_qcs.remove(&key).is_some() {
+                deferred_qcs_removed = deferred_qcs_removed.saturating_add(1);
+            }
+        }
+
+        let stale_quarantined_qcs: Vec<_> = self
+            .quarantined_block_sync_qcs
+            .keys()
+            .copied()
+            .filter(|(_, _, entry_height, _, _)| *entry_height == height)
+            .collect();
+        for key in stale_quarantined_qcs {
+            if self.quarantined_block_sync_qcs.remove(&key).is_some() {
+                deferred_qcs_removed = deferred_qcs_removed.saturating_add(1);
+            }
+        }
+
+        let stale_deferred_qc_roster: Vec<_> = self
+            .deferred_qc_roster_state
+            .keys()
+            .copied()
+            .filter(|(_, _, entry_height, _, _)| *entry_height == height)
+            .collect();
+        for key in stale_deferred_qc_roster {
+            if self.deferred_qc_roster_state.remove(&key).is_some() {
+                deferred_qcs_removed = deferred_qcs_removed.saturating_add(1);
+            }
+        }
+
+        let stale_deferred_qc_votes: Vec<_> = self
+            .deferred_qcs
+            .keys()
+            .copied()
+            .filter(|(_, _, entry_height, _, _)| *entry_height == height)
+            .collect();
+        for key in stale_deferred_qc_votes {
+            if self.deferred_qcs.remove(&key).is_some() {
+                deferred_qcs_removed = deferred_qcs_removed.saturating_add(1);
+            }
+        }
+
+        let stale_known_block_qc_work: Vec<_> = self
+            .known_block_qc_work
+            .keys()
+            .copied()
+            .filter(|(_, _, entry_height, _, _)| *entry_height == height)
+            .collect();
+        for key in stale_known_block_qc_work {
+            if self.known_block_qc_work.remove(&key).is_some() {
+                deferred_qcs_removed = deferred_qcs_removed.saturating_add(1);
+            }
+        }
+
+        let markers_before = self
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .len();
+        self.subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .retain(|(entry_height, _, _)| *entry_height != height);
+        deferred_qcs_removed = deferred_qcs_removed.saturating_add(
+            markers_before.saturating_sub(
+                self.subsystems
+                    .propose
+                    .highest_qc_missing_defer_markers
+                    .len(),
+            ),
+        );
+
+        self.qc_missing_payload_range_pull_cooldowns
+            .retain(|(entry_height, _, _), _| *entry_height != height);
+        let _ = self.clear_lock_rejected_block_sinks_for_height(height);
+
         (
             pending_removed,
             missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
             hints_removed,
             proposals_removed,
             seen_removed,
         )
     }
 
+    fn clear_range_pull_escalation_cooldowns_for_height(&mut self, height: u64) -> usize {
+        let before = self.range_pull_escalation_cooldowns.len();
+        self.range_pull_escalation_cooldowns
+            .retain(|(_, local_height, canonical_height, _), _| {
+                *local_height != height && *canonical_height != height
+            });
+        before.saturating_sub(self.range_pull_escalation_cooldowns.len())
+    }
+
+    fn force_clear_frontier_reanchor_state_for_height(
+        &mut self,
+        height: u64,
+        now: Instant,
+    ) -> bool {
+        let had_frontier_catchup_gate = self.frontier_catchup_window_gates.contains_key(&height);
+        let had_canonical_gate = self
+            .canonical_frontier_reanchor_window_gates
+            .keys()
+            .any(|(entry_height, _)| *entry_height == height);
+        let had_frontier_stall_state = self
+            .frontier_catchup_stall
+            .is_some_and(|stall| stall.frontier_height == height);
+        let had_missing_qc_stall_state = self
+            .missing_qc_height_stall
+            .is_some_and(|stall| stall.height == height);
+        let had_lock_lag_stall_state = self
+            .lock_lag_frontier_stall
+            .is_some_and(|stall| stall.frontier_height == height);
+        let had_lock_lag_prune_cooldown = self
+            .lock_lag_prune_cooldown
+            .is_some_and(|cooldown| cooldown.catchup_frontier_height == height);
+
+        self.clear_frontier_catchup_window_gate_for_height(height);
+        self.clear_canonical_frontier_reanchor_window_gate_for_height(height);
+        self.clear_frontier_stall_reset_window_gate_for_height(height);
+        if had_frontier_stall_state {
+            self.clear_frontier_catchup_stall_state();
+        }
+        if had_missing_qc_stall_state {
+            self.missing_qc_height_stall = None;
+        }
+        if had_lock_lag_stall_state {
+            self.lock_lag_frontier_stall = None;
+        }
+        if had_lock_lag_prune_cooldown {
+            self.lock_lag_prune_cooldown = None;
+        }
+        let cleared = had_frontier_catchup_gate
+            || had_canonical_gate
+            || had_frontier_stall_state
+            || had_missing_qc_stall_state
+            || had_lock_lag_stall_state
+            || had_lock_lag_prune_cooldown;
+        if cleared {
+            self.note_missing_block_dependency_event(now);
+        }
+        cleared
+    }
+
     fn prune_future_consensus_state_above_height(
         &mut self,
         keep_through_height: u64,
         now: Instant,
+        preserve_immediate_successor_frontier_state: bool,
     ) -> (usize, usize, usize, usize, usize, usize, usize) {
         let stale_pending: Vec<_> = self
             .pending
@@ -16580,7 +21065,18 @@ impl Actor {
         cleared_heights.extend(stale_hint_heights);
         cleared_heights.extend(stale_proposal_heights);
         cleared_heights.extend(stale_seen_heights);
+        let contiguous_frontier_height = keep_through_height.saturating_add(1);
         for height in cleared_heights {
+            let _ = self.clear_lock_rejected_block_sinks_for_height(height);
+            self.clear_range_pull_expiry_streak_for_key(
+                self.missing_block_recovery_key_for_height(height),
+            );
+            if preserve_immediate_successor_frontier_state && height == contiguous_frontier_height {
+                // Keep frontier/canonical shared-window state stable while pruning far-future
+                // artifacts above the contiguous catch-up edge.
+                self.clear_missing_block_recovery_for_height_preserving_frontier_state(height, now);
+                continue;
+            }
             self.clear_missing_block_recovery_for_height(height, now);
             self.clear_sidecar_mismatch_for_height(height);
         }
@@ -16597,7 +21093,9 @@ impl Actor {
     }
 
     fn maybe_reset_stalled_frontier_state(&mut self, committed_height: u64, now: Instant) -> bool {
-        let frontier_height = committed_height.saturating_add(1);
+        let frontier_height = u64::try_from(committed_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
@@ -16613,6 +21111,10 @@ impl Actor {
             })
             .count();
         if stalled_frontier_requests == 0 {
+            self.clear_frontier_stall_reset_window_gate_for_height(frontier_height);
+            return false;
+        }
+        if !self.allow_frontier_stall_reset_action(frontier_height, now) {
             return false;
         }
         let prune_threshold = frontier_height.saturating_add(1);
@@ -16649,7 +21151,24 @@ impl Actor {
                 .keys()
                 .any(|(height, _)| *height > prune_threshold);
         if !has_far_future_state {
-            return false;
+            let view = self
+                .phase_tracker
+                .current_view(frontier_height)
+                .unwrap_or(0);
+            let advance = self.advance_frontier_recovery(
+                "frontier_stall",
+                frontier_height,
+                view,
+                false,
+                true,
+                false,
+                now,
+            );
+            return !matches!(advance, FrontierRecoveryAdvance::None)
+                || self.frontier_recovery.is_some_and(|state| {
+                    state.frontier_height == frontier_height
+                        && self.frontier_catchup_has_unresolved_dependency(frontier_height)
+                });
         }
 
         let (
@@ -16660,7 +21179,7 @@ impl Actor {
             hints_removed,
             proposals_removed,
             seen_removed,
-        ) = self.prune_future_consensus_state_above_height(prune_threshold, now);
+        ) = self.prune_future_consensus_state_above_height(prune_threshold, now, true);
         if missing_removed > 0 {
             super::status::inc_missing_request_pruned_stale_height(
                 u64::try_from(missing_removed).unwrap_or(u64::MAX),
@@ -16678,8 +21197,17 @@ impl Actor {
                 u64::try_from(evicted_total).unwrap_or(u64::MAX),
             );
         }
-        let requested_pull =
+        let mut requested_pull =
             self.request_range_pull_from_anchor(frontier_height, "frontier_stall_reset", now);
+        if !requested_pull {
+            // Retry once with a fallback reason that bypasses canonical-frontier window gating so
+            // stalled frontier recovery can still request an anchor pull.
+            requested_pull = self.request_range_pull_from_anchor(
+                frontier_height,
+                "frontier_stall_reset_fallback",
+                now,
+            );
+        }
         if evicted_total == 0 && missing_removed == 0 && !requested_pull {
             return false;
         }
@@ -16709,12 +21237,183 @@ impl Actor {
         true
     }
 
+    fn prune_lock_lag_future_consensus_state(
+        &mut self,
+        now: Instant,
+        trigger: &'static str,
+    ) -> bool {
+        let Some(catchup_height) = self.lock_lag_catchup_frontier_height() else {
+            return false;
+        };
+        let lock_lag_stall = self.lock_lag_frontier_stall_snapshot(now);
+        let lock_lag_stall_mode = lock_lag_stall
+            .is_some_and(|stall| stall.mode_active && stall.frontier_height == catchup_height);
+        let lock_lag_stall_dwell_ms = lock_lag_stall
+            .filter(|stall| stall.mode_active && stall.frontier_height == catchup_height)
+            .map(|stall| now.saturating_duration_since(stall.entered_at).as_millis())
+            .unwrap_or(0);
+        let lock_lag_stall_window = lock_lag_stall
+            .map(|stall| stall.stall_window)
+            .unwrap_or_else(|| self.lock_lag_prune_cooldown_window());
+        let dependency_event_seq = self.dependency_event_seq;
+        let previous_consecutive_without_pull = self
+            .lock_lag_prune_cooldown
+            .filter(|cooldown| cooldown.catchup_frontier_height == catchup_height)
+            .map_or(0, |cooldown| cooldown.consecutive_without_pull);
+        let keep_through_height = catchup_height.saturating_add(1);
+        let has_far_future_state = self
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.height > keep_through_height)
+            || self
+                .pending
+                .missing_block_requests
+                .values()
+                .any(|request| request.height > keep_through_height)
+            || self
+                .deferred_block_sync_updates
+                .keys()
+                .any(|(height, _, _)| *height > keep_through_height)
+            || self
+                .deferred_missing_payload_qcs
+                .keys()
+                .any(|(_, _, height, _, _)| *height > keep_through_height)
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .hints
+                .keys()
+                .any(|(height, _)| *height > keep_through_height)
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .proposals
+                .keys()
+                .any(|(height, _)| *height > keep_through_height);
+        if !has_far_future_state {
+            return false;
+        }
+        if let Some(cooldown) = self.lock_lag_prune_cooldown.filter(|cooldown| {
+            cooldown.catchup_frontier_height == catchup_height && now < cooldown.expires_at
+        }) {
+            debug!(
+                trigger,
+                catchup_height,
+                dependency_event_seq,
+                lock_lag_prune_consecutive_without_pull = cooldown.consecutive_without_pull,
+                lock_lag_stall_mode,
+                stall_window_ms = lock_lag_stall_window.as_millis(),
+                lock_lag_stall_dwell_ms,
+                "suppressing repeated lock-lag prune while dependency frontier is unchanged"
+            );
+            return false;
+        }
+
+        let requested_pull_before_prune = if lock_lag_stall_mode {
+            self.request_range_pull_from_anchor(catchup_height, "lock_lag_future_prune", now)
+        } else {
+            false
+        };
+        if lock_lag_stall_mode
+            && !requested_pull_before_prune
+            && previous_consecutive_without_pull > 0
+        {
+            debug!(
+                trigger,
+                catchup_height,
+                dependency_event_seq,
+                lock_lag_prune_consecutive_without_pull = previous_consecutive_without_pull,
+                lock_lag_stall_mode,
+                lock_lag_stall_window_ms = lock_lag_stall_window.as_millis(),
+                lock_lag_stall_dwell_ms,
+                "suppressing destructive lock-lag prune while stall-mode reanchor pull is still gated"
+            );
+            return false;
+        }
+
+        let (
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+        ) = self.prune_future_consensus_state_above_height(keep_through_height, now, true);
+        if missing_removed > 0 {
+            super::status::inc_missing_request_pruned_stale_height(
+                u64::try_from(missing_removed).unwrap_or(u64::MAX),
+            );
+            self.update_missing_block_gauges();
+        }
+        let evicted_total = pending_removed
+            .saturating_add(deferred_updates_removed)
+            .saturating_add(deferred_qcs_removed)
+            .saturating_add(hints_removed)
+            .saturating_add(proposals_removed)
+            .saturating_add(seen_removed);
+        if evicted_total > 0 {
+            super::status::inc_pending_queue_evictions_total(
+                u64::try_from(evicted_total).unwrap_or(u64::MAX),
+            );
+        }
+        let requested_pull = requested_pull_before_prune
+            || self.request_range_pull_from_anchor(catchup_height, "lock_lag_future_prune", now);
+        if evicted_total == 0 && missing_removed == 0 && !requested_pull {
+            return false;
+        }
+        let base_cooldown = if lock_lag_stall_mode {
+            lock_lag_stall_window
+        } else {
+            self.lock_lag_prune_cooldown_window()
+        };
+        let mut cooldown = base_cooldown;
+        let mut consecutive_without_pull = 0_u32;
+        if !requested_pull && (evicted_total > 0 || missing_removed > 0) {
+            consecutive_without_pull = previous_consecutive_without_pull.saturating_add(1);
+            let multiplier_shift = consecutive_without_pull.saturating_sub(1).min(3);
+            let multiplier = 1_u32 << multiplier_shift;
+            cooldown = saturating_mul_duration(base_cooldown, multiplier);
+        }
+        let expires_at = now.checked_add(cooldown).unwrap_or(now);
+        self.lock_lag_prune_cooldown = Some(LockLagPruneCooldownState {
+            catchup_frontier_height: catchup_height,
+            expires_at,
+            consecutive_without_pull,
+        });
+        warn!(
+            trigger,
+            catchup_height,
+            keep_through_height,
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+            requested_pull,
+            lock_lag_prune_consecutive_without_pull = consecutive_without_pull,
+            lock_lag_prune_cooldown_ms = cooldown.as_millis(),
+            lock_lag_stall_mode,
+            lock_lag_stall_window_ms = lock_lag_stall_window.as_millis(),
+            lock_lag_stall_dwell_ms,
+            "pruned far-future consensus state while lock catch-up dependencies are unresolved"
+        );
+        true
+    }
+
     fn note_missing_block_height_recovery_success(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         now: Instant,
     ) {
+        let key = self.missing_block_recovery_key_for_height(height);
+        self.clear_range_pull_expiry_streak_for_key(key);
         self.clear_missing_block_recovery_for_height(height, now);
         super::status::inc_blocksync_range_pull_success();
         #[cfg(feature = "telemetry")]
@@ -16772,7 +21471,93 @@ impl Actor {
         now.saturating_duration_since(entry.first_seen) >= self.recovery_sidecar_mismatch_ttl()
     }
 
+    fn roster_sidecar_mismatch_obsolete_ttl(&self) -> Duration {
+        self.sidecar_mismatch_recovery_window()
+            .max(Duration::from_millis(1))
+            .min(ROSTER_SIDECAR_MISMATCH_OBSOLETE_TTL)
+    }
+
+    fn prune_roster_sidecar_mismatch_obsolete_cache(&mut self, now: Instant) {
+        let committed_height = self.committed_height_snapshot();
+        self.roster_sidecar_mismatch_obsolete
+            .retain(|(height, _, _), expires_at| *height >= committed_height && now < *expires_at);
+    }
+
+    fn repeated_roster_sidecar_mismatch_is_obsolete(
+        &mut self,
+        height: u64,
+        expected: HashOf<BlockHeader>,
+        stored: HashOf<BlockHeader>,
+        now: Instant,
+    ) -> bool {
+        self.prune_roster_sidecar_mismatch_obsolete_cache(now);
+        let key = (height, expected, stored);
+        let ttl = self.roster_sidecar_mismatch_obsolete_ttl();
+        if let Some(expires_at) = self.roster_sidecar_mismatch_obsolete.get_mut(&key)
+            && now < *expires_at
+        {
+            *expires_at = now.checked_add(ttl).unwrap_or(now);
+            return true;
+        }
+        self.roster_sidecar_mismatch_obsolete
+            .insert(key, now.checked_add(ttl).unwrap_or(now));
+        false
+    }
+
+    fn clear_stale_sidecar_mismatch_dependencies(
+        &mut self,
+        expected: HashOf<BlockHeader>,
+        stored: HashOf<BlockHeader>,
+    ) -> (usize, usize, usize) {
+        let mut stale_hashes = BTreeSet::new();
+        stale_hashes.insert(expected);
+        stale_hashes.insert(stored);
+
+        let mut missing_requests_cleared = 0usize;
+        for hash in stale_hashes.iter().copied() {
+            if self.pending.missing_block_requests.contains_key(&hash) {
+                self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
+                missing_requests_cleared = missing_requests_cleared.saturating_add(1);
+            }
+            self.clear_missing_block_view_change(&hash);
+        }
+
+        let deferred_before = self.deferred_missing_payload_qcs.len();
+        let stale_hashes_with_payload: BTreeSet<_> = stale_hashes
+            .iter()
+            .copied()
+            .filter(|hash| self.block_payload_available_locally(*hash))
+            .collect();
+        self.deferred_missing_payload_qcs.retain(|_, entry| {
+            !stale_hashes.contains(&entry.qc.subject_block_hash)
+                || stale_hashes_with_payload.contains(&entry.qc.subject_block_hash)
+        });
+        let deferred_removed =
+            deferred_before.saturating_sub(self.deferred_missing_payload_qcs.len());
+
+        let markers_before = self
+            .subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .len();
+        self.subsystems
+            .propose
+            .highest_qc_missing_defer_markers
+            .retain(|(_, _, hash)| !stale_hashes.contains(hash));
+        let markers_removed = markers_before.saturating_sub(
+            self.subsystems
+                .propose
+                .highest_qc_missing_defer_markers
+                .len(),
+        );
+
+        (missing_requests_cleared, deferred_removed, markers_removed)
+    }
+
     fn committed_block_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
+        if height > self.committed_height_snapshot() {
+            return None;
+        }
         usize::try_from(height)
             .ok()
             .and_then(NonZeroUsize::new)
@@ -16780,33 +21565,272 @@ impl Actor {
             .map(|block| block.hash())
     }
 
-    const fn sidecar_mismatch_reason_group(reason: &'static str) -> &'static str {
-        reason
+    fn highest_qc_force_fetch_window(&self) -> Duration {
+        self.frontier_catchup_stall_window()
+            .max(self.missing_qc_height_stall_window())
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(Duration::from_millis(1))
+    }
+
+    fn highest_qc_force_fetch_reason_group(source: &'static str) -> &'static str {
+        match source {
+            "proposal" | "proposal_hint" | "new_view" => "proposal_path",
+            "sidecar_mismatch" => "sidecar_mismatch",
+            _ => "consensus_recovery",
+        }
+    }
+
+    fn clear_highest_qc_force_fetch_window_gates_for_height(&mut self, height: u64) {
+        self.highest_qc_force_fetch_window_gates
+            .retain(|(entry_height, _, _), _| *entry_height != height);
+    }
+
+    fn allow_highest_qc_force_fetch_retry(
+        &mut self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+        source: &'static str,
+        now: Instant,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        if height <= committed_height || self.block_payload_available_for_progress(block_hash) {
+            self.clear_highest_qc_force_fetch_window_gates_for_height(height);
+            return false;
+        }
+        let reason_group = Self::highest_qc_force_fetch_reason_group(source);
+        let window = self.highest_qc_force_fetch_window();
+        let key = (height, block_hash, reason_group);
+        let gate = self
+            .highest_qc_force_fetch_window_gates
+            .entry(key)
+            .or_insert(HighestQcForceFetchWindowGateState {
+                height,
+                block_hash,
+                reason_group,
+                entered_at: now,
+                last_window_at: now,
+                window_index: 0,
+                last_force_window_index: None,
+            });
+        debug_assert_eq!(gate.height, height);
+        debug_assert_eq!(gate.block_hash, block_hash);
+        debug_assert_eq!(gate.reason_group, reason_group);
+        let elapsed_window_count = {
+            let window_nanos = window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(gate.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            gate.last_window_at = now;
+            gate.window_index = gate.window_index.saturating_add(elapsed_window_count);
+        }
+        if gate.last_force_window_index == Some(gate.window_index) {
+            debug!(
+                height,
+                view_source = source,
+                reason_group,
+                window_index = gate.window_index,
+                window_ms = window.as_millis(),
+                dwell_ms = now.saturating_duration_since(gate.entered_at).as_millis(),
+                "suppressing forced highest-QC missing-block fetch in the current stall window"
+            );
+            return false;
+        }
+        gate.last_force_window_index = Some(gate.window_index);
+        true
+    }
+
+    fn committed_edge_conflict_recovery_window(&self) -> Duration {
+        self.frontier_catchup_stall_window()
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(Duration::from_millis(1))
+    }
+
+    fn clear_committed_edge_conflict_window_gates_for_height(&mut self, height: u64) {
+        self.committed_edge_conflict_window_gates
+            .retain(|(entry_height, _), _| *entry_height != height);
+    }
+
+    fn allow_committed_edge_conflict_recovery_action(
+        &mut self,
+        height: u64,
+        reason_group: &'static str,
+        now: Instant,
+    ) -> bool {
+        if self.committed_height_snapshot() > height {
+            self.clear_committed_edge_conflict_window_gates_for_height(height);
+            return false;
+        }
+        let window = self.committed_edge_conflict_recovery_window();
+        let key = (height, reason_group);
+        let gate = self
+            .committed_edge_conflict_window_gates
+            .entry(key)
+            .or_insert(CommittedEdgeConflictWindowGateState {
+                height,
+                reason_group,
+                entered_at: now,
+                last_window_at: now,
+                window_index: 0,
+                last_action_window_index: None,
+            });
+        debug_assert_eq!(gate.height, height);
+        debug_assert_eq!(gate.reason_group, reason_group);
+        let elapsed_window_count = {
+            let window_nanos = window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(gate.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            gate.last_window_at = now;
+            gate.window_index = gate.window_index.saturating_add(elapsed_window_count);
+        }
+        if gate.last_action_window_index == Some(gate.window_index) {
+            debug!(
+                height,
+                reason_group,
+                window_index = gate.window_index,
+                window_ms = window.as_millis(),
+                dwell_ms = now.saturating_duration_since(gate.entered_at).as_millis(),
+                "suppressing committed-edge highest-QC conflict recovery action in the current window"
+            );
+            return false;
+        }
+        gate.last_action_window_index = Some(gate.window_index);
+        true
+    }
+
+    const fn sidecar_mismatch_reason_group(_reason: &'static str) -> &'static str {
+        "roster_sidecar_mismatch"
+    }
+
+    fn committed_edge_sidecar_conflict_hashes(
+        &self,
+        committed_height: u64,
+    ) -> Option<(HashOf<BlockHeader>, HashOf<BlockHeader>)> {
+        let canonical_hash = self.committed_block_hash_for_height(committed_height)?;
+        let sidecar_hash = self.kura.read_roster_metadata(committed_height)?.block_hash;
+        (canonical_hash != sidecar_hash).then_some((canonical_hash, sidecar_hash))
+    }
+
+    fn sidecar_mismatch_recovery_window(&self) -> Duration {
+        self.frontier_catchup_stall_window()
+            .max(self.rebroadcast_cooldown())
+            .max(SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR)
+    }
+
+    fn sidecar_mismatch_recovery_converged(&self, height: u64) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        committed_height > height || self.committed_block_hash_for_height(height).is_some()
+    }
+
+    fn allow_sidecar_mismatch_committed_edge_observation(
+        &mut self,
+        height: u64,
+        reason_group: &'static str,
+        now: Instant,
+    ) -> bool {
+        let window = self.sidecar_mismatch_recovery_window();
+        let key = (height, reason_group);
+        let gate = self
+            .sidecar_mismatch_committed_edge_gates
+            .entry(key)
+            .or_insert(SidecarMismatchCommittedEdgeGateState {
+                height,
+                reason_group,
+                entered_at: now,
+                last_window_at: now,
+                window_index: 0,
+                last_observation_window_index: None,
+            });
+        debug_assert_eq!(gate.height, height);
+        debug_assert_eq!(gate.reason_group, reason_group);
+        let elapsed_window_count = {
+            let window_nanos = window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(gate.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            gate.last_window_at = now;
+            gate.window_index = gate.window_index.saturating_add(elapsed_window_count);
+        }
+        if gate.last_observation_window_index == Some(gate.window_index) {
+            debug!(
+                height,
+                reason_group,
+                window_index = gate.window_index,
+                window_ms = window.as_millis(),
+                dwell_ms = now.saturating_duration_since(gate.entered_at).as_millis(),
+                "suppressing committed-edge sidecar mismatch observation in the current stall window"
+            );
+            return false;
+        }
+        gate.last_observation_window_index = Some(gate.window_index);
+        true
     }
 
     fn allow_sidecar_mismatch_recovery_action(
         &mut self,
         height: u64,
-        expected: HashOf<BlockHeader>,
-        stored: HashOf<BlockHeader>,
+        _expected: HashOf<BlockHeader>,
+        _stored: HashOf<BlockHeader>,
         reason_group: &'static str,
         now: Instant,
     ) -> bool {
-        let cooldown = self
-            .rebroadcast_cooldown()
-            .max(SIDECAR_MISMATCH_RECOVERY_ACTION_COOLDOWN_FLOOR);
-        self.sidecar_mismatch_action_cooldowns
-            .retain(|_, expires| now < *expires);
-        let key = (height, expected, stored, reason_group);
-        if self
-            .sidecar_mismatch_action_cooldowns
-            .get(&key)
-            .is_some_and(|deadline| now < *deadline)
-        {
+        if self.sidecar_mismatch_recovery_converged(height) {
+            self.clear_sidecar_mismatch_for_height(height);
             return false;
         }
-        let expires = now.checked_add(cooldown).unwrap_or(now);
-        self.sidecar_mismatch_action_cooldowns.insert(key, expires);
+        let window = self.sidecar_mismatch_recovery_window();
+        let key = (height, reason_group);
+        let gate = self.sidecar_mismatch_window_gates.entry(key).or_insert(
+            SidecarMismatchEscalationWindowGateState {
+                height,
+                reason_group,
+                entered_at: now,
+                last_window_at: now,
+                window_index: 0,
+                last_escalation_window_index: None,
+                last_escalation_at: None,
+            },
+        );
+        debug_assert_eq!(gate.height, height);
+        debug_assert_eq!(gate.reason_group, reason_group);
+        let elapsed_window_count = {
+            let window_nanos = window.as_nanos().max(1);
+            let elapsed = now
+                .saturating_duration_since(gate.last_window_at)
+                .as_nanos()
+                / window_nanos;
+            u64::try_from(elapsed).unwrap_or(u64::MAX)
+        };
+        if elapsed_window_count > 0 {
+            gate.last_window_at = now;
+            gate.window_index = gate.window_index.saturating_add(elapsed_window_count);
+        }
+
+        if gate.last_escalation_window_index == Some(gate.window_index) {
+            debug!(
+                height,
+                reason_group,
+                window_index = gate.window_index,
+                window_ms = window.as_millis(),
+                dwell_ms = now.saturating_duration_since(gate.entered_at).as_millis(),
+                "suppressing sidecar mismatch escalation in the current stall window"
+            );
+            return false;
+        }
+        gate.last_escalation_window_index = Some(gate.window_index);
+        gate.last_escalation_at = Some(now);
         true
     }
 
@@ -16818,6 +21842,62 @@ impl Actor {
         reason: &'static str,
     ) {
         let now = Instant::now();
+        let reason_group = Self::sidecar_mismatch_reason_group(reason);
+        let committed_height = self.committed_height_snapshot();
+        let canonical_reanchor_height = committed_height.saturating_add(1);
+        let (stale_missing_requests_cleared, stale_deferred_qcs_removed, stale_markers_removed) =
+            self.clear_stale_sidecar_mismatch_dependencies(expected, stored);
+        let repeated_obsolete =
+            self.repeated_roster_sidecar_mismatch_is_obsolete(height, expected, stored, now);
+        if repeated_obsolete {
+            super::status::inc_roster_sidecar_mismatch_obsolete();
+        }
+        if height <= committed_height {
+            if !self.allow_sidecar_mismatch_committed_edge_observation(height, reason_group, now) {
+                return;
+            }
+            let contiguous_frontier_height = self
+                .frontier_catchup_target_height(committed_height)
+                .filter(|frontier_height| *frontier_height == canonical_reanchor_height);
+            let contiguous_frontier_unresolved =
+                contiguous_frontier_height.is_some_and(|frontier_height| {
+                    self.frontier_catchup_has_unresolved_dependency(frontier_height)
+                });
+            let mut emitted_reanchor = false;
+            if !repeated_obsolete
+                && self.allow_committed_edge_conflict_recovery_action(
+                    height,
+                    "highest_qc_committed_conflict",
+                    now,
+                )
+            {
+                emitted_reanchor = self.request_range_pull_from_anchor(
+                    canonical_reanchor_height,
+                    "highest_qc_committed_conflict",
+                    now,
+                );
+            } else if !contiguous_frontier_unresolved {
+                self.clear_committed_edge_conflict_window_gates_for_height(height);
+            }
+            warn!(
+                height,
+                committed_height,
+                expected = %expected,
+                stored = %stored,
+                reason_group,
+                reason,
+                repeated_obsolete,
+                contiguous_frontier_unresolved,
+                canonical_reanchor_height,
+                stale_missing_requests_cleared,
+                stale_deferred_qcs_removed,
+                stale_markers_removed,
+                emitted_reanchor,
+                "roster sidecar mismatch detected at committed edge; stale conflicting dependencies cleared and canonical reanchor gated"
+            );
+            return;
+        }
+
         let mut entry = self
             .sidecar_mismatch_recovery
             .get(&height)
@@ -16837,7 +21917,8 @@ impl Actor {
 
         let should_final_drop = entry.mismatch_count >= self.recovery_sidecar_mismatch_retry_cap()
             || self.sidecar_entry_expired(entry, now);
-        if should_final_drop && !entry.final_dropped {
+        let transitioned_to_final_drop = should_final_drop && !entry.final_dropped;
+        if transitioned_to_final_drop {
             entry.final_dropped = true;
             entry.canonical_rebuild_inflight = false;
             super::status::inc_consensus_sidecar_final_drop();
@@ -16860,50 +21941,88 @@ impl Actor {
         }
 
         self.sidecar_mismatch_recovery.insert(height, entry);
-        let reason_group = Self::sidecar_mismatch_reason_group(reason);
-        let suppress_recovery_actions = !self.allow_sidecar_mismatch_recovery_action(
-            height,
-            expected,
-            stored,
-            reason_group,
-            now,
-        );
+        let suppress_recovery_actions = if entry.final_dropped {
+            !transitioned_to_final_drop
+        } else {
+            !self.allow_sidecar_mismatch_recovery_action(
+                height,
+                expected,
+                stored,
+                reason_group,
+                now,
+            )
+        };
+        let repeated_recovery_trigger = entry.mismatch_count > 1 && !suppress_recovery_actions;
+        if repeated_recovery_trigger {
+            super::status::inc_consensus_sidecar_recovery_trigger();
+        }
+        let mut emitted_reanchor = false;
         if !suppress_recovery_actions {
-            let _ = self.request_range_pull_from_anchor(height, "sidecar_mismatch", now);
-            if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-                // Keep sidecar mismatch recovery non-reentrant to avoid recursive overflow.
-                self.request_missing_block_for_highest_qc_force_skip_sidecar_observation(
-                    highest,
-                    "sidecar_mismatch",
-                );
-            }
+            emitted_reanchor = self.request_range_pull_from_anchor(
+                canonical_reanchor_height,
+                "sidecar_mismatch",
+                now,
+            );
         } else {
             debug!(
                 height,
                 expected = %expected,
                 stored = %stored,
                 reason_group,
-                "suppressing duplicate sidecar mismatch recovery actions inside cooldown"
+                repeated_obsolete,
+                "suppressing duplicate sidecar mismatch recovery actions in the current stall window"
             );
         }
-        warn!(
-            height,
-            expected = %expected,
-            stored = %stored,
-            mismatches = entry.mismatch_count,
-            quarantined = entry.quarantined,
-            final_drop = entry.final_dropped,
-            reason_group,
-            recovery_actions_suppressed = suppress_recovery_actions,
-            reason,
-            "roster sidecar mismatch detected; fail-closed quarantine active"
-        );
+        if let Some(suppressed_since_last) =
+            allow_roster_sidecar_mismatch_warning(height, expected, stored)
+        {
+            warn!(
+                height,
+                expected = %expected,
+                stored = %stored,
+                mismatches = entry.mismatch_count,
+                quarantined = entry.quarantined,
+                final_drop = entry.final_dropped,
+                reason_group,
+                recovery_actions_suppressed = suppress_recovery_actions,
+                repeated_obsolete,
+                repeated_recovery_trigger,
+                emitted_reanchor,
+                canonical_reanchor_height,
+                stale_missing_requests_cleared,
+                stale_deferred_qcs_removed,
+                stale_markers_removed,
+                suppressed_since_last,
+                reason,
+                "roster sidecar mismatch detected; fail-closed quarantine active"
+            );
+        }
     }
 
     fn clear_sidecar_mismatch_for_height(&mut self, height: u64) {
         self.sidecar_mismatch_recovery.remove(&height);
-        self.sidecar_mismatch_action_cooldowns
-            .retain(|(entry_height, _, _, _), _| *entry_height != height);
+        self.roster_sidecar_mismatch_obsolete
+            .retain(|(entry_height, _, _), _| *entry_height != height);
+        self.sidecar_mismatch_window_gates
+            .retain(|(entry_height, _), _| *entry_height != height);
+        self.sidecar_mismatch_committed_edge_gates
+            .retain(|(entry_height, _), _| *entry_height != height);
+        self.clear_highest_qc_force_fetch_window_gates_for_height(height);
+        self.clear_committed_edge_conflict_window_gates_for_height(height);
+        self.clear_canonical_frontier_reanchor_window_gate_for_height(height);
+        self.clear_frontier_stall_reset_window_gate_for_height(height);
+    }
+
+    fn clear_sidecar_mismatch_for_height_preserving_frontier_windows(&mut self, height: u64) {
+        self.sidecar_mismatch_recovery.remove(&height);
+        self.roster_sidecar_mismatch_obsolete
+            .retain(|(entry_height, _, _), _| *entry_height != height);
+        self.sidecar_mismatch_window_gates
+            .retain(|(entry_height, _), _| *entry_height != height);
+        self.sidecar_mismatch_committed_edge_gates
+            .retain(|(entry_height, _), _| *entry_height != height);
+        self.clear_highest_qc_force_fetch_window_gates_for_height(height);
+        self.clear_committed_edge_conflict_window_gates_for_height(height);
     }
 
     fn retarget_missing_block_request_to_canonical_hash(
@@ -16930,8 +22049,15 @@ impl Actor {
         let stale_view_change_window = stale_request.view_change_window;
 
         let now = Instant::now();
-        let (pending_removed, missing_removed, hints_removed, proposals_removed, seen_removed) =
-            self.prune_consensus_state_for_missing_block_height(height);
+        let (
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+        ) = self.prune_consensus_state_for_missing_block_height(height);
         self.clear_missing_block_recovery_for_height(height, now);
 
         let mut targets = self.effective_commit_topology();
@@ -16979,6 +22105,7 @@ impl Actor {
             stale_view_change_window,
             signer_fallback_attempts,
             MissingBlockFetchMode::AggressiveTopology,
+            false,
         );
         match &decision {
             MissingBlockFetchDecision::Requested {
@@ -17012,7 +22139,7 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
+                self.note_missing_block_height_backoff(
                     canonical_hash,
                     height,
                     stale_view,
@@ -17036,6 +22163,8 @@ impl Actor {
             reason,
             pending_removed,
             missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
             hints_removed,
             proposals_removed,
             seen_removed,
@@ -17051,7 +22180,9 @@ impl Actor {
         expected_hash: HashOf<BlockHeader>,
         reason: &'static str,
     ) -> bool {
-        self.quarantine_sidecar_for_height_recovery(height, reason);
+        if self.committed_block_hash_for_height(height).is_some() {
+            self.quarantine_sidecar_for_height_recovery(height, reason);
+        }
         let tracked_request = self
             .pending
             .missing_block_requests
@@ -17115,6 +22246,7 @@ impl Actor {
             request.view_change_window,
             signer_fallback_attempts,
             MissingBlockFetchMode::AggressiveTopology,
+            false,
         );
         match &decision {
             MissingBlockFetchDecision::Requested {
@@ -17148,7 +22280,7 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
+                self.note_missing_block_height_backoff(
                     target_hash,
                     request.height,
                     request.view,
@@ -17170,9 +22302,17 @@ impl Actor {
             expected = %expected_hash,
             fetch = ?decision,
             reason,
-            "forced deterministic tracked missing-height sidecar failover"
+            "forced deterministic tracked missing-height sidecar fetch failover without quarantine"
         );
         matches!(decision, MissingBlockFetchDecision::Requested { .. })
+    }
+
+    #[inline]
+    fn roster_sidecar_compat_enabled(&self) -> bool {
+        // First release does not need backward-compat toggles. Keep sidecar mismatch
+        // observation enabled so repeated roster/hash conflicts deterministically trigger
+        // quarantine + canonical recovery.
+        true
     }
 
     fn observe_sidecar_mismatch_for_height(
@@ -17181,6 +22321,9 @@ impl Actor {
         expected_hash: HashOf<BlockHeader>,
         reason: &'static str,
     ) {
+        if !self.roster_sidecar_compat_enabled() {
+            return;
+        }
         if self.sidecar_observation_suppression_depth > 0 {
             return;
         }
@@ -17200,7 +22343,42 @@ impl Actor {
                 });
         let Some(canonical_hash) = self.committed_block_hash_for_height(height) else {
             if tracked_missing_height {
-                self.note_sidecar_mismatch(height, expected_hash, meta.block_hash, reason);
+                let committed_height = self.committed_height_snapshot();
+                let contiguous_frontier_height = committed_height.saturating_add(1);
+                let allow_frontier_sidecar_retarget = height == contiguous_frontier_height
+                    && self.should_retarget_contiguous_frontier_missing_request_to_sidecar_hint(
+                        contiguous_frontier_height,
+                        committed_height,
+                    );
+                let retargeted_frontier_sidecar = allow_frontier_sidecar_retarget
+                    && self.retarget_missing_block_request_to_canonical_hash(
+                        height,
+                        expected_hash,
+                        meta.block_hash,
+                        reason,
+                    );
+                if retargeted_frontier_sidecar {
+                    // Keep the local FSM pinned to one deterministic contiguous frontier hash.
+                    // This avoids repeatedly chasing far-future non-canonical branches when
+                    // committed+1 sidecar metadata already advertises a replacement frontier hash.
+                    debug!(
+                        height,
+                        expected = %expected_hash,
+                        sidecar_hash = %meta.block_hash,
+                        reason,
+                        "retargeted tracked contiguous-frontier missing request to sidecar hint"
+                    );
+                    return;
+                }
+                if height == contiguous_frontier_height && !allow_frontier_sidecar_retarget {
+                    debug!(
+                        height,
+                        expected = %expected_hash,
+                        sidecar_hash = %meta.block_hash,
+                        reason,
+                        "suppressing contiguous-frontier retarget to sidecar hint under active frontier-stall recovery gate"
+                    );
+                }
                 let _ = self.force_tracked_missing_height_sidecar_failover(
                     height,
                     expected_hash,
@@ -17253,11 +22431,21 @@ impl Actor {
         self.note_sidecar_mismatch(height, canonical_hash, meta.block_hash, reason);
     }
 
-    fn proposal_gated_by_missing_dependencies(&self, height: u64) -> bool {
+    fn proposal_gated_by_missing_dependencies(&mut self, height: u64) -> bool {
         let now = Instant::now();
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
+        let committed_height = self.committed_height_snapshot();
+        if !self.missing_qc_height_has_unresolved_dependency_at_height(height) {
+            let _ = self.clear_non_actionable_missing_dependencies_for_height(
+                height,
+                committed_height,
+                now,
+            );
+            self.clear_missing_block_recovery_for_height(height, now);
+            return false;
+        }
         self.missing_block_height_recovery
             .iter()
             .any(|(key, budget)| {
@@ -17269,7 +22457,7 @@ impl Actor {
             })
     }
 
-    fn note_consensus_recovery_state_transition(&self, state: ConsensusRecoveryState) {
+    fn note_consensus_recovery_state_transition(&self, state: RosterRecoveryState) {
         super::status::inc_consensus_recovery_state_transition(state.as_str());
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry_handle() {
@@ -17277,9 +22465,236 @@ impl Actor {
         }
     }
 
+    fn round_liveness_isolated(&self) -> bool {
+        matches!(
+            self.round_liveness.state,
+            RoundLivenessState::CatchUpIsolated
+        )
+    }
+
+    fn transition_round_liveness_state(&mut self, next: RoundLivenessState, now: Instant) {
+        if self.round_liveness.state == next {
+            return;
+        }
+        self.round_liveness.state = next;
+        self.round_liveness.entered_at = now;
+    }
+
+    fn drive_round_liveness_fsm(&mut self, now: Instant) -> bool {
+        let local_height = self.committed_height_snapshot();
+        if local_height > self.round_liveness.last_progress_height {
+            self.round_liveness.last_progress_height = local_height;
+            self.round_liveness.stagnation_windows = 0;
+            self.round_liveness.last_window_at = now;
+        } else {
+            let stall_window = self
+                .frontier_catchup_stall_window()
+                .max(Duration::from_millis(1));
+            let elapsed_windows = now
+                .saturating_duration_since(self.round_liveness.last_window_at)
+                .as_nanos()
+                / stall_window.as_nanos().max(1);
+            if elapsed_windows > 0 {
+                self.round_liveness.last_window_at = now;
+                let increment = u32::try_from(elapsed_windows).unwrap_or(u32::MAX);
+                self.round_liveness.stagnation_windows = self
+                    .round_liveness
+                    .stagnation_windows
+                    .saturating_add(increment);
+            }
+        }
+
+        let highest_height = self
+            .highest_qc
+            .or(self.latest_committed_qc())
+            .map_or(local_height, |qc| qc.height.max(local_height));
+        let gap = highest_height.saturating_sub(local_height);
+        let frontier_height = self.frontier_catchup_target_height(local_height);
+        let unresolved = frontier_height.is_some_and(|frontier_height| {
+            self.frontier_catchup_has_unresolved_dependency(frontier_height)
+        });
+
+        match self.round_liveness.state {
+            RoundLivenessState::Steady => {
+                if gap >= ROUND_LIVENESS_GAP_TO_ISOLATE
+                    && self.round_liveness.stagnation_windows
+                        >= ROUND_LIVENESS_STAGNATION_WINDOWS_TO_ISOLATE
+                {
+                    self.transition_round_liveness_state(RoundLivenessState::CatchUpIsolated, now);
+                    super::status::inc_consensus_catchup_isolation_enter();
+                    return true;
+                }
+                false
+            }
+            RoundLivenessState::CatchUpIsolated => {
+                let catchup_frontier_height = local_height.saturating_add(1);
+                let mut progressed = self.request_range_pull_from_anchor(
+                    catchup_frontier_height,
+                    "round_liveness_catchup_isolated",
+                    now,
+                );
+                let next_deadline = now
+                    .checked_add(
+                        self.subsystems
+                            .propose
+                            .pacemaker
+                            .propose_interval
+                            .max(Duration::from_millis(1)),
+                    )
+                    .unwrap_or(now);
+                self.subsystems.propose.pacemaker.next_deadline = next_deadline;
+                if gap == 0 || (!unresolved && gap < ROUND_LIVENESS_GAP_TO_ISOLATE) {
+                    self.transition_round_liveness_state(RoundLivenessState::Rejoin, now);
+                    super::status::inc_consensus_catchup_isolation_success();
+                    progressed = true;
+                }
+                progressed
+            }
+            RoundLivenessState::Rejoin => {
+                self.round_liveness.stagnation_windows = 0;
+                self.round_liveness.last_window_at = now;
+                self.round_liveness.last_progress_height = local_height;
+                self.transition_round_liveness_state(RoundLivenessState::Steady, now);
+                super::status::inc_consensus_catchup_rejoin();
+                true
+            }
+        }
+    }
+
+    fn update_roster_recovery_status_snapshot(
+        &self,
+        entry: &RosterRecoveryEntry,
+        now: Instant,
+    ) -> BTreeMap<&'static str, u64> {
+        let mut dwell = entry.dwell_ms.clone();
+        let current_ms = u64::try_from(
+            now.saturating_duration_since(entry.state_entered_at)
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        let slot = dwell.entry(entry.state.as_str()).or_insert(0);
+        *slot = slot.saturating_add(current_ms);
+        super::status::set_consensus_roster_recovery_state(entry.state.as_str());
+        super::status::set_consensus_roster_recovery_dwell_ms(dwell.clone());
+        dwell
+    }
+
+    fn transition_roster_recovery_state(
+        &self,
+        entry: &mut RosterRecoveryEntry,
+        event: RosterRecoveryEvent,
+        now: Instant,
+    ) -> bool {
+        let current = entry.state;
+        let next = step_roster_recovery_state(current, event);
+        if next == current {
+            return false;
+        }
+        let elapsed_ms = u64::try_from(
+            now.saturating_duration_since(entry.state_entered_at)
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+        let dwell_slot = entry.dwell_ms.entry(current.as_str()).or_insert(0);
+        *dwell_slot = dwell_slot.saturating_add(elapsed_ms);
+        entry.state = next;
+        entry.state_entered_at = now;
+        self.note_consensus_recovery_state_transition(next);
+        true
+    }
+
+    fn roster_unavailability_seed(
+        &self,
+        height: u64,
+        view: u64,
+        latest_committed_hash: HashOf<BlockHeader>,
+    ) -> [u8; 32] {
+        let mut seed_material = Vec::new();
+        seed_material.extend_from_slice(self.chain_id.clone().into_inner().as_bytes());
+        seed_material.extend_from_slice(&height.to_be_bytes());
+        seed_material.extend_from_slice(&view.to_be_bytes());
+        seed_material.extend_from_slice(&latest_committed_hash.encode());
+        let hash_bytes: [u8; Hash::LENGTH] = Hash::new(&seed_material).into();
+        hash_bytes
+    }
+
+    fn roster_unavailability_candidate_roster(
+        &self,
+        height: u64,
+        consensus_mode: ConsensusMode,
+    ) -> Vec<PeerId> {
+        let world = self.state.world_view();
+        // A lagging node can observe recovery hints for heights beyond its committed world.
+        // Clamp live-key filtering to the local committed horizon to avoid deterministic
+        // false-empty candidate sets that would keep WaitCandidates parked indefinitely.
+        let committed_height = self.committed_height_snapshot();
+        let live_height = height.min(committed_height.saturating_add(1)).max(1);
+        let world_peers: BTreeSet<_> = world.peers().iter().cloned().collect();
+        let candidates = match consensus_mode {
+            ConsensusMode::Npos => roster::stake_active_validator_roster_from_world(&world),
+            ConsensusMode::Permissioned => self.trusted_topology(),
+        };
+        let present: Vec<_> = candidates
+            .into_iter()
+            .filter(|peer| world_peers.contains(peer))
+            .collect();
+        let live = roster::filter_roster_with_live_consensus_keys_at_height_world(
+            &world,
+            present,
+            live_height,
+        );
+        roster::canonicalize_roster_for_mode(live, consensus_mode)
+    }
+
+    fn deterministic_elected_roster_from_candidates(
+        &self,
+        mut candidates: Vec<PeerId>,
+        consensus_mode: ConsensusMode,
+        seed: [u8; 32],
+        target_roster_len: usize,
+    ) -> Vec<PeerId> {
+        candidates.sort_by(|lhs, rhs| {
+            let lhs_score: [u8; Hash::LENGTH] = {
+                let mut material = Vec::new();
+                material.extend_from_slice(&seed);
+                material.extend_from_slice(&lhs.encode());
+                Hash::new(&material).into()
+            };
+            let rhs_score: [u8; Hash::LENGTH] = {
+                let mut material = Vec::new();
+                material.extend_from_slice(&seed);
+                material.extend_from_slice(&rhs.encode());
+                Hash::new(&material).into()
+            };
+            lhs_score.cmp(&rhs_score).then_with(|| lhs.cmp(rhs))
+        });
+        if matches!(consensus_mode, ConsensusMode::Npos) {
+            let max_validators =
+                usize::try_from(self.config.npos.election.max_validators).unwrap_or(usize::MAX);
+            if max_validators > 0 && candidates.len() > max_validators {
+                candidates.truncate(max_validators);
+            }
+        }
+        let effective_target = target_roster_len.max(1);
+        if candidates.len() > effective_target {
+            candidates.truncate(effective_target);
+        }
+        roster::canonicalize_roster_for_mode(candidates, consensus_mode)
+    }
+
     pub(super) fn clear_consensus_recovery_for_round(&mut self, height: u64, view: u64) {
         self.consensus_recovery
-            .retain(|(entry_height, _), _| *entry_height != height);
+            .retain(|entry_key, _| entry_key.height != height);
+        if self
+            .consensus_recovery
+            .keys()
+            .all(|entry_key| entry_key.height != height)
+        {
+            super::status::set_consensus_roster_recovery_state(
+                RosterRecoveryState::Steady.as_str(),
+            );
+            super::status::set_consensus_roster_recovery_dwell_ms(BTreeMap::new());
+        }
         self.subsystems
             .propose
             .highest_qc_missing_defer_markers
@@ -17289,6 +22704,7 @@ impl Actor {
     }
 
     fn prune_highest_qc_missing_defer_markers(&mut self, committed_height: u64) {
+        let now = Instant::now();
         let stale_markers: Vec<_> = self
             .subsystems
             .propose
@@ -17296,7 +22712,14 @@ impl Actor {
             .iter()
             .copied()
             .filter(|(height, _, hash)| {
-                *height <= committed_height || self.block_known_locally(*hash)
+                *height <= committed_height
+                    || self.block_known_locally(*hash)
+                    || self.missing_hash_is_non_actionable_dependency(
+                        *height,
+                        *hash,
+                        committed_height,
+                        now,
+                    )
             })
             .collect();
         for marker in stale_markers {
@@ -17314,7 +22737,23 @@ impl Actor {
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     ) -> bool {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let now = Instant::now();
         self.prune_highest_qc_missing_defer_markers(committed_height);
+        if self.missing_hash_is_non_actionable_dependency(
+            highest_qc.height,
+            highest_qc.subject_block_hash,
+            committed_height,
+            now,
+        ) {
+            self.subsystems
+                .propose
+                .highest_qc_missing_defer_markers
+                .retain(|(marker_height, _, marker_hash)| {
+                    *marker_height != highest_qc.height
+                        || *marker_hash != highest_qc.subject_block_hash
+                });
+            return false;
+        }
         self.subsystems
             .propose
             .highest_qc_missing_defer_markers
@@ -17328,13 +22767,13 @@ impl Actor {
             .max(self.subsystems.propose.pacemaker.propose_interval)
             .max(Duration::from_millis(1))
             .saturating_mul(8);
-        self.consensus_recovery.retain(|(height, _), entry| {
-            *height >= committed_height.saturating_sub(1)
+        self.consensus_recovery.retain(|entry_key, entry| {
+            entry_key.height >= committed_height.saturating_sub(1)
                 && now.saturating_duration_since(entry.last_attempt) <= retention
         });
     }
 
-    fn handle_empty_commit_topology_recovery(
+    fn handle_roster_unavailable_recovery(
         &mut self,
         height: u64,
         view: u64,
@@ -17344,145 +22783,191 @@ impl Actor {
         warning_kind: ProposalDeferWarningKind,
         reason: &'static str,
     ) -> bool {
-        super::status::inc_consensus_empty_commit_topology_defer();
-        #[cfg(feature = "telemetry")]
-        if let Some(telemetry) = self.telemetry_handle() {
-            telemetry.inc_consensus_empty_commit_topology_defer();
-        }
-
+        super::status::inc_consensus_roster_unavailable_detected();
         self.prune_stale_consensus_recovery(now);
 
-        enum RecoveryAction {
-            RefreshTopology,
-            TriggerBlockSync,
-            EscalateViewChange,
-            Wait,
-        }
-
-        let queue_depths = super::status::worker_queue_depth_snapshot();
-        let consensus_queue_backlog = queue_depths.vote_rx > 0
-            || queue_depths.block_payload_rx > 0
-            || queue_depths.rbc_chunk_rx > 0
-            || queue_depths.block_rx > 0
-            || queue_depths.consensus_rx > 0;
-        let backlog_signals = self.has_unresolved_rbc_backlog() || consensus_queue_backlog;
-        let wait_window_base = self
-            .commit_quorum_timeout()
-            .max(self.subsystems.propose.pacemaker.propose_interval)
-            .max(Duration::from_millis(1));
-        let wait_window =
-            self.backlog_extended_view_change_timeout(wait_window_base, backlog_signals);
-
-        let mut created = false;
-        let mut transition: Option<ConsensusRecoveryState> = None;
-        let sidecar_quarantine_active = self.sidecar_quarantined_for_height(height);
-        let dependency_seq = self.dependency_event_seq;
-        let inherited = self
-            .consensus_recovery
-            .iter()
-            .filter(|((entry_height, entry_view), _)| *entry_height == height && *entry_view < view)
-            .max_by_key(|((_, entry_view), _)| *entry_view)
-            .map(|(_, entry)| *entry);
-        let (action, active_state, retries, age, dependency_arrived, dependency_requested) = {
-            let entry = match self.consensus_recovery.entry((height, view)) {
-                Entry::Vacant(vacant) => {
-                    if let Some(previous) = inherited {
-                        vacant.insert(ConsensusRecoveryEntry {
-                            state: previous.state,
-                            first_seen: previous.first_seen,
-                            last_attempt: now,
-                            retries: previous.retries,
-                            dependency_requested: previous.dependency_requested,
-                            dependency_event_seq: previous.dependency_event_seq,
-                            waiting_since: previous.waiting_since,
-                            last_observed_dependency_seq: previous.last_observed_dependency_seq,
-                        })
-                    } else {
-                        created = true;
-                        vacant.insert(ConsensusRecoveryEntry {
-                            state: ConsensusRecoveryState::RefreshTopology,
-                            first_seen: now,
-                            last_attempt: now,
-                            retries: 0,
-                            dependency_requested: false,
-                            dependency_event_seq: dependency_seq,
-                            waiting_since: None,
-                            last_observed_dependency_seq: dependency_seq,
-                        })
-                    }
-                }
-                Entry::Occupied(occupied) => occupied.into_mut(),
-            };
-            entry.last_attempt = now;
-            entry.retries = entry.retries.saturating_add(1);
-            let retries = entry.retries;
-            let age = now.saturating_duration_since(entry.first_seen);
-            let dependency_arrived = dependency_seq > entry.last_observed_dependency_seq;
-            let current_state = entry.state;
-            let action = match current_state {
-                ConsensusRecoveryState::RefreshTopology => {
-                    entry.dependency_requested = false;
-                    entry.waiting_since = None;
-                    transition = Some(ConsensusRecoveryState::BlockSync);
-                    RecoveryAction::RefreshTopology
-                }
-                ConsensusRecoveryState::BlockSync => {
-                    entry.dependency_requested = true;
-                    entry.dependency_event_seq = dependency_seq;
-                    entry.waiting_since = Some(now);
-                    entry.last_observed_dependency_seq = dependency_seq;
-                    transition = Some(ConsensusRecoveryState::WaitingForDependencies);
-                    RecoveryAction::TriggerBlockSync
-                }
-                ConsensusRecoveryState::WaitingForDependencies => {
-                    if dependency_arrived {
-                        entry.last_observed_dependency_seq = dependency_seq;
-                        transition = Some(ConsensusRecoveryState::RefreshTopology);
-                        RecoveryAction::RefreshTopology
-                    } else if sidecar_quarantine_active
-                        || !entry.dependency_requested
-                        || entry.retries >= EMPTY_COMMIT_TOPOLOGY_RECOVERY_MAX_RETRIES
-                        || age >= wait_window
-                        || entry.waiting_since.is_some_and(|since| {
-                            now.saturating_duration_since(since) >= wait_window
-                        })
-                    {
-                        transition = Some(ConsensusRecoveryState::ViewChangeEscalation);
-                        RecoveryAction::EscalateViewChange
-                    } else {
-                        RecoveryAction::Wait
-                    }
-                }
-                ConsensusRecoveryState::ViewChangeEscalation => RecoveryAction::EscalateViewChange,
-            };
-            if let Some(next) = transition {
-                entry.state = next;
-            }
-            (
-                action,
-                entry.state,
-                retries,
-                age,
-                dependency_arrived,
-                entry.dependency_requested,
-            )
-        };
-        if inherited.is_some() {
-            self.consensus_recovery
-                .retain(|(entry_height, entry_view), _| {
-                    *entry_height != height || *entry_view >= view
-                });
-        }
-        if created {
-            self.note_consensus_recovery_state_transition(ConsensusRecoveryState::RefreshTopology);
-        }
-        if let Some(next) = transition {
-            self.note_consensus_recovery_state_transition(next);
-        }
-
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let canonical_view = self
+            .phase_tracker
+            .current_view(height)
+            .map_or(view, |tracked_view| tracked_view.max(view));
         let throttle_hash = block_hash.unwrap_or_else(|| {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
         });
+        let latest_committed_hash = self.state.latest_block_hash_fast().unwrap_or_else(|| {
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
+        });
+        let key = RosterRecoveryEpisodeKey {
+            height,
+            latest_committed_hash,
+        };
+        let initial_roster = {
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if live.is_empty() {
+                self.roster_unavailability_candidate_roster(height, consensus_mode)
+            } else {
+                live
+            }
+        };
+        let baseline_roster_len = initial_roster.len().max(1);
+
+        let mut entry = self.consensus_recovery.remove(&key).unwrap_or_else(|| {
+            self.note_consensus_recovery_state_transition(RosterRecoveryState::Steady);
+            RosterRecoveryEntry {
+                state: RosterRecoveryState::Steady,
+                first_seen: now,
+                state_entered_at: now,
+                last_attempt: now,
+                last_view: view,
+                election_attempts: BTreeSet::new(),
+                dwell_ms: BTreeMap::new(),
+            }
+        });
+        let previous_observed_view = entry.last_view;
+        entry.last_attempt = now;
+        entry.last_view = entry.last_view.max(canonical_view);
+        if self
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|tracked| tracked > previous_observed_view)
+        {
+            let _ = self.transition_roster_recovery_state(
+                &mut entry,
+                RosterRecoveryEvent::RoundAdvanced,
+                now,
+            );
+        }
+        let dependency_missing = self.proposal_gated_by_missing_dependencies(height);
+        if dependency_missing {
+            if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+                self.request_missing_block_for_highest_qc_force(highest, reason);
+            }
+            let _ = self.request_range_pull_from_anchor(height, reason, now);
+        }
+
+        let wait_window = self.commit_quorum_timeout().max(Duration::from_millis(1));
+        let roster_unavailable_window_elapsed =
+            now.saturating_duration_since(entry.first_seen) >= wait_window;
+        if roster_unavailable_window_elapsed {
+            let _ = self.transition_roster_recovery_state(
+                &mut entry,
+                RosterRecoveryEvent::RosterUnavailable,
+                now,
+            );
+        }
+
+        let mut should_rotate = false;
+        let attempt_key = RosterElectionAttemptKey {
+            height,
+            view: canonical_view,
+            latest_committed_hash,
+        };
+
+        match entry.state {
+            RosterRecoveryState::Steady => {}
+            RosterRecoveryState::ReelectRoster => {
+                let candidates =
+                    self.roster_unavailability_candidate_roster(height, consensus_mode);
+                if candidates.is_empty() {
+                    super::status::inc_consensus_roster_unavailable_wait_candidates();
+                    let _ = self.transition_roster_recovery_state(
+                        &mut entry,
+                        RosterRecoveryEvent::CandidatesEmpty,
+                        now,
+                    );
+                } else if !entry.election_attempts.contains(&attempt_key) {
+                    entry.election_attempts.insert(attempt_key);
+                    super::status::inc_consensus_roster_unavailable_election_attempt();
+                    let seed = self.roster_unavailability_seed(
+                        height,
+                        canonical_view,
+                        latest_committed_hash,
+                    );
+                    let mut target_roster_len = baseline_roster_len.max(1).min(candidates.len());
+                    if matches!(consensus_mode, ConsensusMode::Npos) {
+                        let max_validators =
+                            usize::try_from(self.config.npos.election.max_validators)
+                                .unwrap_or(usize::MAX);
+                        if max_validators > 0 {
+                            target_roster_len = target_roster_len.min(max_validators);
+                        }
+                    }
+                    let elected = self.deterministic_elected_roster_from_candidates(
+                        candidates.clone(),
+                        consensus_mode,
+                        seed,
+                        target_roster_len,
+                    );
+                    if elected.is_empty() {
+                        let _ = self.transition_roster_recovery_state(
+                            &mut entry,
+                            RosterRecoveryEvent::CandidatesEmpty,
+                            now,
+                        );
+                    } else {
+                        let active_roster = roster::canonicalize_roster_for_mode(
+                            self.roster_for_live_vote_with_mode(height, consensus_mode),
+                            consensus_mode,
+                        );
+                        let mut effective_roster = active_roster.clone();
+                        if elected != active_roster {
+                            if let Err(err) = self.install_elected_roster(&elected) {
+                                warn!(
+                                    ?err,
+                                    height,
+                                    view = canonical_view,
+                                    roster_len = elected.len(),
+                                    "failed to install deterministically elected roster during recovery"
+                                );
+                            } else {
+                                effective_roster = elected.clone();
+                                if elected.len() < baseline_roster_len {
+                                    self.recovery_pending_baseline_restore
+                                        .entry(height)
+                                        .or_insert_with(|| initial_roster.clone());
+                                }
+                                super::status::inc_consensus_roster_unavailable_election_success();
+                            }
+                        }
+                        let _ = self.refresh_commit_topology_state(&effective_roster);
+                        let _ = self.transition_roster_recovery_state(
+                            &mut entry,
+                            RosterRecoveryEvent::CandidatesAvailable,
+                            now,
+                        );
+                        should_rotate = true;
+                    }
+                }
+            }
+            RosterRecoveryState::WaitCandidates => {
+                let candidates =
+                    self.roster_unavailability_candidate_roster(height, consensus_mode);
+                if !candidates.is_empty() {
+                    let _ = self.transition_roster_recovery_state(
+                        &mut entry,
+                        RosterRecoveryEvent::CandidatesAvailable,
+                        now,
+                    );
+                }
+                if self
+                    .phase_tracker
+                    .current_view(height)
+                    .is_some_and(|tracked| tracked > previous_observed_view)
+                {
+                    let _ = self.transition_roster_recovery_state(
+                        &mut entry,
+                        RosterRecoveryEvent::RoundAdvanced,
+                        now,
+                    );
+                }
+            }
+            RosterRecoveryState::RotateView => {
+                should_rotate = true;
+            }
+        }
+
+        let age = now.saturating_duration_since(entry.first_seen);
+        let dwell = self.update_roster_recovery_status_snapshot(&entry, now);
         if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
             warning_kind,
             height,
@@ -17495,16 +22980,12 @@ impl Actor {
                 height,
                 view,
                 queue_len,
-                retries,
                 age_ms = age.as_millis(),
-                wait_window_ms = wait_window.as_millis(),
-                recovery_state = active_state.as_str(),
-                dependency_requested,
-                dependency_arrived,
-                sidecar_quarantine_active,
+                recovery_state = entry.state.as_str(),
+                dwell_ms = ?dwell,
                 reason,
                 suppressed_since_last,
-                "deferring consensus path: empty commit topology"
+                "deferring consensus path: roster unavailable"
             );
         }
         super::status::observe_consensus_recovery_stuck_round(age.as_secs());
@@ -17512,7 +22993,6 @@ impl Actor {
         if let Some(telemetry) = self.telemetry_handle() {
             telemetry.observe_consensus_recovery_stuck_round(age);
         }
-
         let next_deadline = now
             .checked_add(
                 self.subsystems
@@ -17524,56 +23004,22 @@ impl Actor {
             .unwrap_or(now);
         self.subsystems.propose.pacemaker.next_deadline = next_deadline;
 
-        match action {
-            RecoveryAction::RefreshTopology => {
-                let refreshed = self.effective_commit_topology();
-                let _ = self.refresh_commit_topology_state(&refreshed);
-                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-                if !self
-                    .roster_for_live_vote_with_mode(height, consensus_mode)
-                    .is_empty()
-                {
-                    self.clear_consensus_recovery_for_round(height, view);
-                }
-                true
-            }
-            RecoveryAction::TriggerBlockSync => {
-                if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-                    self.request_missing_block_for_highest_qc_force(
-                        highest,
-                        "empty_commit_topology_recovery",
-                    );
-                }
-                let commit_topology = self.effective_commit_topology();
-                self.request_missing_parents_for_gap(
-                    commit_topology.as_slice(),
-                    None,
-                    "empty_commit_topology_recovery",
-                );
-                let _ = self.request_range_pull_from_anchor(
-                    height,
-                    "empty_commit_topology_recovery",
-                    now,
-                );
-                true
-            }
-            RecoveryAction::EscalateViewChange => {
-                self.clear_consensus_recovery_for_round(height, view);
-                let _ = self.request_range_pull_from_anchor(
-                    height,
-                    "empty_commit_topology_escalation",
-                    now,
-                );
-                super::status::inc_consensus_empty_commit_topology_escalation();
-                #[cfg(feature = "telemetry")]
-                if let Some(telemetry) = self.telemetry_handle() {
-                    telemetry.inc_consensus_empty_commit_topology_escalation();
-                }
-                self.trigger_view_change_with_cause(height, view, ViewChangeCause::MissingQc);
-                true
-            }
-            RecoveryAction::Wait => false,
+        if should_rotate {
+            self.clear_consensus_recovery_for_round(height, canonical_view);
+            self.trigger_view_change_with_cause(
+                height,
+                canonical_view,
+                ViewChangeCause::RosterUnavailable,
+            );
+            super::status::set_consensus_roster_recovery_state(
+                RosterRecoveryState::Steady.as_str(),
+            );
+            super::status::set_consensus_roster_recovery_dwell_ms(BTreeMap::new());
+            return true;
         }
+
+        self.consensus_recovery.insert(key, entry);
+        true
     }
 
     fn backpressure_override_due(&self, now: Instant) -> bool {
@@ -17604,25 +23050,45 @@ impl Actor {
     }
 
     fn should_attempt_missing_qc_reacquire(
-        &self,
+        &mut self,
         height: u64,
         current_view: u64,
         proposal_seen: bool,
-        rbc_backlog: bool,
-        consensus_queue_backlog: bool,
+        dependency_signals: bool,
+        now: Instant,
     ) -> bool {
         if self.subsystems.propose.last_missing_qc_reacquire_attempt == Some((height, current_view))
         {
             return false;
         }
-        let dependency_signals = rbc_backlog
-            || consensus_queue_backlog
-            || !self.pending.missing_block_requests.is_empty()
-            || !self.deferred_missing_payload_qcs.is_empty();
         if proposal_seen {
             // After a proposal is observed, only explicit commit-phase missing-QC dependencies
             // can justify a single bounded reacquire in this round.
             return self.has_commit_phase_missing_qc_dependency_for_height(height);
+        }
+        if !dependency_signals {
+            let stale_margin = self.recovery_missing_request_stale_height_margin();
+            let committed_height = self.committed_height_snapshot();
+            self.subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .retain(|attempt_height, _| {
+                    attempt_height.saturating_add(stale_margin) >= committed_height
+                });
+            let window = self
+                .recovery_missing_qc_reacquire_window()
+                .max(Duration::from_millis(1));
+            if self
+                .subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .get(&height)
+                .is_some_and(|last_attempt_at| {
+                    now.saturating_duration_since(*last_attempt_at) < window
+                })
+            {
+                return false;
+            }
         }
         let repeated_timeout_streak = next_missing_qc_timeout_streak(
             self.subsystems.propose.last_missing_qc_timeout_trigger,
@@ -17633,11 +23099,1030 @@ impl Actor {
     }
 
     fn has_commit_phase_missing_qc_dependency_for_height(&self, height: u64) -> bool {
-        self.pending.missing_block_requests.values().any(|request| {
-            request.phase == crate::sumeragi::consensus::Phase::Commit && request.height == height
-        }) || self.deferred_missing_payload_qcs.values().any(|entry| {
-            entry.qc.phase == crate::sumeragi::consensus::Phase::Commit && entry.qc.height == height
-        })
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.phase == crate::sumeragi::consensus::Phase::Commit
+                    && request.height == height
+                    && self.missing_block_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.phase == crate::sumeragi::consensus::Phase::Commit
+                    && entry.qc.height == height
+                    && self.deferred_missing_payload_qc_has_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+    }
+
+    fn pending_block_count_for_height(&self, height: u64) -> usize {
+        self.pending
+            .pending_blocks
+            .values()
+            .filter(|pending| pending.height == height && !pending.aborted)
+            .count()
+    }
+
+    fn frontier_recovery_window(&self) -> Duration {
+        self.commit_quorum_timeout()
+            .max(self.recovery_missing_block_height_ttl())
+            .max(self.recovery_missing_qc_reacquire_window())
+            .max(Duration::from_millis(1))
+    }
+
+    fn same_height_no_proposal_storm_dependency_progress_at(&self, height: u64) -> Option<Instant> {
+        let same_height = self.missing_qc_height_unresolved_dependency_progress_at_height(height);
+        let frontier = self.frontier_catchup_unresolved_dependency_progress_at_height(height);
+        match (same_height, frontier) {
+            (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+            (Some(value), None) | (None, Some(value)) => Some(value),
+            (None, None) => None,
+        }
+    }
+
+    fn frontier_recovery_dependency_progress_advanced(
+        previous: Option<Instant>,
+        current: Option<Instant>,
+    ) -> bool {
+        match (previous, current) {
+            (Some(previous), Some(current)) => current > previous,
+            (None, Some(_)) => true,
+            _ => false,
+        }
+    }
+
+    fn reset_same_height_no_proposal_storm_if_progressed(
+        &mut self,
+        height: u64,
+        _view: u64,
+        committed_height: u64,
+        proposal_seen: bool,
+        dependency_progress_at: Option<Instant>,
+        now: Instant,
+    ) {
+        let Some(mut state) = self.frontier_recovery else {
+            return;
+        };
+        let committed_advanced = committed_height >= state.frontier_height;
+        let frontier_changed = state.frontier_height != height;
+        let proposal_progress = proposal_seen && state.frontier_height == height;
+        let dependency_progress_advanced = Self::frontier_recovery_dependency_progress_advanced(
+            state.last_dependency_progress_at,
+            dependency_progress_at,
+        );
+        if committed_advanced || frontier_changed || proposal_progress {
+            self.frontier_recovery = None;
+            return;
+        }
+        state.last_dependency_progress_at =
+            match (state.last_dependency_progress_at, dependency_progress_at) {
+                (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            };
+        if dependency_progress_advanced {
+            let progressed_at = state.last_dependency_progress_at.unwrap_or(now);
+            state.phase = FrontierRecoveryPhase::CatchUp;
+            state.entered_at = progressed_at;
+            state.last_progress_at = progressed_at;
+            state.no_progress_windows = 0;
+            state.cleanup_done = false;
+            state.last_rotation_view = None;
+            // Preserve the current owner through the active cooldown window so another source
+            // cannot immediately emit a second catch-up action after dependency movement.
+            if self.frontier_recovery_action_taken_in_current_window(state, now) {
+                self.frontier_recovery = Some(state);
+            } else {
+                self.frontier_recovery = None;
+            }
+            return;
+        }
+        self.frontier_recovery = Some(state);
+    }
+
+    fn record_same_height_no_proposal_storm_timeout(
+        &mut self,
+        height: u64,
+        view: u64,
+        committed_height: u64,
+        dependency_progress_at: Option<Instant>,
+    ) -> u32 {
+        let now = Instant::now();
+        self.reset_same_height_no_proposal_storm_if_progressed(
+            height,
+            view,
+            committed_height,
+            false,
+            dependency_progress_at,
+            now,
+        );
+        let mut state = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == height)
+            .unwrap_or(FrontierRecoveryState {
+                frontier_height: height,
+                phase: FrontierRecoveryPhase::CatchUp,
+                entered_at: now,
+                last_progress_at: dependency_progress_at.unwrap_or(now),
+                last_dependency_progress_at: dependency_progress_at,
+                last_action_at: None,
+                no_progress_windows: 0,
+                cleanup_done: false,
+                last_view: view,
+                last_rotation_view: None,
+                last_cause: "missing_qc",
+            });
+
+        if view > state.last_view || state.no_progress_windows == 0 {
+            state.last_view = view;
+            state.no_progress_windows = state.no_progress_windows.saturating_add(1);
+        }
+        state.last_dependency_progress_at =
+            match (state.last_dependency_progress_at, dependency_progress_at) {
+                (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            };
+        super::status::observe_consensus_no_proposal_storm_state(
+            state.frontier_height,
+            state.no_progress_windows,
+            state.no_progress_windows,
+        );
+        self.frontier_recovery = Some(state);
+        state.no_progress_windows
+    }
+
+    fn same_height_no_proposal_storm_count_for_height(&self, height: u64) -> u32 {
+        self.frontier_recovery
+            .filter(|state| state.frontier_height == height)
+            .map_or(0, |state| state.no_progress_windows)
+    }
+
+    fn frontier_recovery_window_index_at(&self, state: FrontierRecoveryState, at: Instant) -> u32 {
+        let window = self.frontier_recovery_window().as_nanos().max(1);
+        let elapsed = at
+            .saturating_duration_since(state.last_progress_at)
+            .as_nanos()
+            / window;
+        u32::try_from(elapsed).unwrap_or(u32::MAX)
+    }
+
+    fn frontier_recovery_action_taken_in_current_window(
+        &self,
+        state: FrontierRecoveryState,
+        now: Instant,
+    ) -> bool {
+        let Some(last_action_at) = state.last_action_at else {
+            return false;
+        };
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        now.saturating_duration_since(last_action_at) < window
+    }
+
+    fn emit_frontier_recovery_range_pull(
+        &mut self,
+        frontier_height: u64,
+        reason: &'static str,
+        now: Instant,
+        all_peers: bool,
+    ) -> bool {
+        let Some((anchor_prev_hash, anchor_latest_hash, anchor_mode)) =
+            self.range_pull_anchor_hashes(reason, true)
+        else {
+            return false;
+        };
+        let local_height = self.committed_height_snapshot();
+        let view = self
+            .phase_tracker
+            .current_view(frontier_height)
+            .unwrap_or(0);
+        let mut targets = if all_peers {
+            self.range_pull_targets_for_height_tier(
+                frontier_height,
+                RangePullCandidateTier::TrustedPeers,
+            )
+        } else {
+            let scoped = self.range_pull_targets_for_height(frontier_height);
+            self.transport_fanout_targets_for_round(
+                &scoped,
+                frontier_height,
+                view,
+                "frontier_recovery",
+            )
+        };
+        if targets.is_empty() {
+            return false;
+        }
+        let cooldown = self
+            .frontier_recovery_window()
+            .max(RANGE_PULL_DEDUP_COOLDOWN_FLOOR);
+        let expires = now.checked_add(cooldown).unwrap_or(now);
+        let mut sent = 0usize;
+        for peer in targets.drain(..) {
+            let dedup_key = (peer.clone(), local_height, frontier_height, reason);
+            if self
+                .range_pull_escalation_cooldowns
+                .get(&dedup_key)
+                .is_some_and(|deadline| now < *deadline)
+            {
+                continue;
+            }
+            self.range_pull_escalation_cooldowns
+                .insert(dedup_key, expires);
+            let request = crate::block_sync::message::GetBlocksAfter::new(
+                self.common_config.peer.id().clone(),
+                anchor_prev_hash,
+                anchor_latest_hash,
+                BTreeSet::new(),
+            );
+            self.network.post(Post {
+                data: NetworkMessage::BlockSync(Box::new(
+                    crate::block_sync::message::Message::GetBlocksAfter(request),
+                )),
+                peer_id: peer,
+                priority: Priority::Low,
+            });
+            sent = sent.saturating_add(1);
+        }
+        if sent == 0 {
+            return false;
+        }
+        super::status::inc_blocksync_range_pull_escalation();
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_blocksync_range_pull_escalation();
+        }
+        info!(
+            frontier_height,
+            local_height,
+            targets = sent,
+            all_peers,
+            anchor_prev = ?anchor_prev_hash,
+            anchor_latest = ?anchor_latest_hash,
+            anchor_mode,
+            reason,
+            "requested unified frontier recovery range pull"
+        );
+        true
+    }
+
+    fn apply_frontier_recovery_cleanup(
+        &mut self,
+        frontier_height: u64,
+        view: u64,
+        now: Instant,
+        source: &'static str,
+    ) {
+        // Frontier cleanup must own all same-height recovery state, including RBC sessions
+        // that no longer have a pending-block wrapper but still block contiguous progress.
+        let frontier_rbc_removed =
+            self.purge_rbc_sessions_at_or_above_height(frontier_height, false);
+        let (
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+        ) = self.prune_consensus_state_for_missing_block_height(frontier_height);
+        let (
+            future_pending_removed,
+            future_missing_removed,
+            future_deferred_updates_removed,
+            future_deferred_qcs_removed,
+            future_hints_removed,
+            future_proposals_removed,
+            future_seen_removed,
+        ) = self.prune_future_consensus_state_above_height(frontier_height, now, false);
+        let future_rbc_removed = self.purge_rbc_sessions_at_or_above_height(frontier_height, true);
+        let rbc_removed = frontier_rbc_removed.saturating_add(future_rbc_removed);
+        let total_missing_removed = missing_removed.saturating_add(future_missing_removed);
+        if total_missing_removed > 0 {
+            self.update_missing_block_gauges();
+        }
+        let evicted_total = pending_removed
+            .saturating_add(deferred_updates_removed)
+            .saturating_add(deferred_qcs_removed)
+            .saturating_add(hints_removed)
+            .saturating_add(proposals_removed)
+            .saturating_add(seen_removed)
+            .saturating_add(future_pending_removed)
+            .saturating_add(future_deferred_updates_removed)
+            .saturating_add(future_deferred_qcs_removed)
+            .saturating_add(future_hints_removed)
+            .saturating_add(future_proposals_removed)
+            .saturating_add(future_seen_removed)
+            .saturating_add(rbc_removed);
+        if evicted_total > 0 {
+            super::status::inc_pending_queue_evictions_total(
+                u64::try_from(evicted_total).unwrap_or(u64::MAX),
+            );
+        }
+        self.clear_missing_block_recovery_for_height(frontier_height, now);
+        self.clear_sidecar_mismatch_for_height(frontier_height);
+        let frontier_state_cleared =
+            self.force_clear_frontier_reanchor_state_for_height(frontier_height, now);
+        let cooldowns_cleared =
+            self.clear_range_pull_escalation_cooldowns_for_height(frontier_height);
+        let new_view_entries_before = self.subsystems.propose.new_view_tracker.entries.len();
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .retain(|(entry_height, _), _| *entry_height < frontier_height);
+        let new_view_entries_removed = new_view_entries_before
+            .saturating_sub(self.subsystems.propose.new_view_tracker.entries.len());
+        let frontier_new_view_votes_removed =
+            self.clear_new_view_vote_history_at_or_above_height(frontier_height);
+        let forced_view_reset = self
+            .subsystems
+            .propose
+            .forced_view_after_timeout
+            .is_some_and(|(height, _)| height >= frontier_height);
+        if forced_view_reset {
+            self.subsystems.propose.forced_view_after_timeout = None;
+        }
+        if self
+            .subsystems
+            .propose
+            .last_missing_qc_timeout_trigger
+            .is_some_and(|trigger| trigger.height == frontier_height)
+        {
+            self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+        }
+        if self
+            .subsystems
+            .propose
+            .last_missing_qc_reacquire_attempt
+            .is_some_and(|(attempt_height, _)| attempt_height == frontier_height)
+        {
+            self.subsystems.propose.last_missing_qc_reacquire_attempt = None;
+        }
+        self.subsystems
+            .propose
+            .last_missing_qc_reacquire_without_dependency_at
+            .remove(&frontier_height);
+        super::status::inc_consensus_no_proposal_storm();
+        warn!(
+            height = frontier_height,
+            view,
+            pending_removed,
+            missing_removed,
+            future_pending_removed,
+            future_missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            future_deferred_updates_removed,
+            future_deferred_qcs_removed,
+            rbc_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+            future_hints_removed,
+            future_proposals_removed,
+            future_seen_removed,
+            frontier_state_cleared,
+            cooldowns_cleared,
+            new_view_entries_removed,
+            frontier_new_view_votes_removed,
+            forced_view_reset,
+            source,
+            "applied unified frontier recovery cleanup"
+        );
+    }
+
+    fn clear_new_view_vote_history_at_or_above_height(&mut self, min_height: u64) -> usize {
+        let vote_keys: Vec<_> = self
+            .vote_log
+            .iter()
+            .filter(|(_, vote)| {
+                vote.phase == crate::sumeragi::consensus::Phase::NewView
+                    && vote.height >= min_height
+            })
+            .map(|(key, _)| *key)
+            .collect();
+        let removed = vote_keys.len();
+        for key in vote_keys {
+            self.vote_log.remove(&key);
+            self.vote_validation_cache.remove(&key);
+        }
+        removed
+    }
+
+    fn purge_rbc_sessions_at_or_above_height(
+        &mut self,
+        frontier_height: u64,
+        future_only: bool,
+    ) -> usize {
+        let stale_rbc: Vec<_> = self
+            .collect_rbc_keys_for_height(frontier_height, future_only)
+            .into_iter()
+            .collect();
+        let mut rbc_removed = 0usize;
+        for key in stale_rbc {
+            self.purge_rbc_state(key, key.0, key.1, key.2);
+            rbc_removed = rbc_removed.saturating_add(1);
+        }
+        rbc_removed
+    }
+
+    fn collect_rbc_keys_for_height(
+        &self,
+        frontier_height: u64,
+        future_only: bool,
+    ) -> BTreeSet<super::rbc_store::SessionKey> {
+        let matches_height = |key: super::rbc_store::SessionKey| {
+            if future_only {
+                key.1 > frontier_height
+            } else {
+                key.1 == frontier_height
+            }
+        };
+        let mut keys = BTreeSet::new();
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .pending
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .deliver_rebroadcast_last_sent
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_deferral
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .deliver_deferral
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persisted_full_sessions
+                .iter()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persist_inflight
+                .iter()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .seed_inflight
+                .keys()
+                .copied()
+                .filter(|key| matches_height(*key)),
+        );
+        keys
+    }
+
+    fn collect_rbc_keys_for_block(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+    ) -> BTreeSet<super::rbc_store::SessionKey> {
+        let matches_block = |key: super::rbc_store::SessionKey| key.0 == block_hash;
+        let mut keys = BTreeSet::new();
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .pending
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .deliver_rebroadcast_last_sent
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .ready_deferral
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .deliver_deferral
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persisted_full_sessions
+                .iter()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .persist_inflight
+                .iter()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys.extend(
+            self.subsystems
+                .da_rbc
+                .rbc
+                .seed_inflight
+                .keys()
+                .copied()
+                .filter(|key| matches_block(*key)),
+        );
+        keys
+    }
+
+    fn frontier_recovery_view_change_cause(reason: &'static str) -> ViewChangeCause {
+        match reason {
+            "missing_payload"
+            | "missing_block_height_hard_cap"
+            | "missing_block_range_pull_no_progress" => ViewChangeCause::MissingPayload,
+            "quorum_timeout" => ViewChangeCause::QuorumTimeout,
+            _ => ViewChangeCause::MissingQc,
+        }
+    }
+
+    fn advance_frontier_recovery(
+        &mut self,
+        reason: &'static str,
+        height: u64,
+        view: u64,
+        proposal_seen: bool,
+        backlog_signals: bool,
+        allow_rotation: bool,
+        now: Instant,
+    ) -> FrontierRecoveryAdvance {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = u64::try_from(committed_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        if height != frontier_height {
+            debug!(
+                height,
+                frontier_height,
+                reason,
+                "suppressing timeout-driven recovery for non-contiguous frontier height"
+            );
+            return FrontierRecoveryAdvance::None;
+        }
+
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
+        self.reset_same_height_no_proposal_storm_if_progressed(
+            frontier_height,
+            view,
+            committed_height,
+            proposal_seen,
+            dependency_progress_at,
+            now,
+        );
+
+        let reserved_recovery_window = self.frontier_recovery.is_some_and(|current| {
+            current.frontier_height == frontier_height && current.last_cause != "missing_qc"
+        });
+        let empty_frontier_missing_qc =
+            reason == "missing_qc" && !proposal_seen && height == frontier_height;
+        let actionable_dependency = reserved_recovery_window
+            || empty_frontier_missing_qc
+            || backlog_signals
+            || self.slot_has_vote_backed_consensus_evidence(frontier_height, view)
+            || self.frontier_catchup_has_unresolved_dependency(frontier_height)
+            || self.has_actionable_missing_block_requests()
+            || self.has_actionable_deferred_missing_payload_qcs()
+            || self.has_residual_round_backlog_for_height(frontier_height)
+            || self.sidecar_quarantined_for_height(frontier_height);
+        if !actionable_dependency {
+            self.frontier_recovery = None;
+            return FrontierRecoveryAdvance::None;
+        }
+
+        let existing_state = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == frontier_height);
+        let mut state = existing_state.unwrap_or(FrontierRecoveryState {
+            frontier_height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: now,
+            last_progress_at: dependency_progress_at.unwrap_or(now),
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: None,
+            no_progress_windows: 0,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: reason,
+        });
+        state.last_view = view.max(state.last_view);
+        if existing_state.is_none() && !(reason == "missing_qc" && state.last_cause != "missing_qc")
+        {
+            state.last_cause = reason;
+        }
+        state.last_dependency_progress_at =
+            match (state.last_dependency_progress_at, dependency_progress_at) {
+                (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            };
+        state.no_progress_windows = self.frontier_recovery_window_index_at(state, now);
+        super::status::observe_consensus_no_proposal_storm_state(
+            state.frontier_height,
+            state.no_progress_windows,
+            state.no_progress_windows,
+        );
+        super::status::observe_blocksync_range_pull_expiry_streak(state.no_progress_windows);
+
+        if state.no_progress_windows == 0 {
+            self.frontier_recovery = Some(state);
+            return FrontierRecoveryAdvance::None;
+        }
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        if self.frontier_recovery_same_height_dependency_backlog_active(
+            frontier_height,
+            now,
+            queue_depths,
+        ) && (state.no_progress_windows >= 2
+            || matches!(state.phase, FrontierRecoveryPhase::RotateArmed))
+        {
+            self.frontier_recovery = Some(state);
+            return FrontierRecoveryAdvance::None;
+        }
+        if self.frontier_recovery_action_taken_in_current_window(state, now) {
+            self.frontier_recovery = Some(state);
+            return FrontierRecoveryAdvance::None;
+        }
+
+        let window = self.frontier_recovery_window();
+        match state.phase {
+            FrontierRecoveryPhase::CatchUp => {
+                let all_peers = state.cleanup_done || state.no_progress_windows >= 2;
+                let emitted =
+                    self.emit_frontier_recovery_range_pull(frontier_height, reason, now, all_peers);
+                if emitted {
+                    state.last_action_at = Some(now);
+                }
+                if state.no_progress_windows >= 2 && !state.cleanup_done {
+                    self.apply_frontier_recovery_cleanup(frontier_height, view, now, reason);
+                    state.phase = FrontierRecoveryPhase::RotateArmed;
+                    state.entered_at = now;
+                    state.cleanup_done = true;
+                    state.last_action_at = Some(now);
+                }
+                self.frontier_recovery = Some(state);
+                if emitted || state.cleanup_done {
+                    FrontierRecoveryAdvance::CatchUp
+                } else {
+                    FrontierRecoveryAdvance::None
+                }
+            }
+            FrontierRecoveryPhase::RotateArmed => {
+                if !allow_rotation
+                    || state.last_rotation_view == Some(view)
+                    || now.saturating_duration_since(state.entered_at) < window
+                {
+                    self.frontier_recovery = Some(state);
+                    return FrontierRecoveryAdvance::None;
+                }
+                state.last_rotation_view = Some(view);
+                state.last_action_at = Some(now);
+                self.frontier_recovery = Some(state);
+                warn!(
+                    height = frontier_height,
+                    view,
+                    reason,
+                    no_progress_windows = state.no_progress_windows,
+                    "frontier recovery exhausted catch-up windows; rotating view"
+                );
+                self.trigger_view_change_with_cause(
+                    frontier_height,
+                    view,
+                    Self::frontier_recovery_view_change_cause(reason),
+                );
+                self.frontier_recovery = Some(FrontierRecoveryState {
+                    frontier_height,
+                    phase: FrontierRecoveryPhase::CatchUp,
+                    entered_at: now,
+                    last_progress_at: now,
+                    last_dependency_progress_at: dependency_progress_at,
+                    last_action_at: None,
+                    no_progress_windows: 0,
+                    cleanup_done: false,
+                    last_view: view,
+                    last_rotation_view: Some(view),
+                    last_cause: reason,
+                });
+                FrontierRecoveryAdvance::Rotate
+            }
+        }
+    }
+
+    fn maybe_break_same_height_no_proposal_storm(
+        &mut self,
+        height: u64,
+        view: u64,
+        storm_count: u32,
+        backlog_signals: bool,
+        now: Instant,
+        source: &'static str,
+    ) -> bool {
+        if storm_count < NO_PROPOSAL_STORM_FORCE_BREAK_STREAK
+            || self
+                .subsystems
+                .propose
+                .proposals_seen
+                .contains(&(height, view))
+        {
+            return false;
+        }
+        if self.pending_block_count_for_height(height) == 0 && !backlog_signals {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        if height != committed_height.saturating_add(1) {
+            return false;
+        }
+        let actionable_dependency = backlog_signals
+            || self.missing_qc_height_has_unresolved_dependency_at_height(height)
+            || self.has_actionable_missing_block_requests()
+            || self.has_actionable_deferred_missing_payload_qcs()
+            || self.frontier_catchup_has_unresolved_dependency(height);
+        if actionable_dependency && storm_count < NO_PROPOSAL_STORM_FORCE_BREAK_STREAK {
+            return false;
+        }
+        let window = self.frontier_recovery_window();
+        let mut state = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == height)
+            .unwrap_or(FrontierRecoveryState {
+                frontier_height: height,
+                phase: FrontierRecoveryPhase::CatchUp,
+                entered_at: now,
+                last_progress_at: now.checked_sub(window).unwrap_or(now),
+                last_dependency_progress_at: self
+                    .same_height_no_proposal_storm_dependency_progress_at(height),
+                last_action_at: None,
+                no_progress_windows: storm_count,
+                cleanup_done: false,
+                last_view: view,
+                last_rotation_view: None,
+                last_cause: source,
+            });
+        let forced_windows = storm_count.max(2);
+        let forced_elapsed = saturating_mul_duration(window, forced_windows);
+        state.phase = FrontierRecoveryPhase::CatchUp;
+        state.entered_at = now.checked_sub(forced_elapsed).unwrap_or(now);
+        state.last_progress_at = now.checked_sub(forced_elapsed).unwrap_or(now);
+        state.last_action_at = None;
+        state.no_progress_windows = forced_windows;
+        state.cleanup_done = false;
+        state.last_view = view.max(state.last_view);
+        self.frontier_recovery = Some(state);
+        !matches!(
+            self.advance_frontier_recovery(source, height, view, false, true, true, now),
+            FrontierRecoveryAdvance::None
+        )
+    }
+
+    fn maybe_trigger_payload_mismatch_recovery_bundle(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        now: Instant,
+        source: &'static str,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        if height <= committed_height {
+            return false;
+        }
+        if !self.try_reserve_round_recovery_bundle_window(
+            height,
+            RoundRecoveryBundleSource::PayloadMismatchRecovery,
+            now,
+        ) {
+            return false;
+        }
+
+        let (
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+        ) = self.prune_consensus_state_for_missing_block_height(height);
+        if missing_removed > 0 {
+            super::status::inc_missing_request_pruned_stale_height(
+                u64::try_from(missing_removed).unwrap_or(u64::MAX),
+            );
+            self.update_missing_block_gauges();
+        }
+        let evicted_total = pending_removed
+            .saturating_add(deferred_updates_removed)
+            .saturating_add(deferred_qcs_removed)
+            .saturating_add(hints_removed)
+            .saturating_add(proposals_removed)
+            .saturating_add(seen_removed);
+        if evicted_total > 0 {
+            super::status::inc_pending_queue_evictions_total(
+                u64::try_from(evicted_total).unwrap_or(u64::MAX),
+            );
+        }
+        self.clear_missing_block_recovery_for_height(height, now);
+        self.clear_sidecar_mismatch_for_height(height);
+
+        let canonical_frontier_height = committed_height.saturating_add(1);
+        let lock_rejected_sinks_removed_for_frontier = if canonical_frontier_height != height {
+            self.clear_lock_rejected_block_sinks_for_height(canonical_frontier_height)
+        } else {
+            0
+        };
+        let frontier_state_cleared_for_height =
+            self.force_clear_frontier_reanchor_state_for_height(height, now);
+        let frontier_state_cleared_for_frontier = if canonical_frontier_height != height {
+            self.force_clear_frontier_reanchor_state_for_height(canonical_frontier_height, now)
+        } else {
+            false
+        };
+        let cooldowns_cleared_for_height =
+            self.clear_range_pull_escalation_cooldowns_for_height(height);
+        let cooldowns_cleared_for_frontier = if canonical_frontier_height != height {
+            self.clear_range_pull_escalation_cooldowns_for_height(canonical_frontier_height)
+        } else {
+            0
+        };
+        let quarantine_sidecar = source.contains("sidecar") || source.contains("roster");
+        if quarantine_sidecar {
+            self.quarantine_sidecar_for_height_recovery(height, source);
+        }
+
+        let mut canonical_reanchor_requested =
+            self.request_range_pull_from_anchor(canonical_frontier_height, "sidecar_mismatch", now);
+        let mut fallback_reanchor_requested = false;
+        if !canonical_reanchor_requested {
+            fallback_reanchor_requested = self.request_range_pull_from_anchor(
+                canonical_frontier_height,
+                "frontier_stall_reset_fallback",
+                now,
+            );
+            canonical_reanchor_requested = fallback_reanchor_requested;
+        }
+        super::status::inc_consensus_sidecar_recovery_trigger();
+        warn!(
+            height,
+            view,
+            block = %block_hash,
+            source,
+            committed_height,
+            pending_removed,
+            missing_removed,
+            deferred_updates_removed,
+            deferred_qcs_removed,
+            hints_removed,
+            proposals_removed,
+            seen_removed,
+            canonical_frontier_height,
+            canonical_reanchor_requested,
+            fallback_reanchor_requested,
+            quarantine_sidecar,
+            frontier_state_cleared_for_height,
+            frontier_state_cleared_for_frontier,
+            cooldowns_cleared_for_height,
+            cooldowns_cleared_for_frontier,
+            lock_rejected_sinks_removed_for_frontier,
+            "triggered deterministic payload-mismatch recovery bundle"
+        );
+        true
     }
 
     fn reacquire_missing_qc_dependencies(
@@ -17645,17 +24130,51 @@ impl Actor {
         height: u64,
         current_view: u64,
         now: Instant,
+        dependency_signals: bool,
     ) -> bool {
         self.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
+        if !dependency_signals {
+            self.subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .insert(height, now);
+        }
         super::status::inc_consensus_missing_qc_reacquire_attempt();
         let mut requested = false;
         let mut triggered = false;
+        let local_height = self.committed_height_snapshot();
+        let contiguous_frontier_unresolved = self
+            .frontier_catchup_target_height(local_height)
+            .filter(|frontier_height| *frontier_height == local_height.saturating_add(1))
+            .is_some_and(|frontier_height| {
+                self.frontier_catchup_has_unresolved_dependency(frontier_height)
+            });
         if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
-            triggered = true;
-            requested |= self
-                .request_missing_block_for_highest_qc_force(highest, "idle_missing_qc_reacquire");
+            let highest_far_ahead = highest.height > local_height.saturating_add(2);
+            if !(contiguous_frontier_unresolved && highest_far_ahead) {
+                triggered = true;
+                requested |= self.request_missing_block_for_highest_qc_force(
+                    highest,
+                    "idle_missing_qc_reacquire",
+                );
+            } else {
+                debug!(
+                    round_height = height,
+                    highest_qc_height = highest.height,
+                    local_height,
+                    "suppressing far-ahead highest-QC fetch while contiguous frontier catch-up remains unresolved"
+                );
+            }
         }
-        requested |= self.request_range_pull_from_anchor(height, "idle_missing_qc_reacquire", now);
+        let range_pull_height = self
+            .lock_lag_catchup_frontier_height()
+            .filter(|catchup_height| *catchup_height < height)
+            .unwrap_or(height);
+        requested |= self.request_range_pull_from_anchor(
+            range_pull_height,
+            "idle_missing_qc_reacquire",
+            now,
+        );
         if requested || triggered {
             super::status::inc_consensus_missing_qc_reacquire_success();
         }
@@ -17695,7 +24214,7 @@ impl Actor {
             && slot.height == height
             && slot.view == view
         {
-            slot.state = state;
+            slot.state = step_proposal_liveness_state(slot.state, state);
         }
     }
 
@@ -17821,20 +24340,56 @@ impl Actor {
     fn maybe_force_view_change_for_stalled_pending(&mut self, now: Instant) -> bool {
         let committed_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
+        let stalled_pending_backlog = self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    committed_height,
+                    tip_hash,
+                )
+        }) || self.subsystems.commit.inflight.as_ref().is_some_and(
+            |inflight| {
+                !inflight.pending.aborted
+                    && pending_extends_tip(
+                        inflight.pending.height,
+                        inflight.pending.block.header().prev_block_hash(),
+                        committed_height,
+                        tip_hash,
+                    )
+            },
+        );
         let base_timeout = self.commit_quorum_timeout().max(Duration::from_millis(1));
         let near_quorum_timeout =
             reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown()).min(base_timeout);
         let queue_depths = super::status::worker_queue_depth_snapshot();
-        let consensus_queue_backlog = Self::consensus_queue_backlog(queue_depths);
-        let near_quorum_queue_backlog =
-            self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
-        let rbc_backlog_summary = self.rbc_backlog_summary();
-        let unresolved_rbc_backlog = rbc_backlog_summary.has_backlog();
-        let near_quorum_rbc_backlog = self.has_near_quorum_rbc_backlog(rbc_backlog_summary);
+        let evaluated_height = self.active_consensus_round_height();
+        let backlog_signals = self.idle_backlog_signals_for_height(evaluated_height, queue_depths);
+        let IdleBacklogSignals {
+            existing_worker_backlog,
+            queue_active_backlog,
+            residual_round_backlog,
+            unresolved_rbc_backlog,
+            near_quorum_queue_backlog_raw,
+            near_quorum_rbc_backlog_raw,
+            consensus_queue_backlog,
+            rbc_backlog,
+            near_quorum_queue_backlog,
+            near_quorum_rbc_backlog,
+        } = backlog_signals;
+        let backlog_signals_active = backlog_signals.has_backlog() || stalled_pending_backlog;
         let near_quorum_fast_timeout_gate_open =
-            !near_quorum_queue_backlog && !near_quorum_rbc_backlog;
+            backlog_signals.near_quorum_fast_timeout_gate_open();
         let near_quorum_recent_progress_grace =
             saturating_mul_duration(self.rebroadcast_cooldown(), 4).max(Duration::from_millis(500));
+        let backlog_timeout =
+            self.backlog_extended_view_change_timeout(base_timeout, backlog_signals_active);
+        let frontier_pending_timeout =
+            saturating_mul_duration(self.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+        let backlog_recent_progress_grace = self.backlog_extended_view_change_timeout(
+            self.rebroadcast_cooldown().max(Duration::from_millis(500)),
+            backlog_signals_active,
+        );
         let da_enabled = self.runtime_da_enabled();
         let pending_effective_timeout = |pending: &PendingBlock| {
             let block_hash = pending.block.hash();
@@ -17870,35 +24425,47 @@ impl Actor {
             let missing_local_data = da_enabled && !payload_available;
             let near_quorum_fast_timeout_allowed =
                 near_commit_quorum && missing_local_data && near_quorum_fast_timeout_gate_open;
-            let effective_timeout = if near_quorum_fast_timeout_allowed {
+            let backlog_hysteresis_active =
+                backlog_signals_active && !near_quorum_fast_timeout_allowed;
+            let mut effective_timeout = if near_quorum_fast_timeout_allowed {
                 near_quorum_timeout
+            } else if backlog_hysteresis_active {
+                backlog_timeout
             } else {
                 base_timeout
             };
+            if !near_quorum_fast_timeout_allowed {
+                effective_timeout = effective_timeout.max(frontier_pending_timeout);
+            }
             (
                 effective_timeout,
                 near_quorum_fast_timeout_allowed,
                 vote_status.vote_count,
                 min_votes_for_commit,
                 missing_local_data,
+                backlog_hysteresis_active,
             )
         };
 
         let mut stalled_pending = 0usize;
         let mut max_pending_stall = Duration::ZERO;
         let mut stalled_height: Option<u64> = None;
-        let mut effective_timeout = base_timeout;
+        let mut effective_timeout: Option<Duration> = None;
         let mut near_quorum_stalled = false;
+        let mut backlog_hysteresis_stalled = false;
+        let near_quorum_recovery_window = near_quorum_timeout
+            .checked_div(2)
+            .unwrap_or(near_quorum_timeout)
+            .max(Duration::from_millis(200));
+        let mut near_quorum_recovery_candidates = Vec::new();
 
-        for pending in self.pending.pending_blocks.values() {
-            if pending.aborted
-                || !pending_extends_tip(
-                    pending.height,
-                    pending.block.header().prev_block_hash(),
-                    committed_height,
-                    tip_hash,
-                )
-            {
+        for (block_hash, pending) in &self.pending.pending_blocks {
+            if !self.pending_block_is_active_for_tip(
+                *block_hash,
+                pending,
+                committed_height,
+                tip_hash,
+            ) {
                 continue;
             }
             let (
@@ -17907,19 +24474,50 @@ impl Actor {
                 vote_count,
                 min_votes_for_commit,
                 missing_local_data,
+                backlog_hysteresis_active,
             ) = pending_effective_timeout(pending);
             let stall_age = pending.progress_age(now);
+            if near_quorum_fast_timeout_allowed && stall_age >= near_quorum_recovery_window {
+                near_quorum_recovery_candidates.push((
+                    *block_hash,
+                    pending.height,
+                    pending.view,
+                    stall_age,
+                    vote_count,
+                    min_votes_for_commit,
+                ));
+            }
             if near_quorum_fast_timeout_allowed && stall_age < near_quorum_recent_progress_grace {
                 debug!(
                     height = pending.height,
                     view = pending.view,
-                    block = %pending.block.hash(),
+                    block = %block_hash,
                     votes = vote_count,
                     min_votes = min_votes_for_commit,
                     missing_local_data,
                     stall_age_ms = stall_age.as_millis(),
                     grace_ms = near_quorum_recent_progress_grace.as_millis(),
                     "deferring forced view change: near-quorum pending shows recent progress"
+                );
+                continue;
+            }
+            if backlog_hysteresis_active && stall_age < backlog_recent_progress_grace {
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %block_hash,
+                    stall_age_ms = stall_age.as_millis(),
+                    grace_ms = backlog_recent_progress_grace.as_millis(),
+                    existing_worker_backlog,
+                    queue_active_backlog,
+                    residual_round_backlog,
+                    consensus_queue_backlog,
+                    rbc_backlog,
+                    unresolved_rbc_backlog,
+                    near_quorum_queue_backlog,
+                    near_quorum_rbc_backlog,
+                    stalled_pending_backlog,
+                    "deferring forced view change: backlog-heavy pending shows recent progress"
                 );
                 continue;
             }
@@ -17930,8 +24528,11 @@ impl Actor {
             max_pending_stall = max_pending_stall.max(stall_age);
             stalled_height =
                 Some(stalled_height.map_or(pending.height, |current| current.min(pending.height)));
-            effective_timeout = effective_timeout.min(pending_timeout);
+            effective_timeout = Some(
+                effective_timeout.map_or(pending_timeout, |current| current.min(pending_timeout)),
+            );
             near_quorum_stalled |= near_quorum_fast_timeout_allowed;
+            backlog_hysteresis_stalled |= backlog_hysteresis_active;
         }
 
         let inflight_stall = self
@@ -17941,11 +24542,48 @@ impl Actor {
             .as_ref()
             .filter(|inflight| !inflight.pending.aborted)
             .map(|inflight| {
-                let (pending_timeout, near_quorum_fast_timeout_allowed, _, _, _) =
-                    pending_effective_timeout(&inflight.pending);
+                let (
+                    pending_timeout,
+                    near_quorum_fast_timeout_allowed,
+                    _,
+                    _,
+                    _,
+                    backlog_hysteresis_active,
+                ) = pending_effective_timeout(&inflight.pending);
                 let stall_age = inflight.pending.progress_age(now);
+                if near_quorum_fast_timeout_allowed && stall_age >= near_quorum_recovery_window {
+                    let vote_status = self.commit_vote_quorum_status_for_block_detail(
+                        inflight.block_hash,
+                        inflight.pending.height,
+                        inflight.pending.view,
+                    );
+                    let (consensus_mode, _, _) =
+                        self.consensus_context_for_height(inflight.pending.height);
+                    let mut commit_roster = self.roster_for_vote_with_mode(
+                        inflight.block_hash,
+                        inflight.pending.height,
+                        inflight.pending.view,
+                        consensus_mode,
+                    );
+                    if commit_roster.is_empty() {
+                        commit_roster = self.effective_commit_topology();
+                    }
+                    let min_votes = super::network_topology::Topology::new(commit_roster)
+                        .min_votes_for_commit()
+                        .max(1);
+                    near_quorum_recovery_candidates.push((
+                        inflight.block_hash,
+                        inflight.pending.height,
+                        inflight.pending.view,
+                        stall_age,
+                        vote_status.vote_count,
+                        min_votes,
+                    ));
+                }
                 let stalled = if near_quorum_fast_timeout_allowed {
                     stall_age >= pending_timeout && stall_age >= near_quorum_recent_progress_grace
+                } else if backlog_hysteresis_active {
+                    stall_age >= pending_timeout && stall_age >= backlog_recent_progress_grace
                 } else {
                     stall_age >= pending_timeout
                 };
@@ -17955,21 +24593,104 @@ impl Actor {
                     stall_age,
                     pending_timeout,
                     near_quorum_fast_timeout_allowed,
+                    backlog_hysteresis_active,
                 )
             });
-        let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _, _, _)| stalled);
-        if let Some((height, true, stall_age, pending_timeout, near_quorum_fast_timeout_allowed)) =
-            inflight_stall
+        let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _, _, _, _)| stalled);
+        if let Some((
+            height,
+            true,
+            stall_age,
+            pending_timeout,
+            near_quorum_fast_timeout_allowed,
+            backlog_hysteresis_active,
+        )) = inflight_stall
         {
             stalled_height = Some(stalled_height.map_or(height, |current| current.min(height)));
             max_pending_stall = max_pending_stall.max(stall_age);
-            effective_timeout = effective_timeout.min(pending_timeout);
+            effective_timeout = Some(
+                effective_timeout.map_or(pending_timeout, |current| current.min(pending_timeout)),
+            );
             near_quorum_stalled |= near_quorum_fast_timeout_allowed;
+            backlog_hysteresis_stalled |= backlog_hysteresis_active;
+        }
+        let mut near_quorum_preemptive_escalations = 0usize;
+        if !near_quorum_recovery_candidates.is_empty() {
+            let mut escalated_candidates = BTreeSet::<(HashOf<BlockHeader>, u64, u64)>::new();
+            for (block_hash, candidate_height, candidate_view, stall_age, vote_count, min_votes) in
+                near_quorum_recovery_candidates.into_iter().take(4)
+            {
+                if !escalated_candidates.insert((block_hash, candidate_height, candidate_view)) {
+                    continue;
+                }
+                if self.should_skip_missing_block_recovery_escalation(
+                    block_hash,
+                    candidate_height,
+                    candidate_view,
+                    now,
+                ) {
+                    debug!(
+                        height = candidate_height,
+                        view = candidate_view,
+                        block = %block_hash,
+                        "suppressing duplicate pre-timeout near-quorum escalation while prior recovery is in-flight"
+                    );
+                    continue;
+                }
+                if self.maybe_escalate_missing_block_height_recovery(
+                    block_hash,
+                    candidate_height,
+                    candidate_view,
+                    now,
+                ) {
+                    near_quorum_preemptive_escalations =
+                        near_quorum_preemptive_escalations.saturating_add(1);
+                    debug!(
+                        height = candidate_height,
+                        view = candidate_view,
+                        block = %block_hash,
+                        votes = vote_count,
+                        min_votes,
+                        stall_age_ms = stall_age.as_millis(),
+                        escalation_window_ms = near_quorum_recovery_window.as_millis(),
+                        "triggered pre-timeout near-quorum pending recovery escalation"
+                    );
+                }
+            }
         }
 
+        let frontier_height = u64::try_from(committed_height)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
         if stalled_pending == 0 && !inflight_stalled {
+            if self.frontier_recovery_owned_by_quorum_timeout(frontier_height) {
+                let view = self
+                    .phase_tracker
+                    .current_view(frontier_height)
+                    .unwrap_or(0);
+                return matches!(
+                    self.advance_frontier_recovery(
+                        "quorum_timeout",
+                        frontier_height,
+                        view,
+                        false,
+                        true,
+                        true,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
+            }
             return false;
         }
+        if self.prune_lock_lag_future_consensus_state(now, "stalled_pending") {
+            debug!(
+                stalled_pending,
+                inflight_stalled, "deferred forced view change after lock-lag catch-up pruning"
+            );
+            return false;
+        }
+        let effective_timeout = effective_timeout.unwrap_or(base_timeout);
 
         let height = stalled_height.unwrap_or_else(|| self.active_consensus_round_height());
         if self.phase_tracker.current_view(height).is_none() {
@@ -18002,16 +24723,41 @@ impl Actor {
             timeout_ms = effective_timeout.as_millis(),
             base_timeout_ms = base_timeout.as_millis(),
             near_quorum_timeout_ms = near_quorum_timeout.as_millis(),
+            backlog_timeout_ms = backlog_timeout.as_millis(),
             near_quorum_stalled,
+            backlog_hysteresis_stalled,
+            near_quorum_preemptive_escalations,
+            existing_worker_backlog,
+            queue_active_backlog,
+            residual_round_backlog,
             consensus_queue_backlog,
+            rbc_backlog,
             near_quorum_queue_backlog,
+            near_quorum_queue_backlog_raw,
             unresolved_rbc_backlog,
             near_quorum_rbc_backlog,
+            near_quorum_rbc_backlog_raw,
+            near_quorum_fast_timeout_gate_open,
+            stalled_pending_backlog,
             max_pending_stall_ms = max_pending_stall.as_millis(),
-            "active pending block stalled past quorum timeout; forcing deterministic view change"
+            "active pending block stalled past quorum timeout; routing contiguous frontier through unified recovery"
         );
+        if height == frontier_height {
+            self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+            return matches!(
+                self.advance_frontier_recovery(
+                    "quorum_timeout",
+                    height,
+                    view,
+                    false,
+                    true,
+                    true,
+                    now,
+                ),
+                FrontierRecoveryAdvance::Rotate
+            );
+        }
         self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
-        self.subsystems.propose.forced_view_after_timeout = Some((height, view.saturating_add(1)));
         true
     }
 
@@ -18031,7 +24777,6 @@ impl Actor {
             return false;
         }
         let da_enabled = self.runtime_da_enabled();
-        let rbc_backlog = self.has_unresolved_rbc_backlog();
         let relay_backpressure = self.relay_backpressure_active(now, self.rebroadcast_cooldown());
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let rbc_progress_window = self
@@ -18044,11 +24789,6 @@ impl Actor {
         let consensus_queue_backpressure = queue_depths.vote_rx >= vote_cap
             || queue_depths.block_payload_rx >= block_payload_cap
             || queue_depths.rbc_chunk_rx >= rbc_chunk_cap;
-        let consensus_queue_backlog = queue_depths.vote_rx > 0
-            || queue_depths.block_payload_rx > 0
-            || queue_depths.rbc_chunk_rx > 0
-            || queue_depths.block_rx > 0
-            || queue_depths.consensus_rx > 0;
 
         let committed_qc = self.latest_committed_qc();
         let committed_height = committed_qc
@@ -18091,8 +24831,25 @@ impl Actor {
             );
             height = commit_horizon_height;
         }
+        let backlog_signals = self.idle_backlog_signals_for_height(height, queue_depths);
+        let IdleBacklogSignals {
+            existing_worker_backlog: _existing_worker_backlog,
+            queue_active_backlog,
+            residual_round_backlog,
+            unresolved_rbc_backlog,
+            near_quorum_queue_backlog_raw,
+            near_quorum_rbc_backlog_raw,
+            consensus_queue_backlog,
+            rbc_backlog,
+            near_quorum_queue_backlog,
+            near_quorum_rbc_backlog,
+        } = backlog_signals;
+        let near_quorum_fast_timeout_gate_open =
+            backlog_signals.near_quorum_fast_timeout_gate_open();
 
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
 
         let view_age = if let Some(age) = self.phase_tracker.view_age(height, now) {
             age
@@ -18110,6 +24867,33 @@ impl Actor {
             .propose
             .proposals_seen
             .contains(&(height, current_view));
+        let frontier_pending_exists = height == committed_height.saturating_add(1)
+            && self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && pending.height == height
+                    && pending_extends_tip(
+                        pending.height,
+                        pending.block.header().prev_block_hash(),
+                        tip_height,
+                        tip_hash,
+                    )
+            });
+        let same_height_unresolved_dependency =
+            self.missing_qc_height_has_unresolved_dependency(height);
+        let same_height_unresolved_backlog =
+            same_height_unresolved_dependency || self.has_residual_round_backlog_for_height(height);
+        let same_height_dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(height);
+        self.reset_same_height_no_proposal_storm_if_progressed(
+            height,
+            current_view,
+            committed_height,
+            proposal_seen,
+            same_height_dependency_progress_at,
+            now,
+        );
+        let missing_qc_progress_signal =
+            committed_height >= height || !same_height_unresolved_backlog;
         if proposal_seen {
             if self
                 .subsystems
@@ -18125,7 +24909,27 @@ impl Actor {
                 );
             }
             self.subsystems.propose.proposal_liveness = None;
-            self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+            if missing_qc_progress_signal {
+                self.subsystems.propose.last_missing_qc_timeout_trigger = None;
+            } else if self
+                .subsystems
+                .propose
+                .last_missing_qc_timeout_trigger
+                .is_some()
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    same_height_unresolved_dependency,
+                    same_height_unresolved_backlog,
+                    "proposal observed without same-height progress; preserving missing-QC timeout streak"
+                );
+            }
+            self.subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .remove(&height);
             if self
                 .subsystems
                 .propose
@@ -18187,7 +24991,31 @@ impl Actor {
         } else {
             now.saturating_duration_since(queue_since.unwrap_or(now))
         };
-        let timed_out = idle_round_timed_out(true, age, timeout);
+        let initial_frontier_proposal_grace = if !proposal_seen
+            && da_enabled
+            && current_view == 0
+            && height == committed_height.saturating_add(1)
+            && !frontier_pending_exists
+            && self.subsystems.commit.inflight.is_none()
+        {
+            saturating_mul_duration(self.rebroadcast_cooldown(), 4).max(Duration::from_millis(500))
+        } else {
+            Duration::ZERO
+        };
+        let effective_timeout = timeout.saturating_add(initial_frontier_proposal_grace);
+        let timed_out = idle_round_timed_out(true, age, effective_timeout);
+        if !timed_out && initial_frontier_proposal_grace != Duration::ZERO && age >= timeout {
+            debug!(
+                height,
+                view = current_view,
+                age_ms = age.as_millis(),
+                timeout_ms = timeout.as_millis(),
+                frontier_grace_ms = initial_frontier_proposal_grace.as_millis(),
+                effective_timeout_ms = effective_timeout.as_millis(),
+                "deferring empty-frontier missing_qc rotation to absorb bounded commit-skew on the contiguous frontier"
+            );
+            return false;
+        }
         let rbc_backlog_progressing = rbc_backlog
             && (queue_depths.rbc_chunk_rx > 0
                 || queue_depths.block_payload_rx > 0
@@ -18208,48 +25036,6 @@ impl Actor {
             }
             return false;
         }
-        if proposal_gap_backlog_grace > Duration::ZERO {
-            let backlog_grace_deadline = timeout.saturating_add(proposal_gap_backlog_grace);
-            if age < backlog_grace_deadline {
-                debug!(
-                    rbc_backlog,
-                    rbc_backlog_progressing,
-                    consensus_queue_backlog,
-                    age_ms = age.as_millis(),
-                    timeout_ms = timeout.as_millis(),
-                    proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
-                    vote_rx_depth = queue_depths.vote_rx,
-                    block_payload_rx_depth = queue_depths.block_payload_rx,
-                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                    block_rx_depth = queue_depths.block_rx,
-                    consensus_rx_depth = queue_depths.consensus_rx,
-                    "deferring idle view-change while proposal-gap backlog converges"
-                );
-                return false;
-            }
-        }
-        if rbc_backlog && rbc_backlog_progressing {
-            let progress_grace_deadline =
-                timeout.saturating_add(rbc_progress_window.max(proposal_gap_backlog_grace));
-            if age < progress_grace_deadline {
-                debug!(
-                    rbc_backlog,
-                    rbc_backlog_progressing,
-                    consensus_queue_backlog,
-                    age_ms = age.as_millis(),
-                    timeout_ms = timeout.as_millis(),
-                    progress_grace_ms = progress_grace_deadline.as_millis(),
-                    proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
-                    vote_rx_depth = queue_depths.vote_rx,
-                    block_payload_rx_depth = queue_depths.block_payload_rx,
-                    rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                    block_rx_depth = queue_depths.block_rx,
-                    consensus_rx_depth = queue_depths.consensus_rx,
-                    "deferring idle view-change while RBC backlog is converging"
-                );
-                return false;
-            }
-        }
         if consensus_queue_backpressure && !timed_out {
             trace!("skipping idle view-change due to consensus queue backpressure");
             return false;
@@ -18259,7 +25045,14 @@ impl Actor {
                 rbc_backlog,
                 relay_backpressure,
                 consensus_queue_backpressure,
+                queue_active_backlog,
+                residual_round_backlog,
                 consensus_queue_backlog,
+                near_quorum_queue_backlog,
+                near_quorum_queue_backlog_raw,
+                near_quorum_rbc_backlog,
+                near_quorum_rbc_backlog_raw,
+                near_quorum_fast_timeout_gate_open,
                 vote_rx_depth = queue_depths.vote_rx,
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
@@ -18271,15 +25064,37 @@ impl Actor {
         if !timed_out {
             return false;
         }
-        if self.maybe_reset_stalled_frontier_state(committed_height, now) {
-            debug!(
-                height,
-                view = current_view,
-                committed_height,
-                "deferred idle view-change after deterministic frontier stall reset"
-            );
-            return false;
-        }
+        let contiguous_frontier_height_for_reset = committed_height.saturating_add(1);
+        let pre_reset_frontier_reanchor_unresolved_in_window =
+            if height == contiguous_frontier_height_for_reset {
+                let dependency_progress_now = self
+                    .frontier_catchup_unresolved_dependency_progress_at_height(
+                        contiguous_frontier_height_for_reset,
+                    );
+                let frontier_snapshot = self.canonical_frontier_reanchor_window_snapshot(
+                    contiguous_frontier_height_for_reset,
+                    contiguous_frontier_height_for_reset,
+                    now,
+                );
+                self.canonical_frontier_reanchor_window_already_emitted(
+                    contiguous_frontier_height_for_reset,
+                    contiguous_frontier_height_for_reset,
+                    frontier_snapshot.window_index,
+                ) && self.frontier_catchup_has_unresolved_dependency(
+                    contiguous_frontier_height_for_reset,
+                ) && self.canonical_frontier_reanchor_dependency_progress_unchanged(
+                    contiguous_frontier_height_for_reset,
+                    contiguous_frontier_height_for_reset,
+                    frontier_snapshot.window_index,
+                    dependency_progress_now,
+                )
+            } else {
+                false
+            };
+        let reset_stalled_frontier_state =
+            self.maybe_reset_stalled_frontier_state(committed_height, now);
+        let pruned_lock_lag_future_state =
+            self.prune_lock_lag_future_consensus_state(now, "idle_missing_qc");
         let stale_margin = self.recovery_missing_request_stale_height_margin();
         if height.saturating_add(stale_margin) < committed_height {
             // Invariant C: stale missing-height state must not spin endless MissingQc rotations.
@@ -18289,6 +25104,10 @@ impl Actor {
             self.subsystems.propose.proposal_liveness = None;
             self.subsystems.propose.last_missing_qc_timeout_trigger = None;
             self.subsystems.propose.last_missing_qc_reacquire_attempt = None;
+            self.subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .remove(&height);
             self.prune_stale_view_state(height, current_view.saturating_add(1));
             debug_assert!(
                 self.pending.missing_block_requests.values().all(|request| {
@@ -18313,8 +25132,15 @@ impl Actor {
             // Invariant C (extended): stale missing-height rounds behind the evolving QC head
             // must not repeatedly retrigger MissingQc view changes.
             super::status::inc_missing_qc_trigger_suppressed_stale();
-            let (pending_removed, missing_removed, hints_removed, proposals_removed, seen_removed) =
-                self.prune_consensus_state_for_missing_block_height(height);
+            let (
+                pending_removed,
+                missing_removed,
+                deferred_updates_removed,
+                deferred_qcs_removed,
+                hints_removed,
+                proposals_removed,
+                seen_removed,
+            ) = self.prune_consensus_state_for_missing_block_height(height);
             if missing_removed > 0 {
                 super::status::inc_missing_request_pruned_stale_height(missing_removed as u64);
                 self.update_missing_block_gauges();
@@ -18325,6 +25151,10 @@ impl Actor {
             self.subsystems.propose.proposal_liveness = None;
             self.subsystems.propose.last_missing_qc_timeout_trigger = None;
             self.subsystems.propose.last_missing_qc_reacquire_attempt = None;
+            self.subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .remove(&height);
             self.prune_stale_view_state(height, current_view.saturating_add(1));
             debug_assert!(
                 self.pending
@@ -18341,6 +25171,8 @@ impl Actor {
                 stale_margin,
                 pending_removed,
                 missing_removed,
+                deferred_updates_removed,
+                deferred_qcs_removed,
                 hints_removed,
                 proposals_removed,
                 seen_removed,
@@ -18365,85 +25197,77 @@ impl Actor {
                 now,
             );
         }
-        let backlog_hysteresis_base = timeout.max(proposal_gap_backlog_grace);
-        if !proposal_seen
-            && backlog_hysteresis_base != Duration::ZERO
-            && (rbc_backlog || relay_backpressure || consensus_queue_backlog)
-        {
-            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-            if let Some(wait_remaining) = missing_qc_timeout_hysteresis_remaining(
-                consensus_mode,
-                backlog_hysteresis_base,
-                self.subsystems.propose.last_missing_qc_timeout_trigger,
-                height,
-                current_view,
-                now,
-            ) {
-                let next_streak = next_missing_qc_timeout_streak(
-                    self.subsystems.propose.last_missing_qc_timeout_trigger,
-                    height,
-                    current_view,
-                );
+        let same_height_actionable_dependency =
+            self.missing_qc_height_has_unresolved_dependency_at_height(height);
+        let contiguous_frontier_unresolved = height == committed_height.saturating_add(1)
+            && self.frontier_catchup_has_unresolved_dependency(height);
+        let missing_qc_actionable_dependency_signals = unresolved_rbc_backlog
+            || proposal_seen_missing_qc_dependency_signals
+            || same_height_actionable_dependency
+            || contiguous_frontier_unresolved
+            || frontier_pending_exists
+            || self.has_actionable_missing_block_requests()
+            || self.has_actionable_deferred_missing_payload_qcs()
+            || self.has_residual_round_backlog_for_height(height)
+            || self.sidecar_quarantined_for_height(height);
+        if missing_qc_actionable_dependency_signals {
+            if reset_stalled_frontier_state {
                 debug!(
                     height,
                     view = current_view,
-                    rbc_backlog,
-                    relay_backpressure,
-                    consensus_queue_backlog,
-                    timeout_ms = timeout.as_millis(),
-                    proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
-                    hysteresis_wait_ms = wait_remaining.as_millis(),
-                    timeout_streak = next_streak,
-                    "deferring idle view-change: missing-proposal timeout hysteresis under backlog"
+                    committed_height,
+                    "deferred idle view-change after deterministic frontier stall reset"
+                );
+                return false;
+            }
+            if pruned_lock_lag_future_state {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "deferred idle view-change after lock-lag catch-up pruning"
                 );
                 return false;
             }
         }
-
-        if self.should_attempt_missing_qc_reacquire(
-            height,
-            current_view,
-            proposal_seen,
-            rbc_backlog,
-            consensus_queue_backlog,
-        ) && self.reacquire_missing_qc_dependencies(height, current_view, now)
-        {
-            self.mark_proposal_liveness_state(
-                height,
-                current_view,
-                ProposalLivenessState::RecoveryAcquireDependencies,
-                now,
-            );
-            debug!(
-                height,
-                view = current_view,
-                rbc_backlog,
-                consensus_queue_backlog,
-                "deferred idle view-change after bounded missing-QC reacquire attempt"
-            );
-            return false;
+        if missing_qc_actionable_dependency_signals && proposal_gap_backlog_grace > Duration::ZERO {
+            let backlog_grace_deadline = timeout.saturating_add(proposal_gap_backlog_grace);
+            if age < backlog_grace_deadline {
+                debug!(
+                    height,
+                    view = current_view,
+                    age_ms = age.as_millis(),
+                    timeout_ms = timeout.as_millis(),
+                    proposal_gap_backlog_grace_ms = proposal_gap_backlog_grace.as_millis(),
+                    "deferring idle view-change while backlog converges"
+                );
+                return false;
+            }
+        }
+        if missing_qc_actionable_dependency_signals && rbc_backlog && rbc_backlog_progressing {
+            let progress_grace_deadline =
+                timeout.saturating_add(rbc_progress_window.max(proposal_gap_backlog_grace));
+            if age < progress_grace_deadline {
+                debug!(
+                    height,
+                    view = current_view,
+                    age_ms = age.as_millis(),
+                    timeout_ms = timeout.as_millis(),
+                    progress_grace_ms = progress_grace_deadline.as_millis(),
+                    "deferring idle view-change while RBC backlog is converging"
+                );
+                return false;
+            }
         }
         if !proposal_seen
             && self.maybe_force_missing_qc_leader_proposal(height, current_view, age, now)
         {
             return false;
         }
-        if self.maybe_defer_missing_qc_rotation(height, current_view, age, timeout) {
-            debug!(
-                height,
-                view = current_view,
-                age_ms = age.as_millis(),
-                timeout_ms = timeout.as_millis(),
-                missing_qc_reacquire_window_ms =
-                    self.recovery_missing_qc_reacquire_window().as_millis(),
-                rotate_after_exhausted = self.recovery_rotate_after_reacquire_exhausted(),
-                "deferring idle view-change while proposal liveness state machine waits for deterministic dependency reacquire"
-            );
-            return false;
-        }
 
-        let next_view = current_view.saturating_add(1);
-        let missing_qc_timeout_streak = if !proposal_seen {
+        let track_missing_qc_timeout =
+            !proposal_seen || proposal_seen_missing_qc_dependency_signals;
+        let missing_qc_timeout_streak = if track_missing_qc_timeout {
             next_missing_qc_timeout_streak(
                 self.subsystems.propose.last_missing_qc_timeout_trigger,
                 height,
@@ -18452,7 +25276,7 @@ impl Actor {
         } else {
             0
         };
-        if !proposal_seen {
+        if track_missing_qc_timeout {
             self.subsystems.propose.last_missing_qc_timeout_trigger =
                 Some(CachedSlotTimeoutTrigger {
                     height,
@@ -18461,39 +25285,163 @@ impl Actor {
                     streak: missing_qc_timeout_streak,
                 });
         }
-        if !proposal_seen {
-            if let Some(telemetry) = self.telemetry_handle() {
-                telemetry.inc_proposal_gap();
-            }
-        }
-        if let Some(suppressed_since_last) =
-            self.missing_qc_warning_log
-                .allow(height, current_view, now, Duration::from_secs(5))
-        {
-            warn!(
+        if pre_reset_frontier_reanchor_unresolved_in_window {
+            debug!(
                 height,
                 view = current_view,
-                next_view,
-                age_ms = age.as_millis(),
-                timeout_ms = timeout.as_millis(),
-                suppressed_since_last,
-                proposal_seen,
-                missing_qc_timeout_streak,
-                rbc_backlog,
-                rbc_backlog_progressing,
-                relay_backpressure,
-                consensus_queue_backpressure,
-                consensus_queue_backlog,
-                vote_rx_depth = queue_depths.vote_rx,
-                block_payload_rx_depth = queue_depths.block_payload_rx,
-                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                block_rx_depth = queue_depths.block_rx,
-                consensus_rx_depth = queue_depths.consensus_rx,
-                "no proposal observed before cutoff; rotating leader via view change"
+                committed_height,
+                "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+            );
+            return false;
+        }
+
+        let frontier_matching_pending = frontier_pending_exists
+            && self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && pending.height == height
+                    && pending.view == current_view
+                    && pending_extends_tip(
+                        pending.height,
+                        pending.block.header().prev_block_hash(),
+                        tip_height,
+                        tip_hash,
+                    )
+            });
+        let frontier_slot_vote_backed_evidence = height == committed_height.saturating_add(1)
+            && self.slot_has_vote_backed_consensus_evidence(height, current_view);
+        let frontier_non_missing_qc_recovery_cause = (height == committed_height.saturating_add(1))
+            .then(|| self.frontier_non_missing_qc_recovery_cause(height))
+            .flatten();
+        let frontier_dependency_recovery_cause = (height == committed_height.saturating_add(1))
+            .then(|| self.frontier_dependency_recovery_cause(height, current_view, now))
+            .flatten();
+        let frontier_vote_backed_recovery_active = height == committed_height.saturating_add(1)
+            && self.frontier_vote_backed_recovery_active(height, now);
+        if !missing_qc_actionable_dependency_signals {
+            if let Some(reason) = frontier_non_missing_qc_recovery_cause {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    reason,
+                    "deferring empty-frontier missing_qc rotation while a prior frontier recovery window remains reserved"
+                );
+                return matches!(
+                    self.advance_frontier_recovery(
+                        reason,
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        true,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
+            }
+            if frontier_slot_vote_backed_evidence
+                && !frontier_vote_backed_recovery_active
+                && !frontier_matching_pending
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "routing empty-frontier slot with vote/QC evidence through unified quorum-timeout recovery instead of MissingQc"
+                );
+                return matches!(
+                    self.advance_frontier_recovery(
+                        "quorum_timeout",
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        true,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
+            }
+            if frontier_vote_backed_recovery_active || frontier_matching_pending {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    frontier_matching_pending,
+                    "suppressing empty-frontier missing_qc rotation while frontier pending or another recovery path owns the active window"
+                );
+                return false;
+            }
+            if !proposal_seen {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "routing empty-frontier missing_qc through unified frontier recovery instead of emitting an immediate direct rotation"
+                );
+                return matches!(
+                    self.advance_frontier_recovery(
+                        "missing_qc",
+                        height,
+                        current_view,
+                        proposal_seen,
+                        false,
+                        true,
+                        now,
+                    ),
+                    FrontierRecoveryAdvance::Rotate
+                );
+            }
+            return false;
+        }
+
+        let storm_backlog_signals = missing_qc_actionable_dependency_signals
+            || residual_round_backlog
+            || queue_active_backlog
+            || consensus_queue_backlog
+            || rbc_backlog;
+        if !proposal_seen {
+            let _ = self.record_same_height_no_proposal_storm_timeout(
+                height,
+                current_view,
+                committed_height,
+                same_height_dependency_progress_at,
             );
         }
-        self.trigger_view_change_with_cause(height, current_view, ViewChangeCause::MissingQc);
-        true
+        if pre_reset_frontier_reanchor_unresolved_in_window {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+            );
+            return false;
+        }
+
+        let frontier_recovery_cause = frontier_non_missing_qc_recovery_cause
+            .or(frontier_dependency_recovery_cause)
+            .unwrap_or("missing_qc");
+        match self.advance_frontier_recovery(
+            frontier_recovery_cause,
+            height,
+            current_view,
+            proposal_seen,
+            storm_backlog_signals,
+            frontier_non_missing_qc_recovery_cause.is_none()
+                && !frontier_vote_backed_recovery_active
+                && !frontier_matching_pending,
+            now,
+        ) {
+            FrontierRecoveryAdvance::None | FrontierRecoveryAdvance::CatchUp => false,
+            FrontierRecoveryAdvance::Rotate => {
+                if !proposal_seen {
+                    if let Some(telemetry) = self.telemetry_handle() {
+                        telemetry.inc_proposal_gap();
+                    }
+                }
+                true
+            }
+        }
     }
 
     fn prune_stale_view_state(&mut self, height: u64, min_view: u64) {
@@ -18635,6 +25583,7 @@ impl Actor {
             .persisted_full_sessions
             .remove(&key);
         self.subsystems.da_rbc.rbc.persist_inflight.remove(&key);
+        self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
         if self.ensure_rbc_chunk_store() {
             if let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() {
                 if let Err(err) = store.remove(&key) {
@@ -18705,6 +25654,72 @@ impl Actor {
                 return;
             }
         }
+        if let Some(current_view) = self.phase_tracker.current_view(height)
+            && view < current_view
+        {
+            debug!(
+                height,
+                view, current_view, "dropping view-change trigger for stale view"
+            );
+            return;
+        }
+        let now = Instant::now();
+        if matches!(
+            cause,
+            ViewChangeCause::QuorumTimeout | ViewChangeCause::StakeQuorumTimeout
+        ) {
+            let committed_height = self.committed_height_snapshot();
+            if self.frontier_catchup_target_height(committed_height) == Some(height)
+                && self.frontier_catchup_has_unresolved_dependency(height)
+            {
+                let canonical_frontier_reference_height = self
+                    .highest_qc
+                    .or(self.latest_committed_qc())
+                    .map_or(height, |qc| qc.height.max(height));
+                let canonical_frontier_height = self
+                    .canonical_frontier_reanchor_gate_heights(
+                        committed_height,
+                        canonical_frontier_reference_height,
+                    )
+                    .and_then(|(gate_frontier_height, gate_canonical_height)| {
+                        (gate_frontier_height == height).then_some(gate_canonical_height)
+                    })
+                    .unwrap_or(height);
+                let dependency_progress_now =
+                    self.frontier_catchup_unresolved_dependency_progress_at_height(height);
+                let frontier_snapshot = self.canonical_frontier_reanchor_window_snapshot(
+                    height,
+                    canonical_frontier_height,
+                    now,
+                );
+                let frontier_reanchor_emitted_in_window = self
+                    .canonical_frontier_reanchor_window_already_emitted(
+                        height,
+                        canonical_frontier_height,
+                        frontier_snapshot.window_index,
+                    );
+                if frontier_reanchor_emitted_in_window
+                    && self.canonical_frontier_reanchor_dependency_progress_unchanged(
+                        height,
+                        canonical_frontier_height,
+                        frontier_snapshot.window_index,
+                        dependency_progress_now,
+                    )
+                    && !self.try_reserve_missing_qc_height_stall_rotation_window(height, cause, now)
+                {
+                    debug!(
+                        height,
+                        view,
+                        cause = cause.as_str(),
+                        frontier_height = height,
+                        frontier_window_index = frontier_snapshot.window_index,
+                        frontier_canonical_height = canonical_frontier_height,
+                        "suppressing same-height view-change while in-window frontier reanchor remains unresolved"
+                    );
+                    return;
+                }
+            }
+        }
         let queue_depths = super::status::worker_queue_depth_snapshot();
         let active_queue_len = self.queue.active_len();
         let pending_blocks = self.pending.pending_blocks.len();
@@ -18744,25 +25759,14 @@ impl Actor {
             background_rx_depth = queue_depths.background_rx,
             "view change triggered"
         );
-        let now = Instant::now();
         let prev_view = self.phase_tracker.current_view(height);
-        let base_view = self
-            .phase_tracker
-            .current_view(height)
-            .map_or(view, |current| current.max(view));
-        if base_view != view {
-            debug!(
-                height,
-                view, base_view, "upgrading view-change trigger from stale view"
-            );
-        }
-        self.assert_proposal_seen(height, base_view, cause.as_str());
+        self.assert_proposal_seen(height, view, cause.as_str());
         let next_view = bump_view_after_quorum_timeout(
             &mut self.phase_tracker,
             &mut self.subsystems.propose.pacemaker,
             &mut self.subsystems.propose.new_view_tracker,
             height,
-            base_view,
+            view,
             self.config.gating.future_view_window,
             now,
         );
@@ -18785,9 +25789,7 @@ impl Actor {
         self.subsystems.propose.proposal_liveness = None;
         self.prune_stale_view_state(height, next_view);
         self.consensus_recovery
-            .retain(|(entry_height, entry_view), _| {
-                *entry_height != height || *entry_view >= next_view
-            });
+            .retain(|entry_key, _| entry_key.height >= height);
         // Drop earlier views for the active height so proposals_seen can't grow unbounded.
         self.subsystems
             .propose
@@ -18798,6 +25800,49 @@ impl Actor {
         self.prune_vote_caches_horizon(self.last_committed_height);
         record_view_change_cause_with_telemetry(cause, self.telemetry_handle());
         let committed_qc = self.latest_committed_qc();
+        let committed_height = self.committed_height_snapshot();
+        let highest_committed_conflict = self.highest_qc.and_then(|highest| {
+            if highest.height > committed_height {
+                return None;
+            }
+            let committed_hash = self.committed_block_hash_for_height(highest.height)?;
+            (committed_hash != highest.subject_block_hash).then_some((highest, committed_hash))
+        });
+        let locked_committed_conflict = self.locked_qc.and_then(|locked| {
+            if locked.height > committed_height {
+                return None;
+            }
+            let committed_hash = self.committed_block_hash_for_height(locked.height)?;
+            (committed_hash != locked.subject_block_hash).then_some((locked, committed_hash))
+        });
+        if highest_committed_conflict.is_some() || locked_committed_conflict.is_some() {
+            if let Some(committed) = committed_qc {
+                if let Some((highest, committed_hash)) = highest_committed_conflict {
+                    self.highest_qc = Some(committed);
+                    warn!(
+                        height,
+                        view = next_view,
+                        highest_height = highest.height,
+                        highest_view = highest.view,
+                        highest_hash = %highest.subject_block_hash,
+                        committed_hash = %committed_hash,
+                        "realigning conflicting highest QC at committed edge before NEW_VIEW vote"
+                    );
+                }
+                if let Some((locked, committed_hash)) = locked_committed_conflict {
+                    self.locked_qc = Some(committed);
+                    warn!(
+                        height,
+                        view = next_view,
+                        locked_height = locked.height,
+                        locked_view = locked.view,
+                        locked_hash = %locked.subject_block_hash,
+                        committed_hash = %committed_hash,
+                        "realigning conflicting locked QC at committed edge before NEW_VIEW vote"
+                    );
+                }
+            }
+        }
         if let Some(mut highest_qc) = self.highest_qc.or(committed_qc) {
             let valid_phase = matches!(
                 highest_qc.phase,
@@ -18895,35 +25940,8 @@ fn next_missing_qc_timeout_streak(
         .map_or(0, |last| last.streak.saturating_add(1))
 }
 
-fn missing_qc_timeout_hysteresis_remaining(
-    mode: ConsensusMode,
-    timeout: Duration,
-    previous: Option<CachedSlotTimeoutTrigger>,
-    height: u64,
-    view: u64,
-    now: Instant,
-) -> Option<Duration> {
-    if !matches!(mode, ConsensusMode::Npos) || timeout == Duration::ZERO {
-        return None;
-    }
-    let last = previous?;
-    if last.height != height || view <= last.view {
-        return None;
-    }
-    let streak = next_missing_qc_timeout_streak(previous, height, view)
-        .max(1)
-        .min(3);
-    let hysteresis = saturating_mul_duration(timeout, u32::from(streak) + 1);
-    let elapsed = now.saturating_duration_since(last.at);
-    (elapsed < hysteresis).then(|| hysteresis.saturating_sub(elapsed))
-}
-
 fn forced_proposal_attempt_allowed(attempts: u32, max_attempts_per_view: u32) -> bool {
     max_attempts_per_view != 0 && attempts < max_attempts_per_view
-}
-
-fn no_roster_refresh_retry_allowed(attempts: u32, retry_cap_per_view: u32) -> bool {
-    retry_cap_per_view != 0 && attempts < retry_cap_per_view
 }
 
 fn should_defer_missing_qc_rotation(
@@ -19072,13 +26090,14 @@ pub(super) fn commit_quorum_timeout_from_durations(
         return block_time.max(Duration::from_millis(1));
     }
 
-    // DA runs need additional slack for payload dissemination; non-DA keeps a floor
-    // to avoid overly aggressive view-change churn on small pipelines.
+    // DA runs need additional slack for payload dissemination. For non-DA we follow
+    // effective block/commit timing directly; fixed 2s floors cap throughput in
+    // fast local/soak pipelines and mask real pacing behavior.
     let base = if da_enabled {
-        let commit_window = saturating_mul_duration(commit_time, 4);
+        let commit_window = saturating_mul_duration(commit_time, 3);
         block_time.saturating_add(commit_window)
     } else {
-        block_time.max(commit_time).max(Duration::from_secs(2))
+        block_time.max(commit_time)
     };
     let base = if da_enabled {
         saturating_mul_duration(base, da_quorum_timeout_multiplier.max(1))
@@ -19705,11 +26724,13 @@ impl ProposalDeferWarningThrottle {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Default)]
 struct MissingQcWarningThrottle {
     entries: BTreeMap<(u64, u64), (Instant, u64)>,
 }
 
+#[cfg(test)]
 impl MissingQcWarningThrottle {
     fn allow(&mut self, height: u64, view: u64, now: Instant, cooldown: Duration) -> Option<u64> {
         let key = (height, view);
@@ -20136,7 +27157,7 @@ mod missing_qc_warning_throttle_tests {
 mod proposal_liveness_state_machine_tests {
     use super::{
         ProposalLivenessSlot, ProposalLivenessState, forced_proposal_attempt_allowed,
-        no_roster_refresh_retry_allowed, should_defer_missing_qc_rotation,
+        should_defer_missing_qc_rotation, step_proposal_liveness_state,
     };
     use std::time::{Duration, Instant};
 
@@ -20174,9 +27195,21 @@ mod proposal_liveness_state_machine_tests {
     }
 
     #[test]
-    fn no_roster_refresh_retry_happens_once_before_fail_closed() {
-        assert!(no_roster_refresh_retry_allowed(0, 1));
-        assert!(!no_roster_refresh_retry_allowed(1, 1));
+    fn proposal_liveness_recovery_state_does_not_downgrade_to_awaiting() {
+        assert_eq!(
+            step_proposal_liveness_state(
+                ProposalLivenessState::RecoveryAcquireDependencies,
+                ProposalLivenessState::AwaitingProposalAfterMissingQc,
+            ),
+            ProposalLivenessState::RecoveryAcquireDependencies
+        );
+        assert_eq!(
+            step_proposal_liveness_state(
+                ProposalLivenessState::RecoveryAcquireDependencies,
+                ProposalLivenessState::Normal,
+            ),
+            ProposalLivenessState::Normal
+        );
     }
 }
 
@@ -20341,7 +27374,7 @@ fn distinct_epochs_for_block_votes(
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum PipelinePhase {
+pub(super) enum ConsensusTimingPhase {
     Propose,
     #[allow(dead_code)]
     CollectDa,
@@ -20350,7 +27383,10 @@ pub(super) enum PipelinePhase {
     Commit,
 }
 
-impl PipelinePhase {
+/// Backward-compatible alias while call sites migrate from protocol-centric naming.
+pub(super) type PipelinePhase = ConsensusTimingPhase;
+
+impl ConsensusTimingPhase {
     #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
     #[allow(dead_code)]
     fn telemetry_label(self) -> &'static str {

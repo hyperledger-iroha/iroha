@@ -7,6 +7,7 @@ use norito::codec::{Decode, Encode};
 
 use super::{SignedBlock, header::BlockHeader};
 use crate::{
+    consensus::PreviousRosterEvidence,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -22,7 +23,7 @@ use crate::{
 #[model]
 mod model {
     use super::*;
-    use crate::da::commitment::DaCommitmentBundle;
+    use crate::{consensus::PreviousRosterEvidence, da::commitment::DaCommitmentBundle};
 
     /// Core contents of a block.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema, Decode)]
@@ -48,6 +49,10 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub da_pin_intents: Option<DaPinIntentBundle>,
+        /// Optional previous-height roster evidence embedded in this block.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub previous_roster_evidence: Option<PreviousRosterEvidence>,
     }
 
     /// Secondary block state resulting from execution.
@@ -168,6 +173,19 @@ impl SignedBlock {
         self.payload.header.set_da_pin_intents_hash(hash);
     }
 
+    /// Optional previous-height roster evidence embedded in this block.
+    #[inline]
+    pub fn previous_roster_evidence(&self) -> Option<&PreviousRosterEvidence> {
+        self.payload.previous_roster_evidence.as_ref()
+    }
+
+    /// Set or clear previous-height roster evidence and update the header hash accordingly.
+    pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
+        let hash = evidence.as_ref().map(HashOf::new);
+        self.payload.previous_roster_evidence = evidence;
+        self.payload.header.set_prev_roster_evidence_hash(hash);
+    }
+
     /// Check whether the block has entrypoints or deterministic artifacts.
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -195,6 +213,9 @@ impl SignedBlock {
             .as_ref()
             .is_some_and(|bundle| !bundle.is_empty())
         {
+            return false;
+        }
+        if self.payload.previous_roster_evidence.is_some() {
             return false;
         }
         true

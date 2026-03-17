@@ -1458,13 +1458,11 @@ impl Actor {
                 #[cfg(feature = "telemetry")]
                 let block_sync_start = Instant::now();
                 let sync_block: SignedBlock = committed_block.as_ref().clone();
-                let mut sync_update = block_sync_update_with_roster(
+                let mut sync_update = block_sync_update_with_certified_roster(
                     &sync_block,
                     &self.state,
                     &self.kura,
                     self.config.consensus_mode,
-                    self.common_config.trusted_peers.value(),
-                    self.common_config.peer.id(),
                     &self.roster_validation_cache,
                 );
                 let expected_epoch = self.epoch_for_height(pending_height);
@@ -1485,9 +1483,12 @@ impl Actor {
                 if self.prepare_block_sync_update_for_broadcast(&mut sync_update, consensus_mode) {
                     self.broadcast_block_sync_update(sync_update, &world_peers);
                 } else {
-                    self.broadcast_block_created_for_block_sync(
-                        super::message::BlockCreated::from(&sync_block),
-                        &world_peers,
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        targets = world_peers.len(),
+                        "skipping committed block payload fallback because a verifiable block sync update is unavailable"
                     );
                 }
                 #[cfg(feature = "telemetry")]
@@ -1896,11 +1897,6 @@ impl Actor {
                 super::quorum_reschedule_backoff_from_timeout(quorum_timeout),
                 Instant::now(),
             );
-            self.trigger_view_change_with_cause(
-                pending_height,
-                pending_view,
-                view_change_cause_for_quorum(vote_count, false),
-            );
         }
         if committed {
             if !self.should_retain_rbc_sessions_after_commit(block_hash, pending_height) {
@@ -2198,7 +2194,7 @@ impl Actor {
             "finalizing pending block with commit topology"
         );
         if commit_topology.is_empty() {
-            let _ = self.handle_empty_commit_topology_recovery(
+            let _ = self.handle_roster_unavailable_recovery(
                 pending_height,
                 pending_view,
                 Some(block_hash),
@@ -2656,11 +2652,20 @@ impl Actor {
             let commit_topology =
                 self.roster_for_vote_with_mode(hash, pending_height, pending_view, consensus_mode);
             if commit_topology.is_empty() {
+                let _ = self.handle_roster_unavailable_recovery(
+                    pending_height,
+                    pending_view,
+                    Some(hash),
+                    self.queue.queued_len(),
+                    now,
+                    ProposalDeferWarningKind::EmptyCommitTopologyFinalize,
+                    "commit_pipeline_empty_commit_topology",
+                );
                 warn!(
                     height = pending_height,
                     view = pending_view,
                     block = %hash,
-                    "skipping pending block: empty commit roster"
+                    "deferring pending block: empty commit roster"
                 );
                 continue;
             }
@@ -2845,6 +2850,19 @@ impl Actor {
                 Some(pending) => pending,
                 None => continue,
             };
+            let has_commit_qc = pending.commit_qc_seen
+                || self.pending_block_has_qc(hash, pending_height, pending_view);
+            if !has_commit_qc && !self.slot_has_proposal_evidence(pending_height, pending_view) {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %hash,
+                    validation_status = ?pending.validation_status,
+                    "deferring commit pipeline: proposal not observed for pending block"
+                );
+                self.pending.pending_blocks.insert(hash, pending);
+                continue;
+            }
             if !pending.commit_qc_seen {
                 if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
                     matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
@@ -3274,44 +3292,14 @@ impl Actor {
                     "sending block sync update to commit topology after emitting local precommit vote"
                 );
             } else {
-                match self.decide_no_roster_fallback_or_fail_closed(
-                    vote.height,
-                    vote.view,
-                    vote.block_hash,
-                    ViewChangeCause::MissingPayload,
-                    "local_precommit_no_roster",
-                ) {
-                    super::NoRosterFallbackDecision::AllowFallback => {
-                        self.broadcast_block_created_for_block_sync(
-                            super::message::BlockCreated::from(&pending.block),
-                            &topology_peers,
-                        );
-                        iroha_logger::info!(
-                            height = vote.height,
-                            view = vote.view,
-                            block = %vote.block_hash,
-                            signer = vote.signer,
-                            targets = topology_peers.len(),
-                            "sending BlockCreated payload to commit topology (no verifiable roster snapshot)"
-                        );
-                    }
-                    super::NoRosterFallbackDecision::BootstrapPending => {
-                        iroha_logger::debug!(
-                            height = vote.height,
-                            view = vote.view,
-                            block = %vote.block_hash,
-                            "deferring BlockCreated fallback broadcast while no-roster bootstrap is pending"
-                        );
-                    }
-                    super::NoRosterFallbackDecision::FailClosed => {
-                        iroha_logger::warn!(
-                            height = vote.height,
-                            view = vote.view,
-                            block = %vote.block_hash,
-                            "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
-                        );
-                    }
-                }
+                iroha_logger::debug!(
+                    height = vote.height,
+                    view = vote.view,
+                    block = %vote.block_hash,
+                    signer = vote.signer,
+                    targets = topology_peers.len(),
+                    "skipping BlockCreated payload fallback after local precommit vote because roster proof is unavailable"
+                );
             }
         } else {
             iroha_logger::trace!(
@@ -3396,6 +3384,35 @@ impl Actor {
         added
     }
 
+    fn vote_recorded_or_queued_for_validation(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> bool {
+        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        if self
+            .vote_log
+            .get(&key)
+            .is_some_and(|existing| existing.block_hash == vote.block_hash)
+        {
+            return true;
+        }
+        let verify_key = super::VoteVerifyKey::from_vote(vote);
+        self.subsystems
+            .vote_verify
+            .pending_validation
+            .contains_key(&verify_key)
+            || self
+                .subsystems
+                .vote_verify
+                .pending
+                .contains_key(&verify_key)
+            || self
+                .subsystems
+                .vote_verify
+                .inflight
+                .contains_key(&verify_key)
+    }
+
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_precommit_vote(
@@ -3410,6 +3427,15 @@ impl Actor {
         pending_roots: Option<(Hash, Hash)>,
     ) -> bool {
         if self.is_observer() {
+            return false;
+        }
+        if self.round_liveness_isolated() {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                "skipping precommit vote while round liveness catch-up isolation is active"
+            );
             return false;
         }
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
@@ -3465,26 +3491,12 @@ impl Actor {
             );
             return false;
         }
-        let local_peer = self.common_config.peer.id();
-        let conflicting_vote = self.vote_log.values().find(|vote| {
-            if vote.phase != crate::sumeragi::consensus::Phase::Commit {
-                return false;
-            }
-            if vote.height != height || vote.epoch != epoch || vote.block_hash == block_hash {
-                return false;
-            }
-            if vote.view < view {
-                return false;
-            }
-            let signature_topology =
-                topology_for_view(topology, vote.height, vote.view, mode_tag, prf_seed);
-            let Ok(vote_idx) = usize::try_from(vote.signer) else {
-                return false;
-            };
-            signature_topology
-                .as_ref()
-                .get(vote_idx)
-                .is_some_and(|peer| peer == local_peer)
+        let conflicting_vote = self.vote_log.get(&sent_key).filter(|vote| {
+            vote.phase == crate::sumeragi::consensus::Phase::Commit
+                && vote.height == height
+                && vote.view == view
+                && vote.epoch == epoch
+                && vote.block_hash != block_hash
         });
         if let Some(conflict) = conflicting_vote {
             warn!(
@@ -3564,6 +3576,17 @@ impl Actor {
             return false;
         };
         self.handle_vote(vote.clone());
+        if !self.vote_recorded_or_queued_for_validation(&vote) {
+            warn!(
+                height,
+                view,
+                epoch,
+                block = ?block_hash,
+                signer = local_idx,
+                "skipping precommit broadcast: local vote rejected before recording"
+            );
+            return false;
+        }
 
         let vote_msg = Arc::new(BlockMessage::QcVote(vote));
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
@@ -3667,6 +3690,16 @@ impl Actor {
         if self.is_observer() {
             return false;
         }
+        if self.round_liveness_isolated() {
+            debug!(
+                height,
+                view,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                "skipping NEW_VIEW vote while round liveness catch-up isolation is active"
+            );
+            return false;
+        }
         let epoch = self.epoch_for_height(height);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
@@ -3753,6 +3786,18 @@ impl Actor {
             return false;
         };
         self.handle_vote(vote.clone());
+        if !self.vote_recorded_or_queued_for_validation(&vote) {
+            warn!(
+                height,
+                view,
+                epoch,
+                signer = local_idx,
+                highest_height = highest_qc.height,
+                highest_view = highest_qc.view,
+                "skipping NEW_VIEW broadcast: local vote rejected before recording"
+            );
+            return false;
+        }
 
         let vote_msg = Arc::new(BlockMessage::QcVote(vote));
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
@@ -4704,13 +4749,11 @@ impl Actor {
             .and_then(|height| self.kura.get_block(height));
         if let Some(block) = block_from_kura {
             let block_height = block.header().height().get();
-            let mut update = block_sync_update_with_roster(
+            let mut update = block_sync_update_with_certified_roster(
                 block.as_ref(),
                 self.state.as_ref(),
                 self.kura.as_ref(),
                 self.config.consensus_mode,
-                self.common_config.trusted_peers.value(),
-                self.common_config.peer.id(),
                 &self.roster_validation_cache,
             );
             let expected_epoch = qc.epoch;
@@ -5201,66 +5244,13 @@ impl Actor {
             .retain(|(_, hash, _, _, _), _| *hash != block_hash);
         self.quarantined_block_sync_qcs
             .retain(|(_, hash, _, _, _), _| *hash != block_hash);
-        let payload_keys: Vec<_> = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .payload_rebroadcast_last_sent
-            .keys()
-            .filter(|(hash, _, _)| *hash == block_hash)
-            .copied()
+        let orphan_keys: Vec<_> = self
+            .collect_rbc_keys_for_block(block_hash)
+            .into_iter()
             .collect();
-        for key in payload_keys {
-            self.subsystems
-                .da_rbc
-                .rbc
-                .payload_rebroadcast_last_sent
-                .remove(&key);
+        for key in orphan_keys {
+            self.purge_rbc_state(key, key.0, key.1, key.2);
         }
-        let ready_keys: Vec<_> = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .ready_rebroadcast_last_sent
-            .keys()
-            .filter(|(hash, _, _)| *hash == block_hash)
-            .copied()
-            .collect();
-        for key in ready_keys {
-            self.subsystems
-                .da_rbc
-                .rbc
-                .ready_rebroadcast_last_sent
-                .remove(&key);
-        }
-        let deferral_keys: Vec<_> = self
-            .subsystems
-            .da_rbc
-            .rbc
-            .deliver_deferral
-            .keys()
-            .filter(|(hash, _, _)| *hash == block_hash)
-            .copied()
-            .collect();
-        for key in deferral_keys {
-            self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
-            self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
-        }
-        self.subsystems
-            .da_rbc
-            .rbc
-            .persisted_full_sessions
-            .retain(|(hash, _, _)| *hash != block_hash);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .persist_inflight
-            .retain(|(hash, _, _)| *hash != block_hash);
-        self.subsystems
-            .da_rbc
-            .rbc
-            .seed_inflight
-            .retain(|(hash, _, _), _| *hash != block_hash);
 
         let telemetry_ref = self.telemetry_handle();
         if !lane_totals.is_empty() || !dataspace_totals.is_empty() {
@@ -5446,11 +5436,29 @@ impl Actor {
             .forced_view_after_timeout
             .filter(|(forced_height, _)| *forced_height > height);
         let now = Instant::now();
+        self.prune_lock_rejected_block_sinks(now);
         self.prune_stale_missing_requests_for_committed_height(height, now);
         self.clear_missing_block_recovery_for_height(height, now);
         self.clear_sidecar_mismatch_for_height(height);
         self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
+        if let Some(baseline_roster) = self.recovery_pending_baseline_restore.remove(&height) {
+            if let Err(err) = self.install_elected_roster(&baseline_roster) {
+                warn!(
+                    ?err,
+                    height,
+                    roster_len = baseline_roster.len(),
+                    "failed to restore baseline roster after temporary recovery shrink"
+                );
+            } else {
+                let _ = self.refresh_commit_topology_state(&baseline_roster);
+                info!(
+                    height,
+                    roster_len = baseline_roster.len(),
+                    "restored baseline roster after temporary recovery shrink"
+                );
+            }
+        }
         let commit_topology = self.effective_commit_topology();
         match self.refresh_commit_topology_state(&commit_topology) {
             CommitTopologyChange::None => {}
@@ -5910,6 +5918,7 @@ impl Actor {
         self.vote_validation_cache.clear();
         self.deferred_votes.clear();
         self.consensus_recovery.clear();
+        self.recovery_pending_baseline_restore.clear();
         self.deferred_qcs.clear();
         self.deferred_qc_roster_state.clear();
         self.deferred_missing_payload_qcs.clear();
@@ -5917,6 +5926,7 @@ impl Actor {
         self.vote_roster_cache.clear();
         self.qc_cache.clear();
         self.qc_signer_tally.clear();
+        self.lock_rejected_block_sinks.clear();
         self.block_signer_cache.clear();
         self.voting_block = None;
         if !preserve_proposals_seen {
@@ -5954,6 +5964,7 @@ impl Actor {
         self.block_sync_fetch_log.clear();
         self.block_sync_warning_log.clear();
         self.qc_insufficient_warning_log.clear();
+        self.round_recovery_bundle_window_gates.clear();
         let now = Instant::now();
         self.tick_lag_last_progress_at = now;
         self.tick_lag_last_progress_height = self.state.committed_height();
@@ -7014,6 +7025,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms: 0,
             view_change_index: view,
             confidential_features: None,
