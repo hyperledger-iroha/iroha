@@ -1159,6 +1159,30 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        self.handle_block_created_with_preserve_policy(msg, sender, true)
+    }
+
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+    pub(super) fn handle_block_created_from_block_sync(
+        &mut self,
+        msg: super::message::BlockCreated,
+        sender: Option<PeerId>,
+        allow_frontier_owner_preserve_on_payload_mismatch: bool,
+    ) -> Result<()> {
+        self.handle_block_created_with_preserve_policy(
+            msg,
+            sender,
+            allow_frontier_owner_preserve_on_payload_mismatch,
+        )
+    }
+
+    #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+    fn handle_block_created_with_preserve_policy(
+        &mut self,
+        msg: super::message::BlockCreated,
+        sender: Option<PeerId>,
+        allow_frontier_owner_preserve_on_payload_mismatch: bool,
+    ) -> Result<()> {
         if crate::sumeragi::status::local_peer_removed() {
             debug!(
                 ?sender,
@@ -2339,13 +2363,9 @@ impl Actor {
             .or(cached_proposal_mismatch)
             .map(|mismatch| mismatch.reason())
         {
-            let preserve_frontier_owner = self
-                .preserve_contiguous_frontier_owner_on_payload_mismatch(
-                    height,
-                    view,
-                    Instant::now(),
-                );
-            self.invalidate_proposal(block_hash, height, view, reason)?;
+            let preserve_frontier_owner = allow_frontier_owner_preserve_on_payload_mismatch
+                && self.preserve_contiguous_frontier_owner_on_payload_mismatch(height, view);
+            self.invalidate_proposal(block_hash, height, view, reason, preserve_frontier_owner)?;
             if preserve_frontier_owner {
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::BlockCreated,
@@ -2757,6 +2777,8 @@ impl Actor {
                     format!(
                         "payload hash mismatch: expected {expected_hash:?}, observed {payload_hash:?}",
                     ),
+                    allow_frontier_owner_preserve_on_payload_mismatch
+                        && self.preserve_contiguous_frontier_owner_on_payload_mismatch(height, view),
                 )?;
                 self.clear_payload_mismatch_state(session_key, block_hash, height, view);
                 self.finalize_collector_plan(false);
@@ -2864,10 +2886,9 @@ impl Actor {
         height: u64,
         view: u64,
         reason: String,
+        preserve_frontier_owner: bool,
     ) -> Result<()> {
         let now = Instant::now();
-        let preserve_frontier_owner =
-            self.preserve_contiguous_frontier_owner_on_payload_mismatch(height, view, now);
         let proposal_opt = if preserve_frontier_owner {
             self.subsystems
                 .propose
@@ -2931,13 +2952,13 @@ impl Actor {
         &self,
         height: u64,
         view: u64,
-        now: Instant,
     ) -> bool {
         let committed_height = self.committed_height_snapshot();
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         height == committed_height.saturating_add(1)
-            && (self.pending.pending_blocks.values().any(|pending| {
+            && self.pending.pending_blocks.values().any(|pending| {
+                let block_hash = pending.block.hash();
                 !pending.aborted
                     && pending.height == height
                     && pending.view == view
@@ -2947,7 +2968,8 @@ impl Actor {
                         tip_height,
                         tip_hash,
                     )
-            }) || self.frontier_vote_backed_recovery_active(height, now))
+                    && self.pending_block_has_consensus_evidence(block_hash, pending)
+            })
     }
 
     pub(super) fn clear_payload_mismatch_state(

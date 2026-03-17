@@ -2,6 +2,92 @@
 
 Last updated: 2026-03-17
 
+Latest sync (2026-03-17 late contiguous-frontier sparse recovery):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+`crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` now preserve
+same-height contiguous-frontier recovery ownership while missing-block
+dependency progress and inbound recovery backlog are still active, and they now
+narrowly accept explicit contiguous-frontier sparse `BlockSyncUpdate` recovery
+traffic when the update is requested, at `committed_height + 1`, and carries at
+least one validated block signature. Repeated same-height quorum-timeout
+handoffs now preserve the existing frontier owner state instead of reseeding
+cleanup/rotation timers. Updated regressions cover zero-vote drop suppression,
+same-height owner preservation, cleanup/rotate suppression under active
+dependency backlog, and the sparse recovery intake matrix
+(explicit-request accept; unsolicited, far-ahead, and unsigned reject).
+
+The permanent late-frontier stall moved off the critical path in the warmed
+120-block healthy NPoS probe:
+- rebuilt `iroha3d` reached `122 / 122` against `target_blocks=120`,
+- peer logs showed `dropping block sync update missing commit-role quorum`:
+  `0` occurrences for this run,
+- the previous repeated same-height sparse-recovery drop loop did not recur.
+
+Open work remains throughput and residual late commit-quorum churn, not sparse
+recovery ownership:
+- the same warmed run still averaged about `1.75s/block`, above the `1s/block`
+  target,
+- preserved peer logs still showed
+  `commit quorum missing past timeout; rescheduling block for reassembly`
+  `8` times across the run.
+
+Latest sync (2026-03-17 near-quorum hintless block-sync resend):
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now allows a
+contiguous-frontier near-quorum quorum-timeout resend to emit a
+frame-cap-trimmed hintless `BlockSyncUpdate` when certified roster proof is not
+available, instead of no-op skipping payload resend. This remains on the
+`BlockSyncUpdate` path (no `BlockCreated` fallback re-entry from this
+reschedule branch). Updated
+`quorum_reschedule_near_quorum_rebroadcasts_votes_without_payload_rebroadcast`
+to assert near-quorum block-sync emission, and revalidated with
+`quorum_reschedule_near_quorum_rebroadcasts_block_sync_without_new_commit_evidence`.
+
+Runtime signal improved but is still below acceptance:
+- pre-cut keep-dirs baseline (`.../irohad_test_network_yMBnIh`): `62 / 68`,
+- stale-binary check on this source tree (`.../irohad_test_network_Fy0Iwd`):
+  `67 / 71`,
+- rebuilt-binary check (`.../irohad_test_network_a2kifr`): `68 / 71`.
+  The rebuilt probe window (`137.48s`) corresponds to about `2.02s/block`
+  (quorum-min) / `1.94s/block` (strict-min), so this cut is still above the
+  `1s/block` target.
+
+Peer-log churn moved in the right direction (`yMBnIh -> a2kifr`):
+`commit quorum missing ...` `17 -> 7`, `roster proof unavailable ...` `9 -> 0`,
+and near-quorum `rebroadcasted_block_sync=true` now appears (`3` events). Open
+work is still late low-70s same-height convergence (`height=72` in the rebuilt
+run), so the next cut should target zero-vote late-frontier reassembly
+ownership/progress rather than roster-proof suppression.
+
+Latest sync (2026-03-17 payload-mismatch owner-preserve guard):
+`crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` now preserves
+contiguous-frontier payload-mismatch ownership only when an active pending owner
+exists for the same `height/view` and tip lineage; it no longer preserves based
+solely on vote-backed frontier recovery state. Added regression
+`block_created_payload_mismatch_does_not_preserve_owner_without_active_pending_block`
+in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, while preserving the
+existing active-owner invariant
+(`block_created_payload_mismatch_preserves_active_frontier_owner` remains green).
+Targeted validation passed
+(`block_created_accepts_payload_after_proposal_mismatch`,
+`block_created_payload_mismatch_does_not_preserve_owner_without_active_pending_block`,
+`block_created_payload_mismatch_preserves_active_frontier_owner`,
+`contiguous_frontier_missing_payload_dwell_*`).
+
+Runtime signal moved in the expected direction:
+- diagnostic keep-dirs baseline
+  (`/tmp/izanami_npos_healthy_probe_keepdirs_20260317T041709.log`,
+  `/tmp/iroha-test-network-debug/irohad_test_network_FgGlzN`) stalled at
+  `27/27` with repeated `height=28` proposal-mismatch + dropped block-sync
+  updates on one lagging peer,
+- post-cut probe
+  (`/tmp/izanami_npos_healthy_probe_post_payload_mismatch_guard_20260317T042521.log`)
+  reached `51/51` before timeout.
+
+Open work remains late, global commit-quorum convergence (all peers stalled at
+the same frontier under load), not early single-peer preserved-mismatch
+deadlock.
+
 Latest sync (2026-03-17 zero-vote active-owner no-op drop suppression):
 `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now suppresses
 contiguous-frontier zero-vote quorum-timeout drop/requeue when the existing

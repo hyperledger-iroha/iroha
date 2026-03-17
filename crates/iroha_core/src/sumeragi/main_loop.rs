@@ -3143,19 +3143,28 @@ fn plan_missing_block_fetch_with_mode(
 
 #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 fn block_sync_quorum_available(
-    _block_signers: usize,
+    block_signers: usize,
     _commit_quorum: usize,
     signature_quorum_met: bool,
     qc_evidence_present: bool,
     commit_cert_present: bool,
     checkpoint_present: bool,
-    _missing_block_requested: bool,
-    _block_height: u64,
-    _local_height: u64,
+    missing_block_requested: bool,
+    block_height: u64,
+    local_height: u64,
 ) -> bool {
-    // Missing-block requests must not bypass quorum checks. Apply block-sync payloads only when
-    // commit evidence or signature quorum is available.
-    commit_cert_present || qc_evidence_present || signature_quorum_met || checkpoint_present
+    // Sparse block-sync payloads are only accepted without commit-role quorum when the node has an
+    // explicit contiguous-frontier missing-block request for this height and the payload still
+    // carries at least one validated block signature. Finalization still requires the usual
+    // downstream QC / vote thresholds.
+    let explicit_frontier_sparse_recovery = missing_block_requested
+        && block_height == local_height.saturating_add(1)
+        && block_signers > 0;
+    commit_cert_present
+        || qc_evidence_present
+        || signature_quorum_met
+        || checkpoint_present
+        || explicit_frontier_sparse_recovery
 }
 
 fn block_sync_commit_cert_present(
@@ -4795,6 +4804,11 @@ impl Actor {
         })
     }
 
+    fn frontier_recovery_exists_at_height(&self, frontier_height: u64) -> bool {
+        self.frontier_recovery
+            .is_some_and(|state| state.frontier_height == frontier_height)
+    }
+
     fn frontier_recovery_owned_by_quorum_timeout(&self, frontier_height: u64) -> bool {
         self.frontier_non_missing_qc_recovery_cause(frontier_height) == Some("quorum_timeout")
     }
@@ -4813,6 +4827,45 @@ impl Actor {
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
         now.saturating_duration_since(last_action_at) < window
+    }
+
+    fn frontier_recovery_inbound_backlog_active(
+        &self,
+        frontier_height: u64,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        queue_depths.block_payload_rx > 0
+            || queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_rx > 0
+            || self.has_residual_round_backlog_for_height(frontier_height)
+    }
+
+    fn frontier_recovery_same_height_dependency_backlog_active(
+        &self,
+        frontier_height: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        let Some(state) = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == frontier_height)
+        else {
+            return false;
+        };
+        let dependency_progress_at = match (
+            state.last_dependency_progress_at,
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height),
+        ) {
+            (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+            (Some(value), None) | (None, Some(value)) => Some(value),
+            (None, None) => None,
+        };
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        dependency_progress_at
+            .is_some_and(|progress| now.saturating_duration_since(progress) < window)
+            && self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths)
     }
 
     fn frontier_dependency_recovery_cause(
@@ -4882,11 +4935,9 @@ impl Actor {
         frontier_height: u64,
         view: u64,
         now: Instant,
-    ) {
-        if self.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == frontier_height && state.last_cause != "missing_qc"
-        }) {
-            return;
+    ) -> bool {
+        if self.frontier_recovery_exists_at_height(frontier_height) {
+            return false;
         }
 
         let window = self.frontier_recovery_window();
@@ -4894,32 +4945,20 @@ impl Actor {
         let started_at = now.checked_sub(elapsed).unwrap_or(now);
         let dependency_progress_at =
             self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
-        let mut state = self
-            .frontier_recovery
-            .filter(|state| state.frontier_height == frontier_height)
-            .unwrap_or(FrontierRecoveryState {
-                frontier_height,
-                phase: FrontierRecoveryPhase::CatchUp,
-                entered_at: started_at,
-                last_progress_at: started_at,
-                last_dependency_progress_at: dependency_progress_at,
-                last_action_at: None,
-                no_progress_windows: 2,
-                cleanup_done: false,
-                last_view: view,
-                last_rotation_view: None,
-                last_cause: "quorum_timeout",
-            });
-        state.phase = FrontierRecoveryPhase::CatchUp;
-        state.entered_at = started_at;
-        state.last_progress_at = started_at;
-        state.last_dependency_progress_at = dependency_progress_at;
-        state.last_action_at = None;
-        state.no_progress_windows = state.no_progress_windows.max(2);
-        state.cleanup_done = false;
-        state.last_view = view.max(state.last_view);
-        state.last_cause = "quorum_timeout";
-        self.frontier_recovery = Some(state);
+        self.frontier_recovery = Some(FrontierRecoveryState {
+            frontier_height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: started_at,
+            last_progress_at: started_at,
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: None,
+            no_progress_windows: 2,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: "quorum_timeout",
+        });
+        true
     }
 
     fn blocking_pending_blocks_len(&self) -> usize {
@@ -23787,24 +23826,25 @@ impl Actor {
             return FrontierRecoveryAdvance::None;
         }
 
-        let mut state = self
+        let existing_state = self
             .frontier_recovery
-            .filter(|state| state.frontier_height == frontier_height)
-            .unwrap_or(FrontierRecoveryState {
-                frontier_height,
-                phase: FrontierRecoveryPhase::CatchUp,
-                entered_at: now,
-                last_progress_at: dependency_progress_at.unwrap_or(now),
-                last_dependency_progress_at: dependency_progress_at,
-                last_action_at: None,
-                no_progress_windows: 0,
-                cleanup_done: false,
-                last_view: view,
-                last_rotation_view: None,
-                last_cause: reason,
-            });
+            .filter(|state| state.frontier_height == frontier_height);
+        let mut state = existing_state.unwrap_or(FrontierRecoveryState {
+            frontier_height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: now,
+            last_progress_at: dependency_progress_at.unwrap_or(now),
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: None,
+            no_progress_windows: 0,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: reason,
+        });
         state.last_view = view.max(state.last_view);
-        if !(reason == "missing_qc" && state.last_cause != "missing_qc") {
+        if existing_state.is_none() && !(reason == "missing_qc" && state.last_cause != "missing_qc")
+        {
             state.last_cause = reason;
         }
         state.last_dependency_progress_at =
@@ -23822,6 +23862,17 @@ impl Actor {
         super::status::observe_blocksync_range_pull_expiry_streak(state.no_progress_windows);
 
         if state.no_progress_windows == 0 {
+            self.frontier_recovery = Some(state);
+            return FrontierRecoveryAdvance::None;
+        }
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        if self.frontier_recovery_same_height_dependency_backlog_active(
+            frontier_height,
+            now,
+            queue_depths,
+        ) && (state.no_progress_windows >= 2
+            || matches!(state.phase, FrontierRecoveryPhase::RotateArmed))
+        {
             self.frontier_recovery = Some(state);
             return FrontierRecoveryAdvance::None;
         }
