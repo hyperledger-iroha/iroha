@@ -16953,19 +16953,14 @@ pub mod isi {
             }
         }
 
-        impl ValidSingularQuery for iroha_data_model::query::runtime::prelude::FindActiveAbiVersions {
-            #[metrics(+"find_active_abi_versions")]
+        impl ValidSingularQuery for iroha_data_model::query::runtime::prelude::FindAbiVersion {
+            #[metrics(+"find_abi_version")]
             fn execute(
                 &self,
                 state_ro: &impl StateReadOnly,
-            ) -> Result<iroha_data_model::query::runtime::ActiveAbiVersions, Error> {
-                let set = state_ro.world().active_abi_versions();
-                let mut v: Vec<u16> = set.into_iter().collect();
-                v.sort_unstable();
-                let default = *v.last().unwrap_or(&1);
-                Ok(iroha_data_model::query::runtime::ActiveAbiVersions {
-                    active_versions: v,
-                    default_compile_target: default,
+            ) -> Result<iroha_data_model::query::runtime::AbiVersion, Error> {
+                Ok(iroha_data_model::query::runtime::AbiVersion {
+                    abi_version: state_ro.world().abi_version(),
                 })
             }
         }

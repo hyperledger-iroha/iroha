@@ -3458,8 +3458,8 @@ fn runtime_paths() -> Map {
         "/v1/runtime/abi/active".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
-            "Fetch active ABI versions.",
-            "Return active ABI version list.",
+            "Fetch the active ABI version.",
+            "Return the fixed runtime ABI version.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),

@@ -21226,7 +21226,7 @@ mod query_endpoint_tests {
     async fn handle_queries_rejects_invalid_signature() {
         use iroha_crypto::KeyPair;
         use iroha_data_model::query::{
-            QueryRequest, prelude::SingularQueryBox, runtime::prelude::FindActiveAbiVersions,
+            QueryRequest, prelude::SingularQueryBox, runtime::prelude::FindAbiVersion,
         };
 
         let authority_key = KeyPair::random();
@@ -21239,10 +21239,8 @@ mod query_endpoint_tests {
             LiveQueryStore::start_test(),
         ));
 
-        let payload = QueryRequest::Singular(SingularQueryBox::FindActiveAbiVersions(
-            FindActiveAbiVersions,
-        ))
-        .with_authority(authority);
+        let payload = QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority);
         let signed = payload.sign(&signer_key);
 
         let err = handle_queries_with_opts(
@@ -28196,8 +28194,8 @@ mod cursor_mode_tests {
     ) -> iroha_data_model::query::SignedQuery {
         use iroha_data_model::query::QueryRequest;
         let req = QueryRequest::Singular(
-            iroha_data_model::query::prelude::SingularQueryBox::FindActiveAbiVersions(
-                iroha_data_model::query::runtime::prelude::FindActiveAbiVersions,
+            iroha_data_model::query::prelude::SingularQueryBox::FindAbiVersion(
+                iroha_data_model::query::runtime::prelude::FindAbiVersion,
             ),
         )
         .with_authority(authority.clone());

@@ -10,12 +10,12 @@ translator: manual
 
 <div dir="rtl">
 
-# בנייה של `SignedQuery` עבור ‎`FindActiveAbiVersions`
+# בנייה של `SignedQuery` עבור ‎`FindAbiVersion`
 
-הדוגמה הבאה מדגימה כיצד לבנות, לחתום ולקודד מסגרת Norito מסוג `SignedQuery` שמבצעת את השאילתה הסינגולרית `FindActiveAbiVersions`. ניתן לשלוח את הבייטים שנוצרו ב־`POST /query` או להזין אותם ל־CLI בעזרת `query stdin-raw`.
+הדוגמה הבאה מדגימה כיצד לבנות, לחתום ולקודד מסגרת Norito מסוג `SignedQuery` שמבצעת את השאילתה הסינגולרית `FindAbiVersion`. ניתן לשלוח את הבייטים שנוצרו ב־`POST /query` או להזין אותם ל־CLI בעזרת `query stdin-raw`.
 
 צעדים
-- בנו `SingularQueryBox::FindActiveAbiVersions`.
+- בנו `SingularQueryBox::FindAbiVersion`.
 - עטפו בתוך `QueryRequest::Singular` ולאחר מכן `QueryRequestWithAuthority { authority, request }`.
 - חתמו באמצעות `KeyPair` של בעל הסמכות כדי לקבל `SignedQuery`.
 - קודדו בעזרת `norito::codec::Encode::encode`.
@@ -28,8 +28,8 @@ use iroha_crypto::KeyPair;
 
 fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec<u8> {
     // 1) יצירת תיבת השאילתה הסינגולרית
-    let q = iroha_data_model::query::runtime::prelude::FindActiveAbiVersions;
-    let box_ = iroha_data_model::query::SingularQueryBox::FindActiveAbiVersions(q);
+    let q = iroha_data_model::query::runtime::prelude::FindAbiVersion;
+    let box_ = iroha_data_model::query::SingularQueryBox::FindAbiVersion(q);
 
     // 2) עטיפה כבקשת שאילתה והוספת זהות הסמכות
     let req = QueryRequest::Singular(box_);
@@ -48,13 +48,12 @@ fn build_signed_query_find_active_abi(authority: AccountId, kp: &KeyPair) -> Vec
 - CLI: המירו את הבייטים ל־base64 והזינו אל `iroha ledger query stdin-raw`.
 
 פלט
-- הצלחה מחזירה מהצומת תגובת Norito מסוג `QueryResponse::Singular(ActiveAbiVersions)`.
+- הצלחה מחזירה מהצומת תגובת Norito מסוג `QueryResponse::Singular(AbiVersion)`.
 - ה־CLI מציג JSON מנותח בעזרת מעטפות ה־Norito JSON.
 
 ```json
 {
-  "active_versions": [1],
-  "default_compile_target": 1
+  "abi_version": 1
 }
 ```
 

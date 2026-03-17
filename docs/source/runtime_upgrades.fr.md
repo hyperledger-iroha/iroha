@@ -49,8 +49,8 @@ Objets d etat (Modele de donnees)
   - `description: String` - description courte pour les operateurs.
   - `abi_version: u16` - version ABI cible a activer (doit etre 1 en premiere version).
   - `abi_hash: [u8; 32]` - hash ABI canonique pour la politique cible.
-  - `added_syscalls: Vec<u16>` - numeros de syscalls qui deviennent valides avec cette version.
-  - `added_pointer_types: Vec<u16>` - identifiants de types de pointeur ajoutes par la mise a jour.
+  - `added_syscalls: Vec<u16>` - liste delta reservee; doit rester vide dans la premiere version.
+  - `added_pointer_types: Vec<u16>` - liste delta reservee; doit rester vide dans la premiere version.
   - `start_height: u64` - premiere hauteur de bloc ou l activation est permise.
   - `end_height: u64` - borne superieure exclusive de la fenetre d activation.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` - digests SBOM pour les artefacts de mise a jour.
@@ -142,7 +142,7 @@ Deploiement operateur (sans downtime)
 
 Torii et CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implante)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (implante)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implante)
   - `GET /v1/runtime/upgrades` -> liste des records (implante).
   - `POST /v1/runtime/upgrades/propose` -> encapsule `ProposeRuntimeUpgrade` (retourne un squelette d instruction; implante).
@@ -158,7 +158,7 @@ Torii et CLI
 
 API de requete core
 - Requete Norito singuliere (signee):
-  - `FindActiveAbiVersions` renvoie une struct Norito `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` renvoie une struct Norito `{ abi_version: u16 }`.
   - Voir exemple: `docs/source/samples/find_active_abi_versions.md` (type/champs et exemple JSON).
 
 Notes d implementation (v1 seulement)
@@ -179,7 +179,7 @@ Notes d implementation (v1 seulement)
   - Emet `abi_version = 1` et insere le `abi_hash` canonique v1 dans les manifests `.to`.
 
 Telemetrie
-- Ajouter la gauge `runtime.active_abi_versions` et le counter `runtime.upgrade_events_total{kind}`.
+- Ajouter la gauge `runtime.abi_version` et le counter `runtime.upgrade_events_total{kind}`.
 
 Considerations de securite
 - Seul root/sudo peut proposer/activer/annuler; les manifests doivent etre correctement signes.

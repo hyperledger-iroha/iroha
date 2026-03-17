@@ -415,7 +415,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindContractManifestByCodeHash(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindActiveAbiVersions(q) => {
+            SingularQueryBox::FindAbiVersion(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindAssetById(q) => {

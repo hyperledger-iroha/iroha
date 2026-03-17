@@ -2,7 +2,7 @@
 //! See `docs/source/runtime_upgrades.md` for the canonical documentation.
 //!
 //! Types here are used by instructions (ISIs) and events to coordinate
-//! deterministic activation of ABI versions without downtime.
+//! deterministic activation of the fixed ABI v1 runtime without downtime.
 
 use std::{string::String, vec::Vec};
 
@@ -68,14 +68,14 @@ pub struct RuntimeUpgradeManifest {
     pub name: String,
     /// Short description.
     pub description: String,
-    /// ABI version to activate.
+    /// ABI version to activate. Must be `1` in the first release.
     pub abi_version: u16,
     /// ABI hash for the target version.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub abi_hash: [u8; 32],
-    /// New syscall numbers introduced in this version (additive only).
+    /// Reserved syscall delta list. Must remain empty in the first release.
     pub added_syscalls: Vec<u16>,
-    /// New pointer-type IDs (additive only).
+    /// Reserved pointer-type delta list. Must remain empty in the first release.
     pub added_pointer_types: Vec<u16>,
     /// Activation window start (inclusive).
     pub start_height: u64,
@@ -104,14 +104,14 @@ pub struct RuntimeUpgradeManifestSignaturePayload {
     pub name: String,
     /// Short description.
     pub description: String,
-    /// ABI version to activate.
+    /// ABI version to activate. Must be `1` in the first release.
     pub abi_version: u16,
     /// ABI hash for the target version.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub abi_hash: [u8; 32],
-    /// New syscall numbers introduced in this version (additive only).
+    /// Reserved syscall delta list. Must remain empty in the first release.
     pub added_syscalls: Vec<u16>,
-    /// New pointer-type IDs (additive only).
+    /// Reserved pointer-type delta list. Must remain empty in the first release.
     pub added_pointer_types: Vec<u16>,
     /// Activation window start (inclusive).
     pub start_height: u64,
@@ -278,10 +278,10 @@ pub fn render_runtime_upgrade_types_markdown_section() -> String {
     );
     out.push_str("  - `abi_hash: [u8; 32]` — canonical ABI hash for the target policy.\n");
     out.push_str(
-        "  - `added_syscalls: Vec<u16>` — syscall numbers that become valid with this version.\n",
+        "  - `added_syscalls: Vec<u16>` — reserved delta list; must be empty in the first release.\n",
     );
     out.push_str(
-        "  - `added_pointer_types: Vec<u16>` — pointer-type identifiers added by the upgrade.\n",
+        "  - `added_pointer_types: Vec<u16>` — reserved delta list; must be empty in the first release.\n",
     );
     out.push_str("  - `start_height: u64` — first block height where activation is permitted.\n");
     out.push_str("  - `end_height: u64` — exclusive upper bound on the activation window.\n");
@@ -401,8 +401,8 @@ mod tests {
             description: "Activate ABI v1".to_string(),
             abi_version: 1,
             abi_hash: [0x11; 32],
-            added_syscalls: vec![4001, 4002],
-            added_pointer_types: vec![0x0101, 0x0102],
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
             start_height: 1_000_000,
             end_height: 1_000_256,
             sbom_digests: Vec::new(),
@@ -442,8 +442,8 @@ mod tests {
             description: "Activate ABI v1".to_string(),
             abi_version: 1,
             abi_hash: [0x11; 32],
-            added_syscalls: vec![4001],
-            added_pointer_types: vec![0x0101],
+            added_syscalls: Vec::new(),
+            added_pointer_types: Vec::new(),
             start_height: 10,
             end_height: 20,
             sbom_digests: vec![RuntimeUpgradeSbomDigest {

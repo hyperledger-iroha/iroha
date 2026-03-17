@@ -8807,7 +8807,7 @@ impl Client {
     }
 
     /// GET `/v1/node/capabilities`
-    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
+    /// Returns `{ abi_version: 1, data_model_version: n, crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
@@ -8846,7 +8846,7 @@ impl Client {
     }
 
     /// GET `/v1/node/capabilities`
-    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
+    /// Returns `{ abi_version: 1, data_model_version: n, crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
@@ -8863,7 +8863,7 @@ impl Client {
     }
 
     /// GET `/v1/runtime/metrics`
-    /// Returns a JSON summary of runtime metrics (ABI count and upgrade events counters).
+    /// Returns a JSON summary of runtime metrics (ABI version and upgrade events counters).
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_metrics_json(&self) -> Result<norito::json::Value> {

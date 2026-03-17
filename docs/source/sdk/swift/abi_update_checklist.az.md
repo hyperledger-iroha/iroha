@@ -99,7 +99,7 @@ planned for v1). Examples:
 4. **Manifest builders.** Ensure any builders that embed ABI metadata (e.g.,
    transaction manifests, DA/Kotodama wrappers) set the correct `abiVersion`,
    `abiHash`, pointer type IDs, and policy flags pulled from Torii.
-5. **Docs.** Reference the new ABI version in developer docs if APIs change
+5. **Docs.** Keep developer docs pinned to ABI v1 if APIs change
    (`docs/source/sdk/swift/connect_workshop.md`, `docs/source/sdk/swift/support_playbook.md`, etc.).
 
 ### 3.3 Tests, Fixtures, & Automation

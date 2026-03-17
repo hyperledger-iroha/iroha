@@ -47,8 +47,8 @@ State Objects (Data Model)
   - `description: String` — operators کیلئے مختصر وضاحت۔
   - `abi_version: u16` — target ABI version جو activate ہو گی (پہلے ریلیز میں 1 ہونا چاہیے)۔
   - `abi_hash: [u8; 32]` — target policy کیلئے canonical ABI hash۔
-  - `added_syscalls: Vec<u16>` — syscall numbers جو اس version کے ساتھ valid ہوتے ہیں۔
-  - `added_pointer_types: Vec<u16>` — pointer-type identifiers جو upgrade میں شامل ہوں گے۔
+  - `added_syscalls: Vec<u16>` — محفوظ delta list؛ پہلے release میں خالی رہنی چاہیے۔
+  - `added_pointer_types: Vec<u16>` — محفوظ delta list؛ پہلے release میں خالی رہنی چاہیے۔
   - `start_height: u64` — پہلی block height جہاں activation allowed ہو۔
   - `end_height: u64` — activation window کی exclusive upper bound۔
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — upgrade artifacts کیلئے SBOM digests۔
@@ -122,7 +122,7 @@ Operator Rollout (No Downtime)
 
 Torii & CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (implemented)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
   - `GET /v1/runtime/upgrades` -> records کی فہرست (implemented)۔
   - `POST /v1/runtime/upgrades/propose` -> `ProposeRuntimeUpgrade` کو wrap کرتا ہے (instruction skeleton واپس کرتا ہے; implemented)۔
@@ -138,7 +138,7 @@ Torii & CLI
 
 Core Query API
 - Norito singular query (signed):
-  - `FindActiveAbiVersions` Norito-encoded struct `{ active_versions: [u16], default_compile_target: u16 }` واپس کرتا ہے۔
+  - `FindAbiVersion` Norito-encoded struct `{ abi_version: u16 }` واپس کرتا ہے۔
   - مثال: `docs/source/samples/find_active_abi_versions.md` (type/fields اور JSON example)۔
 
 Implementation Notes (صرف v1)
@@ -158,7 +158,7 @@ Implementation Notes (صرف v1)
   - `abi_version = 1` emit کریں اور canonical v1 `abi_hash` کو `.to` manifests میں embed کریں۔
 
 Telemetry
-- `runtime.active_abi_versions` gauge اور `runtime.upgrade_events_total{kind}` counter شامل کریں۔
+- `runtime.abi_version` gauge اور `runtime.upgrade_events_total{kind}` counter شامل کریں۔
 
 Security Considerations
 - صرف root/sudo propose/activate/cancel کر سکتے ہیں؛ manifests مناسب طور پر signed ہوں۔

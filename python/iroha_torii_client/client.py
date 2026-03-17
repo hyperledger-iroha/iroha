@@ -985,18 +985,16 @@ class NodeCryptoCapabilities:
 class NodeCapabilities:
     """Capability advert returned by ``GET /v1/node/capabilities``."""
 
-    supported_abi_versions: List[int]
-    default_compile_target: int
+    abi_version: int
     data_model_version: int
     crypto: NodeCryptoCapabilities
 
 
 @dataclass(frozen=True)
 class RuntimeAbiActive:
-    """Active ABI versions advertised by the runtime."""
+    """Active ABI version advertised by the runtime."""
 
-    active_versions: List[int]
-    default_compile_target: int
+    abi_version: int
 
 
 @dataclass(frozen=True)
@@ -1020,7 +1018,7 @@ class RuntimeUpgradeEventCounters:
 class RuntimeMetricsSnapshot:
     """Runtime upgrade metrics returned by `/v1/runtime/metrics`."""
 
-    active_abi_versions_count: int
+    abi_version: int
     upgrade_events_total: RuntimeUpgradeEventCounters
 
 
@@ -2908,7 +2906,7 @@ class ToriiClient:
         return self._parse_node_capabilities(payload, context="node capabilities")
 
     def get_runtime_abi_active(self) -> RuntimeAbiActive:
-        """Fetch the active ABI versions (`GET /v1/runtime/abi/active`)."""
+        """Fetch the active ABI version (`GET /v1/runtime/abi/active`)."""
 
         payload = self._get_json_object(
             "/v1/runtime/abi/active",
@@ -6970,16 +6968,12 @@ class ToriiClient:
     @staticmethod
     def _parse_node_capabilities(payload: Mapping[str, Any], *, context: str) -> NodeCapabilities:
         record = ToriiClient._ensure_mapping(payload, context)
-        supported = ToriiClient._parse_int_list(
-            record.get("supported_abi_versions"),
-            context=f"{context}.supported_abi_versions",
+        abi_version = ToriiClient._coerce_unsigned(
+            record.get("abi_version"),
+            f"{context}.abi_version",
         )
-        default_target = ToriiClient._coerce_unsigned(
-            record.get("default_compile_target"),
-            f"{context}.default_compile_target",
-        )
-        if default_target == 0:
-            raise RuntimeError(f"{context}.default_compile_target must be greater than zero")
+        if abi_version == 0:
+            raise RuntimeError(f"{context}.abi_version must be greater than zero")
         data_model_version = ToriiClient._coerce_unsigned(
             record.get("data_model_version"),
             f"{context}.data_model_version",
@@ -6996,8 +6990,7 @@ class ToriiClient:
             context=f"{context}.crypto.curves",
         )
         return NodeCapabilities(
-            supported_abi_versions=supported,
-            default_compile_target=default_target,
+            abi_version=abi_version,
             data_model_version=data_model_version,
             crypto=NodeCryptoCapabilities(sm=sm, curves=curves),
         )
@@ -7075,14 +7068,10 @@ class ToriiClient:
     @staticmethod
     def _parse_runtime_abi_active(payload: Mapping[str, Any], *, context: str) -> RuntimeAbiActive:
         record = ToriiClient._ensure_mapping(payload, context)
-        versions = ToriiClient._parse_int_list(record.get("active_versions"), context=f"{context}.active_versions")
-        default_target = ToriiClient._coerce_unsigned(
-            record.get("default_compile_target"),
-            f"{context}.default_compile_target",
-        )
-        if default_target == 0:
-            raise RuntimeError(f"{context}.default_compile_target must be greater than zero")
-        return RuntimeAbiActive(active_versions=versions, default_compile_target=default_target)
+        abi_version = ToriiClient._coerce_unsigned(record.get("abi_version"), f"{context}.abi_version")
+        if abi_version == 0:
+            raise RuntimeError(f"{context}.abi_version must be greater than zero")
+        return RuntimeAbiActive(abi_version=abi_version)
 
     @staticmethod
     def _parse_runtime_abi_hash(payload: Mapping[str, Any], *, context: str) -> RuntimeAbiHash:
@@ -7099,10 +7088,7 @@ class ToriiClient:
     @staticmethod
     def _parse_runtime_metrics(payload: Mapping[str, Any], *, context: str) -> RuntimeMetricsSnapshot:
         record = ToriiClient._ensure_mapping(payload, context)
-        active_count = ToriiClient._coerce_unsigned(
-            record.get("active_abi_versions_count"),
-            f"{context}.active_abi_versions_count",
-        )
+        abi_version = ToriiClient._coerce_unsigned(record.get("abi_version"), f"{context}.abi_version")
         counters_record = ToriiClient._ensure_mapping(
             record.get("upgrade_events_total", {}),
             f"{context}.upgrade_events_total",
@@ -7120,7 +7106,7 @@ class ToriiClient:
             f"{context}.upgrade_events_total.canceled",
         )
         return RuntimeMetricsSnapshot(
-            active_abi_versions_count=active_count,
+            abi_version=abi_version,
             upgrade_events_total=RuntimeUpgradeEventCounters(
                 proposed=proposed,
                 activated=activated,
@@ -7200,6 +7186,14 @@ class ToriiClient:
             record.get("end_height"),
             f"{context}.end_height",
         )
+        if end_height <= start_height:
+            raise RuntimeError(f"{context}.end_height must be greater than start_height")
+        ToriiClient._validate_first_release_runtime_manifest(
+            abi_version=abi_version,
+            added_syscalls=added_syscalls,
+            added_pointer_types=added_pointer_types,
+            context=context,
+        )
         return RuntimeUpgradeManifest(
             name=name,
             description=description,
@@ -7263,6 +7257,12 @@ class ToriiClient:
         abi_version = ToriiClient._coerce_unsigned(abi_version_value, f"{context}.abi_version")
         if abi_version == 0:
             raise RuntimeError(f"{context}.abi_version must be greater than zero")
+        ToriiClient._validate_first_release_runtime_manifest(
+            abi_version=abi_version,
+            added_syscalls=added_syscalls,
+            added_pointer_types=added_pointer_types,
+            context=context,
+        )
         abi_hash = ToriiClient._normalize_hex_string(
             abi_hash_value,
             context=f"{context}.abi_hash",
@@ -7278,6 +7278,21 @@ class ToriiClient:
             "start_height": start_height,
             "end_height": end_height,
         }
+
+    @staticmethod
+    def _validate_first_release_runtime_manifest(
+        *,
+        abi_version: int,
+        added_syscalls: list[int],
+        added_pointer_types: list[int],
+        context: str,
+    ) -> None:
+        if abi_version != 1:
+            raise RuntimeError(f"{context}.abi_version must be 1 in the first release")
+        if added_syscalls:
+            raise RuntimeError(f"{context}.added_syscalls must be empty in the first release")
+        if added_pointer_types:
+            raise RuntimeError(f"{context}.added_pointer_types must be empty in the first release")
 
 
 class _StatusMetricsState:

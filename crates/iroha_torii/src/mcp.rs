@@ -9365,7 +9365,7 @@ fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
 fn iroha_runtime_abi_active_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.abi.active".to_owned(),
-        description: "Fetch active runtime ABI versions (`/v1/runtime/abi/active`).".to_owned(),
+        description: "Fetch the active runtime ABI version (`/v1/runtime/abi/active`).".to_owned(),
         method: Method::GET,
         path_template: "/v1/runtime/abi/active".to_owned(),
         input_schema: norito::json!({

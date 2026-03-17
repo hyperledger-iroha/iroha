@@ -936,8 +936,8 @@ if #available(iOS 15, macOS 12, *) {
     let capabilities = try await torii.getNodeCapabilities()
     let metrics = try await torii.getRuntimeMetrics()
     let abiActive = try await torii.getRuntimeAbiActive()
-    print("supported:", capabilities.supportedAbiVersions,
-          "active:", abiActive.activeVersions,
+    print("abi:", capabilities.abiVersion,
+          "active:", abiActive.abiVersion,
           "upgrades:", metrics.upgradeEventsTotal)
 }
 ```
@@ -951,10 +951,10 @@ Generate upgrade instructions via the runtime helpers:
 if #available(iOS 15, macOS 12, *) {
     let manifest = ToriiRuntimeUpgradeManifest(
         name: "Upgrade Foo",
-        description: "Add syscall",
-        abiVersion: 2,
+        description: "Refresh runtime provenance",
+        abiVersion: 1,
         abiHashHex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        addedSyscalls: [42],
+        addedSyscalls: [],
         startHeight: 1_000,
         endHeight: 1_200
     )

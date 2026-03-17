@@ -35,7 +35,7 @@ Singular requests identify the query by name and optionally include a payload:
 
 The following singular queries are supported:
 
-- `FindActiveAbiVersions`
+- `FindAbiVersion`
 - `FindExecutorDataModel`
 - `FindParameters`
 - `FindContractManifestByCodeHash` (requires a 32-byte `code_hash` hex string)

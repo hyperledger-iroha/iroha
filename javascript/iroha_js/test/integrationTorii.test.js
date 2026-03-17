@@ -644,17 +644,9 @@ test(
     });
 
     const capabilities = await client.getNodeCapabilities();
-    assert.ok(
-      Array.isArray(capabilities.supportedAbiVersions),
-      "node capabilities should list supported ABI versions",
-    );
-    assert.ok(
-      capabilities.supportedAbiVersions.length > 0,
-      "at least one ABI version should be advertised",
-    );
     assertNonNegativeInteger(
-      capabilities.defaultCompileTarget,
-      "node capabilities defaultCompileTarget",
+      capabilities.abiVersion,
+      "node capabilities abiVersion",
     );
     assertNonNegativeInteger(
       capabilities.dataModelVersion,
@@ -676,13 +668,9 @@ test(
     );
 
     const abiActive = await client.getRuntimeAbiActive();
-    assert.ok(
-      Array.isArray(abiActive.activeVersions),
-      "runtime ABI active versions must be an array",
-    );
     assertNonNegativeInteger(
-      abiActive.defaultCompileTarget,
-      "runtime ABI default compile target",
+      abiActive.abiVersion,
+      "runtime ABI abiVersion",
     );
 
     const abiHash = await client.getRuntimeAbiHash();
@@ -691,8 +679,8 @@ test(
 
     const runtimeMetrics = await client.getRuntimeMetrics();
     assertNonNegativeInteger(
-      runtimeMetrics.activeAbiVersionsCount,
-      "runtime metrics activeAbiVersionsCount",
+      runtimeMetrics.abiVersion,
+      "runtime metrics abiVersion",
     );
     assert.equal(
       typeof runtimeMetrics.upgradeEventsTotal.proposed,

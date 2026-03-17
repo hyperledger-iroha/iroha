@@ -3539,7 +3539,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch active ABI versions (`GET /v1/runtime/abi/active`).
+   * Fetch the active ABI version (`GET /v1/runtime/abi/active`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiRuntimeAbiActiveResponse>}
    */
@@ -12317,13 +12317,9 @@ function normalizeNodeCapabilitiesResponse(payload) {
   const cryptoRecord = ensureRecord(record.crypto ?? {}, "node capabilities response.crypto");
   const curvesRecord = cryptoRecord.curves ?? {};
   return {
-    supportedAbiVersions: parseIntegerArray(
-      record.supported_abi_versions,
-      "node capabilities response.supported_abi_versions",
-    ),
-    defaultCompileTarget: ToriiClient._normalizeUnsignedInteger(
-      record.default_compile_target,
-      "node capabilities response.default_compile_target",
+    abiVersion: ToriiClient._normalizeUnsignedInteger(
+      record.abi_version,
+      "node capabilities response.abi_version",
       { allowZero: false },
     ),
     dataModelVersion: ToriiClient._normalizeUnsignedInteger(
@@ -12633,13 +12629,9 @@ function normalizeConfigurationNexusAxt(value, context) {
 function normalizeRuntimeAbiActiveResponse(payload) {
   const record = ensureRecord(payload, "runtime abi active response");
   return {
-    activeVersions: parseIntegerArray(
-      record.active_versions,
-      "runtime abi active response.active_versions",
-    ),
-    defaultCompileTarget: ToriiClient._normalizeUnsignedInteger(
-      record.default_compile_target,
-      "runtime abi active response.default_compile_target",
+    abiVersion: ToriiClient._normalizeUnsignedInteger(
+      record.abi_version,
+      "runtime abi active response.abi_version",
       { allowZero: false },
     ),
   };
@@ -12660,10 +12652,10 @@ function normalizeRuntimeMetricsResponse(payload) {
     "runtime metrics response.upgrade_events_total",
   );
   return {
-    activeAbiVersionsCount: ToriiClient._normalizeUnsignedInteger(
-      record.active_abi_versions_count ?? 0,
-      "runtime metrics response.active_abi_versions_count",
-      { allowZero: true },
+    abiVersion: ToriiClient._normalizeUnsignedInteger(
+      record.abi_version,
+      "runtime metrics response.abi_version",
+      { allowZero: false },
     ),
     upgradeEventsTotal: {
       proposed: ToriiClient._normalizeUnsignedInteger(
@@ -13978,26 +13970,35 @@ function normalizeRuntimeUpgradeRecord(value, context) {
 
 function normalizeRuntimeUpgradeManifest(value, context) {
   const record = ensureRecord(value, context);
+  const abiVersion = ToriiClient._normalizeUnsignedInteger(
+    record.abi_version,
+    `${context}.abi_version`,
+    { allowZero: false },
+  );
+  const addedSyscalls = parseIntegerArray(
+    record.added_syscalls,
+    `${context}.added_syscalls`,
+  );
+  const addedPointerTypes = parseIntegerArray(
+    record.added_pointer_types,
+    `${context}.added_pointer_types`,
+  );
+  assertFirstReleaseRuntimeUpgradeManifest({
+    abiVersion,
+    addedSyscalls,
+    addedPointerTypes,
+    context,
+  });
   return {
     name: requireNonEmptyString(record.name, `${context}.name`),
     description: requireNonEmptyString(record.description, `${context}.description`),
-    abiVersion: ToriiClient._normalizeUnsignedInteger(
-      record.abi_version,
-      `${context}.abi_version`,
-      { allowZero: false },
-    ),
+    abiVersion,
     abiHashHex: requireHexString(
       record.abi_hash ?? "",
       `${context}.abi_hash`,
     ),
-    addedSyscalls: parseIntegerArray(
-      record.added_syscalls,
-      `${context}.added_syscalls`,
-    ),
-    addedPointerTypes: parseIntegerArray(
-      record.added_pointer_types,
-      `${context}.added_pointer_types`,
-    ),
+    addedSyscalls,
+    addedPointerTypes,
     startHeight: ToriiClient._normalizeUnsignedInteger(
       record.start_height,
       `${context}.start_height`,
@@ -14059,29 +14060,55 @@ function normalizeRuntimeUpgradeManifestPayload(value, context) {
   if (endHeight <= startHeight) {
     throw new TypeError(`${context}.end_height must be greater than start_height`);
   }
+  const normalizedAbiVersion = ToriiClient._normalizeUnsignedInteger(
+    abiVersion,
+    `${context}.abi_version`,
+    { allowZero: false },
+  );
+  const addedSyscalls = parseIntegerArray(
+    record.added_syscalls ?? record.addedSyscalls ?? [],
+    `${context}.added_syscalls`,
+  );
+  const addedPointerTypes = parseIntegerArray(
+    record.added_pointer_types ?? record.addedPointerTypes ?? [],
+    `${context}.added_pointer_types`,
+  );
+  assertFirstReleaseRuntimeUpgradeManifest({
+    abiVersion: normalizedAbiVersion,
+    addedSyscalls,
+    addedPointerTypes,
+    context,
+  });
   return {
     name: requireNonEmptyString(record.name, `${context}.name`),
     description: requireNonEmptyString(
       record.description,
       `${context}.description`,
     ),
-    abi_version: ToriiClient._normalizeUnsignedInteger(
-      abiVersion,
-      `${context}.abi_version`,
-      { allowZero: false },
-    ),
+    abi_version: normalizedAbiVersion,
     abi_hash: normalizeHex32String(abiHashValue, `${context}.abi_hash`),
-    added_syscalls: parseIntegerArray(
-      record.added_syscalls ?? record.addedSyscalls ?? [],
-      `${context}.added_syscalls`,
-    ),
-    added_pointer_types: parseIntegerArray(
-      record.added_pointer_types ?? record.addedPointerTypes ?? [],
-      `${context}.added_pointer_types`,
-    ),
+    added_syscalls: addedSyscalls,
+    added_pointer_types: addedPointerTypes,
     start_height: startHeight,
     end_height: endHeight,
   };
+}
+
+function assertFirstReleaseRuntimeUpgradeManifest({
+  abiVersion,
+  addedSyscalls,
+  addedPointerTypes,
+  context,
+}) {
+  if (abiVersion !== 1) {
+    throw new TypeError(`${context}.abi_version must be 1 in the first release`);
+  }
+  if (addedSyscalls.length > 0) {
+    throw new TypeError(`${context}.added_syscalls must be empty in the first release`);
+  }
+  if (addedPointerTypes.length > 0) {
+    throw new TypeError(`${context}.added_pointer_types must be empty in the first release`);
+  }
 }
 
 function normalizeRuntimeUpgradeTxResponse(payload, context) {

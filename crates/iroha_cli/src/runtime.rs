@@ -27,8 +27,8 @@ impl Run for Command {
                 let client = context.client_from_config();
                 let value = client.get_runtime_metrics_json()?;
                 // Compose a short one-line summary
-                let active = value
-                    .get("active_abi_versions_count")
+                let abi_version = value
+                    .get("abi_version")
                     .and_then(norito::json::Value::as_u64)
                     .unwrap_or(0);
                 let up = value
@@ -47,7 +47,7 @@ impl Run for Command {
                     .and_then(norito::json::Value::as_u64)
                     .unwrap_or(0);
                 let summary = format!(
-                    "runtime: active_abi_versions={active} proposed={proposed} activated={activated} canceled={canceled}"
+                    "runtime: abi_version={abi_version} proposed={proposed} activated={activated} canceled={canceled}"
                 );
                 match context.output_format() {
                     CliOutputFormat::Text => context.println(summary)?,
@@ -92,9 +92,9 @@ impl Run for Command {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum AbiCommand {
-    /// Fetch active ABI versions from the node
+    /// Fetch the active ABI version from the node
     Active,
-    /// Fetch active ABI versions via signed Norito query (core /query)
+    /// Fetch the active ABI version via signed Norito query (core /query)
     ActiveQuery,
     /// Fetch the node's canonical ABI hash for the active policy
     Hash,
@@ -110,10 +110,8 @@ impl Run for AbiCommand {
             }
             AbiCommand::ActiveQuery => {
                 let client = context.client_from_config();
-                let out: iroha::data_model::query::runtime::ActiveAbiVersions = client
-                    .query_single(
-                        iroha::data_model::query::runtime::prelude::FindActiveAbiVersions,
-                    )?;
+                let out: iroha::data_model::query::runtime::AbiVersion =
+                    client.query_single(iroha::data_model::query::runtime::prelude::FindAbiVersion)?;
                 context.print_data(&out)
             }
             AbiCommand::Hash => {

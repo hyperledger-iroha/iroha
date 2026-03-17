@@ -10337,18 +10337,9 @@ pub trait WorldReadOnly {
     fn vrf_epochs(&self)
     -> &impl StorageReadOnly<u64, iroha_data_model::consensus::VrfEpochRecord>;
 
-    /// Compute the set of active ABI versions based on runtime upgrade records.
-    ///
-    /// Policy: ABI v1 is always active in the first release. Each `ActivatedAt(_)`
-    /// record permanently extends the active set with its `abi_version`.
-    fn active_abi_versions(&self) -> std::collections::BTreeSet<u16> {
-        let mut out: std::collections::BTreeSet<u16> = [1u16].into_iter().collect();
-        for (_id, rec) in self.runtime_upgrades().iter() {
-            if let iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(_) = rec.status {
-                out.insert(rec.manifest.abi_version);
-            }
-        }
-        out
+    /// Return the single ABI version accepted by the first release runtime.
+    fn abi_version(&self) -> u16 {
+        1
     }
 
     // Domain-related methods

@@ -6945,8 +6945,8 @@ pub struct Metrics {
     pub runtime_upgrade_events_total: IntCounterVec,
     /// Runtime: provenance rejection events (labeled by reason)
     pub runtime_upgrade_provenance_rejections_total: IntCounterVec,
-    /// Runtime: count of active ABI versions (gauge)
-    pub runtime_active_abi_versions_count: GenericGauge<AtomicU64>,
+    /// Runtime: ABI version accepted by this node.
+    pub runtime_abi_version: GenericGauge<AtomicU64>,
     /// IVM opcode pre-decode cache hits (cumulative)
     pub ivm_cache_hits: GenericGauge<AtomicU64>,
     /// IVM opcode pre-decode cache misses (cumulative)
@@ -10483,11 +10483,9 @@ impl Default for Metrics {
             &["reason"],
         )
         .expect("Infallible");
-        let runtime_active_abi_versions_count = GenericGauge::new(
-            "runtime_active_abi_versions_count",
-            "Count of active ABI versions allowed by runtime",
-        )
-        .expect("Infallible");
+        let runtime_abi_version =
+            GenericGauge::new("runtime_abi_version", "ABI version allowed by runtime")
+                .expect("Infallible");
         // Sumeragi consensus counters/histogram
         let sumeragi_tail_votes_total =
             IntCounter::new("sumeragi_tail_votes_total", "Votes accepted at proxy tail")
@@ -13554,7 +13552,7 @@ impl Default for Metrics {
             p2p_frame_cap_violations_total,
             runtime_upgrade_events_total,
             runtime_upgrade_provenance_rejections_total,
-            runtime_active_abi_versions_count,
+            runtime_abi_version,
             sumeragi_tail_votes_total,
             sumeragi_votes_sent_total,
             sumeragi_votes_received_total,
@@ -14167,7 +14165,7 @@ impl Default for Metrics {
             p2p_frame_cap_violations_total,
             runtime_upgrade_events_total,
             runtime_upgrade_provenance_rejections_total,
-            runtime_active_abi_versions_count,
+            runtime_abi_version,
             sumeragi_tail_votes_total,
             sumeragi_votes_sent_total,
             sumeragi_votes_received_total,
