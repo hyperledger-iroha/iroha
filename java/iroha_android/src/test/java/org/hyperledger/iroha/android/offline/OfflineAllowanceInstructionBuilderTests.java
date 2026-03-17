@@ -30,8 +30,8 @@ public final class OfflineAllowanceInstructionBuilderTests {
 
     final OfflineWalletCertificate certificate =
         OfflineWalletCertificate.builder()
-            .setController("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
-            .setOperator("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+            .setController("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .setOperator("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
             .setAllowance(allowance)
             .setSpendPublicKey("ed0120ABCDEF")
             .setAttestationReportBase64("AAECAw==")
@@ -69,8 +69,8 @@ public final class OfflineAllowanceInstructionBuilderTests {
     boolean threw = false;
     try {
       OfflineWalletCertificate.builder()
-          .setController("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
-          .setOperator("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+          .setController("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+          .setOperator("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
           .setAllowance(
               OfflineAllowance.builder()
                   .setAssetId("norito:00")

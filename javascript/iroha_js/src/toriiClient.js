@@ -10989,6 +10989,21 @@ function parseLaneRelayEnvelopes(payload) {
       record.settlement_hash,
       `${context}.settlement_hash`,
     );
+    const manifestRoot =
+      record.manifest_root === undefined || record.manifest_root === null
+        ? null
+        : requireNonEmptyString(record.manifest_root, `${context}.manifest_root`);
+    let fastpqProof = null;
+    if (record.fastpq_proof !== undefined && record.fastpq_proof !== null) {
+      const proof = ensureRecord(record.fastpq_proof, `${context}.fastpq_proof`);
+      fastpqProof = {
+        proof_digest: requireNonEmptyString(proof.proof_digest, `${context}.fastpq_proof.proof_digest`),
+        verified_at_height:
+          proof.verified_at_height === undefined || proof.verified_at_height === null
+            ? null
+            : coerceNestedInt(proof, "verified_at_height", `${context}.fastpq_proof`),
+      };
+    }
     return {
       lane_id: coerceNestedInt(record, "lane_id", context),
       dataspace_id: coerceNestedInt(record, "dataspace_id", context),
@@ -11002,6 +11017,8 @@ function parseLaneRelayEnvelopes(payload) {
       settlement_commitment: settlementCommitments[0],
       settlement_hash: settlementHash,
       rbc_bytes_total: coerceNestedInt(record, "rbc_bytes_total", context),
+      manifest_root: manifestRoot,
+      fastpq_proof: fastpqProof,
     };
   });
 }

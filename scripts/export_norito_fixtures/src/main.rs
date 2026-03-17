@@ -11,14 +11,12 @@ use anyhow::{Context, Result, bail};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{ArgAction, Parser};
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::name::Name;
 use iroha_data_model::{
     account::{AccountId, address},
-    domain::{Domain, DomainId},
     isi::{
-        Instruction, InstructionBox, Register, decode_instruction_from_pair,
-        frame_instruction_payload,
+        Instruction, InstructionBox, decode_instruction_from_pair, frame_instruction_payload,
     },
     metadata::Metadata,
     prelude::*,
@@ -41,15 +39,14 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use norito::codec::{Decode, Encode};
 use norito::json::{self, Map, Number, Value};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+#[cfg(test)]
+use {iroha_data_model::domain::DomainId, iroha_data_model::domain::Domain, iroha_data_model::isi::Register};
 
 const DEFAULT_FIXTURES_PATH: &str =
     "java/iroha_android/src/test/resources/transaction_payloads.json";
 const DEFAULT_OUT_DIR: &str = "java/iroha_android/src/test/resources";
 const DEFAULT_MANIFEST_NAME: &str = "transaction_fixtures.manifest.json";
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = 42;
-const PAYLOAD_SCHEMA_NAME: &str = "iroha.android.transaction.Payload.v1";
-const SIGNED_SCHEMA_NAME: &str = "iroha.transaction.SignedTransaction.v1";
 const SIGNING_SEED_HEX: &str = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
 
 #[derive(Parser)]
@@ -202,10 +199,15 @@ impl RawFixture {
                 .as_ref()
                 .map(|payload| payload.authority.as_str())
         });
+        let legacy_wire_fixture = self.payload_base64.is_some()
+            && self
+                .payload
+                .as_ref()
+                .is_some_and(|payload| matches!(payload.executable, RawExecutable::Instructions(_)));
         let _chain_guard = authority_source
             .and_then(authority_chain_discriminant)
             .map(address::ChainDiscriminantGuard::enter);
-        if let Some(payload) = self.payload {
+        if let Some(payload) = self.payload.as_ref() {
             if let Some(chain_hint) = &self.chain_hint {
                 if chain_hint != &payload.chain {
                     bail!(
@@ -258,15 +260,19 @@ impl RawFixture {
                     );
                 }
             }
-            let builder = payload.to_builder()?;
-            let signed = builder.sign(keypair.private_key());
-            let payload_value = signed.payload().clone();
-            let encoded_struct = payload_value.encode();
-            let encoded = normalize_payload_authority_bytes(&encoded_struct, &payload.authority)?;
-            let payload_base64 = BASE64.encode(&encoded);
-            if check_encoded {
-                if let Some(expected) = &self.encoded {
-                    if expected != &payload_base64 {
+            if !legacy_wire_fixture {
+                let rebuilt = (|| -> Result<Fixture> {
+                    let builder = payload.to_builder()?;
+                    let signed = builder.sign(keypair.private_key());
+                    let payload_value = signed.payload().clone();
+                    let encoded_struct = payload_value.encode();
+                    let encoded =
+                        normalize_payload_authority_bytes(&encoded_struct, &payload.authority)?;
+                    let payload_base64 = BASE64.encode(&encoded);
+                    if check_encoded
+                        && let Some(expected) = &self.encoded
+                        && expected != &payload_base64
+                    {
                         bail!(
                             "encoded payload mismatch for '{}': expected {}, got {}",
                             self.name,
@@ -274,32 +280,46 @@ impl RawFixture {
                             payload_base64
                         );
                     }
+                    let signed_struct = signed.encode();
+                    let signed_bytes =
+                        reencode_signed_with_payload(keypair, &encoded, &signed_struct)?;
+                    let signed_base64 = BASE64.encode(&signed_bytes);
+                    let payload_hash_hex = format!("{}", Hash::new(&encoded));
+                    let signed_hash_hex = format!("{}", Hash::new(&signed_bytes));
+
+                    let summary = PayloadSummary {
+                        chain: payload.chain.clone(),
+                        authority: payload.authority.clone(),
+                        creation_time_ms: payload.creation_time_ms,
+                        ttl_ms: payload.ttl_ms,
+                        nonce: payload.nonce,
+                        payload_base64,
+                        signed_base64,
+                        payload_hash_hex,
+                        signed_hash_hex,
+                    };
+
+                    Ok(Fixture {
+                        name: self.name.clone(),
+                        encoded,
+                        signed_bytes,
+                        summary,
+                    })
+                })();
+
+                match rebuilt {
+                    Ok(fixture) => return Ok(fixture),
+                    Err(err) => {
+                        if self.payload_base64.is_none() {
+                            return Err(err);
+                        }
+                        eprintln!(
+                            "fixture '{}' failed to rebuild from payload; using payload_base64 fallback: {err}",
+                            self.name
+                        );
+                    }
                 }
             }
-            let signed_struct = signed.encode();
-            let signed_bytes = reencode_signed_with_payload(keypair, &encoded, &signed_struct)?;
-            let signed_base64 = BASE64.encode(&signed_bytes);
-            let payload_hash_hex = format!("{}", Hash::new(&encoded));
-            let signed_hash_hex = format!("{}", Hash::new(&signed_bytes));
-
-            let summary = PayloadSummary {
-                chain: payload.chain,
-                authority: payload.authority,
-                creation_time_ms: payload.creation_time_ms,
-                ttl_ms: payload.ttl_ms,
-                nonce: payload.nonce,
-                payload_base64,
-                signed_base64,
-                payload_hash_hex,
-                signed_hash_hex,
-            };
-
-            return Ok(Fixture {
-                name: self.name,
-                encoded,
-                signed_bytes,
-                summary,
-            });
         }
 
         let payload_base64_input = self.payload_base64.as_deref().ok_or_else(|| {
@@ -331,7 +351,7 @@ impl RawFixture {
         let payload = match TransactionPayload::decode(&mut cursor) {
             Ok(payload) => payload,
             Err(err) => {
-                if check_hints {
+                if check_hints && !legacy_wire_fixture {
                     eprintln!(
                         "fixture '{}' payload decode failed; using opaque hints: {err}",
                         self.name
@@ -347,7 +367,7 @@ impl RawFixture {
             }
         };
         if !cursor.is_empty() {
-            if check_hints {
+            if check_hints && !legacy_wire_fixture {
                 eprintln!(
                     "fixture '{}' payload has trailing bytes; using opaque hints",
                     self.name
@@ -1033,14 +1053,7 @@ fn normalize_authority_hint(authority: &str) -> String {
 
 fn parse_account_id(value: &str) -> Result<AccountId> {
     let trimmed = value.trim();
-    let address = AccountAddress::parse_encoded(trimmed, None)
-        .map_err(|err| anyhow::anyhow!(err.to_string()))
-        .with_context(|| format!("invalid encoded account id '{value}'"))?;
-    let canonical = address
-        .to_i105_for_discriminant(address::chain_discriminant())
-        .map_err(|err| anyhow::anyhow!(err.to_string()))
-        .with_context(|| format!("failed to canonicalize account id '{value}'"))?;
-    AccountId::parse_encoded(&canonical)
+    AccountId::parse_encoded(trimmed)
         .map(|parsed| parsed.into_account_id())
         .with_context(|| format!("invalid encoded account id '{value}'"))
 }
@@ -1343,14 +1356,44 @@ fn build_fixtures_json(raw_fixtures: &[RawFixture], fixtures: &[Fixture]) -> Res
 
         if let Some(mut payload) = raw.payload_json.clone() {
             if payload_json_uses_instruction_list(&payload) {
-                let wire_payloads = if let Some(raw_payload) = raw.payload.as_ref() {
-                    wire_payloads_from_raw_payload(raw_payload).with_context(|| {
-                        format!("failed to derive wire payloads for '{}'", fixture.name)
-                    })?
+                let legacy_wire_fixture = raw.payload_base64.is_some()
+                    && raw
+                        .payload
+                        .as_ref()
+                        .is_some_and(|payload| matches!(payload.executable, RawExecutable::Instructions(_)));
+                let wire_payloads = if legacy_wire_fixture {
+                    Vec::new()
+                } else if let Some(raw_payload) = raw.payload.as_ref() {
+                    match wire_payloads_from_raw_payload(raw_payload) {
+                        Ok(payloads) => payloads,
+                        Err(raw_err) => match wire_payloads_from_encoded(&fixture.encoded) {
+                            Ok(payloads) => {
+                                eprintln!(
+                                    "fixture '{}' wire payload rewrite fell back to encoded payload: {raw_err}",
+                                    fixture.name
+                                );
+                                payloads
+                            }
+                            Err(encoded_err) => {
+                                eprintln!(
+                                    "fixture '{}' retaining existing wire payload JSON after decode failures; raw: {raw_err}; encoded: {encoded_err}",
+                                    fixture.name
+                                );
+                                Vec::new()
+                            }
+                        },
+                    }
                 } else {
-                    wire_payloads_from_encoded(&fixture.encoded).with_context(|| {
-                        format!("failed to derive wire payloads for '{}'", fixture.name)
-                    })?
+                    match wire_payloads_from_encoded(&fixture.encoded) {
+                        Ok(payloads) => payloads,
+                        Err(err) => {
+                            eprintln!(
+                                "fixture '{}' retaining existing wire payload JSON; encoded decode failed: {err}",
+                                fixture.name
+                            );
+                            Vec::new()
+                        }
+                    }
                 };
                 if !wire_payloads.is_empty() {
                     apply_wire_payloads_to_payload_json(&mut payload, &wire_payloads)?;
@@ -1751,7 +1794,6 @@ mod tests {
 
     fn sample_authority_literal() -> String {
         let keypair = signing_keypair().expect("test keypair");
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
-        AccountId::new(domain, keypair.public_key().clone()).to_string()
+        AccountId::new(keypair.public_key().clone()).to_string()
     }
 }

@@ -84,7 +84,8 @@ use iroha_data_model::{
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceId, LaneConfig, LaneId, LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
+        DataSpaceId, LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob,
+        proof_matches_manifest,
     },
     peer::PeerId,
     transaction::{
@@ -292,6 +293,16 @@ fn attach_manifest_roots_to_relays(
 ) {
     for envelope in envelopes {
         envelope.manifest_root = manifest_roots.get(&envelope.dataspace_id).copied();
+    }
+}
+
+fn attach_fastpq_proof_material_to_relays(envelopes: &mut [LaneRelayEnvelope]) {
+    for envelope in envelopes {
+        let verified_at_height = Some(envelope.block_height);
+        envelope.fastpq_proof = Some(LaneFastpqProofMaterial {
+            proof_digest: envelope.expected_fastpq_proof_digest(verified_at_height),
+            verified_at_height,
+        });
     }
 }
 
@@ -7243,6 +7254,7 @@ pub(crate) mod valid {
                     commit_qc.as_ref(),
                 );
                 attach_manifest_roots_to_relays(&mut lane_relay_envelopes, &manifest_roots);
+                attach_fastpq_proof_material_to_relays(&mut lane_relay_envelopes);
                 crate::sumeragi::status::set_lane_relay_envelopes(lane_relay_envelopes);
             }
 
@@ -14289,9 +14301,14 @@ mod tests {
         let manifest_roots: BTreeMap<DataSpaceId, [u8; 32]> =
             core::iter::once((dataspace_id, manifest_root)).collect();
         attach_manifest_roots_to_relays(&mut envelopes, &manifest_roots);
+        attach_fastpq_proof_material_to_relays(&mut envelopes);
 
         assert_eq!(envelopes.len(), 1);
         assert_eq!(envelopes[0].manifest_root, Some(manifest_root));
+        assert!(envelopes[0].fastpq_proof.is_some());
+        envelopes[0]
+            .verify_fastpq_proof_material()
+            .expect("FastPQ proof material must validate");
     }
 
     #[test]
