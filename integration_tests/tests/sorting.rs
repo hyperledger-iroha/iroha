@@ -183,7 +183,7 @@ fn correct_sorting_of_entities() {
         .execute_all()
         .expect("Valid")
         .into_iter()
-        .filter(|asset_definition| asset_definition.id().name().as_ref().starts_with("xor_"))
+        .filter(|asset_definition| asset_definitions.contains(asset_definition.id()))
         .collect::<Vec<_>>();
 
     assert!(
@@ -366,7 +366,7 @@ fn metadata_sorting_descending() {
         .execute_all()
         .expect("Valid")
         .into_iter()
-        .filter(|asset_definition| asset_definition.id().name().as_ref().starts_with("xor_"))
+        .filter(|asset_definition| asset_definitions.contains(asset_definition.id()))
         .collect::<Vec<_>>();
 
     assert!(
