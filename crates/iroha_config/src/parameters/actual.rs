@@ -2717,12 +2717,13 @@ impl LaneConfigEntry {
         root.as_ref().join("blocks").join(&self.kura_segment)
     }
 
-    /// Compute the canonical merge-ledger log path for this lane.
+    /// Compute the canonical merge-ledger log path.
+    ///
+    /// Nexus mode persists a universal merge ledger, so this path is shared
+    /// across all lanes.
     #[must_use]
     pub fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
-        root.as_ref()
-            .join("merge_ledger")
-            .join(format!("{}.log", self.merge_segment))
+        root.as_ref().join("merge_ledger").join("universal.log")
     }
 }
 

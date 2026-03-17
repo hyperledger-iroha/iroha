@@ -7271,6 +7271,11 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
             },
             settlement_hash: "0xfeed",
             rbc_bytes_total: "64",
+            manifest_root: "0xcafe",
+            fastpq_proof: {
+              proof_digest: "0xdeadbeef",
+              verified_at_height: "22",
+            },
           },
         ],
       },
@@ -7281,6 +7286,9 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
   assert.equal(status.lane_settlement_commitments[0].total_local_micro, 42);
   assert.equal(status.lane_relay_envelopes[0].settlement_hash, "0xfeed");
   assert.equal(status.lane_relay_envelopes[0].rbc_bytes_total, 64);
+  assert.equal(status.lane_relay_envelopes[0].manifest_root, "0xcafe");
+  assert.equal(status.lane_relay_envelopes[0].fastpq_proof.proof_digest, "0xdeadbeef");
+  assert.equal(status.lane_relay_envelopes[0].fastpq_proof.verified_at_height, 22);
 });
 
 test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () => {
@@ -7315,6 +7323,41 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(() => client.getSumeragiStatusTyped(), /settlement_hash/);
+});
+
+test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        mode_tag: "iroha2-consensus::permissioned-sumeragi@v1",
+        lane_relay_envelopes: [
+          {
+            lane_id: 1,
+            dataspace_id: 1,
+            block_height: 1,
+            block_header: { height: 1 },
+            settlement_commitment: {
+              block_height: 1,
+              lane_id: 1,
+              dataspace_id: 1,
+              tx_count: 0,
+              total_local_micro: 0,
+              total_xor_due_micro: 0,
+              total_xor_after_haircut_micro: 0,
+              total_xor_variance_micro: 0,
+              receipts: [],
+            },
+            settlement_hash: "0x00",
+            rbc_bytes_total: 0,
+            fastpq_proof: { proof_digest: 42 },
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(() => client.getSumeragiStatusTyped(), /fastpq_proof.proof_digest/);
 });
 
 test("getSumeragiPacemaker returns null when gated and decodes payload otherwise", async () => {

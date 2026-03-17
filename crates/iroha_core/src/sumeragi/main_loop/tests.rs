@@ -446,16 +446,14 @@ fn sample_lane_relay_envelope_with_bitmap(
             timestamp_ms: 1_700_000_000_000,
         }],
     };
-    LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
-        .expect("valid envelope")
-        .with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
-            proof_digest: Hash::new([
-                u8::try_from(lane_id.as_u32()).unwrap_or(0),
-                u8::try_from(height & 0xFF).unwrap_or(0),
-                signers_bitmap,
-            ]),
-            verified_at_height: Some(height),
-        }))
+    let envelope =
+        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope");
+    let verified_at_height = Some(height);
+    let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
+    envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+        proof_digest,
+        verified_at_height,
+    }))
 }
 
 fn account_id_for_keypair(keypair: &KeyPair) -> AccountId {

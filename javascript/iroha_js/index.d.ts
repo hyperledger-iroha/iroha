@@ -2738,6 +2738,47 @@ export interface ToriiDataspaceCommitmentSnapshot {
   block_hash: string;
 }
 
+export interface ToriiLaneSettlementReceipt {
+  source_id: string;
+  local_amount_micro: number;
+  xor_due_micro: number;
+  xor_after_haircut_micro: number;
+  xor_variance_micro: number;
+  timestamp_ms: number;
+}
+
+export interface ToriiLaneSettlementCommitment {
+  block_height: number;
+  lane_id: number;
+  dataspace_id: number;
+  tx_count: number;
+  total_local_micro: number;
+  total_xor_due_micro: number;
+  total_xor_after_haircut_micro: number;
+  total_xor_variance_micro: number;
+  swap_metadata: Record<string, unknown> | null;
+  receipts: ReadonlyArray<ToriiLaneSettlementReceipt>;
+}
+
+export interface ToriiLaneFastpqProofMaterial {
+  proof_digest: string;
+  verified_at_height: number | null;
+}
+
+export interface ToriiLaneRelayEnvelope {
+  lane_id: number;
+  dataspace_id: number;
+  block_height: number;
+  block_header: Record<string, unknown>;
+  qc: Record<string, unknown> | null;
+  da_commitment_hash: string | null;
+  settlement_commitment: ToriiLaneSettlementCommitment;
+  settlement_hash: string;
+  rbc_bytes_total: number;
+  manifest_root: string | null;
+  fastpq_proof: ToriiLaneFastpqProofMaterial | null;
+}
+
 export interface ToriiLaneRuntimeUpgradeHookSnapshot {
   allow: boolean;
   require_metadata: boolean;
@@ -3814,6 +3855,8 @@ export interface ToriiSumeragiStatus {
   membership?: ToriiSumeragiMembershipSnapshot;
   lane_commitments?: ToriiLaneCommitmentSnapshot[];
   dataspace_commitments?: ToriiDataspaceCommitmentSnapshot[];
+  lane_settlement_commitments?: ToriiLaneSettlementCommitment[];
+  lane_relay_envelopes?: ToriiLaneRelayEnvelope[];
   lane_governance?: ToriiLaneGovernanceSnapshot[];
   lane_governance_sealed_total?: number;
   lane_governance_sealed_aliases?: ReadonlyArray<string>;

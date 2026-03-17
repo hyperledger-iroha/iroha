@@ -72,7 +72,7 @@ public final class GovernanceInstructionBuilderTests {
           .setElectionId("election-2")
           .setProofBase64("AQID")
           .setPublicInputsJson(
-              "{\"durationBlocks\":64,\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"amount\":\"100\","
+              "{\"durationBlocks\":64,\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV\",\"amount\":\"100\","
                   + "\"rootHintHex\":\""
                   + rootHint
                   + "\",\"nullifierHex\":\""
@@ -93,7 +93,7 @@ public final class GovernanceInstructionBuilderTests {
             .setElectionId("election-2b")
             .setProofBase64("AQID")
             .setPublicInputsJson(
-                "{\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"amount\":\"100\",\"duration_blocks\":64,"
+                "{\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV\",\"amount\":\"100\",\"duration_blocks\":64,"
                     + "\"root_hint\":\""
                     + rootHint
                     + "\",\"nullifier\":\""
@@ -116,7 +116,7 @@ public final class GovernanceInstructionBuilderTests {
     args.put("proof_b64", "AQID");
     args.put(
         "public_inputs_json",
-        "{\"duration_blocks\":12,\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"amount\":\"100\","
+        "{\"duration_blocks\":12,\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV\",\"amount\":\"100\","
             + "\"root_hint\":\"0x"
             + "Aa".repeat(32)
             + "\"}");
@@ -134,7 +134,7 @@ public final class GovernanceInstructionBuilderTests {
       CastZkBallotInstruction.builder()
           .setElectionId("election-3")
           .setProofBase64("AQID")
-          .setPublicInputsJson("{\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\"}")
+          .setPublicInputsJson("{\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV\"}")
           .build();
     } catch (final IllegalArgumentException ex) {
       failed = ex.getMessage().contains("lock hints");
@@ -163,7 +163,7 @@ public final class GovernanceInstructionBuilderTests {
           .setElectionId("election-5")
           .setProofBase64("AQID")
           .setPublicInputsJson(
-              "{\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp\",\"amount\":\"100\",\"duration_blocks\":5,"
+              "{\"owner\":\"6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV\",\"amount\":\"100\",\"duration_blocks\":5,"
                   + "\"root_hint\":\"not-hex\"}")
           .build();
     } catch (final IllegalArgumentException ex) {
@@ -176,7 +176,7 @@ public final class GovernanceInstructionBuilderTests {
     final CastPlainBallotInstruction instruction =
         CastPlainBallotInstruction.builder()
             .setReferendumId("ref-42")
-            .setOwnerAccountId("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+            .setOwnerAccountId("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
             .setAmount(new BigInteger("125000"))
             .setDurationBlocks(512)
             .setDirection(1)
@@ -211,15 +211,15 @@ public final class GovernanceInstructionBuilderTests {
     final PersistCouncilForEpochInstruction instruction =
         PersistCouncilForEpochInstruction.builder()
             .setEpoch(99)
-            .addMember("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
-            .addMember("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
-            .addAlternate("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+            .addMember("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .addMember("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .addAlternate("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
             .setCandidatesCount(5)
             .setVerified(2)
             .setDerivedBy(GovernanceInstructionUtils.CouncilDerivationKind.VRF)
             .build();
-    assert instruction.members().equals(List.of("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")) : "members mismatch";
-    assert instruction.alternates().equals(List.of("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")) : "alternates mismatch";
+    assert instruction.members().equals(List.of("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")) : "members mismatch";
+    assert instruction.alternates().equals(List.of("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")) : "alternates mismatch";
     assert instruction.candidatesCount() == 5 : "candidates mismatch";
     assert instruction.verified() == 2 : "verified mismatch";
     assert instruction.derivedBy() == GovernanceInstructionUtils.CouncilDerivationKind.VRF

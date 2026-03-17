@@ -78,7 +78,7 @@ public final class OfflineJournalPendingTransactionQueueTest {
       final TransactionPayload payload =
           TransactionPayload.builder()
               .setChainId("00000001")
-              .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp")
+              .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
               .setCreationTimeMs(1_700_000_000_000L)
               .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))
               .setTimeToLiveMs(5_000L)

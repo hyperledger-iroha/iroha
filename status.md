@@ -2,6 +2,15 @@
 
 Last updated: 2026-03-17
 
+## 2026-03-17 Follow-up: sorting checks now match opaque asset-definition IDs
+- Fixed `integration_tests/tests/sorting.rs` asset-definition sorting checks to
+  filter results by the exact IDs registered in-test instead of
+  `id().name().starts_with("xor_")`, matching current opaque `aid:*`
+  asset-definition ID behavior.
+- Verified previously failing integration tests now pass:
+  - `correct_sorting_of_entities`
+  - `metadata_sorting_descending`
+
 ## 2026-03-17 Follow-up: late contiguous-frontier recovery now preserves sender ownership and accepts explicit sparse block-sync recovery
 - Updated `crates/iroha_core/src/sumeragi/main_loop.rs`,
   `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
