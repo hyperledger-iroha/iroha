@@ -5040,12 +5040,16 @@ async fn handler_explorer_transaction_detail(
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/transactions/{hash}").await?;
     }
-    crate::routing::handle_v1_explorer_transaction_detail(
+    match crate::routing::handle_v1_explorer_transaction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
     )
     .await
+    {
+        Ok(response) => Ok(response),
+        Err(error) => Ok(explorer_json_error_response(error)),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -5065,13 +5069,31 @@ async fn handler_explorer_instruction_detail(
         )
         .await?;
     }
-    crate::routing::handle_v1_explorer_instruction_detail(
+    match crate::routing::handle_v1_explorer_instruction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
         index,
     )
     .await
+    {
+        Ok(response) => Ok(response),
+        Err(error) => Ok(explorer_json_error_response(error)),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn explorer_json_error_response(error: Error) -> AxResponse {
+    let status = error.status_code();
+    let message = error.to_string();
+    let payload = json_object(vec![
+        json_entry("error", "request_failed"),
+        json_entry("status", status.as_u16()),
+        json_entry("message", message),
+    ]);
+    let mut response = JsonBody(payload).into_response();
+    *response.status_mut() = status;
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -18597,6 +18619,68 @@ pub(crate) mod tests_runtime_handlers {
             norito::json::from_slice(&bytes).expect("decode json");
         assert_eq!(hash.policy, "V1");
         assert_eq!(hash.abi_hash_hex.len(), 64);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn explorer_transaction_detail_not_found_returns_json_response() {
+        let app = mk_app_state_for_tests();
+        let headers = HeaderMap::new();
+        let missing_hash = "00".repeat(32);
+
+        let response = super::handler_explorer_transaction_detail(
+            State(app),
+            headers,
+            axum::extract::Path(missing_hash),
+        )
+        .await
+        .expect("explorer detail handler should map errors to HTTP responses");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let _payload: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("json error payload");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn explorer_instruction_detail_not_found_returns_json_response() {
+        let app = mk_app_state_for_tests();
+        let headers = HeaderMap::new();
+        let missing_hash = "00".repeat(32);
+
+        let response = super::handler_explorer_instruction_detail(
+            State(app),
+            headers,
+            axum::extract::Path((missing_hash, 0)),
+        )
+        .await
+        .expect("explorer instruction detail handler should map errors to HTTP responses");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let _payload: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("json error payload");
     }
 
     #[cfg(feature = "telemetry")]
