@@ -164,11 +164,19 @@ public final class AssetIdEncoder {
    * AccountController::Single(PublicKey) = u32(0) + length-prefixed PublicKey string.
    */
   private static byte[] encodeAccountIdPayload(int flags, String publicKeyHex) {
+    PublicKeyCodec.PublicKeyPayload publicKey =
+        PublicKeyCodec.decodePublicKeyLiteral(publicKeyHex);
+    if (publicKey == null) {
+      throw new IllegalArgumentException("Invalid public key literal: " + publicKeyHex);
+    }
+    String canonicalMultihash =
+        PublicKeyCodec.encodePublicKeyMultihash(publicKey.curveId(), publicKey.keyBytes());
+
     // AccountId is #[norito(transparent)] -> encodes directly as AccountController
     NoritoEncoder controllerEncoder = new NoritoEncoder(flags);
     UINT32_ADAPTER.encode(controllerEncoder, 0L); // Single variant discriminant
     NoritoEncoder publicKeyEncoder = new NoritoEncoder(flags);
-    STRING_ADAPTER.encode(publicKeyEncoder, publicKeyHex);
+    STRING_ADAPTER.encode(publicKeyEncoder, canonicalMultihash);
     byte[] publicKeyBytes = publicKeyEncoder.toByteArray();
     controllerEncoder.writeUInt(publicKeyBytes.length, 64);
     controllerEncoder.writeBytes(publicKeyBytes);

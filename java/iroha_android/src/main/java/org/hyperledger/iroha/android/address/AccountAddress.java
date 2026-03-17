@@ -132,8 +132,8 @@ public final class AccountAddress {
    * <p>Multisig addresses return {@link Optional#empty()}.
    */
   public Optional<SingleKeyPayload> singleKeyPayload() throws AccountAddressException {
-    parseCanonical(canonicalBytes);
-    return extractSingleKeyPayload(canonicalBytes);
+    parseCanonical(canonicalBytes, true);
+    return extractSingleKeyPayload(canonicalBytes, true);
   }
 
   /**
@@ -142,8 +142,30 @@ public final class AccountAddress {
    * <p>Single-key addresses return {@link Optional#empty()}.
    */
   public Optional<MultisigPolicyPayload> multisigPolicyPayload() throws AccountAddressException {
-    parseCanonical(canonicalBytes);
-    return extractMultisigPayload(canonicalBytes);
+    parseCanonical(canonicalBytes, true);
+    return extractMultisigPayload(canonicalBytes, true);
+  }
+
+  /**
+   * Returns the single-key controller payload without applying the configurable curve allow-list.
+   *
+   * <p>This is intended for canonical wire payloads that already carry the exact controller bytes.
+   */
+  public Optional<SingleKeyPayload> singleKeyPayloadIgnoringCurveSupport()
+      throws AccountAddressException {
+    parseCanonical(canonicalBytes, false);
+    return extractSingleKeyPayload(canonicalBytes, false);
+  }
+
+  /**
+   * Returns the multisig policy payload without applying the configurable curve allow-list.
+   *
+   * <p>This is intended for canonical wire payloads that already carry the exact controller bytes.
+   */
+  public Optional<MultisigPolicyPayload> multisigPolicyPayloadIgnoringCurveSupport()
+      throws AccountAddressException {
+    parseCanonical(canonicalBytes, false);
+    return extractMultisigPayload(canonicalBytes, false);
   }
 
   public static String i105WarningMessage() {
@@ -249,7 +271,14 @@ public final class AccountAddress {
 
   public static AccountAddress fromCanonicalBytes(final byte[] canonical) throws AccountAddressException {
     final byte[] copy = Arrays.copyOf(canonical, canonical.length);
-    parseCanonical(copy);
+    parseCanonical(copy, true);
+    return new AccountAddress(copy);
+  }
+
+  public static AccountAddress fromCanonicalBytesUnchecked(final byte[] canonical)
+      throws AccountAddressException {
+    final byte[] copy = Arrays.copyOf(canonical, canonical.length);
+    parseCanonical(copy, false);
     return new AccountAddress(copy);
   }
 
@@ -269,9 +298,31 @@ public final class AccountAddress {
     return address;
   }
 
+  public static AccountAddress fromI105Unchecked(final String encoded, final Integer expectedPrefix)
+      throws AccountAddressException {
+    final DecodeResult decode = decodeI105(encoded);
+    if (expectedPrefix != null && decode.networkPrefix != expectedPrefix) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
+          "unexpected I105 network prefix: expected " + expectedPrefix + ", found " + decode.networkPrefix);
+    }
+    final AccountAddress address = fromCanonicalBytesUnchecked(decode.canonical);
+    final String reencoded = address.toI105(decode.networkPrefix);
+    if (!reencoded.equals(encoded)) {
+      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
+    }
+    return address;
+  }
+
   public static AccountAddress fromI105Default(final String encoded) throws AccountAddressException {
     final byte[] canonical = decodeCompressed(encoded);
     return fromCanonicalBytes(canonical);
+  }
+
+  public static AccountAddress fromI105DefaultUnchecked(final String encoded)
+      throws AccountAddressException {
+    final byte[] canonical = decodeCompressed(encoded);
+    return fromCanonicalBytesUnchecked(canonical);
   }
 
   /**
@@ -280,6 +331,23 @@ public final class AccountAddress {
    * <p>Canonical hex is intentionally excluded from this parser.
    */
   public static ParseResult parseEncoded(final String input, final Integer expectedPrefix)
+      throws AccountAddressException {
+    return parseEncodedInternal(input, expectedPrefix, true);
+  }
+
+  /**
+   * Parses encoded account addresses without applying the configurable curve allow-list.
+   *
+   * <p>This is intended for consumers that need to round-trip canonical address bytes already
+   * produced elsewhere in the SDK or by Torii.
+   */
+  public static ParseResult parseEncodedIgnoringCurveSupport(
+      final String input, final Integer expectedPrefix) throws AccountAddressException {
+    return parseEncodedInternal(input, expectedPrefix, false);
+  }
+
+  private static ParseResult parseEncodedInternal(
+      final String input, final Integer expectedPrefix, final boolean enforceCurveSupport)
       throws AccountAddressException {
     final String trimmed = input.trim();
     if (trimmed.isEmpty()) {
@@ -291,14 +359,20 @@ public final class AccountAddress {
           "account address must not include @domain suffix");
     }
     if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
-      return new ParseResult(fromI105Default(trimmed), Format.I105_DEFAULT);
+      final AccountAddress address =
+          enforceCurveSupport ? fromI105Default(trimmed) : fromI105DefaultUnchecked(trimmed);
+      return new ParseResult(address, Format.I105_DEFAULT);
     }
     if (containsCompressedGlyph(trimmed)) {
       throw new AccountAddressException(
           AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "i105-default address must start with sora sentinel");
     }
     try {
-      return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
+      final AccountAddress address =
+          enforceCurveSupport
+              ? fromI105(trimmed, expectedPrefix)
+              : fromI105Unchecked(trimmed, expectedPrefix);
+      return new ParseResult(address, Format.I105);
     } catch (final AccountAddressException ex) {
       final String message = ex.getMessage();
       if (message != null
@@ -501,13 +575,14 @@ public final class AccountAddress {
 
   // -- Canonical decoding helpers --
 
-  private static void parseCanonical(final byte[] canonical) throws AccountAddressException {
+  private static void parseCanonical(final byte[] canonical, final boolean enforceCurveSupport)
+      throws AccountAddressException {
     if (canonical.length < 2) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
     final byte header = canonical[0];
     decodeHeader(header);
-    final ParsedController parsed = parseControllerAt(canonical, 1);
+    final ParsedController parsed = parseControllerAt(canonical, 1, enforceCurveSupport);
     if (parsed.cursor != canonical.length) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
@@ -515,7 +590,8 @@ public final class AccountAddress {
     }
   }
 
-  private static Optional<SingleKeyPayload> extractSingleKeyPayload(final byte[] canonical)
+  private static Optional<SingleKeyPayload> extractSingleKeyPayload(
+      final byte[] canonical, final boolean enforceCurveSupport)
       throws AccountAddressException {
     if (canonical.length < 2) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
@@ -523,7 +599,7 @@ public final class AccountAddress {
     final byte header = canonical[0];
     decodeHeader(header);
 
-    final ParsedController parsed = parseControllerAt(canonical, 1);
+    final ParsedController parsed = parseControllerAt(canonical, 1, enforceCurveSupport);
     if (parsed.cursor != canonical.length) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
@@ -532,7 +608,8 @@ public final class AccountAddress {
     return Optional.ofNullable(parsed.singleKey);
   }
 
-  private static Optional<MultisigPolicyPayload> extractMultisigPayload(final byte[] canonical)
+  private static Optional<MultisigPolicyPayload> extractMultisigPayload(
+      final byte[] canonical, final boolean enforceCurveSupport)
       throws AccountAddressException {
     if (canonical.length < 2) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
@@ -540,7 +617,7 @@ public final class AccountAddress {
     final byte header = canonical[0];
     decodeHeader(header);
 
-    final ParsedController parsed = parseControllerAt(canonical, 1);
+    final ParsedController parsed = parseControllerAt(canonical, 1, enforceCurveSupport);
     if (parsed.cursor != canonical.length) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
@@ -549,7 +626,8 @@ public final class AccountAddress {
     return Optional.ofNullable(parsed.multisigPolicy);
   }
 
-  private static ParsedController parseControllerAt(final byte[] canonical, int cursor)
+  private static ParsedController parseControllerAt(
+      final byte[] canonical, int cursor, final boolean enforceCurveSupport)
       throws AccountAddressException {
     if (cursor >= canonical.length) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
@@ -562,7 +640,7 @@ public final class AccountAddress {
           throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
         }
         final int curveId = canonical[cursor++] & 0xFF;
-        ensureCurveEnabled(curveId, "curve id " + curveId);
+        validateCurveSupport(curveId, enforceCurveSupport);
         final int keyLen = canonical[cursor++] & 0xFF;
         final int end = cursor + keyLen;
         if (end > canonical.length) {
@@ -592,7 +670,7 @@ public final class AccountAddress {
             throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
           }
           final int curveId = canonical[cursor++] & 0xFF;
-          ensureCurveEnabled(curveId, "curve id " + curveId);
+          validateCurveSupport(curveId, enforceCurveSupport);
           final int weight =
               ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
           cursor += 2;
@@ -749,6 +827,18 @@ public final class AccountAddress {
       final String reason =
           known ? context + " disabled by configuration: " + curveName(curveId) : "unknown curve id: " + curveName(curveId);
       throw new AccountAddressException(code, reason);
+    }
+  }
+
+  private static void validateCurveSupport(final int curveId, final boolean enforceCurveSupport)
+      throws AccountAddressException {
+    if (enforceCurveSupport) {
+      ensureCurveEnabled(curveId, "curve id " + curveId);
+      return;
+    }
+    if (!isKnownCurveId(curveId)) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNKNOWN_CURVE, "unknown curve id: " + curveName(curveId));
     }
   }
 

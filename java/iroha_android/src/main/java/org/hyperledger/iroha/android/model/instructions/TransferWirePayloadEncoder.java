@@ -4,13 +4,16 @@
 package org.hyperledger.iroha.android.model.instructions;
 
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AssetIdDecoder;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.SchemaHash;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 import java.math.BigDecimal;
@@ -283,13 +286,14 @@ public final class TransferWirePayloadEncoder {
       // Parse as I105 address (supports both single-key and multisig)
       AccountAddress address;
       try {
-        address = AccountAddress.parseEncoded(signatory, null).address;
+        address = AccountAddress.parseEncodedIgnoringCurveSupport(signatory, null).address;
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException("Failed to parse account identifier: " + signatory, e);
       }
 
       try {
-        Optional<AccountAddress.SingleKeyPayload> singleKey = address.singleKeyPayload();
+        Optional<AccountAddress.SingleKeyPayload> singleKey =
+            address.singleKeyPayloadIgnoringCurveSupport();
         if (singleKey.isPresent()) {
           AccountAddress.SingleKeyPayload key = singleKey.get();
           String multihash =
@@ -297,7 +301,8 @@ public final class TransferWirePayloadEncoder {
           return new AccountId(AccountController.single(multihash));
         }
 
-        Optional<AccountAddress.MultisigPolicyPayload> multisig = address.multisigPolicyPayload();
+        Optional<AccountAddress.MultisigPolicyPayload> multisig =
+            address.multisigPolicyPayloadIgnoringCurveSupport();
         if (multisig.isPresent()) {
           return new AccountId(AccountController.multisig(multisig.get()));
         }
@@ -317,10 +322,22 @@ public final class TransferWirePayloadEncoder {
   private static final class AssetId {
     private final AccountId account;
     private final AssetDefinitionId definition;
+    private final byte[] encodedAccountPayload;
+    private final byte[] scopePayload;
 
-    AssetId(AccountId account, AssetDefinitionId definition) {
-      this.account = Objects.requireNonNull(account);
+    AssetId(
+        AccountId account,
+        AssetDefinitionId definition,
+        byte[] encodedAccountPayload,
+        byte[] scopePayload) {
+      if (account == null && encodedAccountPayload == null) {
+        throw new IllegalArgumentException("AssetId requires either account or encodedAccountPayload");
+      }
+      this.account = account;
       this.definition = Objects.requireNonNull(definition);
+      this.encodedAccountPayload =
+          encodedAccountPayload == null ? null : encodedAccountPayload.clone();
+      this.scopePayload = Objects.requireNonNull(scopePayload).clone();
     }
 
     AccountId account() {
@@ -331,11 +348,23 @@ public final class TransferWirePayloadEncoder {
       return definition;
     }
 
+    byte[] encodedAccountPayload() {
+      return encodedAccountPayload == null ? null : encodedAccountPayload.clone();
+    }
+
+    byte[] scopePayload() {
+      return scopePayload.clone();
+    }
+
     /**
      * Parse from "asset#domain#account@domain" or "asset##account@domain" format.
      * If domain after asset name is empty (##), it means same domain as account.
      */
     static AssetId parse(String assetIdStr) {
+      if (AssetIdDecoder.isNoritoEncoded(assetIdStr)) {
+        return parseNoritoEncoded(assetIdStr);
+      }
+
       // Find the last # followed by account@domain
       int lastHashIndex = assetIdStr.lastIndexOf('#');
       if (lastHashIndex < 0) {
@@ -369,7 +398,40 @@ public final class TransferWirePayloadEncoder {
         assetDef = AssetDefinitionId.fromNameDomain(assetName, assetDomain);
       }
 
-      return new AssetId(accountId, assetDef);
+      return new AssetId(accountId, assetDef, null, globalScopePayload());
+    }
+
+    private static AssetId parseNoritoEncoded(String noritoAssetId) {
+      byte[] raw = extractNoritoBytes(noritoAssetId);
+      NoritoHeader.DecodeResult decoded =
+          NoritoHeader.decode(
+              raw, SchemaHash.hash16("iroha_data_model::asset::id::model::AssetId"));
+      NoritoHeader header = decoded.header();
+      byte[] payload = decoded.payload();
+      header.validateChecksum(payload);
+      if (header.flags() != 0) {
+        throw new IllegalArgumentException(
+            String.format(
+                "Unsupported norito AssetId layout flags for transfer encoding: 0x%02x",
+                header.flags()));
+      }
+
+      boolean compactLen = (header.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      NoritoDecoder decoder = new NoritoDecoder(payload, header.flags(), header.minor());
+
+      byte[] encodedAccountPayload = readSizedField(decoder, compactLen, "AssetId.account");
+      byte[] definitionPayload = readSizedField(decoder, compactLen, "AssetId.definition");
+      byte[] aidBytes = decodeFixedByteArray(definitionPayload, 16, header.flags(), header.minor());
+      byte[] scopePayload = readSizedField(decoder, compactLen, "AssetId.scope");
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after AssetId payload");
+      }
+
+      return new AssetId(
+          null,
+          new AssetDefinitionId(aidBytes),
+          encodedAccountPayload,
+          scopePayload);
     }
   }
 
@@ -602,35 +664,31 @@ public final class TransferWirePayloadEncoder {
   /**
    * Adapter for encoding AssetId: { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }
    *
-   * <p>The {@code scope} field defaults to {@code AssetBalanceScope::Global} (enum discriminant 0,
-   * unit variant) when not specified. It MUST be serialized even for the default value.
+   * <p>Legacy text input defaults to {@code AssetBalanceScope::Global}. Canonical Norito asset
+   * identifiers preserve the account and scope payload bytes exactly as provided.
    */
   private static final class AssetIdAdapter implements TypeAdapter<AssetId> {
     private static final TypeAdapter<AccountId> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();
     private static final TypeAdapter<AssetDefinitionId> ASSET_DEF_ID_ADAPTER =
         new AssetDefinitionIdAdapter();
-    /** AssetBalanceScope::Global = enum discriminant 0, unit variant (no fields). */
-    private static final int ASSET_BALANCE_SCOPE_GLOBAL = 0;
 
     @Override
     public void encode(NoritoEncoder encoder, AssetId value) {
       // AssetId struct fields in order with u64 length prefixes:
       // 1. account: AccountId
       // 2. definition: AssetDefinitionId
-      // 3. scope: AssetBalanceScope (default Global)
-      encodeFieldWithLength(encoder, ACCOUNT_ID_ADAPTER, value.account());
+      // 3. scope: AssetBalanceScope
+      byte[] encodedAccountPayload = value.encodedAccountPayload();
+      if (encodedAccountPayload != null) {
+        encoder.writeUInt(encodedAccountPayload.length, 64);
+        encoder.writeBytes(encodedAccountPayload);
+      } else {
+        encodeFieldWithLength(encoder, ACCOUNT_ID_ADAPTER, value.account());
+      }
       encodeFieldWithLength(encoder, ASSET_DEF_ID_ADAPTER, value.definition());
-      encodeAssetBalanceScopeGlobal(encoder);
-    }
-
-    private void encodeAssetBalanceScopeGlobal(NoritoEncoder encoder) {
-      // AssetBalanceScope::Global = u32(0) with no variant payload.
-      // As a struct field it gets a u64 length prefix wrapping the enum encoding.
-      NoritoEncoder child = encoder.childEncoder();
-      UINT32_ADAPTER.encode(child, (long) ASSET_BALANCE_SCOPE_GLOBAL);
-      byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
-      encoder.writeBytes(payload);
+      byte[] scopePayload = value.scopePayload();
+      encoder.writeUInt(scopePayload.length, 64);
+      encoder.writeBytes(scopePayload);
     }
 
     @Override
@@ -758,5 +816,63 @@ public final class TransferWirePayloadEncoder {
       encoder.writeLength(1, compact);
       encoder.writeByte(b);
     }
+  }
+
+  private static byte[] globalScopePayload() {
+    NoritoEncoder encoder = new NoritoEncoder(0);
+    UINT32_ADAPTER.encode(encoder, 0L);
+    return encoder.toByteArray();
+  }
+
+  private static byte[] extractNoritoBytes(String noritoString) {
+    String prefix = "norito:";
+    if (!noritoString.regionMatches(true, 0, prefix, 0, prefix.length())) {
+      throw new IllegalArgumentException("Value must start with norito: prefix");
+    }
+    String hex = noritoString.substring(prefix.length());
+    if ((hex.length() & 1) != 0) {
+      throw new IllegalArgumentException("Hex string must have even length");
+    }
+    byte[] bytes = new byte[hex.length() / 2];
+    for (int i = 0; i < bytes.length; i++) {
+      int hi = Character.digit(hex.charAt(i * 2), 16);
+      int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+      if (hi < 0 || lo < 0) {
+        throw new IllegalArgumentException("Invalid hex character at position " + (i * 2));
+      }
+      bytes[i] = (byte) ((hi << 4) | lo);
+    }
+    return bytes;
+  }
+
+  private static byte[] readSizedField(
+      NoritoDecoder decoder, boolean compactLen, String fieldName) {
+    long fieldLength = decoder.readLength(compactLen);
+    if (fieldLength > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(fieldName + " field too large");
+    }
+    return decoder.readBytes((int) fieldLength);
+  }
+
+  private static byte[] decodeFixedByteArray(
+      byte[] payload, int expectedLen, int flags, int flagsHint) {
+    if (payload.length == expectedLen) {
+      return payload.clone();
+    }
+
+    NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
+    boolean compactLen = (flags & NoritoHeader.COMPACT_LEN) != 0;
+    byte[] result = new byte[expectedLen];
+    for (int i = 0; i < expectedLen; i++) {
+      long elementLen = decoder.readLength(compactLen);
+      if (elementLen != 1) {
+        throw new IllegalArgumentException("Expected 1-byte element, got " + elementLen);
+      }
+      result[i] = (byte) decoder.readByte();
+    }
+    if (decoder.remaining() != 0) {
+      throw new IllegalArgumentException("Trailing bytes after fixed byte array");
+    }
+    return result;
   }
 }
