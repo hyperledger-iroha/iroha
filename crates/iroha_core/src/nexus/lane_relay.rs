@@ -78,7 +78,10 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
     /// Validate, de-duplicate, record, and broadcast the provided envelopes.
     pub fn broadcast(&mut self, envelopes: impl IntoIterator<Item = LaneRelayEnvelope>) {
         for envelope in envelopes {
-            if let Err(err) = envelope.verify() {
+            if let Err(err) = envelope
+                .verify()
+                .and_then(|()| envelope.verify_fastpq_proof_material())
+            {
                 record_relay_error(&err);
                 iroha_logger::warn!(
                     lane_id = %envelope.lane_id,
@@ -113,7 +116,7 @@ mod tests {
             BlockHeader,
             consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         },
-        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
+        nexus::{DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope},
     };
 
     use super::{LaneRelayBroadcaster, LaneRelayTx};
@@ -169,7 +172,14 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
         };
-        LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope")
+        let envelope =
+            LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope");
+        let verified_at_height = Some(height);
+        let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
+        envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest,
+            verified_at_height,
+        }))
     }
 
     #[test]
@@ -208,5 +218,30 @@ mod tests {
 
         assert!(network.sent().is_empty());
         assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
+    }
+
+    #[test]
+    fn broadcaster_accepts_retry_after_missing_fastpq_proof() {
+        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let network = MockNetwork::default();
+        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
+
+        let envelope = sample_envelope(3, 5);
+        let mut missing_proof = envelope.clone();
+        missing_proof.fastpq_proof = None;
+
+        broadcaster.broadcast(vec![missing_proof]);
+        assert!(network.sent().is_empty());
+        assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
+
+        broadcaster.broadcast(vec![envelope]);
+        let sent = network.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].block_height, 3);
+        assert_eq!(
+            crate::sumeragi::status::lane_relay_envelopes_snapshot().len(),
+            1
+        );
     }
 }

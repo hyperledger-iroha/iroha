@@ -40,7 +40,7 @@ public final class TransactionPayloadFixtureTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000001");
-    payload.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp");
+    payload.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
     payload.put("creation_time_ms", 0L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
@@ -48,7 +48,7 @@ public final class TransactionPayloadFixtureTests {
     final Map<String, Object> fixtureMap = new LinkedHashMap<>();
     fixtureMap.put("name", "wire_instruction_fixture");
     fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp");
+    fixtureMap.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
     fixtureMap.put("creation_time_ms", 0L);
     fixtureMap.put("payload", payload);
 
@@ -85,7 +85,7 @@ public final class TransactionPayloadFixtureTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000001");
-    payload.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp");
+    payload.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
     payload.put("creation_time_ms", 0L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
@@ -93,7 +93,7 @@ public final class TransactionPayloadFixtureTests {
     final Map<String, Object> fixtureMap = new LinkedHashMap<>();
     fixtureMap.put("name", "wire_instruction_arguments_fixture");
     fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp");
+    fixtureMap.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
     fixtureMap.put("creation_time_ms", 0L);
     fixtureMap.put("payload", payload);
 

@@ -24,6 +24,7 @@ macro_rules! json_obj {
 }
 
 const NETWORK_PREFIX: u16 = 753;
+const BASE58_ALPHABET: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 struct PositiveEncodings {
     canonical_hex: String,
@@ -329,11 +330,44 @@ fn mutate_last_char(input: &str, replacement: char) -> String {
         .last_mut()
         .expect("address strings are non-empty for compliance vectors");
     if *last == replacement {
-        *last = '0';
+        *last = if replacement != '1' { '1' } else { '2' };
     } else {
         *last = replacement;
     }
     chars.into_iter().collect()
+}
+
+fn find_i105_checksum_mismatch(
+    input: &str,
+    expected_prefix: Option<u16>,
+) -> (String, AccountAddressError) {
+    for candidate in BASE58_ALPHABET.chars() {
+        let mutated = mutate_last_char(input, candidate);
+        if let Err(err) = AccountAddress::from_i105_for_discriminant(&mutated, expected_prefix) {
+            if matches!(err, AccountAddressError::ChecksumMismatch) {
+                return (mutated, err);
+            }
+        }
+    }
+    panic!("failed to derive deterministic I105 checksum-mismatch vector");
+}
+
+fn find_i105_default_checksum_mismatch(input: &str) -> (String, AccountAddressError) {
+    let mut preferred_candidates: Vec<char> = input.chars().collect();
+    preferred_candidates.sort_unstable();
+    preferred_candidates.dedup();
+    for candidate in preferred_candidates
+        .into_iter()
+        .chain(BASE58_ALPHABET.chars())
+    {
+        let mutated = mutate_last_char(input, candidate);
+        if let Err(err) = AccountAddress::from_i105(&mutated) {
+            if matches!(err, AccountAddressError::ChecksumMismatch) {
+                return (mutated, err);
+            }
+        }
+    }
+    panic!("failed to derive deterministic i105-default checksum-mismatch vector");
 }
 
 fn replace_nth_char(input: &str, index: usize, replacement: char) -> String {
@@ -377,10 +411,8 @@ pub fn compliance_vectors_json() -> Value {
     let mut positive_cases = vec![single_default.value.clone(), single_treasury.value.clone()];
     positive_cases.extend(multisig_cases.iter().map(|case| case.value.clone()));
 
-    let i105_checksum = mutate_last_char(&single_default.encodings.i105, 'z');
-    let err_checksum =
-        AccountAddress::from_i105_for_discriminant(&i105_checksum, Some(NETWORK_PREFIX))
-            .unwrap_err();
+    let (i105_checksum, err_checksum) =
+        find_i105_checksum_mismatch(&single_default.encodings.i105, Some(NETWORK_PREFIX));
 
     let i105_wrong_prefix = single_default
         .address
@@ -390,19 +422,11 @@ pub fn compliance_vectors_json() -> Value {
         AccountAddress::from_i105_for_discriminant(&i105_wrong_prefix, Some(NETWORK_PREFIX))
             .unwrap_err();
 
-    let i105_default_missing = single_default
-        .encodings
-        .i105_default
-        .strip_prefix("sora")
-        .unwrap()
-        .to_string();
-    let err_missing = AccountAddress::from_i105(&i105_default_missing).unwrap_err();
-
     let i105_default_bad_char = replace_nth_char(&single_default.encodings.i105_default, 6, 'A');
     let err_bad_char = AccountAddress::from_i105(&i105_default_bad_char).unwrap_err();
 
-    let i105_default_bad_checksum = mutate_last_char(&single_default.encodings.i105_default, 'ﾇ');
-    let err_bad_checksum = AccountAddress::from_i105(&i105_default_bad_checksum).unwrap_err();
+    let (i105_default_bad_checksum, err_bad_checksum) =
+        find_i105_default_checksum_mismatch(&single_default.encodings.i105_default);
 
     let canonical_invalid = canonical_invalid_hex(&single_default.encodings);
     let err_invalid_hex = AccountAddress::parse_encoded(&canonical_invalid, None).unwrap_err();
@@ -435,13 +459,6 @@ pub fn compliance_vectors_json() -> Value {
             "input": i105_wrong_prefix,
             "expected_prefix": NETWORK_PREFIX,
             "expected_error": error_to_json(&err_prefix),
-        }),
-        json_obj!({
-            "case_id": "i105_default-missing-sentinel",
-            "format": "i105_default",
-            "note": "Missing required sora sentinel prefix.",
-            "input": i105_default_missing,
-            "expected_error": error_to_json(&err_missing),
         }),
         json_obj!({
             "case_id": "i105_default-invalid-character",

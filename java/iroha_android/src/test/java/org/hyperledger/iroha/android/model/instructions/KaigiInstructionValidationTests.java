@@ -6,7 +6,7 @@ import java.util.Map;
 public final class KaigiInstructionValidationTests {
 
   private static final String ENCODED_ACCOUNT_ID =
-      "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp";
+      "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV";
 
   private KaigiInstructionValidationTests() {}
 

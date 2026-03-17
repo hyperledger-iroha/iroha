@@ -21,10 +21,10 @@ public final class OfflineAuditLoggerTest {
     final OfflineAuditLogger logger = new OfflineAuditLogger(logFile, true);
     logger.record(
         new OfflineAuditEntry(
-            "tx1", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp", "norito:00", "10", 1));
+            "tx1", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV", "norito:00", "10", 1));
     logger.record(
         new OfflineAuditEntry(
-            "tx2", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp", "norito:00", "20", 2));
+            "tx2", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV", "norito:00", "20", 2));
 
     final List<OfflineAuditEntry> entries = logger.entries();
     assert entries.size() == 2 : "entries size mismatch";
@@ -47,8 +47,8 @@ public final class OfflineAuditLoggerTest {
         [
           {
             "tx_id": "tx1",
-            "sender_id": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
-            "receiver_id": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+            "sender_id": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV",
+            "receiver_id": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV",
             "asset_id": "norito:00",
             "amount": "10",
             "timestamp_ms": 1.5

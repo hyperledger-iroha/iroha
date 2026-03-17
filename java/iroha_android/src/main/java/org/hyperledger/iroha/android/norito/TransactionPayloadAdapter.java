@@ -49,6 +49,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       NoritoAdapters.option(NoritoAdapters.uint(32));
   private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
   private static final TypeAdapter<Map<String, String>> METADATA_ADAPTER = new MetadataAdapter();
+  // Protect decode paths from pathological allocations on hostile payloads.
+  private static final int MAX_DECODE_FIELD_BYTES = 64 * 1024 * 1024;
 
   @Override
   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
@@ -273,11 +275,9 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         final byte[] payload, final int flags, final int flagsHint) {
       final NoritoDecoder d = new NoritoDecoder(payload, flags, flagsHint);
       final long tag = ENUM_TAG_ADAPTER.decode(d);
-      final long variantLen = d.readLength(d.compactLenActive());
-      if (variantLen > Integer.MAX_VALUE) {
-        throw new IllegalArgumentException("AccountController variant payload too large");
-      }
-      final byte[] variantPayload = d.readBytes((int) variantLen);
+      final int variantLen =
+          checkedLength(d.readLength(d.compactLenActive()), "AccountController variant payload");
+      final byte[] variantPayload = d.readBytes(variantLen);
       if (d.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after AccountController");
       }
@@ -316,27 +316,30 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       final int version = Math.toIntExact(decodeSizedField(d, UINT8_ADAPTER));
       final int threshold = Math.toIntExact(decodeSizedField(d, UINT16_ADAPTER));
 
-      final long vecLen = d.readLength(d.compactLenActive());
-      if (vecLen > Integer.MAX_VALUE) {
-        throw new IllegalArgumentException("MultisigPolicy vector payload too large");
-      }
-      final byte[] vecPayload = d.readBytes((int) vecLen);
+      final int vecLen =
+          checkedLength(d.readLength(d.compactLenActive()), "MultisigPolicy vector payload");
+      final byte[] vecPayload = d.readBytes(vecLen);
       if (d.remaining() != 0) {
         throw new IllegalArgumentException("Trailing bytes after MultisigPolicy");
       }
 
       final NoritoDecoder vecDecoder = new NoritoDecoder(vecPayload, flags, flagsHint);
       final long count = vecDecoder.readLength(false);
+      if (count < 0L) {
+        throw new IllegalArgumentException("MultisigMember count must be non-negative");
+      }
       if (count > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("MultisigMember count too large");
       }
-      final List<AccountAddress.MultisigMemberPayload> members = new ArrayList<>((int) count);
+      final int minPrefixLen = vecDecoder.compactLenActive() ? 1 : 8;
+      if (count > (long) vecDecoder.remaining() / minPrefixLen) {
+        throw new IllegalArgumentException("MultisigMember count exceeds payload bounds");
+      }
+      final List<AccountAddress.MultisigMemberPayload> members = new ArrayList<>();
       for (long i = 0; i < count; i++) {
-        final long memberLen = vecDecoder.readLength(vecDecoder.compactLenActive());
-        if (memberLen > Integer.MAX_VALUE) {
-          throw new IllegalArgumentException("MultisigMember payload too large");
-        }
-        final byte[] memberPayload = vecDecoder.readBytes((int) memberLen);
+        final int memberLen =
+            checkedLength(vecDecoder.readLength(vecDecoder.compactLenActive()), "MultisigMember payload");
+        final byte[] memberPayload = vecDecoder.readBytes(memberLen);
         final NoritoDecoder memberDecoder = new NoritoDecoder(memberPayload, flags, flagsHint);
         final String memberMultihash = decodeSizedField(memberDecoder, STRING_ADAPTER);
         final int weight = Math.toIntExact(decodeSizedField(memberDecoder, UINT16_ADAPTER));
@@ -452,11 +455,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static <T> T decodeSizedField(final NoritoDecoder decoder, final TypeAdapter<T> adapter) {
-    final long length = decoder.readLength(decoder.compactLenActive());
-    if (length > Integer.MAX_VALUE) {
-      throw new IllegalArgumentException("Field payload too large");
-    }
-    final byte[] payload = decoder.readBytes((int) length);
+    final int length = checkedLength(decoder.readLength(decoder.compactLenActive()), "Field payload");
+    final byte[] payload = decoder.readBytes(length);
     final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
@@ -466,12 +466,22 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static String decodeAuthorityField(final NoritoDecoder decoder) {
-    final long length = decoder.readLength(decoder.compactLenActive());
-    if (length > Integer.MAX_VALUE) {
-      throw new IllegalArgumentException("Field payload too large");
-    }
-    final byte[] payload = decoder.readBytes((int) length);
+    final int length = checkedLength(decoder.readLength(decoder.compactLenActive()), "Field payload");
+    final byte[] payload = decoder.readBytes(length);
     return AccountIdAdapter.decodePayload(payload, decoder.flags(), decoder.flagsHint());
+  }
+
+  private static int checkedLength(final long length, final String field) {
+    if (length < 0L) {
+      throw new IllegalArgumentException(field + " must be non-negative");
+    }
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(field + " too large");
+    }
+    if (length > MAX_DECODE_FIELD_BYTES) {
+      throw new IllegalArgumentException(field + " exceeds decode cap");
+    }
+    return (int) length;
   }
 
   private static InstructionBox tryDecodeWireInstruction(
