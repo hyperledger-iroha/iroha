@@ -20,8 +20,10 @@ public final class AssetIdDecoderTests {
     isNoritoEncodedReturnsFalseForNull();
     decodeExtractsAidHexFromNoritoEncodedAssetId();
     decodeRoundtripForRoseInWonderland();
+    decodeRejectsWrongAssetIdSchema();
     decodeDefinitionExtractsAidHex();
     decodeDefinitionHandlesRaw16BytePayload();
+    decodeDefinitionRejectsWrongSchema();
     aidHexStartsWithAidPrefix();
     System.out.println("[IrohaAndroid] AssetIdDecoder tests passed.");
   }
@@ -63,6 +65,24 @@ public final class AssetIdDecoderTests {
         : "decoded aidHex must match expected aid for rose#wonderland";
   }
 
+  private static void decodeRejectsWrongAssetIdSchema() {
+    final String encoded = AssetIdEncoder.encodeAssetId("rose", "wonderland", ED25519_KEY);
+    final String wrongSchema =
+        rewriteSchemaHash(
+            encoded,
+            AssetIdEncoder.schemaHashForRustType(
+                "iroha_data_model::asset::id::model::AssetDefinitionId"));
+
+    boolean threw = false;
+    try {
+      AssetIdDecoder.decode(wrongSchema);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage() != null && ex.getMessage().contains("Schema mismatch");
+    }
+
+    assert threw : "decode must reject norito payloads with a mismatched schema hash";
+  }
+
   private static void decodeDefinitionExtractsAidHex() {
     final String encoded = AssetIdEncoder.encodeDefinition("rose", "wonderland");
     final AssetIdDecoder.AssetDefinition result = AssetIdDecoder.decodeDefinition(encoded);
@@ -97,10 +117,52 @@ public final class AssetIdDecoderTests {
         : "raw 16-byte fast path must produce same aidHex as per-element encoding";
   }
 
+  private static void decodeDefinitionRejectsWrongSchema() {
+    final String encoded = AssetIdEncoder.encodeDefinition("rose", "wonderland");
+    final String wrongSchema =
+        rewriteSchemaHash(
+            encoded,
+            AssetIdEncoder.schemaHashForRustType("iroha_data_model::asset::id::model::AssetId"));
+
+    boolean threw = false;
+    try {
+      AssetIdDecoder.decodeDefinition(wrongSchema);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage() != null && ex.getMessage().contains("Schema mismatch");
+    }
+
+    assert threw : "decodeDefinition must reject norito payloads with a mismatched schema hash";
+  }
+
   private static void aidHexStartsWithAidPrefix() {
     final String encoded = AssetIdEncoder.encodeDefinition("pkr", "sbp");
     final AssetIdDecoder.AssetDefinition result = AssetIdDecoder.decodeDefinition(encoded);
 
     assert result.aidHex().startsWith("aid:") : "aidHex must start with aid: prefix";
+  }
+
+  private static String rewriteSchemaHash(final String noritoLiteral, final byte[] schemaHash) {
+    final byte[] bytes = hexToBytes(noritoLiteral.substring("norito:".length()));
+    final int schemaOffset = NoritoHeader.MAGIC.length + 2;
+    System.arraycopy(schemaHash, 0, bytes, schemaOffset, schemaHash.length);
+    return "norito:" + bytesToHex(bytes);
+  }
+
+  private static byte[] hexToBytes(final String hex) {
+    final byte[] bytes = new byte[hex.length() / 2];
+    for (int i = 0; i < bytes.length; i++) {
+      final int hi = Character.digit(hex.charAt(i * 2), 16);
+      final int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
+      bytes[i] = (byte) ((hi << 4) | lo);
+    }
+    return bytes;
+  }
+
+  private static String bytesToHex(final byte[] bytes) {
+    final StringBuilder sb = new StringBuilder(bytes.length * 2);
+    for (final byte b : bytes) {
+      sb.append(String.format(Locale.ROOT, "%02x", b & 0xFF));
+    }
+    return sb.toString();
   }
 }

@@ -26,6 +26,11 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 public final class AssetIdDecoder {
 
   private static final String NORITO_PREFIX = "norito:";
+  private static final byte[] ASSET_ID_SCHEMA_HASH =
+      AssetIdEncoder.schemaHashForRustType("iroha_data_model::asset::id::model::AssetId");
+  private static final byte[] ASSET_DEF_ID_SCHEMA_HASH =
+      AssetIdEncoder.schemaHashForRustType(
+          "iroha_data_model::asset::id::model::AssetDefinitionId");
 
   private AssetIdDecoder() {}
 
@@ -90,7 +95,7 @@ public final class AssetIdDecoder {
    * Skips the account field and extracts the definition's 16-byte aid.
    */
   private static AssetDefinition decodeAssetIdBytes(byte[] data) {
-    NoritoHeader.DecodeResult headerResult = NoritoHeader.decode(data, null);
+    NoritoHeader.DecodeResult headerResult = NoritoHeader.decode(data, ASSET_ID_SCHEMA_HASH);
     NoritoHeader header = headerResult.header();
     byte[] payload = headerResult.payload();
     header.validateChecksum(payload);
@@ -123,7 +128,7 @@ public final class AssetIdDecoder {
    * Decodes raw norito bytes for an AssetDefinitionId (no account, just the [u8; 16] aid).
    */
   private static AssetDefinition decodeDefinitionIdBytes(byte[] data) {
-    NoritoHeader.DecodeResult headerResult = NoritoHeader.decode(data, null);
+    NoritoHeader.DecodeResult headerResult = NoritoHeader.decode(data, ASSET_DEF_ID_SCHEMA_HASH);
     NoritoHeader header = headerResult.header();
     byte[] payload = headerResult.payload();
     header.validateChecksum(payload);
