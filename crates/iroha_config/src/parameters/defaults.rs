@@ -2566,7 +2566,7 @@ pub mod sumeragi {
     /// Multiplier for availability timeout in DA mode.
     pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
     /// Floor (ms) for availability timeouts to avoid churn on tiny pipelines.
-    pub const DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
+    pub const DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 100;
     /// Default interval between kura persistence retry attempts (milliseconds).
     pub const KURA_STORE_RETRY_INTERVAL_MS: u64 = 1_000;
     /// Default maximum kura persistence retry attempts before aborting the block.
@@ -2606,12 +2606,8 @@ pub mod sumeragi {
     pub const RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: u64 = 1_200;
     /// Maximum forced self-proposal attempts allowed for a single (height, view).
     pub const RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW: u32 = 1;
-    /// Number of deterministic no-roster topology refresh retries allowed per view.
-    pub const RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW: u32 = 1;
     /// Rotate immediately when the missing-QC reacquire window is exhausted.
     pub const RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED: bool = true;
-    /// Number of views where no-roster fallback broadcasts remain allowed.
-    pub const RECOVERY_NO_ROSTER_FALLBACK_VIEWS: u32 = 1;
     /// Sidecar mismatch retries before final-drop and canonical-only rebuild.
     pub const SIDECAR_MISMATCH_RETRY_CAP: u32 = 8;
     /// Sidecar mismatch TTL before final-drop (milliseconds).

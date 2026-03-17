@@ -71,7 +71,6 @@ use iroha_executor_data_model::permission::{
     },
     trigger::CanRegisterTrigger,
 };
-use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
 use norito::{
     codec::Encode as NoritoEncode,
     json::{Map as JsonMap, Value as JsonValue},
@@ -239,6 +238,15 @@ fn peer_keypair(index: usize) -> KeyPair {
     KeyPair::from_seed(seed_bytes, Algorithm::BlsNormal)
 }
 
+fn nexus_gas_keypair() -> KeyPair {
+    KeyPair::from_seed(b"izanami::nexus::gas-account".to_vec(), Algorithm::Ed25519)
+}
+
+/// Deterministic gas/sink account used by Izanami Nexus profiles.
+pub(crate) fn nexus_gas_account_id() -> AccountId {
+    AccountId::new(nexus_gas_keypair().public_key().clone())
+}
+
 /// Prepared chaos state with pre-built genesis instructions.
 #[derive(Debug)]
 pub struct PreparedChaos {
@@ -247,10 +255,13 @@ pub struct PreparedChaos {
     pub recipes: Vec<RecipeKind>,
 }
 
-/// Build post-topology NPoS bootstrap instructions for Izanami peers.
-pub fn npos_post_topology_instructions(peer_count: usize) -> Vec<InstructionBox> {
+/// Build post-topology NPoS bootstrap instructions using an explicit minimum self-bond.
+pub fn npos_post_topology_instructions(
+    peer_count: usize,
+    min_self_bond: u64,
+) -> Vec<InstructionBox> {
     let effective_peers = peer_count.max(1);
-    let stake_amount: Numeric = SumeragiNposParameters::default().min_self_bond().into();
+    let stake_amount: Numeric = min_self_bond.into();
     let mut instructions = Vec::new();
     for index in 0..effective_peers {
         let key_pair = peer_keypair(index);
@@ -376,7 +387,7 @@ pub fn prepare_state(
         let ivm_domain: DomainId = "ivm"
             .parse()
             .map_err(|_| eyre!("failed to parse ivm domain id"))?;
-        let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+        let gas_account_id = nexus_gas_account_id();
         let gas_label: Name = "gas"
             .parse()
             .map_err(|_| eyre!("failed to parse gas account label"))?;
@@ -2960,6 +2971,19 @@ mod tests {
             !setup.validator_accounts.is_empty(),
             "validator accounts should be provisioned"
         );
+        assert_eq!(
+            setup.fee_sink,
+            nexus_gas_account_id(),
+            "nexus staking setup should use deterministic Izanami gas account"
+        );
+        assert_eq!(
+            setup.stake_escrow, setup.fee_sink,
+            "stake escrow should follow the deterministic gas account"
+        );
+        assert_eq!(
+            setup.slash_sink, setup.fee_sink,
+            "slash sink should follow the deterministic gas account"
+        );
 
         let expected_label = AccountLabel::new(
             "ivm".parse().expect("ivm domain"),
@@ -2979,7 +3003,10 @@ mod tests {
         }
         assert!(found_fee_sink, "fee sink account should be registered");
 
-        let post_topology = npos_post_topology_instructions(setup.validator_accounts.len());
+        let post_topology = npos_post_topology_instructions(
+            setup.validator_accounts.len(),
+            SumeragiNposParameters::default().min_self_bond(),
+        );
         let mut registered_validators = HashSet::new();
         let mut activated_validators = HashSet::new();
         for instruction in &post_topology {
@@ -3023,6 +3050,45 @@ mod tests {
                 validator.id
             );
         }
+    }
+
+    #[test]
+    fn npos_post_topology_instructions_use_requested_min_self_bond() {
+        let min_self_bond = 2_048_u64;
+        let instructions = npos_post_topology_instructions(4, min_self_bond);
+
+        let mut register_count = 0usize;
+        let mut activate_count = 0usize;
+        for instruction in &instructions {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                register_count = register_count.saturating_add(1);
+                let stake = u64::try_from(register.initial_stake.clone())
+                    .expect("stake should remain integer-valued");
+                assert_eq!(
+                    stake, min_self_bond,
+                    "post-topology validator registrations must use configured min self-bond"
+                );
+            }
+            if instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+                .is_some()
+            {
+                activate_count = activate_count.saturating_add(1);
+            }
+        }
+
+        assert_eq!(
+            register_count, 4,
+            "expected one validator registration per peer"
+        );
+        assert_eq!(
+            activate_count, 4,
+            "expected one validator activation per peer"
+        );
     }
 
     #[test]

@@ -1861,6 +1861,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "stake_quorum_timeout_total",
             snap.view_change_causes.stake_quorum_timeout_total,
         ),
+        json_entry(
+            "roster_unavailable_total",
+            snap.view_change_causes.roster_unavailable_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
             "missing_payload_total",
@@ -1895,6 +1899,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "last_stake_quorum_timeout_timestamp_ms",
             snap.view_change_causes
                 .last_stake_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_roster_unavailable_timestamp_ms",
+            snap.view_change_causes
+                .last_roster_unavailable_timestamp_ms,
         ),
         json_entry(
             "last_da_gate_timestamp_ms",
@@ -2898,6 +2907,14 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
         json_entry("missing_block_fetch", missing_block_fetch),
+        json_entry(
+            "committed_edge_conflict_obsolete_total",
+            snap.committed_edge_conflict_obsolete_total,
+        ),
+        json_entry(
+            "roster_sidecar_mismatch_obsolete_total",
+            snap.roster_sidecar_mismatch_obsolete_total,
+        ),
         json_entry("block_sync", block_sync),
         json_entry("kura_store", kura_store),
         json_entry("epoch", epoch),
@@ -3014,28 +3031,35 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.consensus_forced_proposal_success_total,
         ),
         json_entry(
-            "consensus_no_roster_fallback_total",
-            snap.consensus_no_roster_fallback_total,
+            "consensus_roster_unavailable_detected_total",
+            snap.consensus_roster_unavailable_detected_total,
         ),
         json_entry(
-            "consensus_no_roster_fallback_allowed_total",
-            snap.consensus_no_roster_fallback_total,
+            "consensus_roster_unavailable_election_attempt_total",
+            snap.consensus_roster_unavailable_election_attempt_total,
         ),
         json_entry(
-            "consensus_no_roster_fail_closed_total",
-            snap.consensus_no_roster_fail_closed_total,
+            "consensus_roster_unavailable_election_success_total",
+            snap.consensus_roster_unavailable_election_success_total,
         ),
         json_entry(
-            "consensus_no_roster_refresh_retry_total",
-            snap.consensus_no_roster_refresh_retry_total,
+            "consensus_roster_unavailable_wait_candidates_total",
+            snap.consensus_roster_unavailable_wait_candidates_total,
         ),
         json_entry(
-            "consensus_no_roster_refresh_attempt_total",
-            snap.consensus_no_roster_refresh_attempt_total,
+            "consensus_roster_recovery_state",
+            snap.consensus_roster_recovery_state
+                .map(Value::from)
+                .unwrap_or(Value::Null),
         ),
         json_entry(
-            "consensus_no_roster_refresh_success_total",
-            snap.consensus_no_roster_refresh_success_total,
+            "consensus_roster_recovery_dwell_ms",
+            json_object(
+                snap.consensus_roster_recovery_dwell_ms
+                    .iter()
+                    .map(|(state, ms)| json_entry(*state, *ms))
+                    .collect::<Vec<_>>(),
+            ),
         ),
         json_entry(
             "blocksync_range_pull_candidate_exhausted_total",
@@ -3757,11 +3781,15 @@ mod status_tests {
             consensus_missing_qc_rotation_deferred_total: 4,
             consensus_forced_proposal_attempt_total: 5,
             consensus_forced_proposal_success_total: 2,
-            consensus_no_roster_fallback_total: 8,
-            consensus_no_roster_fail_closed_total: 9,
-            consensus_no_roster_refresh_retry_total: 6,
-            consensus_no_roster_refresh_attempt_total: 3,
-            consensus_no_roster_refresh_success_total: 1,
+            consensus_roster_unavailable_detected_total: 9,
+            consensus_roster_unavailable_election_attempt_total: 6,
+            consensus_roster_unavailable_election_success_total: 3,
+            consensus_roster_unavailable_wait_candidates_total: 1,
+            consensus_roster_recovery_state: Some("wait_candidates"),
+            consensus_roster_recovery_dwell_ms: std::collections::BTreeMap::from([
+                ("steady", 10_u64),
+                ("wait_candidates", 20_u64),
+            ]),
             blocksync_range_pull_candidate_exhausted_total: 7,
             ..Default::default()
         };
@@ -3808,41 +3836,43 @@ mod status_tests {
                 .and_then(Value::as_u64),
             Some(2)
         );
-        assert_eq!(
-            payload
-                .get("consensus_no_roster_fallback_total")
-                .and_then(Value::as_u64),
-            Some(8)
+        assert!(
+            payload.get("consensus_no_roster_fallback_total").is_none(),
+            "fallback telemetry field removed after fail-closed-only no-roster cutover"
+        );
+        assert!(
+            payload.get("consensus_no_roster_fallback_allowed_total").is_none(),
+            "fallback alias field removed after fail-closed-only no-roster cutover"
         );
         assert_eq!(
             payload
-                .get("consensus_no_roster_fallback_allowed_total")
-                .and_then(Value::as_u64),
-            Some(8)
-        );
-        assert_eq!(
-            payload
-                .get("consensus_no_roster_fail_closed_total")
+                .get("consensus_roster_unavailable_detected_total")
                 .and_then(Value::as_u64),
             Some(9)
         );
         assert_eq!(
             payload
-                .get("consensus_no_roster_refresh_retry_total")
+                .get("consensus_roster_unavailable_election_attempt_total")
                 .and_then(Value::as_u64),
             Some(6)
         );
         assert_eq!(
             payload
-                .get("consensus_no_roster_refresh_attempt_total")
+                .get("consensus_roster_unavailable_election_success_total")
                 .and_then(Value::as_u64),
             Some(3)
         );
         assert_eq!(
             payload
-                .get("consensus_no_roster_refresh_success_total")
+                .get("consensus_roster_unavailable_wait_candidates_total")
                 .and_then(Value::as_u64),
             Some(1)
+        );
+        assert_eq!(
+            payload
+                .get("consensus_roster_recovery_state")
+                .and_then(Value::as_str),
+            Some("wait_candidates")
         );
         assert_eq!(
             payload
@@ -3865,6 +3895,8 @@ mod status_tests {
             missing_block_fetch_total: 5,
             missing_block_fetch_last_targets: 3,
             missing_block_fetch_last_dwell_ms: 11,
+            committed_edge_conflict_obsolete_total: 2,
+            roster_sidecar_mismatch_obsolete_total: 6,
             kura_store: status::KuraStoreSnapshot {
                 failures_total: 1,
                 abort_total: 2,
@@ -3909,6 +3941,18 @@ mod status_tests {
         assert_eq!(fetch.get("total").and_then(Value::as_u64), Some(5));
         assert_eq!(fetch.get("last_targets").and_then(Value::as_u64), Some(3));
         assert_eq!(fetch.get("last_dwell_ms").and_then(Value::as_u64), Some(11));
+        assert_eq!(
+            payload
+                .get("committed_edge_conflict_obsolete_total")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("roster_sidecar_mismatch_obsolete_total")
+                .and_then(Value::as_u64),
+            Some(6)
+        );
 
         let kura = payload
             .get("kura_store")
@@ -4330,6 +4374,8 @@ pub async fn handle_v1_sumeragi_status(
                 last_targets: snap.missing_block_fetch_last_targets,
                 last_dwell_ms: snap.missing_block_fetch_last_dwell_ms,
             },
+            committed_edge_conflict_obsolete_total: snap.committed_edge_conflict_obsolete_total,
+            roster_sidecar_mismatch_obsolete_total: snap.roster_sidecar_mismatch_obsolete_total,
             da_gate: SumeragiDaGateStatus {
                 reason: match snap.da_gate.reason {
                     sumeragi::status::DaGateReasonSnapshot::MissingLocalData => {

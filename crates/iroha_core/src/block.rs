@@ -74,7 +74,7 @@ use iroha_data_model::{
         *,
     },
     confidential::ConfidentialFeatureDigest,
-    consensus::{ConsensusKeyRole, Qc},
+    consensus::{ConsensusKeyRole, PreviousRosterEvidence, Qc, VALIDATOR_SET_HASH_VERSION_V1},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -1703,6 +1703,8 @@ pub enum BlockValidationError {
         /// Hash embedded in the incoming header.
         actual: Option<HashOf<DaProofPolicyBundle>>,
     },
+    /// Previous-roster evidence is invalid: {0}
+    PreviousRosterEvidenceInvalid(String),
     /// DA shard cursor gate failed: {0}
     DaShardCursor(#[from] DaShardCursorError),
     /// AXT envelope export contained invalid or inconsistent fragments: {0}
@@ -2015,6 +2017,7 @@ mod pending {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             })
         }
     }
@@ -2034,6 +2037,7 @@ mod chained {
         pub(super) da_commitments: Option<DaCommitmentBundle>,
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
+        pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
     }
 
     impl BlockBuilder<Chained> {
@@ -2069,6 +2073,18 @@ mod chained {
                 .and_then(|bundle| bundle.merkle_root().map(HashOf::from_untyped_unchecked));
             self.0.header.set_da_pin_intents_hash(hash);
             self.0.da_pin_intents = intents;
+            self
+        }
+
+        /// Attach previous-height roster evidence and update the header hash accordingly.
+        #[must_use]
+        pub fn with_previous_roster_evidence(
+            mut self,
+            evidence: Option<PreviousRosterEvidence>,
+        ) -> Self {
+            let hash = evidence.as_ref().map(HashOf::new);
+            self.0.header.set_prev_roster_evidence_hash(hash);
+            self.0.previous_roster_evidence = evidence;
             self
         }
 
@@ -2109,6 +2125,7 @@ mod chained {
                 da_commitments: builder.0.da_commitments,
                 da_proof_policies: builder.0.da_proof_policies,
                 da_pin_intents: builder.0.da_pin_intents,
+                previous_roster_evidence: builder.0.previous_roster_evidence,
             })
         }
 
@@ -2134,6 +2151,7 @@ mod new {
         pub(super) da_commitments: Option<DaCommitmentBundle>,
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
+        pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
     }
 
     impl NewBlock {
@@ -2178,6 +2196,11 @@ mod new {
             self.da_pin_intents.as_ref()
         }
 
+        /// Previous-height roster evidence embedded in this block, if any.
+        pub fn previous_roster_evidence(&self) -> Option<&PreviousRosterEvidence> {
+            self.previous_roster_evidence.as_ref()
+        }
+
         #[cfg(test)]
         #[allow(dead_code)]
         pub(crate) fn update_header(self, header: &BlockHeader, private_key: &PrivateKey) -> Self {
@@ -2193,6 +2216,7 @@ mod new {
                 da_commitments: self.da_commitments,
                 da_proof_policies: self.da_proof_policies,
                 da_pin_intents: self.da_pin_intents,
+                previous_roster_evidence: self.previous_roster_evidence,
             }
         }
     }
@@ -2212,6 +2236,7 @@ mod new {
             );
             signed_block.set_da_proof_policies(block.da_proof_policies);
             signed_block.set_da_pin_intents(block.da_pin_intents);
+            signed_block.set_previous_roster_evidence(block.previous_roster_evidence);
             signed_block
         }
     }
@@ -4358,6 +4383,11 @@ pub(crate) mod valid {
                     actual: actual_prev_block_hash,
                 });
             }
+            Self::validate_previous_roster_evidence(
+                block,
+                block.header().height().get(),
+                actual_prev_block_hash,
+            )?;
 
             let nexus = state.nexus();
             let expected_policy_hash = proof_policy_bundle_hash(&nexus.lane_config);
@@ -4423,6 +4453,96 @@ pub(crate) mod valid {
                 pipeline_cfg,
                 aggregate_lane,
             })
+        }
+
+        fn validate_previous_roster_evidence(
+            block: &SignedBlock,
+            block_height: u64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+        ) -> Result<(), BlockValidationError> {
+            let embedded = block.previous_roster_evidence();
+            let header_hash = block.header().prev_roster_evidence_hash();
+
+            match (header_hash, embedded) {
+                (None, None) => {}
+                (Some(_), None) => {
+                    return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                        "header references previous-roster evidence but payload is missing"
+                            .to_owned(),
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                        "payload includes previous-roster evidence but header hash is absent"
+                            .to_owned(),
+                    ));
+                }
+                (Some(hash), Some(evidence)) => {
+                    if HashOf::new(evidence) != hash {
+                        return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                            "previous-roster evidence hash mismatch".to_owned(),
+                        ));
+                    }
+                }
+            }
+
+            if block_height > 2 && embedded.is_none() {
+                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                    "missing required previous-roster evidence for height > 2".to_owned(),
+                ));
+            }
+
+            let Some(evidence) = embedded else {
+                return Ok(());
+            };
+
+            let expected_prev_height = block_height.saturating_sub(1);
+            if evidence.height != expected_prev_height {
+                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                    format!(
+                        "previous-roster evidence height mismatch: expected {expected_prev_height}, got {}",
+                        evidence.height
+                    ),
+                ));
+            }
+            if Some(evidence.block_hash) != prev_block_hash {
+                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                    "previous-roster evidence block hash does not match header parent hash"
+                        .to_owned(),
+                ));
+            }
+
+            let checkpoint = &evidence.validator_checkpoint;
+            if checkpoint.height != evidence.height || checkpoint.block_hash != evidence.block_hash
+            {
+                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                    "previous-roster evidence checkpoint metadata mismatch".to_owned(),
+                ));
+            }
+
+            if checkpoint.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
+                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                    format!(
+                        "unsupported validator-set hash version in previous-roster evidence: {}",
+                        checkpoint.validator_set_hash_version
+                    ),
+                ));
+            }
+            if checkpoint.validator_set_hash != HashOf::new(&checkpoint.validator_set) {
+                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                    "previous-roster evidence checkpoint validator-set hash mismatch".to_owned(),
+                ));
+            }
+            if let Some(stake_snapshot) = evidence.stake_snapshot.as_ref()
+                && !stake_snapshot.matches_roster(&checkpoint.validator_set)
+            {
+                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
+                    "previous-roster evidence stake snapshot does not match validator set"
+                        .to_owned(),
+                ));
+            }
+
+            Ok(())
         }
 
         fn committed_heights_for_block(
@@ -9092,6 +9212,7 @@ pub(crate) mod valid {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
+                previous_roster_evidence: None,
             });
             let default_policies = crate::da::proof_policy_bundle(
                 &iroha_config::parameters::actual::LaneConfig::default(),
@@ -10058,6 +10179,68 @@ pub(crate) mod valid {
                 BlockValidationError::TransactionAccept(
                     AcceptTransactionFail::SignatureVerification(_)
                 )
+            ));
+        }
+
+        #[test]
+        fn validate_static_snapshot_rejects_missing_previous_roster_evidence_after_height_two() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![KeyPair::random_with_algorithm(Algorithm::BlsNormal)];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+
+            let genesis_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+            let prev_hash = commit_block_at_height(
+                &state,
+                &kura,
+                &topology,
+                leader.private_key(),
+                2,
+                Some(genesis_hash),
+                2,
+            );
+
+            let candidate =
+                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                    header.set_height(nonzero!(3_u64));
+                    header.set_prev_block_hash(Some(prev_hash));
+                    header.creation_time_ms = 3;
+                });
+            let signed: SignedBlock = candidate.into();
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+            let err = {
+                let view = state.query_view();
+                match ValidBlock::validate_static_state_dependent(
+                    &signed,
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &view,
+                    false,
+                    &time_source,
+                    false,
+                ) {
+                    Ok(_) => panic!("height > 2 blocks must carry previous-roster evidence"),
+                    Err(err) => err,
+                }
+            };
+            assert!(matches!(
+                err,
+                BlockValidationError::PreviousRosterEvidenceInvalid(ref message)
+                    if message.contains("missing required previous-roster evidence")
             ));
         }
 
@@ -13448,6 +13631,7 @@ mod event {
                 Reason::ConfidentialFeatureDigestMismatch
             }
             BlockValidationError::ProofPolicyHashMismatch { .. } => Reason::DaProofPolicyMismatch,
+            BlockValidationError::PreviousRosterEvidenceInvalid(_) => Reason::TopologyMismatch,
             BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {
                 Reason::TransactionValidationFailed

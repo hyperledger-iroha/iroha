@@ -406,7 +406,10 @@ impl Actor {
         &mut self,
         qc: &crate::sumeragi::consensus::Qc,
         reason: &'static str,
-    ) {
+    ) -> bool {
+        let now = Instant::now();
+        let stall_snapshot =
+            self.missing_payload_fetch_window_snapshot(qc.height, qc.subject_block_hash, now);
         let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
         let mut roster = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             self.roster_for_new_view_with_mode(
@@ -428,16 +431,71 @@ impl Actor {
             roster = self.effective_commit_topology();
         }
         if roster.is_empty() {
-            return;
+            return false;
         }
         let topology = super::network_topology::Topology::new(roster);
         let signer_set =
             super::qc_signer_indices(qc, topology.as_ref().len(), topology.as_ref().len())
                 .map(|parsed| parsed.voting.into_iter().collect::<BTreeSet<_>>())
                 .unwrap_or_default();
-        let targets = Self::build_fetch_targets(&signer_set, &topology);
+        let mut targets = Self::build_fetch_targets(&signer_set, &topology);
+        let mut stall_all_peers = false;
+        let mut stall_window_index = 0_u64;
+        let mut stall_dwell_ms = 0_u128;
+        let mut last_targeted_fetch_at_ms: Option<u128> = None;
+        if let Some(stall) = stall_snapshot {
+            stall_window_index = stall.window_index;
+            stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis();
+            last_targeted_fetch_at_ms = stall
+                .last_targeted_fetch_at
+                .map(|at| now.saturating_duration_since(at).as_millis());
+            if self.missing_payload_fetch_window_already_emitted(
+                stall.height,
+                stall.block_hash,
+                stall.window_index,
+            ) {
+                debug!(
+                    phase = ?qc.phase,
+                    height = qc.height,
+                    view = qc.view,
+                    block = %qc.subject_block_hash,
+                    reason,
+                    window_index = stall.window_index,
+                    stall_window_ms = stall.stall_window.as_millis(),
+                    stall_dwell_ms = now.saturating_duration_since(stall.entered_at).as_millis(),
+                    last_targeted_fetch_at_ms,
+                    "suppressing repeated deferred-QC targeted fetch in same-height stall window"
+                );
+                return false;
+            }
+            targets.sort_by(|lhs, rhs| {
+                lhs.public_key()
+                    .cmp(rhs.public_key())
+                    .then_with(|| lhs.cmp(rhs))
+            });
+            targets.dedup();
+            let peer_count = targets.len();
+            if peer_count > 2 {
+                if stall.window_index % 3 == 2 {
+                    stall_all_peers = true;
+                } else {
+                    let peer_count_u64 = u64::try_from(peer_count).unwrap_or(u64::MAX).max(1);
+                    let start_idx =
+                        usize::try_from(stall.window_index % peer_count_u64).unwrap_or(0);
+                    let second_idx = (start_idx + 1) % peer_count;
+                    let mut cohort = Vec::with_capacity(2);
+                    cohort.push(targets[start_idx].clone());
+                    if second_idx != start_idx {
+                        cohort.push(targets[second_idx].clone());
+                    }
+                    targets = cohort;
+                }
+            } else {
+                stall_all_peers = true;
+            }
+        }
         if targets.is_empty() {
-            return;
+            return false;
         }
         self.request_missing_block(
             qc.subject_block_hash,
@@ -446,15 +504,29 @@ impl Actor {
             super::MissingBlockPriority::Consensus,
             &targets,
         );
+        if let Some(stall) = stall_snapshot {
+            self.mark_missing_payload_fetch_window_emitted(
+                stall.height,
+                stall.block_hash,
+                stall.window_index,
+                now,
+            );
+        }
         info!(
             phase = ?qc.phase,
             height = qc.height,
             view = qc.view,
             block = %qc.subject_block_hash,
             targets = targets.len(),
+            same_height_stall_mode = stall_snapshot.is_some(),
+            same_height_stall_window_index = stall_window_index,
+            same_height_stall_all_peers = stall_all_peers,
+            same_height_stall_dwell_ms = stall_dwell_ms,
+            same_height_stall_last_targeted_fetch_at_ms = last_targeted_fetch_at_ms,
             reason,
             "forcing targeted missing-block fetch for deferred QC"
         );
+        true
     }
 
     pub(super) fn try_replay_deferred_qcs(&mut self) -> bool {
@@ -483,16 +555,28 @@ impl Actor {
         }
 
         let mut actions = Vec::new();
-        let deferred_keys: Vec<_> = self
+        let mut deferred_entries: Vec<_> = self
             .deferred_qcs
-            .keys()
-            .cloned()
-            .take(DEFERRED_MISSING_PAYLOAD_QC_PER_TICK)
+            .iter()
+            .map(|(key, qc)| (*key, qc.clone()))
             .collect();
-        for key in deferred_keys {
-            let Some(qc) = self.deferred_qcs.get(&key).cloned() else {
+        deferred_entries.sort_by(|(_, lhs), (_, rhs)| {
+            lhs.height
+                .cmp(&rhs.height)
+                .then_with(|| lhs.view.cmp(&rhs.view))
+                .then_with(|| lhs.subject_block_hash.cmp(&rhs.subject_block_hash))
+                .then_with(|| lhs.phase.cmp(&rhs.phase))
+        });
+        for (key, qc) in deferred_entries {
+            if actions.len() >= DEFERRED_MISSING_PAYLOAD_QC_PER_TICK {
+                break;
+            }
+            if !self.frontier_catchup_far_ahead_replay_allowed(qc.height, now) {
                 continue;
-            };
+            }
+            let stall_window = self
+                .missing_payload_fetch_window_snapshot(qc.height, qc.subject_block_hash, now)
+                .map(|snapshot| snapshot.stall_window);
             let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
             let roster = if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
                 self.roster_for_new_view_with_mode(
@@ -521,6 +605,11 @@ impl Actor {
             let Some(state) = self.deferred_qc_roster_state.get(&key) else {
                 continue;
             };
+            if let Some(stall_window) = stall_window
+                && now.saturating_duration_since(state.last_attempt) < stall_window
+            {
+                continue;
+            }
             let age = now.saturating_duration_since(state.first_seen);
             if age < self.recovery_deferred_qc_ttl() {
                 continue;
@@ -562,31 +651,42 @@ impl Actor {
                     }
                 }
                 ReplayAction::Escalate { key, qc, reason } => {
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    if fetched {
+                        if let Some(state) = self.deferred_qc_roster_state.get_mut(&key) {
+                            state.escalated_fetch = true;
+                            state.attempts = state.attempts.saturating_add(1);
+                            state.first_seen = now;
+                            state.last_attempt = now;
+                        }
+                        progress = true;
+                    }
+                }
+                ReplayAction::Expire { key, qc, reason } => {
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    let current_view = self.phase_tracker.current_view(qc.height).unwrap_or(0);
+                    let recovered = self.handle_roster_unavailable_recovery(
+                        qc.height,
+                        current_view,
+                        Some(qc.subject_block_hash),
+                        self.queue.queued_len(),
+                        now,
+                        super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                        reason,
+                    );
                     if let Some(state) = self.deferred_qc_roster_state.get_mut(&key) {
-                        state.escalated_fetch = true;
-                        state.attempts = state.attempts.saturating_add(1);
+                        // Avoid hammering recovery every tick while the roster remains unavailable.
                         state.first_seen = now;
                         state.last_attempt = now;
                     }
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    progress = true;
-                }
-                ReplayAction::Expire { key, qc, reason } => {
-                    self.deferred_qcs.remove(&key);
-                    self.deferred_qc_roster_state.remove(&key);
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    super::status::inc_qc_deferred_expired();
-                    #[cfg(feature = "telemetry")]
-                    if let Some(telemetry) = self.telemetry_handle() {
-                        telemetry.inc_qc_deferred_expired();
+                    if recovered {
+                        super::status::inc_qc_deferred_expired();
+                        #[cfg(feature = "telemetry")]
+                        if let Some(telemetry) = self.telemetry_handle() {
+                            telemetry.inc_qc_deferred_expired();
+                        }
                     }
-                    let current_view = self.phase_tracker.current_view(qc.height).unwrap_or(0);
-                    self.trigger_view_change_with_cause(
-                        qc.height,
-                        current_view,
-                        super::ViewChangeCause::MissingQc,
-                    );
-                    progress = true;
+                    progress |= fetched || recovered;
                 }
             }
         }
@@ -600,6 +700,11 @@ impl Actor {
         }
 
         enum ReplayAction {
+            Obsolete {
+                key: QcVoteKey,
+                qc: crate::sumeragi::consensus::Qc,
+                reason: &'static str,
+            },
             Replay {
                 key: QcVoteKey,
                 qc: crate::sumeragi::consensus::Qc,
@@ -618,21 +723,57 @@ impl Actor {
         }
 
         let mut actions = Vec::new();
-        for key in self
+        let mut deferred_entries: Vec<_> = self
             .deferred_missing_payload_qcs
-            .keys()
-            .cloned()
-            .take(DEFERRED_MISSING_PAYLOAD_QC_PER_TICK)
-        {
-            let Some(entry) = self.deferred_missing_payload_qcs.get(&key) else {
+            .iter()
+            .map(|(key, entry)| (*key, entry.clone()))
+            .collect();
+        let committed_height = self.committed_height_snapshot();
+        deferred_entries.sort_by(|(_, lhs), (_, rhs)| {
+            lhs.qc
+                .height
+                .cmp(&rhs.qc.height)
+                .then_with(|| lhs.qc.view.cmp(&rhs.qc.view))
+                .then_with(|| lhs.qc.subject_block_hash.cmp(&rhs.qc.subject_block_hash))
+                .then_with(|| lhs.qc.phase.cmp(&rhs.qc.phase))
+        });
+        for (key, entry) in deferred_entries {
+            if actions.len() >= DEFERRED_MISSING_PAYLOAD_QC_PER_TICK {
+                break;
+            }
+            if self.deferred_missing_payload_qc_is_non_actionable_dependency(
+                &entry,
+                committed_height,
+                now,
+            ) {
+                actions.push(ReplayAction::Obsolete {
+                    key,
+                    qc: entry.qc.clone(),
+                    reason: entry.reason,
+                });
                 continue;
-            };
+            }
+            if !self.frontier_catchup_far_ahead_replay_allowed(entry.qc.height, now) {
+                continue;
+            }
+            let stall_window = self
+                .missing_payload_fetch_window_snapshot(
+                    entry.qc.height,
+                    entry.qc.subject_block_hash,
+                    now,
+                )
+                .map(|snapshot| snapshot.stall_window);
             if self.block_known_locally(entry.qc.subject_block_hash) {
                 actions.push(ReplayAction::Replay {
                     key,
                     qc: entry.qc.clone(),
                     reason: entry.reason,
                 });
+                continue;
+            }
+            if let Some(stall_window) = stall_window
+                && now.saturating_duration_since(entry.last_attempt) < stall_window
+            {
                 continue;
             }
             let age = now.saturating_duration_since(entry.first_seen);
@@ -661,6 +802,34 @@ impl Actor {
         let mut progress = false;
         for action in actions {
             match action {
+                ReplayAction::Obsolete { key, qc, reason } => {
+                    self.deferred_missing_payload_qcs.remove(&key);
+                    let subject_height =
+                        Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height);
+                    if self.missing_hash_is_obsolete_committed_edge_conflict(
+                        subject_height,
+                        qc.subject_block_hash,
+                        committed_height,
+                    ) {
+                        super::status::inc_committed_edge_conflict_obsolete();
+                    }
+                    self.clear_missing_block_request(
+                        &qc.subject_block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    self.clear_missing_block_view_change(&qc.subject_block_hash);
+                    debug!(
+                        phase = ?qc.phase,
+                        height = qc.height,
+                        view = qc.view,
+                        subject_height,
+                        committed_height,
+                        block = %qc.subject_block_hash,
+                        reason,
+                        "discarding deferred missing-payload QC as obsolete/non-actionable"
+                    );
+                    progress = true;
+                }
                 ReplayAction::Replay { key, qc, reason } => match self.handle_qc(qc.clone()) {
                     Ok(()) => {
                         self.deferred_missing_payload_qcs.remove(&key);
@@ -672,6 +841,7 @@ impl Actor {
                         progress = true;
                     }
                     Err(err) => {
+                        let mut branch_progress = false;
                         warn!(?err, reason, "failed to replay deferred missing-payload QC");
                         if self.should_defer_missing_block_view_change(
                             &qc.subject_block_hash,
@@ -682,7 +852,8 @@ impl Actor {
                                 entry.first_seen = now;
                                 entry.last_attempt = now;
                             }
-                            self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                            branch_progress |=
+                                self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
                             debug!(
                                 phase = ?qc.phase,
                                 height = qc.height,
@@ -692,6 +863,122 @@ impl Actor {
                                 "deferring MissingPayload escalation for deferred QC replay failure while dependencies are converging"
                             );
                         } else {
+                            let first_seen = self
+                                .deferred_missing_payload_qcs
+                                .get(&key)
+                                .map(|entry| entry.first_seen)
+                                .unwrap_or(now);
+                            if let Some(action) = self
+                                .handoff_contiguous_frontier_missing_payload_recovery(
+                                    qc.height, qc.view, first_seen, now,
+                                )
+                            {
+                                if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                                    self.deferred_missing_payload_qcs.remove(&key);
+                                    super::status::inc_qc_deferred_expired();
+                                    #[cfg(feature = "telemetry")]
+                                    if let Some(telemetry) = self.telemetry_handle() {
+                                        telemetry.inc_qc_deferred_expired();
+                                    }
+                                } else if let Some(entry) =
+                                    self.deferred_missing_payload_qcs.get_mut(&key)
+                                {
+                                    entry.last_attempt = now;
+                                }
+                                branch_progress |=
+                                    !matches!(action, super::FrontierRecoveryAdvance::None);
+                            } else if self.try_reserve_missing_qc_height_stall_rotation_window(
+                                qc.height,
+                                super::ViewChangeCause::MissingPayload,
+                                now,
+                            ) {
+                                self.deferred_missing_payload_qcs.remove(&key);
+                                super::status::inc_qc_deferred_expired();
+                                #[cfg(feature = "telemetry")]
+                                if let Some(telemetry) = self.telemetry_handle() {
+                                    telemetry.inc_qc_deferred_expired();
+                                }
+                                let current_view =
+                                    self.phase_tracker.current_view(qc.height).unwrap_or(0);
+                                self.trigger_view_change_with_cause(
+                                    qc.height,
+                                    current_view,
+                                    super::ViewChangeCause::MissingPayload,
+                                );
+                                branch_progress = true;
+                            } else if let Some(entry) =
+                                self.deferred_missing_payload_qcs.get_mut(&key)
+                            {
+                                entry.last_attempt = now;
+                            }
+                        }
+                        progress |= branch_progress;
+                    }
+                },
+                ReplayAction::Escalate { key, qc, reason } => {
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    if fetched {
+                        if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
+                            entry.escalated_fetch = true;
+                            entry.attempts = entry.attempts.saturating_add(1);
+                            entry.first_seen = now;
+                            entry.last_attempt = now;
+                        }
+                        progress = true;
+                    }
+                }
+                ReplayAction::Expire { key, qc, reason } => {
+                    let mut branch_progress = false;
+                    let fetched = self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
+                    if self.should_defer_missing_block_view_change(
+                        &qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                    ) {
+                        if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
+                            entry.first_seen = now;
+                            entry.last_attempt = now;
+                        }
+                        branch_progress |= fetched;
+                        debug!(
+                            phase = ?qc.phase,
+                            height = qc.height,
+                            view = qc.view,
+                            block = %qc.subject_block_hash,
+                            reason,
+                            "deferring MissingPayload escalation for expired deferred QC while dependencies are converging"
+                        );
+                    } else {
+                        let first_seen = self
+                            .deferred_missing_payload_qcs
+                            .get(&key)
+                            .map(|entry| entry.first_seen)
+                            .unwrap_or(now);
+                        if let Some(action) = self
+                            .handoff_contiguous_frontier_missing_payload_recovery(
+                                qc.height, qc.view, first_seen, now,
+                            )
+                        {
+                            if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                                self.deferred_missing_payload_qcs.remove(&key);
+                                super::status::inc_qc_deferred_expired();
+                                #[cfg(feature = "telemetry")]
+                                if let Some(telemetry) = self.telemetry_handle() {
+                                    telemetry.inc_qc_deferred_expired();
+                                }
+                            } else if let Some(entry) =
+                                self.deferred_missing_payload_qcs.get_mut(&key)
+                            {
+                                entry.last_attempt = now;
+                                branch_progress |= fetched;
+                            }
+                            branch_progress |=
+                                !matches!(action, super::FrontierRecoveryAdvance::None);
+                        } else if self.try_reserve_missing_qc_height_stall_rotation_window(
+                            qc.height,
+                            super::ViewChangeCause::MissingPayload,
+                            now,
+                        ) {
                             self.deferred_missing_payload_qcs.remove(&key);
                             super::status::inc_qc_deferred_expired();
                             #[cfg(feature = "telemetry")]
@@ -705,54 +992,14 @@ impl Actor {
                                 current_view,
                                 super::ViewChangeCause::MissingPayload,
                             );
-                        }
-                        progress = true;
-                    }
-                },
-                ReplayAction::Escalate { key, qc, reason } => {
-                    if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
-                        entry.escalated_fetch = true;
-                        entry.attempts = entry.attempts.saturating_add(1);
-                        entry.first_seen = now;
-                        entry.last_attempt = now;
-                    }
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    progress = true;
-                }
-                ReplayAction::Expire { key, qc, reason } => {
-                    self.force_targeted_missing_payload_fetch_for_qc(&qc, reason);
-                    if self.should_defer_missing_block_view_change(
-                        &qc.subject_block_hash,
-                        qc.height,
-                        qc.view,
-                    ) {
-                        if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key) {
-                            entry.first_seen = now;
+                            branch_progress = true;
+                        } else if let Some(entry) = self.deferred_missing_payload_qcs.get_mut(&key)
+                        {
                             entry.last_attempt = now;
+                            branch_progress |= fetched;
                         }
-                        debug!(
-                            phase = ?qc.phase,
-                            height = qc.height,
-                            view = qc.view,
-                            block = %qc.subject_block_hash,
-                            reason,
-                            "deferring MissingPayload escalation for expired deferred QC while dependencies are converging"
-                        );
-                    } else {
-                        self.deferred_missing_payload_qcs.remove(&key);
-                        super::status::inc_qc_deferred_expired();
-                        #[cfg(feature = "telemetry")]
-                        if let Some(telemetry) = self.telemetry_handle() {
-                            telemetry.inc_qc_deferred_expired();
-                        }
-                        let current_view = self.phase_tracker.current_view(qc.height).unwrap_or(0);
-                        self.trigger_view_change_with_cause(
-                            qc.height,
-                            current_view,
-                            super::ViewChangeCause::MissingPayload,
-                        );
                     }
-                    progress = true;
+                    progress |= branch_progress;
                 }
             }
         }
@@ -760,14 +1007,75 @@ impl Actor {
         progress
     }
 
+    fn handoff_contiguous_frontier_missing_payload_recovery(
+        &mut self,
+        height: u64,
+        view: u64,
+        first_seen: Instant,
+        now: Instant,
+    ) -> Option<super::FrontierRecoveryAdvance> {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        if height != frontier_height || height != self.active_consensus_round_height() {
+            return None;
+        }
+
+        let existing_reason = self
+            .frontier_recovery
+            .filter(|state| state.frontier_height == height)
+            .map(|state| state.last_cause);
+        if existing_reason.is_none() {
+            let dependency_progress_at =
+                self.same_height_no_proposal_storm_dependency_progress_at(height);
+            self.frontier_recovery = Some(super::FrontierRecoveryState {
+                frontier_height: height,
+                phase: super::FrontierRecoveryPhase::CatchUp,
+                entered_at: first_seen,
+                last_progress_at: dependency_progress_at.unwrap_or(first_seen),
+                last_dependency_progress_at: dependency_progress_at,
+                last_action_at: None,
+                no_progress_windows: 0,
+                cleanup_done: false,
+                last_view: view,
+                last_rotation_view: None,
+                last_cause: "missing_payload",
+            });
+        }
+
+        let allow_rotation = !self
+            .phase_tracker
+            .current_view(height)
+            .is_some_and(|current| current > view);
+        Some(self.advance_frontier_recovery(
+            existing_reason.unwrap_or("missing_payload"),
+            height,
+            view,
+            false,
+            true,
+            allow_rotation,
+            now,
+        ))
+    }
+
     pub(super) fn request_missing_block(
-        &self,
+        &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
         priority: super::MissingBlockPriority,
         targets: &[PeerId],
     ) {
+        if self.should_suppress_lock_rejected_block_fetch(
+            height,
+            block_hash,
+            "request_missing_block",
+        ) {
+            self.clear_missing_block_view_change(&block_hash);
+            return;
+        }
+        let requester_roster_proof_known =
+            matches!(priority, super::MissingBlockPriority::Consensus)
+                && self.requester_has_local_roster_proof(block_hash, height, view);
         send_missing_block_request(
             &self.network,
             &self.common_config.peer.id,
@@ -775,8 +1083,40 @@ impl Actor {
             height,
             view,
             priority,
+            requester_roster_proof_known,
             targets,
         );
+    }
+
+    fn requester_has_local_roster_proof(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let epoch = self.epoch_for_height(height);
+        let has_committed_snapshot = self
+            .state
+            .commit_roster_snapshot_for_block(height, block_hash)
+            .is_some();
+        let has_commit_qc = self.qc_cache.contains_key(&(
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+        ));
+        let has_precommit_signer_record =
+            crate::sumeragi::status::precommit_signers_for_round(block_hash, height, view, epoch)
+                .is_some();
+        let highest_matches = self.highest_qc.is_some_and(|highest| {
+            highest.phase == crate::sumeragi::consensus::Phase::Commit
+                && highest.subject_block_hash == block_hash
+                && highest.height == height
+                && highest.view == view
+        });
+
+        has_committed_snapshot || has_commit_qc || has_precommit_signer_record || highest_matches
     }
 
     pub(super) fn qc_signers_for_votes(
@@ -916,6 +1256,50 @@ impl Actor {
                 base_retry_window,
             )
         };
+        let now = Instant::now();
+        let committed_height = self.committed_height_snapshot();
+        let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
+        if self.missing_hash_is_non_actionable_dependency(
+            subject_height,
+            block_hash,
+            committed_height,
+            now,
+        ) {
+            if self.missing_hash_is_obsolete_committed_edge_conflict(
+                subject_height,
+                block_hash,
+                committed_height,
+            ) {
+                super::status::inc_committed_edge_conflict_obsolete();
+            }
+            self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+            self.clear_missing_block_view_change(&block_hash);
+            debug!(
+                phase = ?phase,
+                height,
+                view,
+                subject_height,
+                committed_height,
+                block = %block_hash,
+                "deferring QC aggregation without fetch: block hash is obsolete/non-actionable dependency"
+            );
+            return true;
+        }
+        if self.should_suppress_lock_rejected_block_fetch(
+            height,
+            block_hash,
+            "defer_qc_if_block_missing_with_quorum_hint",
+        ) {
+            self.clear_missing_block_view_change(&block_hash);
+            debug!(
+                phase = ?phase,
+                height,
+                view,
+                block = %block_hash,
+                "deferring QC aggregation without fetch: block hash is lock-rejected under the current lock anchor"
+            );
+            return true;
+        }
         if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
             if aggressive_retry_floor && stats.attempts == 0 {
                 if stats.retry_window == Duration::ZERO || retry_window < stats.retry_window {
@@ -936,9 +1320,10 @@ impl Actor {
         };
         let peer_id = self.common_config.peer.id.clone();
         let network = self.network.clone();
+        let requester_roster_proof_known =
+            self.requester_has_local_roster_proof(block_hash, height, view);
         let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
         let telemetry = self.telemetry_handle();
-        let now = Instant::now();
         let fetch_mode = if aggressive_qc_fetch {
             if aggressive_retry_floor {
                 crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
@@ -970,6 +1355,7 @@ impl Actor {
                     height,
                     view,
                     super::MissingBlockPriority::Consensus,
+                    requester_roster_proof_known,
                     targets,
                 );
             },
@@ -1009,36 +1395,117 @@ impl Actor {
                         "missing block dwell exceeded view-change window; deferring view change while payload backlog is unresolved"
                     );
                 }
-            } else if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                if stats.mark_view_change_if_due(now) {
-                    if self
-                        .phase_tracker
-                        .current_view(height)
-                        .is_some_and(|current| current > view)
-                    {
-                        debug!(
-                            height,
-                            view, "skipping missing-block retry escalation: round already advanced"
-                        );
-                        return deferred;
-                    }
-                    let dwell_ms = now.saturating_duration_since(stats.first_seen).as_millis();
-                    let since_last_ms = now
-                        .saturating_duration_since(stats.last_requested)
-                        .as_millis();
-                    warn!(
+            } else if let Some((first_seen, last_requested, attempts)) = self
+                .pending
+                .missing_block_requests
+                .get(&block_hash)
+                .map(|stats| (stats.first_seen, stats.last_requested, stats.attempts))
+            {
+                if self
+                    .phase_tracker
+                    .current_view(height)
+                    .is_some_and(|current| current > view)
+                {
+                    debug!(
+                        height,
+                        view, "skipping missing-block retry escalation: round already advanced"
+                    );
+                    return deferred;
+                }
+                let dwell_ms = now.saturating_duration_since(first_seen).as_millis();
+                let since_last_ms = now.saturating_duration_since(last_requested).as_millis();
+                let committed_height = self.committed_height_snapshot();
+                let frontier_height = committed_height.saturating_add(1);
+                let frontier_window_owned = height == frontier_height
+                    && height == self.active_consensus_round_height()
+                    && self.frontier_recovery_owns_height_window(height, now);
+                if frontier_window_owned {
+                    debug!(
                         height,
                         view,
+                        block = ?block_hash,
                         dwell_ms,
                         since_last_ms,
-                        attempts = stats.attempts,
-                        "missing block dwell exceeded retry window; forcing view change"
+                        attempts,
+                        "missing payload dwell suppressed; frontier recovery already acted this window"
                     );
-                    self.trigger_view_change_with_cause(
-                        height,
-                        view,
-                        ViewChangeCause::MissingPayload,
+                } else {
+                    let handoff = self.handoff_contiguous_frontier_missing_payload_recovery(
+                        height, view, first_seen, now,
                     );
+                    if let Some(action) = handoff {
+                        if matches!(action, super::FrontierRecoveryAdvance::None) {
+                            debug!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                frontier_recovery_advance = ?action,
+                                "missing block dwell exceeded retry window; frontier recovery evaluated the request without a new action"
+                            );
+                        } else {
+                            warn!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                frontier_recovery_advance = ?action,
+                                "missing block dwell exceeded retry window; routed through frontier recovery"
+                            );
+                        }
+                    } else {
+                        let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash)
+                        else {
+                            return deferred;
+                        };
+                        let direct_fallback_due = stats.mark_view_change_if_due(now);
+                        if direct_fallback_due
+                            && self.try_reserve_missing_qc_height_stall_rotation_window(
+                                height,
+                                ViewChangeCause::MissingPayload,
+                                now,
+                            )
+                        {
+                            warn!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded retry window; frontier controller not responsible, applying direct MissingPayload fallback"
+                            );
+                            self.trigger_view_change_with_cause(
+                                height,
+                                view,
+                                ViewChangeCause::MissingPayload,
+                            );
+                        } else if direct_fallback_due {
+                            debug!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded retry window; direct MissingPayload fallback was due but shared rotation budget denied it"
+                            );
+                        } else {
+                            debug!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded retry window; frontier controller not responsible but direct MissingPayload fallback is not due yet"
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -1237,6 +1704,11 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
+            let local_height = self.committed_height_snapshot();
+            let far_ahead_retry = stats_snapshot.height > local_height.saturating_add(1);
+            let far_ahead_retry_suppressed = far_ahead_retry
+                && !self.frontier_catchup_far_ahead_replay_allowed(stats_snapshot.height, now);
+
             let defer_view_change = self.should_defer_missing_block_view_change(
                 &block_hash,
                 stats_snapshot.height,
@@ -1249,8 +1721,18 @@ impl Actor {
             {
                 stats.retry_window = retry_window;
             }
-            let effective_retry_window =
+            let mut effective_retry_window =
                 self.missing_block_retry_window_with_backoff(retry_window, stats_snapshot.attempts);
+            if matches!(
+                stats_snapshot.priority,
+                super::MissingBlockPriority::Consensus
+            ) && self
+                .missing_qc_height_stall_snapshot(stats_snapshot.height, now)
+                .is_some_and(|stall| stall.mode_active && stall.height == stats_snapshot.height)
+            {
+                effective_retry_window =
+                    effective_retry_window.max(self.missing_qc_height_stall_window());
+            }
             let mut view_change_window = self
                 .pending
                 .missing_block_requests
@@ -1268,7 +1750,9 @@ impl Actor {
             {
                 view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
             }
-            let decision = if let Some(ref topology) = topology {
+            let decision = if far_ahead_retry_suppressed {
+                MissingBlockFetchDecision::Backoff
+            } else if let Some(ref topology) = topology {
                 let since_last_request =
                     now.saturating_duration_since(stats_snapshot.last_requested);
                 if since_last_request < effective_retry_window {
@@ -1370,6 +1854,8 @@ impl Actor {
                         target_kind = target_kind.label(),
                         retry_window_ms = effective_retry_window_ms,
                         base_retry_window_ms = retry_window_ms,
+                        far_ahead_retry,
+                        far_ahead_retry_suppressed,
                         dwell_ms,
                         since_last_ms,
                         attempts,
@@ -1385,6 +1871,8 @@ impl Actor {
                         block = ?block_hash,
                         retry_window_ms = effective_retry_window_ms,
                         base_retry_window_ms = retry_window_ms,
+                        far_ahead_retry,
+                        far_ahead_retry_suppressed,
                         dwell_ms,
                         since_last_ms,
                         attempts,
@@ -1399,6 +1887,8 @@ impl Actor {
                         block = ?block_hash,
                         retry_window_ms = effective_retry_window_ms,
                         base_retry_window_ms = retry_window_ms,
+                        far_ahead_retry,
+                        far_ahead_retry_suppressed,
                         dwell_ms,
                         since_last_ms,
                         attempts,
@@ -1428,7 +1918,7 @@ impl Actor {
                     );
                 }
                 MissingBlockFetchDecision::Backoff => {
-                    self.note_missing_block_height_hash_miss(
+                    self.note_missing_block_height_backoff(
                         block_hash,
                         stats_snapshot.height,
                         stats_snapshot.view,
@@ -1470,7 +1960,25 @@ impl Actor {
                 .filter(|(due, _, _)| *due)
                 .map(|(_, height, view)| (height, view));
             if let Some((height, view)) = view_change_due {
-                if height != self.active_consensus_round_height() {
+                let committed_height = self.committed_height_snapshot();
+                let contiguous_frontier_height = committed_height.saturating_add(1);
+                if height > contiguous_frontier_height {
+                    let requested = self.request_range_pull_from_anchor(
+                        contiguous_frontier_height,
+                        "missing_block_non_contiguous_dwell",
+                        now,
+                    );
+                    progress |= requested;
+                    debug!(
+                        height,
+                        view,
+                        contiguous_frontier_height,
+                        dwell_ms,
+                        attempts,
+                        requested,
+                        "missing block dwell exceeded view-change window for non-contiguous height; suppressing view change and reanchoring catch-up"
+                    );
+                } else if height != self.active_consensus_round_height() {
                     debug!(
                         height,
                         view,
@@ -1488,25 +1996,7 @@ impl Actor {
                         "missing block dwell exceeded view-change window; deferring view change while RBC availability is unresolved"
                     );
                 } else {
-                    let mut record_height_hard_cap_escalation = false;
                     let recovery_key = self.missing_block_recovery_key_for_height(height);
-                    if let Some(budget) = self.missing_block_height_recovery.get_mut(&recovery_key)
-                    {
-                        if budget.escalated_view != Some(view) {
-                            budget.escalated_view = Some(view);
-                            record_height_hard_cap_escalation = true;
-                        }
-                    }
-                    if record_height_hard_cap_escalation {
-                        super::status::inc_consensus_missing_block_height_escalation();
-                        #[cfg(feature = "telemetry")]
-                        if let Some(telemetry) = self.telemetry_handle() {
-                            telemetry.inc_consensus_missing_block_height_escalation();
-                        }
-                    }
-                    if let Some(stats) = self.pending.missing_block_requests.get_mut(&block_hash) {
-                        let _ = stats.mark_view_change_if_due(now);
-                    }
                     if self
                         .phase_tracker
                         .current_view(height)
@@ -1518,21 +2008,146 @@ impl Actor {
                         );
                         continue;
                     }
-                    warn!(
-                        height,
-                        view,
-                        dwell_ms,
-                        since_last_ms,
-                        attempts,
-                        "missing block dwell exceeded view-change window; forcing view change"
-                    );
-                    self.trigger_view_change_with_cause(
-                        height,
-                        view,
-                        ViewChangeCause::MissingPayload,
-                    );
-                    progress = true;
-                    break;
+                    let frontier_height = committed_height.saturating_add(1);
+                    let frontier_window_owned = height == frontier_height
+                        && height == self.active_consensus_round_height()
+                        && self.frontier_recovery_owns_height_window(height, now);
+                    let first_seen = self
+                        .pending
+                        .missing_block_requests
+                        .get(&block_hash)
+                        .map(|stats| stats.first_seen)
+                        .unwrap_or(now);
+                    if frontier_window_owned {
+                        debug!(
+                            height,
+                            view,
+                            block = ?block_hash,
+                            dwell_ms,
+                            since_last_ms,
+                            attempts,
+                            "missing payload dwell suppressed; frontier recovery already acted this window"
+                        );
+                    } else {
+                        let handoff = self.handoff_contiguous_frontier_missing_payload_recovery(
+                            height, view, first_seen, now,
+                        );
+                        if let Some(action) = handoff {
+                            if matches!(action, super::FrontierRecoveryAdvance::None) {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    frontier_recovery_advance = ?action,
+                                    "missing block dwell exceeded view-change window; frontier recovery evaluated the request without a new action"
+                                );
+                            } else {
+                                warn!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    frontier_recovery_advance = ?action,
+                                    "missing block dwell exceeded view-change window; routed through frontier recovery"
+                                );
+                            }
+                            if matches!(action, super::FrontierRecoveryAdvance::Rotate) {
+                                let mut record_height_hard_cap_escalation = false;
+                                if let Some(budget) =
+                                    self.missing_block_height_recovery.get_mut(&recovery_key)
+                                {
+                                    if budget.escalated_view != Some(view) {
+                                        budget.escalated_view = Some(view);
+                                        record_height_hard_cap_escalation = true;
+                                    }
+                                }
+                                if record_height_hard_cap_escalation {
+                                    super::status::inc_consensus_missing_block_height_escalation();
+                                    #[cfg(feature = "telemetry")]
+                                    if let Some(telemetry) = self.telemetry_handle() {
+                                        telemetry.inc_consensus_missing_block_height_escalation();
+                                    }
+                                }
+                                if let Some(stats) =
+                                    self.pending.missing_block_requests.get_mut(&block_hash)
+                                {
+                                    let _ = stats.mark_view_change_if_due(now);
+                                }
+                                progress = true;
+                                break;
+                            }
+                            progress |= !matches!(action, super::FrontierRecoveryAdvance::None);
+                        } else if let Some(stats) =
+                            self.pending.missing_block_requests.get_mut(&block_hash)
+                        {
+                            let direct_fallback_due = stats.mark_view_change_if_due(now);
+                            if !direct_fallback_due {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    "missing block dwell exceeded view-change window; frontier controller not responsible but direct MissingPayload fallback is not due yet"
+                                );
+                                continue;
+                            }
+                            if !self.try_reserve_missing_qc_height_stall_rotation_window(
+                                height,
+                                ViewChangeCause::MissingPayload,
+                                now,
+                            ) {
+                                debug!(
+                                    height,
+                                    view,
+                                    block = ?block_hash,
+                                    dwell_ms,
+                                    since_last_ms,
+                                    attempts,
+                                    "missing block dwell exceeded view-change window; direct MissingPayload fallback was due but shared rotation budget denied it"
+                                );
+                                continue;
+                            }
+                            warn!(
+                                height,
+                                view,
+                                block = ?block_hash,
+                                dwell_ms,
+                                since_last_ms,
+                                attempts,
+                                "missing block dwell exceeded view-change window; frontier controller not responsible, applying direct MissingPayload fallback"
+                            );
+                            let mut record_height_hard_cap_escalation = false;
+                            if let Some(budget) =
+                                self.missing_block_height_recovery.get_mut(&recovery_key)
+                            {
+                                if budget.escalated_view != Some(view) {
+                                    budget.escalated_view = Some(view);
+                                    record_height_hard_cap_escalation = true;
+                                }
+                            }
+                            if record_height_hard_cap_escalation {
+                                super::status::inc_consensus_missing_block_height_escalation();
+                                #[cfg(feature = "telemetry")]
+                                if let Some(telemetry) = self.telemetry_handle() {
+                                    telemetry.inc_consensus_missing_block_height_escalation();
+                                }
+                            }
+                            self.trigger_view_change_with_cause(
+                                height,
+                                view,
+                                ViewChangeCause::MissingPayload,
+                            );
+                            progress = true;
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1727,6 +2342,7 @@ impl Actor {
         let now = Instant::now();
         if let Some(stats) = stats {
             let dwell = stats.first_seen.elapsed();
+            self.clear_missing_payload_fetch_window_gate_for_block(stats.height, *block_hash);
             debug!(
                 ?block_hash,
                 reason = reason.as_str(),
@@ -1734,7 +2350,9 @@ impl Actor {
                 "cleared missing-block request"
             );
             self.note_missing_block_height_recovery_success(*block_hash, stats.height, now);
-            self.clear_sidecar_mismatch_for_height(stats.height);
+            if matches!(reason, MissingBlockClearReason::PayloadAvailable) {
+                self.clear_sidecar_mismatch_for_height(stats.height);
+            }
             #[cfg(feature = "telemetry")]
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.observe_missing_block_dwell(dwell);
@@ -2320,6 +2938,24 @@ impl Actor {
             targets
         }
 
+        if !block_known
+            && self.should_suppress_lock_rejected_block_fetch(
+                height,
+                block_hash,
+                "qc_missing_block_defer",
+            )
+        {
+            self.clear_missing_block_view_change(&block_hash);
+            debug!(
+                phase = ?phase,
+                height,
+                view,
+                block = %block_hash,
+                "keeping QC deferred: missing block hash is lock-rejected under the current lock anchor"
+            );
+            return true;
+        }
+
         if !block_known && quorum_met {
             crate::sumeragi::status::inc_qc_quorum_without_qc();
             match consensus_mode {
@@ -2353,6 +2989,31 @@ impl Actor {
             if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
                 let local_peer = self.common_config.peer.id();
                 let targets = rebroadcast_targets_for_qc(local_peer, signers, signature_topology);
+                let fetch_freshness_cap =
+                    super::saturating_mul_duration(cooldown, 2).max(Duration::from_millis(1));
+                let (
+                    missing_fetch_inflight,
+                    missing_fetch_fresh,
+                    missing_fetch_age_ms,
+                    missing_fetch_freshness_window_ms,
+                ) = self
+                    .pending
+                    .missing_block_requests
+                    .get(&block_hash)
+                    .and_then(|request| {
+                        (request.height == height).then(|| {
+                            let request_age = now.saturating_duration_since(request.last_requested);
+                            let request_window = request.retry_window.max(Duration::from_millis(1));
+                            let freshness_window = request_window.min(fetch_freshness_cap);
+                            (
+                                true,
+                                request_age < freshness_window,
+                                request_age.as_millis(),
+                                freshness_window.as_millis(),
+                            )
+                        })
+                    })
+                    .unwrap_or((false, false, 0, 0));
                 let mut payload_rebroadcasted = false;
                 if let Some(block) = self
                     .pending
@@ -2376,7 +3037,7 @@ impl Actor {
                     }
                 }
                 let mut missing_block_requested = false;
-                if !targets.is_empty() {
+                if !targets.is_empty() && !missing_fetch_fresh {
                     self.request_missing_block(
                         block_hash,
                         height,
@@ -2393,9 +3054,33 @@ impl Actor {
                         None,
                         now,
                     );
+                } else if !targets.is_empty() && missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing duplicate missing-block fetch while equivalent request remains in-flight"
+                    );
                 }
-                let range_pull_allowed = self
-                    .allow_qc_missing_payload_range_pull(height, view, block_hash, now, cooldown);
+                let range_pull_allowed = if missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing range-pull recovery while missing-block fetch remains in-flight"
+                    );
+                    false
+                } else {
+                    self.allow_qc_missing_payload_range_pull(
+                        height, view, block_hash, now, cooldown,
+                    )
+                };
                 let block_sync_requested = if range_pull_allowed {
                     self.request_range_pull_from_anchor(
                         height,
@@ -2415,10 +3100,45 @@ impl Actor {
                         now,
                     );
                 }
-                let range_pull_escalated = self
-                    .maybe_escalate_missing_block_height_recovery(block_hash, height, view, now);
-                let votes_rebroadcasted =
-                    self.rebroadcast_block_votes(phase, block_hash, height, view, true);
+                let range_pull_escalated = if missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing duplicate missing-block escalation while equivalent fetch remains in-flight"
+                    );
+                    false
+                } else if self
+                    .should_skip_missing_block_recovery_escalation(block_hash, height, view, now)
+                {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        "suppressing duplicate missing-block escalation while prior recovery is in-flight"
+                    );
+                    false
+                } else {
+                    self.maybe_escalate_missing_block_height_recovery(block_hash, height, view, now)
+                };
+                let votes_rebroadcasted = if missing_fetch_fresh {
+                    debug!(
+                        height,
+                        view,
+                        phase = ?phase,
+                        block = %block_hash,
+                        request_age_ms = missing_fetch_age_ms,
+                        freshness_window_ms = missing_fetch_freshness_window_ms,
+                        "suppressing duplicate vote rebroadcast while equivalent missing-block fetch remains in-flight"
+                    );
+                    0
+                } else {
+                    self.rebroadcast_block_votes(phase, block_hash, height, view, true)
+                };
                 debug!(
                     height,
                     view,
@@ -2430,6 +3150,10 @@ impl Actor {
                     missing_block_requested,
                     block_sync_requested,
                     range_pull_escalated,
+                    missing_fetch_inflight,
+                    missing_fetch_fresh,
+                    missing_fetch_age_ms,
+                    missing_fetch_freshness_window_ms,
                     range_pull_allowed,
                     cooldown_ms = cooldown.as_millis(),
                     "triggered fast payload-missing recovery for quorum-reached QC deferral"
@@ -2530,13 +3254,10 @@ impl Actor {
             |key, signer_count| {
                 let (phase, block_hash, height, view, epoch) = key;
                 let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-                let mut commit_roster = self.roster_for_vote_with_mode_observing_sidecar(
-                    block_hash,
-                    height,
-                    view,
-                    consensus_mode,
-                    "qc_rebuild_cached_votes",
-                );
+                // QC rebuild is a replay path over cached local votes. It must not drive sidecar
+                // mismatch observation/quarantine for uncommitted competing branches.
+                let mut commit_roster =
+                    self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
                 if commit_roster.is_empty() && !commit_topology.is_empty() {
                     commit_roster = commit_topology.to_vec();
                 }
@@ -2684,6 +3405,74 @@ impl Actor {
         if let Some(lock) = self.locked_qc {
             if !self.block_known_locally(lock.subject_block_hash) {
                 let locked_hash = lock.subject_block_hash;
+                let now = Instant::now();
+                let committed_height = self.committed_height_snapshot();
+                let stale_window = self
+                    .recovery_missing_block_height_ttl()
+                    .max(self.recovery_missing_qc_reacquire_window())
+                    .max(self.rebroadcast_cooldown())
+                    .max(Duration::from_millis(1));
+                let stale_missing_lock = self
+                    .pending
+                    .missing_block_requests
+                    .get(&locked_hash)
+                    .map(|stats| now.saturating_duration_since(stats.first_seen))
+                    .is_some_and(|dwell| dwell >= stale_window);
+                let stale_conflict = lock.height <= committed_height.saturating_add(1)
+                    && qc.height > lock.height
+                    && qc.subject_block_hash != locked_hash
+                    && stale_missing_lock;
+                if stale_conflict {
+                    self.clear_missing_block_view_change(&locked_hash);
+                    self.clear_missing_block_request(
+                        &locked_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
+                    if let Some(committed_qc) = self.latest_committed_qc() {
+                        let lock_changed = self.locked_qc != Some(committed_qc);
+                        self.locked_qc = Some(committed_qc);
+                        super::status::set_locked_qc(
+                            committed_qc.height,
+                            committed_qc.view,
+                            Some(committed_qc.subject_block_hash),
+                        );
+                        if lock_changed {
+                            self.prune_precommit_votes_conflicting_with_lock(committed_qc);
+                        }
+                        if self
+                            .highest_qc
+                            .is_none_or(|highest| highest.height <= committed_height)
+                            || self.highest_qc == Some(lock)
+                        {
+                            self.highest_qc = Some(committed_qc);
+                            super::status::set_highest_qc(committed_qc.height, committed_qc.view);
+                            super::status::set_highest_qc_hash(committed_qc.subject_block_hash);
+                        }
+                    } else {
+                        self.locked_qc = None;
+                        super::status::set_locked_qc(0, 0, None);
+                    }
+                    let frontier_height = committed_height.saturating_add(1);
+                    let recovery_reanchor_requested = self.request_range_pull_from_anchor(
+                        frontier_height,
+                        "round_liveness_catchup_isolated",
+                        now,
+                    );
+                    warn!(
+                        locked_height = lock.height,
+                        locked_view = lock.view,
+                        locked_hash = %locked_hash,
+                        incoming_height = qc.height,
+                        incoming_view = qc.view,
+                        incoming_hash = %qc.subject_block_hash,
+                        committed_height,
+                        stale_window_ms = stale_window.as_millis(),
+                        frontier_height,
+                        recovery_reanchor_requested,
+                        "suppressing stale missing locked QC dependency as obsolete and reanchoring canonical catch-up"
+                    );
+                    return;
+                }
                 info!(
                     locked_height = lock.height,
                     locked_view = lock.view,
@@ -2692,7 +3481,6 @@ impl Actor {
                     incoming_view = qc.view,
                     "locked QC payload missing locally; requesting payload before processing incoming QC"
                 );
-                let now = Instant::now();
                 let retry_window = self.rebroadcast_cooldown();
                 let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
                 let (consensus_mode, _mode_tag, _prf_seed) =
@@ -2712,6 +3500,8 @@ impl Actor {
                     let signers = BTreeSet::new();
                     let peer_id = self.common_config.peer.id.clone();
                     let network = self.network.clone();
+                    let requester_roster_proof_known =
+                        self.requester_has_local_roster_proof(locked_hash, lock.height, lock.view);
                     let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
                     let _ = super::defer_qc_for_missing_block(
                         false,
@@ -2735,6 +3525,7 @@ impl Actor {
                                 lock.height,
                                 lock.view,
                                 super::MissingBlockPriority::Consensus,
+                                requester_roster_proof_known,
                                 targets,
                             )
                         },
@@ -2961,10 +3752,7 @@ impl Actor {
             if self.block_known_for_lock(lock.subject_block_hash) {
                 let same_height_conflict =
                     qc.height == lock.height && qc.subject_block_hash != lock.subject_block_hash;
-                let recoverable_same_height_conflict =
-                    allow_nonextending && same_height_conflict && qc.view > lock.view;
-                let conflicts_locked = qc.height < lock.height
-                    || (same_height_conflict && !recoverable_same_height_conflict);
+                let conflicts_locked = qc.height < lock.height || same_height_conflict;
                 if conflicts_locked {
                     info!(
                         height = qc.height,
@@ -2980,17 +3768,6 @@ impl Actor {
                         super::status::ConsensusMessageReason::LockedQc,
                     );
                     return false;
-                }
-                if recoverable_same_height_conflict {
-                    info!(
-                        height = qc.height,
-                        view = qc.view,
-                        locked_height = lock.height,
-                        locked_view = lock.view,
-                        locked_hash = %lock.subject_block_hash,
-                        incoming_hash = %qc.subject_block_hash,
-                        "accepting same-height conflicting precommit QC with higher view to recover stale lock"
-                    );
                 }
             }
         }
@@ -3745,6 +4522,40 @@ impl Actor {
         }
 
         if !block_known_locally {
+            let now = Instant::now();
+            let committed_height = self.committed_height_snapshot();
+            let subject_height =
+                Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height);
+            if self.missing_hash_is_non_actionable_dependency(
+                subject_height,
+                qc.subject_block_hash,
+                committed_height,
+                now,
+            ) {
+                if self.missing_hash_is_obsolete_committed_edge_conflict(
+                    subject_height,
+                    qc.subject_block_hash,
+                    committed_height,
+                ) {
+                    super::status::inc_committed_edge_conflict_obsolete();
+                }
+                self.deferred_missing_payload_qcs.remove(&qc_key);
+                self.clear_missing_block_request(
+                    &qc.subject_block_hash,
+                    MissingBlockClearReason::Obsolete,
+                );
+                self.clear_missing_block_view_change(&qc.subject_block_hash);
+                debug!(
+                    phase = ?qc.phase,
+                    height = qc.height,
+                    view = qc.view,
+                    subject_height,
+                    committed_height,
+                    block = %qc.subject_block_hash,
+                    "dropping non-actionable QC missing-payload dependency at committed edge"
+                );
+                return Ok(());
+            }
             self.defer_qc_for_missing_payload(&qc, "payload_missing");
             info!(
                 height = qc.height,
@@ -3773,7 +4584,6 @@ impl Actor {
                     base_retry_window,
                 )
             };
-            let now = Instant::now();
             if let Some(stats) = self
                 .pending
                 .missing_block_requests
@@ -3808,6 +4618,7 @@ impl Actor {
                 Some(view_change_window),
                 signer_fallback_attempts,
                 fetch_mode,
+                false,
             );
             let dwell = self
                 .pending

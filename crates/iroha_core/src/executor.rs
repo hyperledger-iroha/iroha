@@ -15,7 +15,7 @@ use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
 use iroha_data_model::{
     Identifiable as _, Registrable as _, ValidationFail,
-    account::AccountId,
+    account::{AccountId, address::AccountAddress},
     asset::{
         AssetDefinition,
         id::{AssetDefinitionId, AssetId},
@@ -881,11 +881,6 @@ impl Executor {
             &state_transaction.world,
             &cfg.fee_sink_account_id,
         )
-        .or_else(|| {
-            AccountId::parse_encoded(&cfg.fee_sink_account_id)
-                .ok()
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        })
         .ok_or_else(|| {
             let reason =
                 "invalid nexus fee sink account id; expected account identifier".to_owned();
@@ -1914,9 +1909,17 @@ impl Executor {
             ));
         };
 
-        let _domain_hint = init.trim_matches(DELIMITER);
-        AccountId::parse_encoded(last)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        let domain_hint = init.trim_matches(DELIMITER);
+        let domain: DomainId = domain_hint.parse().map_err(|_| {
+            ValidationFail::NotPermitted("violates multisig role name format".to_owned())
+        })?;
+        let prefix = iroha_data_model::account::address::chain_discriminant();
+        let address = AccountAddress::parse_encoded(last, Some(prefix)).map_err(|_| {
+            ValidationFail::NotPermitted("violates multisig role name format".to_owned())
+        })?;
+        address
+            .to_scoped_account_id(&domain)
+            .map(|account| account.subject_id())
             .map(Some)
             .map_err(|_| {
                 ValidationFail::NotPermitted("violates multisig role name format".to_owned())

@@ -9,6 +9,7 @@ use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 
 use super::{BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock};
 use crate::{
+    consensus::PreviousRosterEvidence,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -31,6 +32,7 @@ pub struct BlockBuilder {
     da_commitments: Option<DaCommitmentBundle>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     da_pin_intents: Option<DaPinIntentBundle>,
+    previous_roster_evidence: Option<PreviousRosterEvidence>,
 }
 
 impl BlockBuilder {
@@ -47,6 +49,7 @@ impl BlockBuilder {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
+            previous_roster_evidence: None,
         }
     }
 
@@ -92,6 +95,11 @@ impl BlockBuilder {
         self.da_pin_intents = bundle;
     }
 
+    /// Attach previous-height roster evidence that will be embedded in the resulting block.
+    pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
+        self.previous_roster_evidence = evidence;
+    }
+
     /// Build a `SignedBlock` with the provided signatures.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
         // Write roots into header
@@ -100,12 +108,14 @@ impl BlockBuilder {
         let da_commitments = self.da_commitments.clone();
         let da_proof_policies = self.da_proof_policies.clone();
         let da_pin_intents = self.da_pin_intents.clone();
+        let previous_roster_evidence = self.previous_roster_evidence.clone();
         let payload = BlockPayload {
             header: self.header,
             transactions: self.transactions,
             da_commitments,
             da_proof_policies,
             da_pin_intents,
+            previous_roster_evidence,
         };
         let result = BlockResult {
             time_triggers: self.time_triggers,
@@ -124,6 +134,7 @@ impl BlockBuilder {
         block.set_da_proof_policies(self.da_proof_policies);
         block.set_da_commitments(self.da_commitments);
         block.set_da_pin_intents(self.da_pin_intents);
+        block.set_previous_roster_evidence(self.previous_roster_evidence);
         block
     }
 
@@ -150,6 +161,8 @@ impl BlockBuilder {
                 .merkle_root()
                 .map(HashOf::<DaPinIntentBundle>::from_untyped_unchecked)
         });
+        self.header
+            .set_prev_roster_evidence_hash(self.previous_roster_evidence.as_ref().map(HashOf::new));
         let sig = SignatureOf::from_hash(private_key, self.header.hash());
         let mut set = BTreeSet::new();
         set.insert(BlockSignature::new(signatory_index, sig));

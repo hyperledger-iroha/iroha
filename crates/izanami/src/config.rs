@@ -52,6 +52,9 @@ pub struct IzanamiArgs {
     /// Maximum time without block progress before failing when a target is set.
     #[arg(long, default_value = "120s", value_parser = parse_duration)]
     pub progress_timeout: Duration,
+    /// Optional p95 block-interval threshold enforced when `target_blocks` is set.
+    #[arg(long, value_parser = parse_duration)]
+    pub latency_p95_threshold: Option<Duration>,
     /// Optional deterministic seed for reproducible chaos runs.
     #[arg(long)]
     pub seed: Option<u64>,
@@ -216,6 +219,7 @@ pub struct ChaosConfig {
     pub target_blocks: Option<u64>,
     pub progress_interval: Duration,
     pub progress_timeout: Duration,
+    pub latency_p95_threshold: Option<Duration>,
     pub seed: Option<u64>,
     pub tps: f64,
     pub max_inflight: usize,
@@ -274,6 +278,17 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 args.progress_timeout
             ));
         }
+        if args
+            .latency_p95_threshold
+            .is_some_and(|duration| duration.is_zero())
+        {
+            return Err(eyre!("latency_p95_threshold must be greater than zero"));
+        }
+        if args.latency_p95_threshold.is_some() && args.target_blocks.is_none() {
+            return Err(eyre!(
+                "latency_p95_threshold requires target_blocks to be set"
+            ));
+        }
         if args.tps <= 0.0 {
             return Err(eyre!("tps must be positive"));
         }
@@ -307,6 +322,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             target_blocks,
             progress_interval,
             progress_timeout,
+            latency_p95_threshold,
             seed,
             tps,
             max_inflight,
@@ -334,6 +350,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             target_blocks,
             progress_interval,
             progress_timeout,
+            latency_p95_threshold,
             seed,
             tps,
             max_inflight,
@@ -371,6 +388,7 @@ impl IzanamiArgs {
             target_blocks: cfg.target_blocks,
             progress_interval: cfg.progress_interval,
             progress_timeout: cfg.progress_timeout,
+            latency_p95_threshold: cfg.latency_p95_threshold,
             seed: cfg.seed,
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
@@ -759,6 +777,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -790,6 +809,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: Some(42),
             tps: 1.0,
             max_inflight: 1,
@@ -817,6 +837,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -849,6 +870,7 @@ mod tests {
             target_blocks: Some(0),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -879,6 +901,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -927,6 +950,7 @@ mod tests {
             target_blocks: Some(5),
             progress_interval: Duration::from_secs(10),
             progress_timeout: Duration::from_secs(5),
+            latency_p95_threshold: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
@@ -959,6 +983,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: None,
             tps: f64::NAN,
             max_inflight: 1,
@@ -991,6 +1016,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: None,
             tps: f64::MAX,
             max_inflight: 1,
@@ -1023,6 +1049,7 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
             seed: None,
             tps: f64::MIN_POSITIVE,
             max_inflight: 1,
@@ -1040,6 +1067,72 @@ mod tests {
         assert!(
             err.to_string().contains("tps too low"),
             "error should mention timer range: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_latency_threshold_without_target_blocks() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: Some(Duration::from_millis(900)),
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("latency threshold without target_blocks should fail");
+        };
+        assert!(
+            err.to_string().contains("requires target_blocks"),
+            "error should mention target_blocks requirement: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_zero_latency_threshold() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: Some(5),
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: Some(Duration::ZERO),
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("zero latency threshold should fail");
+        };
+        assert!(
+            err.to_string().contains("latency_p95_threshold"),
+            "error should mention latency_p95_threshold: {err}"
         );
     }
 }

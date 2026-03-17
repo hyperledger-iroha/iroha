@@ -393,6 +393,8 @@ static MISSING_BLOCK_FETCH_LAST_DWELL_MS: AtomicU64 = AtomicU64::new(0);
 static MISSING_REQUEST_PRUNED_STALE_HEIGHT: AtomicU64 = AtomicU64::new(0);
 static PENDING_QUEUE_EVICTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static MISSING_QC_TRIGGER_SUPPRESSED_STALE: AtomicU64 = AtomicU64::new(0);
+static COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
+static ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_DROP_INVALID_SIGNATURES_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCK_SYNC_QC_REPLACED_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -407,6 +409,16 @@ static QC_DEFERRED_RESOLVED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QC_DEFERRED_EXPIRED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_EMPTY_COMMIT_TOPOLOGY_DEFER_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_ROSTER_UNAVAILABLE_DETECTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_ROSTER_UNAVAILABLE_WAIT_CANDIDATES_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_CATCHUP_ISOLATION_ENTER_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_CATCHUP_ISOLATION_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_CATCHUP_REJOIN_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_ROSTER_RECOVERY_STATE: OnceLock<Mutex<Option<&'static str>>> = OnceLock::new();
+static CONSENSUS_ROSTER_RECOVERY_DWELL_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> =
+    OnceLock::new();
 static CONSENSUS_RECOVERY_STATE_TRANSITIONS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> =
     OnceLock::new();
 static CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -419,16 +431,18 @@ static CONSENSUS_FORCED_PROPOSAL_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_FORCED_PROPOSAL_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_SIDECAR_QUARANTINE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_SIDECAR_FINAL_DROP_TOTAL: AtomicU64 = AtomicU64::new(0);
-static CONSENSUS_NO_ROSTER_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
-static CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL: AtomicU64 = AtomicU64::new(0);
-static CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL: AtomicU64 = AtomicU64::new(0);
-static CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL: AtomicU64 = AtomicU64::new(0);
-static CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_SIDECAR_RECOVERY_TRIGGER_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_PROPOSAL_STORM_TOTAL: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_PROPOSAL_STORM_LAST_HEIGHT: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_PROPOSAL_STORM_LAST_COUNT: AtomicU64 = AtomicU64::new(0);
+static CONSENSUS_NO_PROPOSAL_STORM_MAX_COUNT: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_LAST: AtomicU64 = AtomicU64::new(0);
+static BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_MAX: AtomicU64 = AtomicU64::new(0);
 static CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VALIDATION_REJECT_REASON: OnceLock<Mutex<Option<&'static str>>> = OnceLock::new();
@@ -462,6 +476,7 @@ static BLOCK_SYNC_ROSTER_DROP_UNSOLICITED_SHARE_BLOCKS_TOTAL: AtomicU64 = Atomic
 static VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_ROSTER_UNAVAILABLE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_DA_GATE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -472,6 +487,7 @@ static VIEW_CHANGE_CAUSE_LAST_LABEL: OnceLock<Mutex<Option<String>>> = OnceLock:
 static VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS: AtomicU64 = AtomicU64::new(0);
+static VIEW_CHANGE_CAUSE_LAST_ROSTER_UNAVAILABLE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS: AtomicU64 = AtomicU64::new(0);
 static VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS: AtomicU64 = AtomicU64::new(0);
@@ -2845,6 +2861,8 @@ pub struct ViewChangeCauseSnapshot {
     pub quorum_timeout_total: u64,
     /// Total view changes triggered after stake-quorum timeouts (`NPoS` only).
     pub stake_quorum_timeout_total: u64,
+    /// Total view changes triggered after roster-unavailability recovery.
+    pub roster_unavailable_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     pub da_gate_total: u64,
     /// Total view changes triggered after censorship evidence reaches quorum.
@@ -2865,6 +2883,8 @@ pub struct ViewChangeCauseSnapshot {
     pub last_quorum_timeout_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a stake-quorum-timeout cause was last recorded.
     pub last_stake_quorum_timeout_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a roster-unavailable cause was last recorded.
+    pub last_roster_unavailable_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     pub last_da_gate_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a censorship-evidence cause was last recorded.
@@ -3411,16 +3431,34 @@ pub struct StatusSnapshot {
     pub consensus_sidecar_quarantine_total: u64,
     /// Sidecar mismatches final-dropped after retry/TTL bounds.
     pub consensus_sidecar_final_drop_total: u64,
-    /// Bounded no-roster fallback broadcasts allowed before fail-closed escalation.
-    pub consensus_no_roster_fallback_total: u64,
-    /// Fail-closed no-roster escalations after fallback budget exhaustion.
-    pub consensus_no_roster_fail_closed_total: u64,
-    /// Per-view no-roster topology refresh retries before fail-closed escalation.
-    pub consensus_no_roster_refresh_retry_total: u64,
-    /// One-shot no-roster topology refresh attempts before fail-closed escalation.
-    pub consensus_no_roster_refresh_attempt_total: u64,
-    /// One-shot no-roster topology refresh attempts that observed topology change.
-    pub consensus_no_roster_refresh_success_total: u64,
+    /// Repeated sidecar mismatch recovery actions that triggered deterministic recovery.
+    pub consensus_sidecar_recovery_trigger_total: u64,
+    /// Same-height no-proposal storms broken by deterministic stale-state cleanup + reanchor.
+    pub consensus_no_proposal_storm_total: u64,
+    /// Last height observed for same-height no-proposal storm tracking.
+    pub consensus_no_proposal_storm_last_height: u64,
+    /// Last observed same-height no-proposal storm count.
+    pub consensus_no_proposal_storm_last_count: u64,
+    /// Maximum observed same-height no-proposal storm count.
+    pub consensus_no_proposal_storm_max_count: u64,
+    /// Roster-unavailability detections.
+    pub consensus_roster_unavailable_detected_total: u64,
+    /// Deterministic roster-election attempts during roster-unavailability recovery.
+    pub consensus_roster_unavailable_election_attempt_total: u64,
+    /// Successful deterministic roster elections during roster-unavailability recovery.
+    pub consensus_roster_unavailable_election_success_total: u64,
+    /// Entries into `wait_candidates` during roster-unavailability recovery.
+    pub consensus_roster_unavailable_wait_candidates_total: u64,
+    /// Entries into round-liveness catch-up isolation mode.
+    pub consensus_catchup_isolation_enter_total: u64,
+    /// Catch-up isolation runs that converged and exited successfully.
+    pub consensus_catchup_isolation_success_total: u64,
+    /// Catch-up isolation exits that rejoined normal consensus flow.
+    pub consensus_catchup_rejoin_total: u64,
+    /// Current roster-unavailability recovery FSM state label.
+    pub consensus_roster_recovery_state: Option<&'static str>,
+    /// Per-state cumulative dwell time in milliseconds for the active recovery run.
+    pub consensus_roster_recovery_dwell_ms: BTreeMap<&'static str, u64>,
     /// Last selected deterministic transport committee size.
     pub consensus_deterministic_committee_size: u64,
     /// Range-pull escalations requested by dependency recovery.
@@ -3431,6 +3469,10 @@ pub struct StatusSnapshot {
     pub blocksync_range_pull_failure_total: u64,
     /// Range-pull recovery tiers exhausted before escalating to broader deterministic peers.
     pub blocksync_range_pull_candidate_exhausted_total: u64,
+    /// Last observed range-pull expiry streak for a single height.
+    pub blocksync_range_pull_expiry_streak_last: u64,
+    /// Maximum observed range-pull expiry streak for a single height.
+    pub blocksync_range_pull_expiry_streak_max: u64,
     /// Last observed stuck-round duration in seconds.
     pub consensus_recovery_stuck_round_seconds_last: u64,
     /// Total blocks rejected by the validation gate before voting.
@@ -3457,6 +3499,10 @@ pub struct StatusSnapshot {
     pub pending_queue_evictions_total: u64,
     /// Total stale-height missing-QC triggers suppressed instead of rotating view.
     pub missing_qc_trigger_suppressed_stale: u64,
+    /// Total committed-edge conflicting dependencies reclassified as obsolete/non-actionable.
+    pub committed_edge_conflict_obsolete_total: u64,
+    /// Total repeated roster-sidecar mismatch tuples classified as obsolete/non-actionable.
+    pub roster_sidecar_mismatch_obsolete_total: u64,
     /// Total QC-missing payload fetches escalated to topology-wide aggressive mode.
     pub qc_missing_payload_aggressive_fetch_total: u64,
     /// Data-availability gate snapshot and counters.
@@ -3971,6 +4017,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
         quorum_timeout_total: VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.load(Ordering::Relaxed),
         stake_quorum_timeout_total: VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL
             .load(Ordering::Relaxed),
+        roster_unavailable_total: VIEW_CHANGE_CAUSE_ROSTER_UNAVAILABLE_TOTAL
+            .load(Ordering::Relaxed),
         da_gate_total: VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.load(Ordering::Relaxed),
         censorship_evidence_total: VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL
             .load(Ordering::Relaxed),
@@ -3984,6 +4032,8 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
         last_quorum_timeout_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS
             .load(Ordering::Relaxed),
         last_stake_quorum_timeout_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS
+            .load(Ordering::Relaxed),
+        last_roster_unavailable_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_ROSTER_UNAVAILABLE_TS_MS
             .load(Ordering::Relaxed),
         last_da_gate_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.load(Ordering::Relaxed),
         last_censorship_evidence_timestamp_ms: VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS
@@ -3999,6 +4049,20 @@ fn view_change_cause_snapshot() -> ViewChangeCauseSnapshot {
 
 fn consensus_recovery_state_transition_snapshot() -> BTreeMap<&'static str, u64> {
     CONSENSUS_RECOVERY_STATE_TRANSITIONS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .map_or_else(|_| BTreeMap::new(), |guard| guard.clone())
+}
+
+fn consensus_roster_recovery_state_snapshot() -> Option<&'static str> {
+    CONSENSUS_ROSTER_RECOVERY_STATE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_or(None, |guard| *guard)
+}
+
+fn consensus_roster_recovery_dwell_snapshot() -> BTreeMap<&'static str, u64> {
+    CONSENSUS_ROSTER_RECOVERY_DWELL_MS
         .get_or_init(|| Mutex::new(BTreeMap::new()))
         .lock()
         .map_or_else(|_| BTreeMap::new(), |guard| guard.clone())
@@ -4333,16 +4397,31 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         consensus_sidecar_final_drop_total: CONSENSUS_SIDECAR_FINAL_DROP_TOTAL
             .load(Ordering::Relaxed),
-        consensus_no_roster_fallback_total: CONSENSUS_NO_ROSTER_FALLBACK_TOTAL
+        consensus_sidecar_recovery_trigger_total: CONSENSUS_SIDECAR_RECOVERY_TRIGGER_TOTAL
             .load(Ordering::Relaxed),
-        consensus_no_roster_fail_closed_total: CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL
+        consensus_no_proposal_storm_total: CONSENSUS_NO_PROPOSAL_STORM_TOTAL
             .load(Ordering::Relaxed),
-        consensus_no_roster_refresh_retry_total: CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL
+        consensus_no_proposal_storm_last_height: CONSENSUS_NO_PROPOSAL_STORM_LAST_HEIGHT
             .load(Ordering::Relaxed),
-        consensus_no_roster_refresh_attempt_total: CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL
+        consensus_no_proposal_storm_last_count: CONSENSUS_NO_PROPOSAL_STORM_LAST_COUNT
             .load(Ordering::Relaxed),
-        consensus_no_roster_refresh_success_total: CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL
+        consensus_no_proposal_storm_max_count: CONSENSUS_NO_PROPOSAL_STORM_MAX_COUNT
             .load(Ordering::Relaxed),
+        consensus_roster_unavailable_detected_total: CONSENSUS_ROSTER_UNAVAILABLE_DETECTED_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_roster_unavailable_election_attempt_total:
+            CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_ATTEMPT_TOTAL.load(Ordering::Relaxed),
+        consensus_roster_unavailable_election_success_total:
+            CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_SUCCESS_TOTAL.load(Ordering::Relaxed),
+        consensus_roster_unavailable_wait_candidates_total:
+            CONSENSUS_ROSTER_UNAVAILABLE_WAIT_CANDIDATES_TOTAL.load(Ordering::Relaxed),
+        consensus_catchup_isolation_enter_total: CONSENSUS_CATCHUP_ISOLATION_ENTER_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_catchup_isolation_success_total: CONSENSUS_CATCHUP_ISOLATION_SUCCESS_TOTAL
+            .load(Ordering::Relaxed),
+        consensus_catchup_rejoin_total: CONSENSUS_CATCHUP_REJOIN_TOTAL.load(Ordering::Relaxed),
+        consensus_roster_recovery_state: consensus_roster_recovery_state_snapshot(),
+        consensus_roster_recovery_dwell_ms: consensus_roster_recovery_dwell_snapshot(),
         consensus_deterministic_committee_size: CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE
             .load(Ordering::Relaxed),
         blocksync_range_pull_escalation_total: BLOCKSYNC_RANGE_PULL_ESCALATION_TOTAL
@@ -4353,6 +4432,10 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         blocksync_range_pull_candidate_exhausted_total:
             BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL.load(Ordering::Relaxed),
+        blocksync_range_pull_expiry_streak_last: BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_LAST
+            .load(Ordering::Relaxed),
+        blocksync_range_pull_expiry_streak_max: BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_MAX
+            .load(Ordering::Relaxed),
         consensus_recovery_stuck_round_seconds_last: CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST
             .load(Ordering::Relaxed),
         validation_reject_total: validation_rejects.total,
@@ -4391,6 +4474,10 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         pending_queue_evictions_total: PENDING_QUEUE_EVICTIONS_TOTAL.load(Ordering::Relaxed),
         missing_qc_trigger_suppressed_stale: MISSING_QC_TRIGGER_SUPPRESSED_STALE
+            .load(Ordering::Relaxed),
+        committed_edge_conflict_obsolete_total: COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL
+            .load(Ordering::Relaxed),
+        roster_sidecar_mismatch_obsolete_total: ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL
             .load(Ordering::Relaxed),
         qc_missing_payload_aggressive_fetch_total: QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL
             .load(Ordering::Relaxed),
@@ -4902,6 +4989,71 @@ pub fn inc_consensus_empty_commit_topology_escalation() {
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter when consensus detects roster unavailability.
+pub fn inc_consensus_roster_unavailable_detected() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_ROSTER_UNAVAILABLE_DETECTED_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when roster-unavailability recovery attempts deterministic election.
+pub fn inc_consensus_roster_unavailable_election_attempt() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_ATTEMPT_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when roster-unavailability recovery successfully elects a roster.
+pub fn inc_consensus_roster_unavailable_election_success() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_SUCCESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when roster-unavailability recovery enters `wait_candidates`.
+pub fn inc_consensus_roster_unavailable_wait_candidates() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_ROSTER_UNAVAILABLE_WAIT_CANDIDATES_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when round-liveness recovery enters catch-up isolation mode.
+pub fn inc_consensus_catchup_isolation_enter() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_CATCHUP_ISOLATION_ENTER_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when catch-up isolation converges successfully.
+pub fn inc_consensus_catchup_isolation_success() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_CATCHUP_ISOLATION_SUCCESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when catch-up isolation re-enters steady consensus flow.
+pub fn inc_consensus_catchup_rejoin() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    CONSENSUS_CATCHUP_REJOIN_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Set current roster-unavailability recovery FSM state.
+pub fn set_consensus_roster_recovery_state(state: &'static str) {
+    let slot = CONSENSUS_ROSTER_RECOVERY_STATE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(state);
+    }
+}
+
+/// Set per-state dwell-time snapshot (milliseconds) for active roster recovery.
+pub fn set_consensus_roster_recovery_dwell_ms(dwell_ms: BTreeMap<&'static str, u64>) {
+    let slot = CONSENSUS_ROSTER_RECOVERY_DWELL_MS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = dwell_ms;
+    }
+}
+
 /// Increment labeled recovery-state transition counter.
 pub fn inc_consensus_recovery_state_transition(state: &'static str) {
     #[cfg(test)]
@@ -4985,39 +5137,40 @@ pub fn inc_consensus_sidecar_final_drop() {
     CONSENSUS_SIDECAR_FINAL_DROP_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Increment counter when bounded no-roster fallback broadcast is used.
-pub fn inc_consensus_no_roster_fallback() {
+/// Increment counter when repeated sidecar mismatch recovery triggers deterministic remediation.
+pub fn inc_consensus_sidecar_recovery_trigger() {
     #[cfg(test)]
     let _guard = missing_block_fetch_test_guard();
-    CONSENSUS_NO_ROSTER_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
+    CONSENSUS_SIDECAR_RECOVERY_TRIGGER_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Increment counter when no-roster fallback budget is exhausted and fail-closed escalation triggers.
-pub fn inc_consensus_no_roster_fail_closed() {
+/// Increment counter when same-height no-proposal storm breaker runs deterministic cleanup.
+pub fn inc_consensus_no_proposal_storm() {
     #[cfg(test)]
     let _guard = missing_block_fetch_test_guard();
-    CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL.fetch_add(1, Ordering::Relaxed);
+    CONSENSUS_NO_PROPOSAL_STORM_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Increment counter for per-view no-roster refresh retry attempts.
-pub fn inc_consensus_no_roster_refresh_retry() {
+/// Record same-height no-proposal storm diagnostics.
+pub fn observe_consensus_no_proposal_storm_state(height: u64, count: u32, max_count: u32) {
     #[cfg(test)]
     let _guard = missing_block_fetch_test_guard();
-    CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-
-/// Increment counter when no-roster fail-closed path attempts a one-shot topology refresh.
-pub fn inc_consensus_no_roster_refresh_attempt() {
-    #[cfg(test)]
-    let _guard = missing_block_fetch_test_guard();
-    CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL.fetch_add(1, Ordering::Relaxed);
-}
-
-/// Increment counter when no-roster refresh attempt observes topology change.
-pub fn inc_consensus_no_roster_refresh_success() {
-    #[cfg(test)]
-    let _guard = missing_block_fetch_test_guard();
-    CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    CONSENSUS_NO_PROPOSAL_STORM_LAST_HEIGHT.store(height, Ordering::Relaxed);
+    let count_u64 = u64::from(count);
+    CONSENSUS_NO_PROPOSAL_STORM_LAST_COUNT.store(count_u64, Ordering::Relaxed);
+    let max_u64 = u64::from(max_count).max(count_u64);
+    let mut previous = CONSENSUS_NO_PROPOSAL_STORM_MAX_COUNT.load(Ordering::Relaxed);
+    while max_u64 > previous {
+        match CONSENSUS_NO_PROPOSAL_STORM_MAX_COUNT.compare_exchange_weak(
+            previous,
+            max_u64,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => previous = observed,
+        }
+    }
 }
 
 /// Record the deterministic transport committee size selected for fanout.
@@ -5044,6 +5197,26 @@ pub fn inc_blocksync_range_pull_failure() {
     #[cfg(test)]
     let _guard = missing_block_fetch_test_guard();
     BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record the current per-height range-pull expiry streak.
+pub fn observe_blocksync_range_pull_expiry_streak(streak: u32) {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    let streak_u64 = u64::from(streak);
+    BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_LAST.store(streak_u64, Ordering::Relaxed);
+    let mut previous = BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_MAX.load(Ordering::Relaxed);
+    while streak_u64 > previous {
+        match BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_MAX.compare_exchange_weak(
+            previous,
+            streak_u64,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => previous = observed,
+        }
+    }
 }
 
 /// Increment counter when range-pull recovery advances to a broader deterministic target tier.
@@ -5247,6 +5420,10 @@ pub fn record_view_change_cause(cause: &str) {
             VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL.fetch_add(1, Ordering::Relaxed);
             VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS.store(now_ms, Ordering::Relaxed);
         }
+        "roster_unavailable" => {
+            VIEW_CHANGE_CAUSE_ROSTER_UNAVAILABLE_TOTAL.fetch_add(1, Ordering::Relaxed);
+            VIEW_CHANGE_CAUSE_LAST_ROSTER_UNAVAILABLE_TS_MS.store(now_ms, Ordering::Relaxed);
+        }
         "da_gate" => {
             VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.fetch_add(1, Ordering::Relaxed);
             VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.store(now_ms, Ordering::Relaxed);
@@ -5399,6 +5576,20 @@ pub fn inc_missing_qc_trigger_suppressed_stale() {
     MISSING_QC_TRIGGER_SUPPRESSED_STALE.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Increment counter when committed-edge conflicting dependencies are suppressed as obsolete.
+pub fn inc_committed_edge_conflict_obsolete() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment counter when repeated roster-sidecar mismatch tuples are suppressed as obsolete.
+pub fn inc_roster_sidecar_mismatch_obsolete() {
+    #[cfg(test)]
+    let _guard = missing_block_fetch_test_guard();
+    ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
 #[cfg(test)]
 pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     MISSING_BLOCK_FETCH_TOTAL.store(0, Ordering::Relaxed);
@@ -5407,12 +5598,21 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     MISSING_REQUEST_PRUNED_STALE_HEIGHT.store(0, Ordering::Relaxed);
     PENDING_QUEUE_EVICTIONS_TOTAL.store(0, Ordering::Relaxed);
     MISSING_QC_TRIGGER_SUPPRESSED_STALE.store(0, Ordering::Relaxed);
+    COMMITTED_EDGE_CONFLICT_OBSOLETE_TOTAL.store(0, Ordering::Relaxed);
+    ROSTER_SIDECAR_MISMATCH_OBSOLETE_TOTAL.store(0, Ordering::Relaxed);
     QC_MISSING_PAYLOAD_AGGRESSIVE_FETCH_TOTAL.store(0, Ordering::Relaxed);
     QC_DEFERRED_MISSING_PAYLOAD_TOTAL.store(0, Ordering::Relaxed);
     QC_DEFERRED_RESOLVED_TOTAL.store(0, Ordering::Relaxed);
     QC_DEFERRED_EXPIRED_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_DEFER_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_EMPTY_COMMIT_TOPOLOGY_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_ROSTER_UNAVAILABLE_DETECTED_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_ATTEMPT_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_ROSTER_UNAVAILABLE_ELECTION_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_ROSTER_UNAVAILABLE_WAIT_CANDIDATES_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_CATCHUP_ISOLATION_ENTER_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_CATCHUP_ISOLATION_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_CATCHUP_REJOIN_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_BLOCK_HEIGHT_ESCALATION_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_BLOCK_HEIGHT_PROGRESS_DEFERRED_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_MISSING_QC_REACQUIRE_ATTEMPT_TOTAL.store(0, Ordering::Relaxed);
@@ -5423,15 +5623,29 @@ pub(crate) fn reset_missing_block_fetch_counters_for_tests() {
     CONSENSUS_FORCED_PROPOSAL_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_SIDECAR_QUARANTINE_TOTAL.store(0, Ordering::Relaxed);
     CONSENSUS_SIDECAR_FINAL_DROP_TOTAL.store(0, Ordering::Relaxed);
-    CONSENSUS_NO_ROSTER_FALLBACK_TOTAL.store(0, Ordering::Relaxed);
-    CONSENSUS_NO_ROSTER_FAIL_CLOSED_TOTAL.store(0, Ordering::Relaxed);
-    CONSENSUS_NO_ROSTER_REFRESH_RETRY_TOTAL.store(0, Ordering::Relaxed);
-    CONSENSUS_NO_ROSTER_REFRESH_ATTEMPT_TOTAL.store(0, Ordering::Relaxed);
-    CONSENSUS_NO_ROSTER_REFRESH_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_SIDECAR_RECOVERY_TRIGGER_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_PROPOSAL_STORM_TOTAL.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_PROPOSAL_STORM_LAST_HEIGHT.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_PROPOSAL_STORM_LAST_COUNT.store(0, Ordering::Relaxed);
+    CONSENSUS_NO_PROPOSAL_STORM_MAX_COUNT.store(0, Ordering::Relaxed);
     CONSENSUS_DETERMINISTIC_COMMITTEE_SIZE.store(0, Ordering::Relaxed);
     BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_LAST.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_MAX.store(0, Ordering::Relaxed);
     CONSENSUS_RECOVERY_STUCK_ROUND_SECONDS_LAST.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = CONSENSUS_RECOVERY_STATE_TRANSITIONS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+    {
+        guard.clear();
+    }
+    if let Ok(mut guard) = CONSENSUS_ROSTER_RECOVERY_STATE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *guard = None;
+    }
+    if let Ok(mut guard) = CONSENSUS_ROSTER_RECOVERY_DWELL_MS
         .get_or_init(|| Mutex::new(BTreeMap::new()))
         .lock()
     {
@@ -5463,6 +5677,8 @@ pub(crate) fn reset_block_sync_counters_for_tests() {
     BLOCKSYNC_RANGE_PULL_SUCCESS_TOTAL.store(0, Ordering::Relaxed);
     BLOCKSYNC_RANGE_PULL_FAILURE_TOTAL.store(0, Ordering::Relaxed);
     BLOCKSYNC_RANGE_PULL_CANDIDATE_EXHAUSTED_TOTAL.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_LAST.store(0, Ordering::Relaxed);
+    BLOCKSYNC_RANGE_PULL_EXPIRY_STREAK_MAX.store(0, Ordering::Relaxed);
     if let Ok(mut guard) = BLOCKSYNC_QC_FINAL_DROP_LAST_REASON
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -5495,6 +5711,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     VIEW_CHANGE_CAUSE_COMMIT_FAILURE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_STAKE_QUORUM_TIMEOUT_TOTAL.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_ROSTER_UNAVAILABLE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_DA_GATE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_CENSORSHIP_EVIDENCE_TOTAL.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_MISSING_PAYLOAD_TOTAL.store(0, Ordering::Relaxed);
@@ -5504,6 +5721,7 @@ pub(crate) fn reset_view_change_cause_counters_for_tests() {
     VIEW_CHANGE_CAUSE_LAST_COMMIT_FAILURE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_QUORUM_TIMEOUT_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_STAKE_QUORUM_TIMEOUT_TS_MS.store(0, Ordering::Relaxed);
+    VIEW_CHANGE_CAUSE_LAST_ROSTER_UNAVAILABLE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_DA_GATE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_CENSORSHIP_EVIDENCE_TS_MS.store(0, Ordering::Relaxed);
     VIEW_CHANGE_CAUSE_LAST_MISSING_PAYLOAD_TS_MS.store(0, Ordering::Relaxed);
@@ -8155,16 +8373,29 @@ mod tests {
         super::inc_consensus_missing_qc_rotation_deferred();
         super::inc_consensus_forced_proposal_attempt();
         super::inc_consensus_forced_proposal_success();
+        super::inc_consensus_sidecar_recovery_trigger();
+        super::inc_consensus_no_proposal_storm();
+        super::observe_consensus_no_proposal_storm_state(42, 3, 5);
         super::inc_consensus_recovery_state_transition("refresh_topology");
         super::inc_consensus_recovery_state_transition("block_sync");
         super::inc_consensus_recovery_state_transition("block_sync");
-        super::inc_consensus_no_roster_refresh_retry();
-        super::inc_consensus_no_roster_refresh_attempt();
-        super::inc_consensus_no_roster_refresh_success();
+        super::inc_consensus_roster_unavailable_detected();
+        super::inc_consensus_roster_unavailable_election_attempt();
+        super::inc_consensus_roster_unavailable_election_success();
+        super::inc_consensus_roster_unavailable_wait_candidates();
+        super::set_consensus_roster_recovery_state("wait_candidates");
+        super::set_consensus_roster_recovery_dwell_ms(BTreeMap::from([
+            ("steady", 10_u64),
+            ("wait_candidates", 20_u64),
+        ]));
         super::inc_blocksync_range_pull_candidate_exhausted();
         super::inc_missing_request_pruned_stale_height(3);
         super::inc_pending_queue_evictions_total(2);
         super::inc_missing_qc_trigger_suppressed_stale();
+        super::inc_committed_edge_conflict_obsolete();
+        super::inc_roster_sidecar_mismatch_obsolete();
+        super::observe_blocksync_range_pull_expiry_streak(2);
+        super::observe_blocksync_range_pull_expiry_streak(3);
         let snapshot = super::snapshot();
         assert_eq!(snapshot.missing_block_fetch_total, 1);
         assert_eq!(snapshot.missing_block_fetch_last_targets, 3);
@@ -8172,6 +8403,8 @@ mod tests {
         assert_eq!(snapshot.missing_request_pruned_stale_height, 3);
         assert_eq!(snapshot.pending_queue_evictions_total, 2);
         assert_eq!(snapshot.missing_qc_trigger_suppressed_stale, 1);
+        assert_eq!(snapshot.committed_edge_conflict_obsolete_total, 1);
+        assert_eq!(snapshot.roster_sidecar_mismatch_obsolete_total, 1);
         assert_eq!(snapshot.qc_missing_payload_aggressive_fetch_total, 1);
         assert_eq!(snapshot.qc_deferred_missing_payload_total, 1);
         assert_eq!(snapshot.qc_deferred_resolved_total, 1);
@@ -8188,10 +8421,41 @@ mod tests {
         assert_eq!(snapshot.consensus_missing_qc_rotation_deferred_total, 1);
         assert_eq!(snapshot.consensus_forced_proposal_attempt_total, 1);
         assert_eq!(snapshot.consensus_forced_proposal_success_total, 1);
-        assert_eq!(snapshot.consensus_no_roster_refresh_retry_total, 1);
-        assert_eq!(snapshot.consensus_no_roster_refresh_attempt_total, 1);
-        assert_eq!(snapshot.consensus_no_roster_refresh_success_total, 1);
+        assert_eq!(snapshot.consensus_sidecar_recovery_trigger_total, 1);
+        assert_eq!(snapshot.consensus_no_proposal_storm_total, 1);
+        assert_eq!(snapshot.consensus_no_proposal_storm_last_height, 42);
+        assert_eq!(snapshot.consensus_no_proposal_storm_last_count, 3);
+        assert_eq!(snapshot.consensus_no_proposal_storm_max_count, 5);
+        assert_eq!(snapshot.consensus_roster_unavailable_detected_total, 1);
+        assert_eq!(
+            snapshot.consensus_roster_unavailable_election_attempt_total,
+            1
+        );
+        assert_eq!(
+            snapshot.consensus_roster_unavailable_election_success_total,
+            1
+        );
+        assert_eq!(
+            snapshot.consensus_roster_unavailable_wait_candidates_total,
+            1
+        );
+        assert_eq!(
+            snapshot.consensus_roster_recovery_state,
+            Some("wait_candidates")
+        );
+        assert_eq!(
+            snapshot.consensus_roster_recovery_dwell_ms.get("steady"),
+            Some(&10)
+        );
+        assert_eq!(
+            snapshot
+                .consensus_roster_recovery_dwell_ms
+                .get("wait_candidates"),
+            Some(&20)
+        );
         assert_eq!(snapshot.blocksync_range_pull_candidate_exhausted_total, 1);
+        assert_eq!(snapshot.blocksync_range_pull_expiry_streak_last, 3);
+        assert_eq!(snapshot.blocksync_range_pull_expiry_streak_max, 3);
         assert_eq!(
             snapshot
                 .consensus_recovery_state_transitions
@@ -8394,6 +8658,7 @@ mod tests {
         super::record_view_change_cause("commit_failure");
         super::record_view_change_cause("quorum_timeout");
         super::record_view_change_cause("stake_quorum_timeout");
+        super::record_view_change_cause("roster_unavailable");
         super::record_view_change_cause("da_gate");
         super::record_view_change_cause("censorship_evidence");
         super::record_view_change_cause("missing_payload");
@@ -8404,6 +8669,7 @@ mod tests {
         assert_eq!(snapshot.view_change_causes.commit_failure_total, 1);
         assert_eq!(snapshot.view_change_causes.quorum_timeout_total, 1);
         assert_eq!(snapshot.view_change_causes.stake_quorum_timeout_total, 1);
+        assert_eq!(snapshot.view_change_causes.roster_unavailable_total, 1);
         assert_eq!(snapshot.view_change_causes.da_gate_total, 1);
         assert_eq!(snapshot.view_change_causes.censorship_evidence_total, 1);
         assert_eq!(snapshot.view_change_causes.missing_payload_total, 1);

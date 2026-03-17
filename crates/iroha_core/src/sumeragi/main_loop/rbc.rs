@@ -30,8 +30,8 @@ use sha2::{Digest, Sha256};
 
 use super::{
     Actor, BlockPayloadDedupKey, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome,
-    LaneAllocation, MissingBlockFetchDecision, PipelinePhase, RBC_MAX_TOTAL_CHUNKS,
-    RbcRosterSource, RbcSession, RbcSessionError,
+    LaneAllocation, MissingBlockClearReason, MissingBlockFetchDecision, PipelinePhase,
+    RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession, RbcSessionError,
     pending_rbc::{
         PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
         rbc_ready_stash_bytes,
@@ -71,7 +71,7 @@ pub(super) struct RbcPlan {
 
 const RBC_PERSIST_WORK_QUEUE_CAP: usize = 8;
 const RBC_PERSIST_RESULT_QUEUE_CAP: usize = 8;
-const RBC_SEED_WORKER_THREADS: usize = 2;
+const RBC_SEED_WORKER_THREADS: usize = 4;
 const RBC_SEED_WORK_QUEUE_CAP: usize = 4 * RBC_SEED_WORKER_THREADS;
 const RBC_SEED_RESULT_QUEUE_CAP: usize = 4 * RBC_SEED_WORKER_THREADS;
 
@@ -2022,6 +2022,9 @@ impl Actor {
         if self.kura.get_block_height_by_hash(key.0).is_some() {
             return;
         }
+        if self.suppress_far_future_rbc_missing_block_fetch(key, "rbc_recover_future_window") {
+            return;
+        }
         let payload = self.rbc_session_payload_bytes(&key);
         if let Some(payload) = payload {
             let payload_hash = Hash::new(&payload);
@@ -2225,6 +2228,91 @@ impl Actor {
         self.request_missing_block_for_pending_rbc(key, context, Some(reason));
     }
 
+    fn suppress_far_future_rbc_missing_block_fetch(
+        &mut self,
+        key: SessionKey,
+        context: &'static str,
+    ) -> bool {
+        let frontier_height = self.committed_height_snapshot().saturating_add(1);
+        if key.1 <= frontier_height.saturating_add(1) {
+            return false;
+        }
+
+        let now = Instant::now();
+        if self.pending.missing_block_requests.contains_key(&key.0) {
+            self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
+        }
+        self.clear_missing_block_recovery_for_height(key.1, now);
+
+        let has_rbc_state = self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
+            || self.subsystems.da_rbc.rbc.pending.contains_key(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .session_rosters
+                .contains_key(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .payload_rebroadcast_last_sent
+                .contains_key(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .contains_key(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .deliver_rebroadcast_last_sent
+                .contains_key(&key)
+            || self.subsystems.da_rbc.rbc.ready_deferral.contains_key(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .deliver_deferral
+                .contains_key(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .contains_key(&key)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .persisted_full_sessions
+                .contains(&key)
+            || self.subsystems.da_rbc.rbc.persist_inflight.contains(&key);
+        if has_rbc_state {
+            self.purge_rbc_state(key, key.0, key.1, key.2);
+        }
+
+        let reanchor_requested = self.request_range_pull_from_anchor_with_tier(
+            frontier_height,
+            "rbc_far_future_missing_block",
+            now,
+            Some(super::RangePullCandidateTier::CommitTopology),
+        );
+        debug!(
+            height = key.1,
+            view = key.2,
+            frontier_height,
+            block = %key.0,
+            context,
+            had_rbc_state = has_rbc_state,
+            reanchor_requested,
+            "suppressing far-future RBC missing-block fetch beyond contiguous frontier"
+        );
+        true
+    }
+
     pub(super) fn request_missing_block_for_pending_rbc(
         &mut self,
         key: SessionKey,
@@ -2232,6 +2320,9 @@ impl Actor {
         reason: Option<PendingRbcDropReason>,
     ) {
         if self.block_known_locally(key.0) {
+            return;
+        }
+        if self.suppress_far_future_rbc_missing_block_fetch(key, context) {
             return;
         }
         let mut roster = self.ensure_rbc_session_roster(key);

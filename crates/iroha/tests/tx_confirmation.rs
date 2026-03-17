@@ -56,6 +56,7 @@ fn block_event(height: NonZeroU64, status: BlockStatus) -> EventBox {
         da_proof_policies_hash: None,
         da_commitments_hash: None,
         da_pin_intents_hash: None,
+        prev_roster_evidence_hash: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,

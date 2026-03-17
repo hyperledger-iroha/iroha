@@ -187,7 +187,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # max_proof_openings_per_block = 128   # max DA proof openings per block
 
 [sumeragi.advanced.da]
-# quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 4 * commit_time)
+# quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 3 * commit_time)
 # availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
 # availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
 

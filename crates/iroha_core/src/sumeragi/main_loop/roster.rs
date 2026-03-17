@@ -404,7 +404,7 @@ pub(super) fn derive_active_topology_for_mode_from_world(
     let use_commit = !commit_topology.is_empty();
     let next_height = height.saturating_add(1);
     if matches!(consensus_mode, ConsensusMode::Npos) {
-        let active_roster = active_validator_roster_from_world(world);
+        let active_roster = stake_active_validator_roster_from_world(world);
         if !active_roster.is_empty() {
             let mut roster = if use_commit {
                 let commit_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
@@ -509,7 +509,8 @@ pub(super) fn derive_local_validator_index_for_mode_from_world(
     })
 }
 
-fn active_validator_roster_from_world(world: &impl WorldReadOnly) -> Vec<PeerId> {
+/// Return stake-active validator peers advertised in world state (NPoS source roster).
+pub(super) fn stake_active_validator_roster_from_world(world: &impl WorldReadOnly) -> Vec<PeerId> {
     let mut roster = BTreeSet::new();
     for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
         if !matches!(record.status, PublicLaneValidatorStatus::Active) {

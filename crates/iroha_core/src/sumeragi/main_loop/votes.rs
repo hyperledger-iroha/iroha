@@ -471,6 +471,7 @@ impl Actor {
             return;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
+        let dependency_check_now = Instant::now();
         let mut topology_peers = if matches!(vote.phase, Phase::NewView) {
             self.roster_for_new_view_with_mode(
                 vote.block_hash,
@@ -488,10 +489,11 @@ impl Actor {
             )
         };
         if topology_peers.is_empty() && matches!(vote.phase, Phase::Commit) {
-            let missing_request = self
-                .pending
-                .missing_block_requests
-                .contains_key(&vote.block_hash);
+            let missing_request = self.missing_request_hash_has_actionable_dependency(
+                vote.block_hash,
+                committed_height,
+                dependency_check_now,
+            );
             let allow_fallback = missing_request
                 || (vote.height <= committed_height.saturating_add(1)
                     && (self.block_known_locally(vote.block_hash) || self.runtime_da_enabled()));
@@ -697,45 +699,31 @@ impl Actor {
                                 targets = topology_peers.len(),
                                 "sending block sync update with cached precommit votes to commit topology after recording vote"
                             );
-                        } else {
-                            match self.decide_no_roster_fallback_or_fail_closed(
+                        } else if topology_peers.is_empty() {
+                            let _ = self.handle_roster_unavailable_recovery(
                                 vote.height,
                                 vote.view,
-                                vote.block_hash,
-                                ViewChangeCause::MissingPayload,
-                                "precommit_vote_no_roster",
-                            ) {
-                                super::NoRosterFallbackDecision::AllowFallback => {
-                                    self.broadcast_block_created_for_block_sync(
-                                        super::message::BlockCreated::from(&block),
-                                        &topology_peers,
-                                    );
-                                    iroha_logger::info!(
-                                        height = vote.height,
-                                        view = vote.view,
-                                        block = %vote.block_hash,
-                                        signer = vote.signer,
-                                        targets = topology_peers.len(),
-                                        "sending BlockCreated payload to commit topology (no verifiable roster yet)"
-                                    );
-                                }
-                                super::NoRosterFallbackDecision::BootstrapPending => {
-                                    iroha_logger::debug!(
-                                        height = vote.height,
-                                        view = vote.view,
-                                        block = %vote.block_hash,
-                                        "deferring BlockCreated fallback broadcast while no-roster bootstrap is pending"
-                                    );
-                                }
-                                super::NoRosterFallbackDecision::FailClosed => {
-                                    iroha_logger::warn!(
-                                        height = vote.height,
-                                        view = vote.view,
-                                        block = %vote.block_hash,
-                                        "skipping BlockCreated fallback broadcast after no-roster fail-closed escalation"
-                                    );
-                                }
-                            }
+                                Some(vote.block_hash),
+                                self.queue.queued_len(),
+                                std::time::Instant::now(),
+                                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                                "precommit_vote_roster_unavailable",
+                            );
+                            iroha_logger::debug!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                "deferring payload rebroadcast while waiting for roster-unavailability recovery"
+                            );
+                        } else {
+                            iroha_logger::debug!(
+                                height = vote.height,
+                                view = vote.view,
+                                block = %vote.block_hash,
+                                signer = vote.signer,
+                                targets = topology_peers.len(),
+                                "skipping BlockCreated payload fallback after precommit vote because roster proof is unavailable"
+                            );
                         }
                     } else {
                         iroha_logger::trace!(
@@ -773,7 +761,18 @@ impl Actor {
                     );
                     return;
                 };
-                self.observe_new_view_highest_qc(highest);
+                if !self.observe_new_view_highest_qc(highest) {
+                    debug!(
+                        height = vote.height,
+                        view = vote.view,
+                        signer = vote.signer,
+                        highest_height = highest.height,
+                        highest_view = highest.view,
+                        highest_block = %highest.subject_block_hash,
+                        "dropping NEW_VIEW vote due to committed-edge conflicting highest certificate reference"
+                    );
+                    return;
+                }
                 crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, &signer_peer);
                 if let Some(local_view) = context.stale_view {
                     debug!(
@@ -1015,10 +1014,11 @@ impl Actor {
         }
         if let Some(local_view) = stale_view {
             let da_enabled = self.runtime_da_enabled();
-            let missing_request = self
-                .pending
-                .missing_block_requests
-                .contains_key(&vote.block_hash);
+            let missing_request = self.missing_request_hash_has_actionable_dependency(
+                vote.block_hash,
+                committed_height,
+                Instant::now(),
+            );
             if vote.phase == crate::sumeragi::consensus::Phase::Commit
                 && (self.block_known_locally(vote.block_hash) || da_enabled || missing_request)
             {
@@ -1079,18 +1079,275 @@ impl Actor {
         self.request_missing_block_for_highest_qc_inner(highest, source, true, true)
     }
 
-    pub(super) fn request_missing_block_for_highest_qc_force_skip_sidecar_observation(
+    pub(super) fn suppress_committed_edge_conflicting_highest_qc(
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
         source: &'static str,
     ) -> bool {
-        self.sidecar_observation_suppression_depth =
-            self.sidecar_observation_suppression_depth.saturating_add(1);
-        let requested =
-            self.request_missing_block_for_highest_qc_inner(highest, source, true, false);
-        self.sidecar_observation_suppression_depth =
-            self.sidecar_observation_suppression_depth.saturating_sub(1);
-        requested
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if highest.height > committed_height {
+            return false;
+        }
+        let Some(committed_hash) = self.committed_block_hash_for_height(highest.height) else {
+            return false;
+        };
+        if committed_hash == highest.subject_block_hash {
+            return false;
+        }
+
+        let lock_anchor_hash = self
+            .locked_qc
+            .map(|lock| lock.subject_block_hash)
+            .unwrap_or(committed_hash);
+        self.note_lock_rejected_block(
+            highest.height,
+            highest.subject_block_hash,
+            highest.height,
+            lock_anchor_hash,
+            "highest_qc_committed_conflict",
+        );
+        let (
+            votes_removed,
+            qcs_removed,
+            qc_tally_removed,
+            deferred_qcs_removed,
+            known_work_removed,
+            deferred_updates_removed,
+            highest_qc_markers_removed,
+            pending_blocks_removed,
+            proposal_hints_removed,
+            proposal_cache_removed,
+        ) = self.purge_lock_rejected_block_artifacts(
+            highest.height,
+            highest.view,
+            highest.subject_block_hash,
+        );
+        let descendant_pending: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(pending_hash, pending)| {
+                (pending.block.header().prev_block_hash() == Some(highest.subject_block_hash))
+                    .then_some((*pending_hash, pending.height, pending.view))
+            })
+            .collect();
+        let mut descendant_pending_removed = 0usize;
+        let mut descendant_requeued = 0usize;
+        let mut descendant_requeue_failures = 0usize;
+        let mut descendant_requeue_duplicates = 0usize;
+        for (pending_hash, pending_height, pending_view) in descendant_pending {
+            if let Some((_, requeued, failures, duplicate_failures)) =
+                self.drop_stale_pending_block(pending_hash, pending_height, pending_view)
+            {
+                descendant_pending_removed = descendant_pending_removed.saturating_add(1);
+                descendant_requeued = descendant_requeued.saturating_add(requeued);
+                descendant_requeue_failures = descendant_requeue_failures.saturating_add(failures);
+                descendant_requeue_duplicates =
+                    descendant_requeue_duplicates.saturating_add(duplicate_failures);
+            }
+        }
+
+        if let Some(committed_qc) = self.latest_committed_qc()
+            && self
+                .highest_qc
+                .is_none_or(|current| current.height <= committed_height)
+            && self.highest_qc != Some(committed_qc)
+        {
+            self.highest_qc = Some(committed_qc);
+            super::status::set_highest_qc(committed_qc.height, committed_qc.view);
+            super::status::set_highest_qc_hash(committed_qc.subject_block_hash);
+        }
+
+        if self.locked_qc.is_some_and(|locked| {
+            locked.height == highest.height
+                && locked.subject_block_hash == highest.subject_block_hash
+        }) && let Some(committed_qc) = self.latest_committed_qc()
+            && committed_qc.height == highest.height
+        {
+            self.locked_qc = Some(committed_qc);
+            super::status::set_locked_qc(
+                committed_qc.height,
+                committed_qc.view,
+                Some(committed_qc.subject_block_hash),
+            );
+        }
+
+        let obsolete_request_present = self
+            .pending
+            .missing_block_requests
+            .get(&highest.subject_block_hash)
+            .is_some();
+        let obsolete_request_actionable = self
+            .pending
+            .missing_block_requests
+            .get(&highest.subject_block_hash)
+            .is_some_and(|request| {
+                self.missing_block_request_has_actionable_dependency(
+                    highest.subject_block_hash,
+                    request,
+                    committed_height,
+                    Instant::now(),
+                )
+            });
+        if obsolete_request_present {
+            self.clear_missing_block_request(
+                &highest.subject_block_hash,
+                MissingBlockClearReason::Obsolete,
+            );
+        }
+        super::status::inc_committed_edge_conflict_obsolete();
+        self.clear_sidecar_mismatch_for_height(highest.height);
+        let now = Instant::now();
+        let contiguous_height = committed_height.saturating_add(1);
+        let active_frontier_round = self.phase_tracker.round_height == Some(contiguous_height);
+        let active_frontier_view = self
+            .phase_tracker
+            .current_view(contiguous_height)
+            .unwrap_or(0);
+        let new_view_entries_before = self.subsystems.propose.new_view_tracker.entries.len();
+        self.subsystems
+            .propose
+            .new_view_tracker
+            .entries
+            .retain(|(entry_height, _), _| *entry_height < contiguous_height);
+        let new_view_entries_removed = new_view_entries_before
+            .saturating_sub(self.subsystems.propose.new_view_tracker.entries.len());
+        let frontier_new_view_votes_removed =
+            self.clear_new_view_vote_history_at_or_above_height(contiguous_height);
+        let (
+            frontier_pending_removed,
+            frontier_missing_removed,
+            frontier_deferred_updates_removed,
+            frontier_deferred_qcs_removed,
+            frontier_hints_removed,
+            frontier_proposals_removed,
+            frontier_seen_removed,
+        ) = self.prune_consensus_state_for_missing_block_height(contiguous_height);
+        if frontier_missing_removed > 0 {
+            super::status::inc_missing_request_pruned_stale_height(
+                u64::try_from(frontier_missing_removed).unwrap_or(u64::MAX),
+            );
+            self.update_missing_block_gauges();
+        }
+        let evicted_total = frontier_pending_removed
+            .saturating_add(frontier_deferred_updates_removed)
+            .saturating_add(frontier_deferred_qcs_removed)
+            .saturating_add(frontier_hints_removed)
+            .saturating_add(frontier_proposals_removed)
+            .saturating_add(frontier_seen_removed);
+        if evicted_total > 0 {
+            super::status::inc_pending_queue_evictions_total(
+                u64::try_from(evicted_total).unwrap_or(u64::MAX),
+            );
+        }
+        self.clear_missing_block_recovery_for_height(contiguous_height, now);
+        self.clear_sidecar_mismatch_for_height(contiguous_height);
+        self.clear_consensus_recovery_for_round(contiguous_height, active_frontier_view);
+        let frontier_state_cleared =
+            self.force_clear_frontier_reanchor_state_for_height(contiguous_height, now);
+        let frontier_cooldowns_cleared =
+            self.clear_range_pull_escalation_cooldowns_for_height(contiguous_height);
+        let phase_tracker_clamped = if self
+            .phase_tracker
+            .round_height
+            .is_some_and(|round_height| round_height > contiguous_height)
+        {
+            self.phase_tracker
+                .on_view_change(contiguous_height, active_frontier_view, now);
+            true
+        } else if active_frontier_round && active_frontier_view != 0 {
+            self.phase_tracker.on_view_change(contiguous_height, 0, now);
+            true
+        } else {
+            false
+        };
+        let forced_view_reset = self
+            .subsystems
+            .propose
+            .forced_view_after_timeout
+            .is_some_and(|(height, _)| height >= contiguous_height);
+        if forced_view_reset {
+            self.subsystems.propose.forced_view_after_timeout = None;
+        }
+        let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
+            highest.height,
+            "highest_qc_committed_conflict",
+            now,
+        );
+        let actionable_frontier_dependency =
+            self.frontier_catchup_has_unresolved_dependency(contiguous_height);
+        let storm_view = self
+            .phase_tracker
+            .current_view(contiguous_height)
+            .unwrap_or(0);
+        let recovery_action = if recovery_allowed {
+            self.advance_frontier_recovery(
+                "highest_qc_committed_conflict",
+                contiguous_height,
+                storm_view,
+                false,
+                actionable_frontier_dependency,
+                true,
+                now,
+            )
+        } else {
+            super::FrontierRecoveryAdvance::None
+        };
+        let recovery_reanchor_requested =
+            matches!(recovery_action, super::FrontierRecoveryAdvance::CatchUp);
+        let no_proposal_storm_count =
+            self.same_height_no_proposal_storm_count_for_height(contiguous_height);
+        let no_proposal_storm_force_break_allowed =
+            no_proposal_storm_count >= super::NO_PROPOSAL_STORM_FORCE_BREAK_STREAK;
+        let no_proposal_storm_broken =
+            matches!(recovery_action, super::FrontierRecoveryAdvance::CatchUp)
+                && no_proposal_storm_force_break_allowed;
+        warn!(
+            height = highest.height,
+            view = highest.view,
+            committed_height,
+            incoming_hash = %highest.subject_block_hash,
+            committed_hash = %committed_hash,
+            source,
+            obsolete_request_present,
+            obsolete_request_actionable,
+            recovery_allowed,
+            actionable_frontier_dependency,
+            contiguous_height,
+            recovery_reanchor_requested,
+            no_proposal_storm_count,
+            no_proposal_storm_force_break_allowed,
+            no_proposal_storm_broken,
+            votes_removed,
+            qcs_removed,
+            qc_tally_removed,
+            deferred_qcs_removed,
+            known_work_removed,
+            deferred_updates_removed,
+            highest_qc_markers_removed,
+            pending_blocks_removed,
+            proposal_hints_removed,
+            proposal_cache_removed,
+            descendant_pending_removed,
+            descendant_requeued,
+            descendant_requeue_failures,
+            descendant_requeue_duplicates,
+            frontier_pending_removed,
+            frontier_missing_removed,
+            frontier_deferred_updates_removed,
+            frontier_deferred_qcs_removed,
+            frontier_hints_removed,
+            frontier_proposals_removed,
+            frontier_seen_removed,
+            frontier_state_cleared,
+            frontier_cooldowns_cleared,
+            new_view_entries_removed,
+            frontier_new_view_votes_removed,
+            phase_tracker_clamped,
+            forced_view_reset,
+            "suppressing committed-edge conflicting highest-QC reference and preserving canonical state with bounded canonical reanchor"
+        );
+        true
     }
 
     fn consensus_missing_block_retry_window(
@@ -1117,14 +1374,12 @@ impl Actor {
         observe_sidecar_mismatch: bool,
     ) -> bool {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if self.suppress_committed_edge_conflicting_highest_qc(highest, source) {
+            return false;
+        }
         if highest.height <= committed_height {
             match self.committed_block_hash_for_height(highest.height) {
                 Some(committed_hash) if committed_hash != highest.subject_block_hash => {
-                    self.clear_missing_block_request(
-                        &highest.subject_block_hash,
-                        MissingBlockClearReason::Obsolete,
-                    );
-                    self.clear_sidecar_mismatch_for_height(highest.height);
                     debug!(
                         height = highest.height,
                         view = highest.view,
@@ -1132,7 +1387,7 @@ impl Actor {
                         committed_hash = %committed_hash,
                         highest_hash = %highest.subject_block_hash,
                         source,
-                        "suppressing highest QC missing-block fetch for committed-height hash conflict"
+                        "suppressing highest QC committed-edge conflict as obsolete"
                     );
                     return false;
                 }
@@ -1149,6 +1404,14 @@ impl Actor {
                 _ => {}
             }
         }
+        if self.should_suppress_lock_rejected_block_fetch(
+            highest.height,
+            highest.subject_block_hash,
+            "request_missing_block_for_highest_qc",
+        ) {
+            self.clear_missing_block_view_change(&highest.subject_block_hash);
+            return false;
+        }
         let payload_available =
             self.block_payload_available_for_progress(highest.subject_block_hash);
         let local_known = self
@@ -1161,7 +1424,7 @@ impl Actor {
                 "highest_qc_missing_block",
             );
         }
-        if payload_available && !force_fetch && local_known {
+        if payload_available && local_known {
             self.clear_missing_block_request(
                 &highest.subject_block_hash,
                 MissingBlockClearReason::PayloadAvailable,
@@ -1266,6 +1529,14 @@ impl Actor {
             }
         }
         if roster.is_empty() {
+            let fallback = self.deterministic_block_sync_fallback_targets(consensus_mode);
+            if !fallback.is_empty() {
+                roster = fallback;
+                signers.clear();
+                roster_source = "deterministic emergency fallback";
+            }
+        }
+        if roster.is_empty() {
             debug!(
                 height = highest.height,
                 view = highest.view,
@@ -1293,6 +1564,13 @@ impl Actor {
         );
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let now = Instant::now();
+        let force_retry_now = force_fetch
+            && self.allow_highest_qc_force_fetch_retry(
+                highest.height,
+                highest.subject_block_hash,
+                source,
+                now,
+            );
         let fetch_mode = if self.sidecar_quarantined_for_height(highest.height) {
             MissingBlockFetchMode::AggressiveTopology
         } else {
@@ -1312,6 +1590,7 @@ impl Actor {
             None,
             signer_fallback_attempts,
             fetch_mode,
+            force_retry_now,
         );
         let dwell = self
             .pending
@@ -1351,7 +1630,7 @@ impl Actor {
                 );
             }
             MissingBlockFetchDecision::Backoff => {
-                self.note_missing_block_height_hash_miss(
+                self.note_missing_block_height_backoff(
                     highest.subject_block_hash,
                     highest.height,
                     highest.view,
@@ -1424,7 +1703,10 @@ impl Actor {
     pub(super) fn observe_new_view_highest_qc(
         &mut self,
         highest: crate::sumeragi::consensus::QcHeaderRef,
-    ) {
+    ) -> bool {
+        if self.suppress_committed_edge_conflicting_highest_qc(highest, "new_view") {
+            return false;
+        }
         let should_update = self.highest_qc.is_none_or(|current| {
             let incoming = (highest.height, highest.view);
             let existing = (current.height, current.view);
@@ -1439,6 +1721,7 @@ impl Actor {
             super::status::set_highest_qc_hash(highest.subject_block_hash);
         }
         self.request_missing_block_for_highest_qc(highest, "new_view");
+        true
     }
 
     pub(super) fn drop_precommit_vote_for_lock(
@@ -1469,9 +1752,6 @@ impl Actor {
             );
             return true;
         }
-        if !self.block_known_for_lock(lock.subject_block_hash) {
-            return false;
-        }
         if vote.height == lock.height {
             if vote.block_hash != lock.subject_block_hash {
                 iroha_logger::debug!(
@@ -1495,6 +1775,9 @@ impl Actor {
                 );
                 return true;
             }
+        }
+        if !self.block_known_for_lock(lock.subject_block_hash) {
+            return false;
         }
         if self.block_known_locally(vote.block_hash) {
             let candidate = crate::sumeragi::consensus::QcHeaderRef {
@@ -1984,11 +2267,18 @@ impl Actor {
         if self.block_known_locally(vote.block_hash) {
             return;
         }
+        let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
         let mut roster = self.effective_commit_topology();
         let mut roster_source = "commit topology";
         if roster.is_empty() {
             roster = self.trusted_topology();
             roster_source = "trusted topology fallback";
+        }
+        if roster.is_empty() {
+            roster = self.deterministic_block_sync_fallback_targets(consensus_mode);
+            if !roster.is_empty() {
+                roster_source = "deterministic emergency fallback";
+            }
         }
         if roster.is_empty() {
             debug!(
@@ -2088,6 +2378,44 @@ impl Actor {
                 );
             }
         }
+    }
+
+    pub(super) fn deterministic_block_sync_fallback_targets(
+        &self,
+        consensus_mode: ConsensusMode,
+    ) -> Vec<PeerId> {
+        let world = self.state.world_view();
+        let commit_topology = self.state.commit_topology_snapshot();
+        let committed_height = self.committed_height_snapshot();
+        let mut targets = self.active_topology_with_genesis_fallback_from_world(
+            &world,
+            commit_topology.as_slice(),
+            committed_height,
+            consensus_mode,
+        );
+        if targets.is_empty() {
+            // Emergency deterministic fallback: derive from world/commit/trusted views even if
+            // strict active-set filtering produced an empty roster.
+            targets = super::roster::derive_active_topology_from_views(
+                &world,
+                commit_topology.as_slice(),
+                self.common_config.trusted_peers.value(),
+                self.common_config.peer.id(),
+            );
+            targets = super::roster::canonicalize_roster_for_mode(targets, consensus_mode);
+        }
+        if targets.is_empty() {
+            targets = self.trusted_topology();
+        }
+        let me = self.common_config.peer.id();
+        targets.retain(|peer| peer != me);
+        targets.sort_by(|lhs, rhs| {
+            lhs.public_key()
+                .cmp(rhs.public_key())
+                .then_with(|| lhs.cmp(rhs))
+        });
+        targets.dedup();
+        targets
     }
 
     fn replay_deferred_votes_for_block(&mut self, block_hash: HashOf<BlockHeader>) {
@@ -2208,13 +2536,11 @@ impl Actor {
         >,
         vote: &crate::sumeragi::consensus::Vote,
     ) -> super::message::BlockSyncUpdate {
-        let mut update = super::block_sync_update_with_roster(
+        let mut update = super::block_sync_update_with_certified_roster(
             block,
             state,
             kura,
             self.config.consensus_mode,
-            self.common_config.trusted_peers.value(),
-            self.common_config.peer.id(),
             &self.roster_validation_cache,
         );
         Self::apply_cached_qcs_to_block_sync_update(
@@ -2715,6 +3041,7 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,

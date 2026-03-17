@@ -340,12 +340,58 @@ impl BlockSyncRequestTracker {
     }
 }
 
-const UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP: u64 = 16;
+// Unknown-prev recovery must stream progress continuously to lagging honest peers.
+// Large step gates can under-serve repeated requests and let divergence widen.
+const UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP: u64 = 1;
+const UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP: u64 = 1;
 const UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS: u64 = 1024;
 const UNKNOWN_PREV_RESPONSE_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
+const UNKNOWN_PREV_RESPONSE_REPEAT_COOLDOWN_MULTIPLIER_CAP: u32 = 2;
+const UNKNOWN_PREV_INCREMENTAL_SHARE_MAX_BLOCKS: usize = 64;
+const UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD: u32 = 4;
+const UNKNOWN_PREV_RECENT_CHAIN_HASH_WINDOW: usize = 64;
 
 fn unknown_prev_response_cooldown(gossip_period: Duration) -> Duration {
     gossip_period.max(UNKNOWN_PREV_RESPONSE_COOLDOWN_FLOOR)
+}
+
+fn scale_unknown_prev_cooldown(cooldown: Duration, multiplier: u32) -> Duration {
+    if multiplier <= 1 {
+        return cooldown;
+    }
+    cooldown.checked_mul(multiplier).unwrap_or(Duration::MAX)
+}
+
+fn unknown_prev_repeat_cooldown(cooldown: Duration, responses_sent: u32) -> Duration {
+    let multiplier = responses_sent
+        .saturating_add(1)
+        .min(UNKNOWN_PREV_RESPONSE_REPEAT_COOLDOWN_MULTIPLIER_CAP);
+    scale_unknown_prev_cooldown(cooldown, multiplier)
+}
+
+fn unknown_prev_incremental_share_limit(gossip_size: usize) -> usize {
+    if gossip_size <= 1 {
+        return 1;
+    }
+    gossip_size
+        .saturating_mul(3)
+        .saturating_div(4)
+        .max(1)
+        .min(UNKNOWN_PREV_INCREMENTAL_SHARE_MAX_BLOCKS)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnknownPrevShareMode {
+    Full,
+    Incremental,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UnknownPrevShareDecision {
+    share: bool,
+    mode: UnknownPrevShareMode,
+    effective_cooldown: Duration,
+    repeat_count: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -356,9 +402,130 @@ struct UnknownPrevHashState {
     local_head_hash: Option<HashOf<BlockHeader>>,
     served_at_height: u64,
     last_served_at: Instant,
+    responses_sent: u32,
 }
 
-fn should_share_unknown_prev_hash(
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct UnknownPrevGlobalKey {
+    prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct UnknownPrevGlobalState {
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
+    served_at_height: u64,
+    last_served_at: Instant,
+    responses_sent: u32,
+}
+
+fn should_share_unknown_prev_global_with_mode(
+    cache: &mut BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState>,
+    prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
+    height: u64,
+    now: Instant,
+    cooldown: Duration,
+) -> UnknownPrevShareDecision {
+    let key = UnknownPrevGlobalKey {
+        prev_hash,
+        latest_hash,
+    };
+    let skip = |effective_cooldown: Duration, repeat_count: u32| UnknownPrevShareDecision {
+        share: false,
+        mode: UnknownPrevShareMode::Incremental,
+        effective_cooldown,
+        repeat_count,
+    };
+    match cache.get_mut(&key) {
+        Some(state) => {
+            if state.fallback_start_height != fallback_start_height {
+                debug!(
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    previous_fallback_start_height = state.fallback_start_height.get(),
+                    fallback_start_height = fallback_start_height.get(),
+                    "unknown-prev fallback anchor changed while dedup key remained unchanged"
+                );
+                state.fallback_start_height = fallback_start_height;
+            }
+            let height_advance = height.saturating_sub(state.served_at_height);
+            let local_head_advanced = height_advance >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP
+                || (local_head_hash != state.local_head_hash
+                    && height_advance >= UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP);
+            let effective_cooldown = if cooldown > Duration::ZERO {
+                unknown_prev_repeat_cooldown(cooldown, state.responses_sent)
+            } else {
+                Duration::ZERO
+            };
+            if !local_head_advanced
+                && (effective_cooldown == Duration::ZERO
+                    || now.saturating_duration_since(state.last_served_at) < effective_cooldown)
+            {
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            if local_head_advanced
+                && effective_cooldown > Duration::ZERO
+                && now.saturating_duration_since(state.last_served_at) < effective_cooldown
+            {
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            let responses_before = state.responses_sent;
+            let stuck_refresh = responses_before >= UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD;
+            let mode = if responses_before == 0 || stuck_refresh {
+                UnknownPrevShareMode::Full
+            } else {
+                UnknownPrevShareMode::Incremental
+            };
+            if stuck_refresh {
+                debug!(
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    repeat_count = responses_before.saturating_sub(1),
+                    threshold = UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD,
+                    "forcing one-shot full unknown-prev refresh for stuck dedup key"
+                );
+            }
+            state.local_head_hash = local_head_hash;
+            state.served_at_height = height;
+            state.last_served_at = now;
+            state.responses_sent = if stuck_refresh {
+                1
+            } else {
+                responses_before.saturating_add(1)
+            };
+            UnknownPrevShareDecision {
+                share: true,
+                mode,
+                effective_cooldown,
+                repeat_count: if stuck_refresh { 0 } else { responses_before },
+            }
+        }
+        None => {
+            cache.insert(
+                key,
+                UnknownPrevGlobalState {
+                    fallback_start_height,
+                    local_head_hash,
+                    served_at_height: height,
+                    last_served_at: now,
+                    responses_sent: 1,
+                },
+            );
+            UnknownPrevShareDecision {
+                share: true,
+                mode: UnknownPrevShareMode::Full,
+                effective_cooldown: cooldown,
+                repeat_count: 0,
+            }
+        }
+    }
+}
+
+fn should_share_unknown_prev_hash_with_mode(
     cache: &mut BTreeMap<PeerId, UnknownPrevHashState>,
     peer_id: &PeerId,
     prev_hash: HashOf<BlockHeader>,
@@ -368,32 +535,100 @@ fn should_share_unknown_prev_hash(
     height: u64,
     now: Instant,
     cooldown: Duration,
-) -> bool {
+) -> UnknownPrevShareDecision {
+    let skip = |effective_cooldown: Duration, repeat_count: u32| UnknownPrevShareDecision {
+        share: false,
+        mode: UnknownPrevShareMode::Incremental,
+        effective_cooldown,
+        repeat_count,
+    };
     match cache.get_mut(peer_id) {
-        Some(state)
-            if state.prev_hash == prev_hash
-                && state.latest_hash == latest_hash
-                && state.fallback_start_height == fallback_start_height =>
-        {
+        Some(state) if state.prev_hash == prev_hash && state.latest_hash == latest_hash => {
+            if state.fallback_start_height != fallback_start_height {
+                debug!(
+                    requester = %peer_id,
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    previous_fallback_start_height = state.fallback_start_height.get(),
+                    fallback_start_height = fallback_start_height.get(),
+                    "unknown-prev fallback anchor changed while dedup key remained unchanged"
+                );
+                state.fallback_start_height = fallback_start_height;
+            }
             // Serve the same requester/frontier tuple only when local canonical state advanced
             // enough to provide new range content.
-            let local_head_advanced = local_head_hash != state.local_head_hash
-                || height.saturating_sub(state.served_at_height)
-                    >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP;
-            if !local_head_advanced {
-                return false;
-            }
-            if cooldown > Duration::ZERO
-                && now.saturating_duration_since(state.last_served_at) < cooldown
+            let height_advance = height.saturating_sub(state.served_at_height);
+            let local_head_advanced = height_advance >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP
+                || (local_head_hash != state.local_head_hash
+                    && height_advance >= UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP);
+            let effective_cooldown = if cooldown > Duration::ZERO {
+                unknown_prev_repeat_cooldown(cooldown, state.responses_sent)
+            } else {
+                Duration::ZERO
+            };
+            if !local_head_advanced
+                && (effective_cooldown == Duration::ZERO
+                    || now.saturating_duration_since(state.last_served_at) < effective_cooldown)
             {
-                return false;
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            if local_head_advanced
+                && effective_cooldown > Duration::ZERO
+                && now.saturating_duration_since(state.last_served_at) < effective_cooldown
+            {
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            let responses_before = state.responses_sent;
+            let stuck_refresh = responses_before >= UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD;
+            let mode = if responses_before == 0 || stuck_refresh {
+                UnknownPrevShareMode::Full
+            } else {
+                UnknownPrevShareMode::Incremental
+            };
+            if stuck_refresh {
+                debug!(
+                    requester = %peer_id,
+                    prev_hash = %prev_hash,
+                    latest_hash = ?latest_hash,
+                    repeat_count = responses_before.saturating_sub(1),
+                    threshold = UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD,
+                    "forcing one-shot full unknown-prev refresh for stuck peer dedup key"
+                );
             }
             state.local_head_hash = local_head_hash;
             state.served_at_height = height;
             state.last_served_at = now;
-            true
+            state.responses_sent = if stuck_refresh {
+                1
+            } else {
+                responses_before.saturating_add(1)
+            };
+            UnknownPrevShareDecision {
+                share: true,
+                mode,
+                effective_cooldown,
+                repeat_count: if stuck_refresh { 0 } else { responses_before },
+            }
         }
         Some(state) => {
+            // Guard against tuple churn (prev/latest changing every request): if local canonical
+            // head did not advance and cooldown has not elapsed, do not reset dedup identity.
+            let height_advance = height.saturating_sub(state.served_at_height);
+            let local_head_advanced = height_advance >= UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP
+                || (local_head_hash != state.local_head_hash
+                    && height_advance >= UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP);
+            let effective_cooldown = if cooldown > Duration::ZERO {
+                unknown_prev_repeat_cooldown(cooldown, state.responses_sent)
+            } else {
+                Duration::ZERO
+            };
+            if !local_head_advanced
+                && effective_cooldown > Duration::ZERO
+                && now.saturating_duration_since(state.last_served_at) < effective_cooldown
+            {
+                return skip(effective_cooldown, state.responses_sent);
+            }
+            let responses_before = state.responses_sent;
             *state = UnknownPrevHashState {
                 prev_hash,
                 latest_hash,
@@ -401,8 +636,14 @@ fn should_share_unknown_prev_hash(
                 local_head_hash,
                 served_at_height: height,
                 last_served_at: now,
+                responses_sent: responses_before.saturating_add(1),
             };
-            true
+            UnknownPrevShareDecision {
+                share: true,
+                mode: UnknownPrevShareMode::Incremental,
+                effective_cooldown,
+                repeat_count: responses_before,
+            }
         }
         None => {
             cache.insert(
@@ -414,11 +655,43 @@ fn should_share_unknown_prev_hash(
                     local_head_hash,
                     served_at_height: height,
                     last_served_at: now,
+                    responses_sent: 1,
                 },
             );
-            true
+            UnknownPrevShareDecision {
+                share: true,
+                mode: UnknownPrevShareMode::Full,
+                effective_cooldown: cooldown,
+                repeat_count: 0,
+            }
         }
     }
+}
+
+#[cfg(test)]
+fn should_share_unknown_prev_hash(
+    cache: &mut BTreeMap<PeerId, UnknownPrevHashState>,
+    peer_id: &PeerId,
+    prev_hash: HashOf<BlockHeader>,
+    latest_hash: Option<HashOf<BlockHeader>>,
+    fallback_start_height: NonZeroUsize,
+    local_head_hash: Option<HashOf<BlockHeader>>,
+    height: u64,
+    now: Instant,
+    cooldown: Duration,
+) -> bool {
+    should_share_unknown_prev_hash_with_mode(
+        cache,
+        peer_id,
+        prev_hash,
+        latest_hash,
+        fallback_start_height,
+        local_head_hash,
+        height,
+        now,
+        cooldown,
+    )
+    .share
 }
 
 fn prune_unknown_prev_hashes(cache: &mut BTreeMap<PeerId, UnknownPrevHashState>, height: u64) {
@@ -427,14 +700,21 @@ fn prune_unknown_prev_hashes(cache: &mut BTreeMap<PeerId, UnknownPrevHashState>,
     });
 }
 
-const UNKNOWN_PREV_SEEN_REWIND_WINDOW: usize = 1024;
-const UNKNOWN_PREV_MAX_REWIND_WINDOW: usize = 256;
+fn prune_unknown_prev_global_hashes(
+    cache: &mut BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState>,
+    height: u64,
+) {
+    cache.retain(|_, state| {
+        height.saturating_sub(state.served_at_height) <= UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS
+    });
+}
 
 fn unknown_prev_rewind_window(height: usize) -> usize {
-    let max_window = UNKNOWN_PREV_SEEN_REWIND_WINDOW.min(UNKNOWN_PREV_MAX_REWIND_WINDOW);
-    // For unknown-prev recovery, rewind enough to bridge honest divergence but avoid
-    // genesis-prefix replay on short/mid-height chains that can starve range-pull progress.
-    (height / 2).max(1).min(max_window)
+    // Keep short-chain recovery forgiving, but cap mid/deep rewinds to the same recent window
+    // we already advertise in seen-block hints to avoid replaying large historical prefixes.
+    (height / 2)
+        .max(1)
+        .min(UNKNOWN_PREV_RECENT_CHAIN_HASH_WINDOW)
 }
 
 fn unknown_prev_fallback_start_height(
@@ -442,42 +722,57 @@ fn unknown_prev_fallback_start_height(
     latest_hash: Option<HashOf<BlockHeader>>,
     seen_blocks: &BTreeSet<HashOf<BlockHeader>>,
 ) -> (NonZeroUsize, bool) {
-    let rewind_start = |height: NonZeroUsize| {
-        let rewind_window = unknown_prev_rewind_window(height.get());
-        NonZeroUsize::new(
-            height
-                .get()
-                .saturating_sub(rewind_window.saturating_sub(1))
-                .max(1),
-        )
-        .unwrap_or(nonzero_ext::nonzero!(1_usize))
+    let local_tip_height = kura.blocks_count().max(1);
+    let clamp_start_height = |height: usize| {
+        NonZeroUsize::new(height.min(local_tip_height).max(1))
+            .unwrap_or(nonzero_ext::nonzero!(1_usize))
     };
-    let local_tip_height = kura.blocks_count();
-    // Unknown-prev fallback must rewind far enough to recover lagging honest peers
-    // while staying near-tip enough to avoid low-height genesis-prefix replay loops.
+    // When no requester anchor is known, rewind a bounded local window.
     let local_window = unknown_prev_rewind_window(local_tip_height);
     let local_fallback_start = local_tip_height
         .saturating_sub(local_window.saturating_sub(1))
         .max(1);
-    let local_fallback_start =
-        NonZeroUsize::new(local_fallback_start).unwrap_or(nonzero_ext::nonzero!(1_usize));
+    let local_fallback_start = clamp_start_height(local_fallback_start);
     match latest_hash
         .and_then(|hash| kura.get_block_height_by_hash(hash))
         .and_then(|height| height.checked_add(1))
     {
-        // When `prev_hash` is unknown but `latest_hash` is known, the pair is inconsistent.
-        // Rewind from `latest_hash` instead of starting at `latest + 1`; otherwise responders
-        // can skip too far ahead and strand lagging peers in a missing-parent loop.
-        Some(known_height) => (rewind_start(known_height), false),
+        // If requester's latest hash is known locally, start from the next height directly.
+        Some(known_height) => (clamp_start_height(known_height.get()), false),
         None => {
             if let Some(recent_seen_height) = seen_blocks
                 .iter()
                 .filter_map(|hash| kura.get_block_height_by_hash(*hash))
                 .max()
             {
-                return (rewind_start(recent_seen_height), true);
+                let next_height = recent_seen_height
+                    .get()
+                    .checked_add(1)
+                    .unwrap_or(recent_seen_height.get());
+                return (clamp_start_height(next_height), true);
             }
             (local_fallback_start, true)
+        }
+    }
+}
+
+fn append_recent_chain_hashes_for_unknown_prev(
+    seen_blocks: &mut BTreeSet<HashOf<BlockHeader>>,
+    kura: &Kura,
+    local_tip_height: usize,
+) {
+    if local_tip_height == 0 {
+        return;
+    }
+    let start_height = local_tip_height
+        .saturating_sub(UNKNOWN_PREV_RECENT_CHAIN_HASH_WINDOW.saturating_sub(1))
+        .max(1);
+    for height in start_height..=local_tip_height {
+        let Some(height_nz) = NonZeroUsize::new(height) else {
+            continue;
+        };
+        if let Some(block) = kura.get_block(height_nz) {
+            seen_blocks.insert(block.hash());
         }
     }
 }
@@ -564,11 +859,12 @@ mod handle_tests {
 
 #[cfg(test)]
 mod seen_blocks_tests {
-    use std::{collections::BTreeSet, num::NonZeroU64};
+    use std::{collections::BTreeSet, num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Hash, HashOf, KeyPair};
 
     use super::*;
+    use crate::block::ValidBlock;
 
     fn entry(height: u64, byte: u8) -> (NonZeroU64, HashOf<BlockHeader>) {
         let height = NonZeroU64::new(height).expect("height must be non-zero");
@@ -596,6 +892,47 @@ mod seen_blocks_tests {
         BlockSynchronizer::prune_seen_blocks(&mut seen, 5, 4);
         let heights: Vec<_> = seen.iter().map(|(height, _)| height.get()).collect();
         assert_eq!(heights, vec![6]);
+    }
+
+    #[test]
+    fn append_recent_chain_hashes_uses_bounded_near_tip_window() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        let mut height_16_hash = None;
+        let mut height_17_hash = None;
+        for height in 1_u64..=80_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            let block_hash = block.hash();
+            if height == 16 {
+                height_16_hash = Some(block_hash);
+            } else if height == 17 {
+                height_17_hash = Some(block_hash);
+            }
+            prev = Some(block_hash);
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+
+        let mut seen = BTreeSet::new();
+        append_recent_chain_hashes_for_unknown_prev(&mut seen, &kura, 80);
+
+        let height_16_hash = height_16_hash.expect("height 16 hash recorded");
+        let height_17_hash = height_17_hash.expect("height 17 hash recorded");
+        assert!(
+            !seen.contains(&height_16_hash),
+            "window should exclude hashes below bounded horizon"
+        );
+        assert!(
+            seen.contains(&height_17_hash),
+            "window should include hashes on bounded horizon"
+        );
     }
 }
 
@@ -703,6 +1040,7 @@ mod gossip_backoff_tests {
             telemetry: None,
             seen_blocks: BTreeSet::new(),
             unknown_prev_hashes: BTreeMap::new(),
+            unknown_prev_global_hashes: BTreeMap::new(),
             request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                 Duration::from_secs(1),
                 Duration::from_secs(8),
@@ -795,6 +1133,17 @@ mod unknown_prev_hash_tests {
             &peer,
             hash1,
             latest1,
+            nonzero_ext::nonzero!(11_usize),
+            Some(hash(0x81)),
+            10,
+            now,
+            Duration::ZERO,
+        ));
+        assert!(should_share_unknown_prev_hash(
+            &mut cache,
+            &peer,
+            hash1,
+            latest1,
             nonzero_ext::nonzero!(10_usize),
             Some(hash(0x81)),
             11,
@@ -808,7 +1157,7 @@ mod unknown_prev_hash_tests {
             latest1,
             nonzero_ext::nonzero!(10_usize),
             Some(hash(0x82)),
-            10 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            11 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
             now,
             Duration::ZERO,
         ));
@@ -845,7 +1194,7 @@ mod unknown_prev_hash_tests {
             now,
             Duration::ZERO,
         ));
-        assert!(should_share_unknown_prev_hash(
+        assert!(!should_share_unknown_prev_hash(
             &mut cache,
             &peer,
             hash2,
@@ -874,7 +1223,7 @@ mod unknown_prev_hash_tests {
             latest2,
             nonzero_ext::nonzero!(13_usize),
             Some(hash(0x83)),
-            12,
+            12 + UNKNOWN_PREV_RESPONSE_HASH_CHANGE_MIN_HEIGHT_STEP,
             now,
             Duration::ZERO,
         ));
@@ -919,9 +1268,440 @@ mod unknown_prev_hash_tests {
             nonzero_ext::nonzero!(10_usize),
             Some(hash(0x73)),
             10 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP * 2,
-            now + cooldown + Duration::from_millis(1),
+            now + cooldown + cooldown + Duration::from_millis(1),
             cooldown,
         ));
+    }
+
+    #[test]
+    fn unknown_prev_repeated_tuple_transitions_to_incremental_share_mode() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let prev = hash(0x74);
+        let latest = Some(hash(0x75));
+        let cooldown = Duration::from_millis(25);
+        let now = Instant::now();
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x76)),
+            8,
+            now,
+            cooldown,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+        assert_eq!(first.repeat_count, 0);
+
+        let second = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x77)),
+            8 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now + cooldown + cooldown + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(second.share);
+        assert_eq!(second.mode, UnknownPrevShareMode::Incremental);
+        assert_eq!(second.repeat_count, 1);
+    }
+
+    #[test]
+    fn unknown_prev_tuple_churn_is_rate_limited_per_peer() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let cooldown = Duration::from_millis(30);
+        let now = Instant::now();
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            hash(0xA1),
+            Some(hash(0xA2)),
+            nonzero_ext::nonzero!(9_usize),
+            Some(hash(0xA3)),
+            9,
+            now,
+            cooldown,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        let churned_immediate = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            hash(0xB1),
+            Some(hash(0xB2)),
+            nonzero_ext::nonzero!(9_usize),
+            Some(hash(0xA3)),
+            9,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(
+            !churned_immediate.share,
+            "tuple churn must respect per-peer cooldown when local head did not advance"
+        );
+
+        let churned_after_progress = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            hash(0xB1),
+            Some(hash(0xB2)),
+            nonzero_ext::nonzero!(10_usize),
+            Some(hash(0xA4)),
+            9 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now + cooldown + cooldown + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(churned_after_progress.share);
+        assert_eq!(
+            churned_after_progress.mode,
+            UnknownPrevShareMode::Incremental,
+            "tuple churn after progress should not reset into full-share mode"
+        );
+    }
+
+    #[test]
+    fn unknown_prev_same_tuple_allows_periodic_resend_after_cooldown_without_head_advance() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let cooldown = Duration::from_millis(40);
+        let now = Instant::now();
+        let prev = hash(0xB3);
+        let latest = Some(hash(0xB4));
+        let local_head = Some(hash(0xB5));
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(11_usize),
+            local_head,
+            11,
+            now,
+            cooldown,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        let immediate = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(11_usize),
+            local_head,
+            11,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(
+            !immediate.share,
+            "same tuple should still be throttled inside cooldown window"
+        );
+
+        let later = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(11_usize),
+            local_head,
+            11,
+            now + cooldown + cooldown + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(
+            later.share,
+            "same tuple should eventually re-share after cooldown even if local head is stable"
+        );
+        assert_eq!(later.mode, UnknownPrevShareMode::Incremental);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_anchor_change_keeps_peer_dedup_identity() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let prev = hash(0x78);
+        let latest = Some(hash(0x79));
+        let now = Instant::now();
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x7A)),
+            8,
+            now,
+            Duration::ZERO,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        let second = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(9_usize),
+            Some(hash(0x7B)),
+            8 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(second.share);
+        assert_eq!(
+            second.mode,
+            UnknownPrevShareMode::Incremental,
+            "fallback-anchor change must not reset unknown-prev dedup identity",
+        );
+    }
+
+    #[test]
+    fn unknown_prev_global_fallback_anchor_change_keeps_dedup_identity() {
+        let prev = hash(0x7C);
+        let latest = Some(hash(0x7D));
+        let now = Instant::now();
+        let mut global_cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> =
+            BTreeMap::new();
+
+        let first = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(9_usize),
+            Some(hash(0x7E)),
+            9,
+            now,
+            Duration::ZERO,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        let second = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(10_usize),
+            Some(hash(0x7F)),
+            9 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(second.share);
+        assert_eq!(
+            second.mode,
+            UnknownPrevShareMode::Incremental,
+            "fallback-anchor change must not reset global unknown-prev dedup identity",
+        );
+    }
+
+    #[test]
+    fn unknown_prev_stuck_key_triggers_one_shot_full_refresh() {
+        let peer = PeerId::new(KeyPair::random().public_key().clone());
+        let mut cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let prev = hash(0x90);
+        let latest = Some(hash(0x91));
+        let start_height = 8_u64;
+        let now = Instant::now();
+
+        let first = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x92)),
+            start_height,
+            now,
+            Duration::ZERO,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+
+        for idx in 1..UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD {
+            let decision = should_share_unknown_prev_hash_with_mode(
+                &mut cache,
+                &peer,
+                prev,
+                latest,
+                nonzero_ext::nonzero!(8_usize),
+                Some(hash(0x92_u8 + u8::try_from(idx).expect("idx fits in u8"))),
+                start_height + u64::from(idx) * UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+                now,
+                Duration::ZERO,
+            );
+            assert!(decision.share);
+            assert_eq!(decision.mode, UnknownPrevShareMode::Incremental);
+        }
+
+        let refresh = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x97)),
+            start_height
+                + u64::from(UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD)
+                    * UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(refresh.share);
+        assert_eq!(
+            refresh.mode,
+            UnknownPrevShareMode::Full,
+            "stuck dedup tuple should force one bounded full-share refresh",
+        );
+        assert_eq!(
+            refresh.repeat_count, 0,
+            "full refresh should reset repeat counter",
+        );
+
+        let after_refresh = should_share_unknown_prev_hash_with_mode(
+            &mut cache,
+            &peer,
+            prev,
+            latest,
+            nonzero_ext::nonzero!(8_usize),
+            Some(hash(0x98)),
+            start_height
+                + u64::from(UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD + 1)
+                    * UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now,
+            Duration::ZERO,
+        );
+        assert!(after_refresh.share);
+        assert_eq!(
+            after_refresh.mode,
+            UnknownPrevShareMode::Incremental,
+            "post-refresh tuple should return to incremental mode",
+        );
+    }
+
+    #[test]
+    fn unknown_prev_global_gate_suppresses_cross_peer_duplicate_requests() {
+        let prev = hash(0x84);
+        let latest = Some(hash(0x85));
+        let fallback_start_height = nonzero_ext::nonzero!(9_usize);
+        let cooldown = Duration::from_millis(30);
+        let now = Instant::now();
+        let mut global_cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> =
+            BTreeMap::new();
+
+        let first = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x86)),
+            9,
+            now,
+            cooldown,
+        );
+        assert!(first.share);
+        assert_eq!(first.mode, UnknownPrevShareMode::Full);
+        assert_eq!(first.repeat_count, 0);
+
+        let second = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x86)),
+            9,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(!second.share);
+        assert_eq!(second.mode, UnknownPrevShareMode::Incremental);
+
+        let third = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x87)),
+            9 + UNKNOWN_PREV_RESPONSE_MIN_HEIGHT_STEP,
+            now + cooldown + cooldown + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(third.share);
+        assert_eq!(third.mode, UnknownPrevShareMode::Incremental);
+        assert_eq!(third.repeat_count, 1);
+    }
+
+    #[test]
+    fn unknown_prev_global_gate_blocks_second_peer_full_share() {
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let prev = hash(0x88);
+        let latest = Some(hash(0x89));
+        let fallback_start_height = nonzero_ext::nonzero!(7_usize);
+        let cooldown = Duration::from_millis(40);
+        let now = Instant::now();
+        let mut peer_cache: BTreeMap<PeerId, UnknownPrevHashState> = BTreeMap::new();
+        let mut global_cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> =
+            BTreeMap::new();
+
+        let global_first = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now,
+            cooldown,
+        );
+        let peer_first = should_share_unknown_prev_hash_with_mode(
+            &mut peer_cache,
+            &peer_a,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now,
+            cooldown,
+        );
+        assert!(global_first.share && peer_first.share);
+
+        let global_second = should_share_unknown_prev_global_with_mode(
+            &mut global_cache,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        let peer_second = should_share_unknown_prev_hash_with_mode(
+            &mut peer_cache,
+            &peer_b,
+            prev,
+            latest,
+            fallback_start_height,
+            Some(hash(0x8A)),
+            7,
+            now + Duration::from_millis(1),
+            cooldown,
+        );
+        assert!(!global_second.share);
+        assert!(peer_second.share);
     }
 
     #[test]
@@ -939,6 +1719,7 @@ mod unknown_prev_hash_tests {
                 local_head_hash: Some(hash(0x43)),
                 served_at_height: prune_at,
                 last_served_at: Instant::now(),
+                responses_sent: 1,
             },
         );
         cache.insert(
@@ -950,6 +1731,7 @@ mod unknown_prev_hash_tests {
                 local_head_hash: Some(hash(0x53)),
                 served_at_height: 10,
                 last_served_at: Instant::now(),
+                responses_sent: 1,
             },
         );
 
@@ -957,6 +1739,43 @@ mod unknown_prev_hash_tests {
 
         assert!(cache.contains_key(&fresh_peer));
         assert!(!cache.contains_key(&stale_peer));
+    }
+
+    #[test]
+    fn prune_unknown_prev_global_hashes_drops_stale_entries() {
+        let prune_at = 10 + UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS + 1;
+        let mut cache: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState> = BTreeMap::new();
+        cache.insert(
+            UnknownPrevGlobalKey {
+                prev_hash: hash(0x61),
+                latest_hash: Some(hash(0x62)),
+            },
+            UnknownPrevGlobalState {
+                fallback_start_height: nonzero_ext::nonzero!(1_usize),
+                local_head_hash: Some(hash(0x63)),
+                served_at_height: prune_at,
+                last_served_at: Instant::now(),
+                responses_sent: 1,
+            },
+        );
+        cache.insert(
+            UnknownPrevGlobalKey {
+                prev_hash: hash(0x71),
+                latest_hash: Some(hash(0x72)),
+            },
+            UnknownPrevGlobalState {
+                fallback_start_height: nonzero_ext::nonzero!(1_usize),
+                local_head_hash: Some(hash(0x73)),
+                served_at_height: 10,
+                last_served_at: Instant::now(),
+                responses_sent: 1,
+            },
+        );
+
+        prune_unknown_prev_global_hashes(&mut cache, prune_at);
+
+        assert_eq!(cache.len(), 1);
+        assert!(cache.keys().any(|entry| entry.prev_hash == hash(0x61)));
     }
 
     #[test]
@@ -1031,11 +1850,11 @@ mod unknown_prev_hash_tests {
         let (start_height, requested_latest) =
             unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &BTreeSet::new());
         assert!(requested_latest);
-        assert_eq!(start_height.get(), 1045);
+        assert_eq!(start_height.get(), 1237);
     }
 
     #[test]
-    fn unknown_prev_fallback_rewinds_known_latest_hash_for_deep_lag() {
+    fn unknown_prev_fallback_starts_from_known_latest_hash_for_deep_lag() {
         let kura = Kura::blank_kura_for_testing();
         let keypair = KeyPair::random();
         let mut prev = None;
@@ -1059,11 +1878,11 @@ mod unknown_prev_hash_tests {
         let (start_height, requested_latest) =
             unknown_prev_fallback_start_height(&kura, Some(latest_known), &BTreeSet::new());
         assert!(!requested_latest);
-        assert_eq!(start_height.get(), 986);
+        assert_eq!(start_height.get(), 1241);
     }
 
     #[test]
-    fn unknown_prev_fallback_rewinds_from_recent_seen_hashes() {
+    fn unknown_prev_fallback_starts_after_recent_seen_hashes() {
         let kura = Kura::blank_kura_for_testing();
         let keypair = KeyPair::random();
         let mut prev = None;
@@ -1089,11 +1908,11 @@ mod unknown_prev_hash_tests {
         let (start_height, requested_latest) =
             unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &seen);
         assert!(requested_latest);
-        assert_eq!(start_height.get(), 961);
+        assert_eq!(start_height.get(), 1217);
     }
 
     #[test]
-    fn unknown_prev_fallback_avoids_genesis_rewind_for_mid_height_known_latest() {
+    fn unknown_prev_fallback_uses_known_latest_anchor_for_mid_height() {
         let kura = Kura::blank_kura_for_testing();
         let keypair = KeyPair::random();
         let mut prev = None;
@@ -1117,7 +1936,31 @@ mod unknown_prev_hash_tests {
         let (start_height, requested_latest) =
             unknown_prev_fallback_start_height(&kura, Some(latest_known), &BTreeSet::new());
         assert!(!requested_latest);
-        assert_eq!(start_height.get(), 236);
+        assert_eq!(start_height.get(), 469);
+    }
+
+    #[test]
+    fn unknown_prev_fallback_caps_mid_height_rewind_to_recent_window() {
+        let kura = Kura::blank_kura_for_testing();
+        let keypair = KeyPair::random();
+        let mut prev = None;
+        for height in 1_u64..=345_u64 {
+            let parent = prev;
+            let block: SignedBlock =
+                ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                    header.set_height(NonZeroU64::new(height).expect("non-zero height"));
+                    header.set_prev_block_hash(parent);
+                })
+                .into();
+            prev = Some(block.hash());
+            kura.store_block(Arc::new(block))
+                .expect("store deterministic local window block");
+        }
+        let unknown_hash = hash(0xE1);
+        let (start_height, requested_latest) =
+            unknown_prev_fallback_start_height(&kura, Some(unknown_hash), &BTreeSet::new());
+        assert!(requested_latest);
+        assert_eq!(start_height.get(), 282);
     }
 
     #[test]
@@ -1163,6 +2006,7 @@ pub struct BlockSynchronizer {
     telemetry: Option<Telemetry>,
     seen_blocks: BTreeSet<(NonZeroU64, HashOf<BlockHeader>)>,
     unknown_prev_hashes: BTreeMap<PeerId, UnknownPrevHashState>,
+    unknown_prev_global_hashes: BTreeMap<UnknownPrevGlobalKey, UnknownPrevGlobalState>,
     request_tracker: BlockSyncRequestTracker,
     latest_height: u64,
     last_peers: BTreeSet<PeerId>,
@@ -1265,8 +2109,10 @@ impl BlockSynchronizer {
         Self::prune_seen_blocks(&mut self.seen_blocks, now_height, previous_height);
         if now_height < previous_height {
             self.unknown_prev_hashes.clear();
+            self.unknown_prev_global_hashes.clear();
         }
         prune_unknown_prev_hashes(&mut self.unknown_prev_hashes, now_height);
+        prune_unknown_prev_global_hashes(&mut self.unknown_prev_global_hashes, now_height);
         self.latest_height = now_height;
 
         let peers = self
@@ -1352,16 +2198,20 @@ impl BlockSynchronizer {
     async fn request_latest_blocks_from_peer(&mut self, peer_id: PeerId) {
         let prev_hash = self.state.prev_block_hash_fast();
         let latest_hash = self.state.latest_block_hash_fast();
+        let local_tip_height = self.state.committed_height();
+        let mut seen_blocks: BTreeSet<_> = self
+            .seen_blocks
+            .iter()
+            .map(|(_height, hash)| *hash)
+            .collect();
+        append_recent_chain_hashes_for_unknown_prev(&mut seen_blocks, &self.kura, local_tip_height);
         self.request_tracker
             .record_request(peer_id.clone(), Instant::now());
         message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
             self.peer.id().clone(),
             prev_hash,
             latest_hash,
-            self.seen_blocks
-                .iter()
-                .map(|(_height, hash)| *hash)
-                .collect(),
+            seen_blocks,
         ))
         .send_to(&self.network, peer_id)
         .await;
@@ -1401,6 +2251,7 @@ impl BlockSynchronizer {
             telemetry,
             seen_blocks: BTreeSet::new(),
             unknown_prev_hashes: BTreeMap::new(),
+            unknown_prev_global_hashes: BTreeMap::new(),
             request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                 gossip_period,
                 gossip_max_period,
@@ -2145,18 +2996,22 @@ mod prf_seed_tests {
 
 #[cfg(test)]
 mod roster_metadata_tests {
-    use std::sync::Arc;
+    use std::{num::NonZeroU64, sync::Arc};
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
-        block::BlockHeader,
-        consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+        block::{BlockHeader, SignedBlock},
+        consensus::{
+            PreviousRosterEvidence, Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+        },
         peer::PeerId,
     };
     use nonzero_ext::nonzero;
 
     use super::*;
-    use crate::{prelude::World, query::store::LiveQueryStore, sumeragi::status};
+    use crate::{
+        block::ValidBlock, prelude::World, query::store::LiveQueryStore, sumeragi::status,
+    };
 
     fn sample_roster_artifacts() -> (Qc, ValidatorSetCheckpoint) {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2198,6 +3053,21 @@ mod roster_metadata_tests {
             None,
         );
         (commit_qc, checkpoint)
+    }
+
+    fn sample_successor_block(
+        prev_hash: HashOf<BlockHeader>,
+        evidence: Option<PreviousRosterEvidence>,
+    ) -> SignedBlock {
+        let keypair = KeyPair::random();
+        let mut block: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(keypair.private_key(), |header| {
+                header.set_height(NonZeroU64::new(2).expect("non-zero height"));
+                header.set_prev_block_hash(Some(prev_hash));
+            })
+            .into();
+        block.set_previous_roster_evidence(evidence);
+        block
     }
 
     #[test]
@@ -2299,6 +3169,77 @@ mod roster_metadata_tests {
     }
 
     #[test]
+    fn metadata_uses_successor_block_previous_roster_evidence() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (_commit_qc, checkpoint) = sample_roster_artifacts();
+        let block_hash = checkpoint.block_hash;
+        let evidence = PreviousRosterEvidence {
+            height: checkpoint.height,
+            block_hash,
+            validator_checkpoint: checkpoint.clone(),
+            stake_snapshot: None,
+        };
+        let successor = sample_successor_block(block_hash, Some(evidence));
+        kura.store_block(Arc::new(successor))
+            .expect("store successor block");
+
+        let metadata = super::message::roster_metadata_from_state(
+            &state,
+            kura.as_ref(),
+            checkpoint.height,
+            block_hash,
+            ConsensusMode::Permissioned,
+        )
+        .expect("metadata should be available from successor block evidence");
+        assert_eq!(metadata.commit_qc, None);
+        assert_eq!(metadata.validator_checkpoint, Some(checkpoint));
+    }
+
+    #[test]
+    fn metadata_rejects_successor_block_previous_roster_evidence_mismatch() {
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (_commit_qc, checkpoint) = sample_roster_artifacts();
+        let block_hash = checkpoint.block_hash;
+        let mismatched_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+        let evidence = PreviousRosterEvidence {
+            height: checkpoint.height,
+            block_hash: mismatched_hash,
+            validator_checkpoint: checkpoint,
+            stake_snapshot: None,
+        };
+        let successor = sample_successor_block(block_hash, Some(evidence));
+        kura.store_block(Arc::new(successor))
+            .expect("store successor block");
+
+        let metadata = super::message::roster_metadata_from_state(
+            &state,
+            kura.as_ref(),
+            1,
+            block_hash,
+            ConsensusMode::Permissioned,
+        );
+        assert!(
+            metadata.is_none(),
+            "mismatched previous roster evidence must be ignored"
+        );
+    }
+
+    #[test]
     fn effective_roster_metadata_prefers_incoming() {
         let (commit_qc, checkpoint) = sample_roster_artifacts();
         let incoming = RosterMetadata {
@@ -2396,6 +3337,35 @@ mod roster_metadata_tests {
             commit_qc.subject_block_hash,
         );
         assert_eq!(effective, Some(fallback));
+    }
+
+    #[test]
+    fn merge_qc_hint_populates_empty_roster_metadata() {
+        let (commit_qc, _checkpoint) = sample_roster_artifacts();
+        let metadata = RosterMetadata {
+            commit_qc: None,
+            validator_checkpoint: None,
+            stake_snapshot: None,
+        };
+
+        let merged = super::message::merge_qc_hint_into_roster_metadata(metadata, Some(&commit_qc));
+        assert_eq!(merged.commit_qc, Some(commit_qc));
+        assert!(merged.validator_checkpoint.is_none());
+    }
+
+    #[test]
+    fn merge_qc_hint_keeps_existing_commit_qc() {
+        let (existing_qc, _checkpoint) = sample_roster_artifacts();
+        let mut alt_qc = existing_qc.clone();
+        alt_qc.height = alt_qc.height.saturating_add(1);
+        let metadata = RosterMetadata {
+            commit_qc: Some(existing_qc.clone()),
+            validator_checkpoint: None,
+            stake_snapshot: None,
+        };
+
+        let merged = super::message::merge_qc_hint_into_roster_metadata(metadata, Some(&alt_qc));
+        assert_eq!(merged.commit_qc, Some(existing_qc));
     }
 }
 
@@ -3108,6 +4078,16 @@ pub mod message {
         None
     }
 
+    pub(super) fn merge_qc_hint_into_roster_metadata(
+        mut metadata: RosterMetadata,
+        qc_hint: Option<&Qc>,
+    ) -> RosterMetadata {
+        if metadata.commit_qc.is_none() {
+            metadata.commit_qc = qc_hint.cloned();
+        }
+        metadata
+    }
+
     /// Message used to share blocks to a peer.
     #[derive(Debug, Clone, Encode)]
     pub struct ShareBlocks {
@@ -3222,6 +4202,69 @@ pub mod message {
         block_hash: HashOf<BlockHeader>,
         fallback_consensus_mode: ConsensusMode,
     ) -> Option<RosterMetadata> {
+        fn stake_snapshot_from_previous_roster_evidence(
+            snapshot: &iroha_data_model::consensus::CommitStakeSnapshot,
+        ) -> CommitStakeSnapshot {
+            CommitStakeSnapshot {
+                validator_set_hash: snapshot.validator_set_hash,
+                entries: snapshot
+                    .entries
+                    .iter()
+                    .cloned()
+                    .map(
+                        |entry| crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                            peer_id: entry.peer_id,
+                            stake: entry.stake,
+                        },
+                    )
+                    .collect(),
+            }
+        }
+
+        fn roster_metadata_from_successor_block_evidence(
+            kura: &Kura,
+            block_height: u64,
+            block_hash: HashOf<BlockHeader>,
+        ) -> Option<RosterMetadata> {
+            let successor_height = block_height.checked_add(1)?;
+            let successor_height = usize::try_from(successor_height).ok()?;
+            let successor_height = NonZeroUsize::new(successor_height)?;
+            let successor = kura.get_block(successor_height)?;
+            if successor.header().prev_block_hash() != Some(block_hash) {
+                return None;
+            }
+            let evidence = successor.previous_roster_evidence()?;
+            if evidence.height != block_height || evidence.block_hash != block_hash {
+                if let Some(suppressed_since_last) =
+                    allow_block_sync_roster_sidecar_mismatch_warning(
+                        block_height,
+                        block_hash,
+                        evidence.block_hash,
+                    )
+                {
+                    warn!(
+                        expected_height = block_height,
+                        expected = %block_hash,
+                        evidence_height = evidence.height,
+                        evidence_hash = %evidence.block_hash,
+                        successor_height,
+                        suppressed_since_last,
+                        "ignoring previous roster evidence with mismatched target"
+                    );
+                }
+                return None;
+            }
+
+            Some(RosterMetadata {
+                commit_qc: None,
+                validator_checkpoint: Some(evidence.validator_checkpoint.clone()),
+                stake_snapshot: evidence
+                    .stake_snapshot
+                    .as_ref()
+                    .map(stake_snapshot_from_previous_roster_evidence),
+            })
+        }
+
         let world = state.world_view();
         let consensus_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
             &world,
@@ -3262,47 +4305,10 @@ pub mod message {
             );
         }
 
-        if let Some(meta) = kura.read_roster_metadata(block_height).and_then(|meta| {
-            if meta.block_hash == block_hash {
-                Some(meta)
-            } else {
-                if let Some(suppressed_since_last) =
-                    allow_block_sync_roster_sidecar_mismatch_warning(
-                        block_height,
-                        block_hash,
-                        meta.block_hash,
-                    )
-                {
-                    warn!(
-                        expected = %block_hash,
-                        stored = %meta.block_hash,
-                        height = block_height,
-                        suppressed_since_last,
-                        "ignoring roster sidecar with mismatched hash"
-                    );
-                }
-                None
-            }
-        }) {
-            return filter_metadata(
-                fill_snapshot(RosterMetadata {
-                    commit_qc: meta.commit_qc,
-                    validator_checkpoint: meta.validator_checkpoint,
-                    stake_snapshot: meta.stake_snapshot,
-                }),
-                "roster_sidecar",
-            );
-        }
-
-        if let Some(snapshot) = state.commit_roster_snapshot_for_block(block_height, block_hash) {
-            return filter_metadata(
-                fill_snapshot(RosterMetadata {
-                    commit_qc: Some(snapshot.commit_qc),
-                    validator_checkpoint: Some(snapshot.validator_checkpoint),
-                    stake_snapshot: snapshot.stake_snapshot,
-                }),
-                "commit_roster_journal",
-            );
+        if let Some(metadata) =
+            roster_metadata_from_successor_block_evidence(kura, block_height, block_hash)
+        {
+            return filter_metadata(fill_snapshot(metadata), "previous_block_evidence");
         }
 
         let commit_qc = status::commit_qc_history()
@@ -4060,6 +5066,7 @@ pub mod message {
                     }
 
                     let mut share_unknown_prev = true;
+                    let mut unknown_prev_share_mode = UnknownPrevShareMode::Full;
                     let mut requested_latest = false;
                     let start_height = if let Some(hash) = *prev_hash {
                         if let Some(height) = block_sync.kura.get_block_height_by_hash(hash) {
@@ -4078,7 +5085,17 @@ pub mod message {
                                     *latest_hash,
                                     seen_blocks,
                                 );
-                            share_unknown_prev = should_share_unknown_prev_hash(
+                            let global_share_decision = should_share_unknown_prev_global_with_mode(
+                                &mut block_sync.unknown_prev_global_hashes,
+                                hash,
+                                *latest_hash,
+                                fallback_start_height,
+                                local_latest_block_hash,
+                                now_height,
+                                now,
+                                unknown_prev_cooldown,
+                            );
+                            let peer_share_decision = should_share_unknown_prev_hash_with_mode(
                                 &mut block_sync.unknown_prev_hashes,
                                 peer_id,
                                 hash,
@@ -4089,8 +5106,32 @@ pub mod message {
                                 now,
                                 unknown_prev_cooldown,
                             );
+                            share_unknown_prev =
+                                global_share_decision.share && peer_share_decision.share;
+                            unknown_prev_share_mode = if matches!(
+                                global_share_decision.mode,
+                                UnknownPrevShareMode::Incremental
+                            ) || matches!(
+                                peer_share_decision.mode,
+                                UnknownPrevShareMode::Incremental
+                            ) {
+                                UnknownPrevShareMode::Incremental
+                            } else {
+                                UnknownPrevShareMode::Full
+                            };
+                            let unknown_prev_effective_cooldown = global_share_decision
+                                .effective_cooldown
+                                .max(peer_share_decision.effective_cooldown);
+                            let unknown_prev_repeat_count = global_share_decision
+                                .repeat_count
+                                .max(peer_share_decision.repeat_count);
                             if share_unknown_prev {
-                                if should_request_latest {
+                                if should_request_latest
+                                    && (matches!(
+                                        unknown_prev_share_mode,
+                                        UnknownPrevShareMode::Full
+                                    ) || unknown_prev_repeat_count > 0)
+                                {
                                     block_sync
                                         .request_latest_blocks_from_peer(peer_id.clone())
                                         .await;
@@ -4102,6 +5143,8 @@ pub mod message {
                                     block = %hash,
                                     requested_latest,
                                     fallback_start_height = fallback_start_height.get(),
+                                    share_mode = ?unknown_prev_share_mode,
+                                    repeat_count = unknown_prev_repeat_count,
                                     "Block hash not found; sharing from fallback anchor"
                                 );
                                 fallback_start_height
@@ -4111,7 +5154,8 @@ pub mod message {
                                     requester = %peer_id,
                                     block = %hash,
                                     fallback_start_height = fallback_start_height.get(),
-                                    cooldown_ms = unknown_prev_cooldown.as_millis(),
+                                    cooldown_ms = unknown_prev_effective_cooldown.as_millis(),
+                                    repeat_count = unknown_prev_repeat_count,
                                     "skipping repeated block sync response for unknown prev hash"
                                 );
                                 nonzero_ext::nonzero!(1_usize)
@@ -4127,6 +5171,14 @@ pub mod message {
 
                     let blocks = {
                         let tip_height = block_sync.state.committed_height();
+                        let share_limit = match unknown_prev_share_mode {
+                            UnknownPrevShareMode::Full => block_sync.gossip_size.get() as usize,
+                            UnknownPrevShareMode::Incremental => {
+                                unknown_prev_incremental_share_limit(
+                                    block_sync.gossip_size.get() as usize
+                                )
+                            }
+                        };
                         let blocks_iter = (start_height.get()..=tip_height)
                             .filter_map(|height| {
                                 let Some(height_nz) = NonZeroUsize::new(height) else {
@@ -4141,14 +5193,19 @@ pub mod message {
                                 })
                             })
                             .skip_while(|block| Some(block.hash()) == *latest_hash);
-                        Self::select_blocks_for_share(
-                            blocks_iter,
-                            seen_blocks,
-                            block_sync.gossip_size.get() as usize,
-                        )
+                        Self::select_blocks_for_share(blocks_iter, seen_blocks, share_limit)
                     };
 
                     if !blocks.is_empty() {
+                        if matches!(unknown_prev_share_mode, UnknownPrevShareMode::Incremental) {
+                            debug!(
+                                requester = %peer_id,
+                                prev_hash = ?prev_hash,
+                                mode = ?unknown_prev_share_mode,
+                                shared_blocks = blocks.len(),
+                                "serving bounded incremental fallback share for repeated unknown-prev request"
+                            );
+                        }
                         trace!(hash=?prev_hash, "Sharing blocks after hash");
 
                         let qcs: Vec<Option<Qc>> = {
@@ -4166,10 +5223,11 @@ pub mod message {
                         };
                         let rosters: Vec<RosterMetadata> = blocks
                             .iter()
-                            .map(|block| {
+                            .zip(qcs.iter())
+                            .map(|(block, qc_hint)| {
                                 let height = block.header().height().get();
                                 let hash = block.hash();
-                                roster_metadata_from_state(
+                                let metadata = roster_metadata_from_state(
                                     &block_sync.state,
                                     &block_sync.kura,
                                     height,
@@ -4180,7 +5238,8 @@ pub mod message {
                                     commit_qc: None,
                                     validator_checkpoint: None,
                                     stake_snapshot: None,
-                                })
+                                });
+                                merge_qc_hint_into_roster_metadata(metadata, qc_hint.as_ref())
                             })
                             .collect();
                         let mut blocks = blocks;
@@ -4605,6 +5664,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4717,6 +5777,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4810,6 +5871,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4889,6 +5951,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -4923,6 +5986,105 @@ pub mod message {
                         .request_tracker
                         .pending
                         .contains_key(&registered_peer_id)
+                );
+            });
+        }
+
+        #[test]
+        fn get_blocks_after_repeated_unknown_prev_probe_requests_latest_on_incremental_repeats() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                let kura = Kura::blank_kura_for_testing();
+                let state = State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                );
+
+                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                {
+                    let mut peers_block = state.world.peers.block();
+                    let mut peers_tx = peers_block.transaction();
+                    peers_tx.push(registered_peer_id.clone());
+                    peers_tx.apply();
+                    peers_block.commit();
+                }
+
+                let state = Arc::new(state);
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    trusted_peers: BTreeSet::new(),
+                    gossip_period: Duration::from_millis(1),
+                    gossip_max_period: Duration::from_millis(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_millis(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x93; Hash::LENGTH]));
+                let latest_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0x94; Hash::LENGTH]));
+                let msg = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+                    registered_peer_id.clone(),
+                    Some(prev_hash),
+                    Some(latest_hash),
+                    BTreeSet::new(),
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+                let first_pending = block_sync
+                    .request_tracker
+                    .pending
+                    .get(&registered_peer_id)
+                    .map_or(0, |entry| entry.pending);
+                assert!(
+                    first_pending > 0,
+                    "initial unknown-prev fallback should trigger a latest-block probe request"
+                );
+
+                // Cooldown floor is 250ms; repeated request after this delay should be served in
+                // incremental mode and still trigger a latest probe.
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                msg.handle_message(&mut block_sync).await;
+                let second_pending = block_sync
+                    .request_tracker
+                    .pending
+                    .get(&registered_peer_id)
+                    .map_or(0, |entry| entry.pending);
+                assert!(
+                    second_pending > first_pending,
+                    "repeated unknown-prev incremental fallback should trigger an additional latest-block probe request"
                 );
             });
         }
@@ -4967,6 +6129,7 @@ pub mod message {
                     telemetry: None,
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),
@@ -5045,6 +6208,7 @@ pub mod message {
                     telemetry: Some(telemetry),
                     seen_blocks: BTreeSet::new(),
                     unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
                     request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
                         Duration::from_secs(1),
                         Duration::from_secs(1),

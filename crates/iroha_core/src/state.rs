@@ -12082,7 +12082,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         core::mem::take(&mut *self.external_event_buf)
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
@@ -12090,7 +12090,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.pin_manifests
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the alias-manifest registry during tests.
     pub fn manifest_aliases_mut_for_testing(
         &mut self,
@@ -12098,7 +12098,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.manifest_aliases
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to replication orders for deterministic test setup.
     pub fn replication_orders_mut_for_testing(
         &mut self,
@@ -12106,7 +12106,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.replication_orders
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to resolver directory records for deterministic tests.
     pub fn soradns_directory_records_mut_for_testing(
         &mut self,
@@ -12114,7 +12114,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_records
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to pending directory drafts for tests.
     pub fn soradns_directory_pending_mut_for_testing(
         &mut self,
@@ -12122,7 +12122,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_pending
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the latest directory pointer for tests.
     pub fn soradns_directory_latest_mut_for_testing(
         &mut self,
@@ -12130,7 +12130,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_latest
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the directory history index for tests.
     pub fn soradns_directory_history_mut_for_testing(
         &mut self,
@@ -12138,7 +12138,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_history
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the directory predecessor pointers for tests.
     pub fn soradns_directory_prev_of_mut_for_testing(
         &mut self,
@@ -12146,7 +12146,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_prev_of
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to resolver revocation records for tests.
     pub fn soradns_directory_revocations_mut_for_testing(
         &mut self,
@@ -12154,7 +12154,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_directory_revocations
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the release signer allowlist for tests.
     pub fn soradns_release_signers_mut_for_testing(
         &mut self,
@@ -12162,7 +12162,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_release_signers
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the directory rotation policy snapshot for tests.
     pub fn soradns_rotation_policy_mut_for_testing(
         &mut self,
@@ -12170,7 +12170,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_rotation_policy
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the last publish timestamp for tests.
     pub fn soradns_last_publish_ms_mut_for_testing(
         &mut self,
@@ -12178,7 +12178,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.soradns_last_publish_ms
     }
 
-    #[cfg(feature = "iroha-core-tests")]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the rotation history length counter for tests.
     pub fn soradns_history_len_mut_for_testing(
         &mut self,
@@ -20715,19 +20715,16 @@ fn replay_roster_for_block(
         }
     }
 
-    if let Some(meta) = kura.read_roster_metadata(height) {
-        if meta.block_hash != block_hash {
-            warn!(
-                expected = %block_hash,
-                stored = %meta.block_hash,
-                height,
-                "ignoring roster sidecar with mismatched hash during replay"
-            );
-        } else if let Some(roster) = meta.roster_snapshot()
-            && !roster.is_empty()
-        {
-            return roster;
-        }
+    let successor_height = height.saturating_add(1);
+    if let Ok(successor_height_usize) = usize::try_from(successor_height)
+        && let Some(successor) = NonZeroUsize::new(successor_height_usize)
+            .and_then(|height_nz| kura.get_block(height_nz))
+        && let Some(evidence) = successor.previous_roster_evidence()
+        && evidence.height == height
+        && evidence.block_hash == block_hash
+        && !evidence.validator_checkpoint.validator_set.is_empty()
+    {
+        return evidence.validator_checkpoint.validator_set.clone();
     }
 
     let fallback_roster = fallback.as_ref().to_vec();
@@ -30836,7 +30833,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_sidecar_persisted_to_kura() {
+    fn commit_roster_record_does_not_persist_sidecar_to_kura() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -30910,24 +30907,9 @@ mod tests {
 
         state.record_commit_roster(&commit_cert, &checkpoint, None);
 
-        let sidecar = kura
-            .read_roster_metadata(commit_cert.height)
-            .expect("roster sidecar persisted");
-        assert_eq!(sidecar.block_hash, commit_cert.subject_block_hash);
-        assert_eq!(
-            sidecar.commit_qc.as_ref(),
-            Some(&commit_cert),
-            "commit certificate should be persisted"
-        );
-        assert_eq!(
-            sidecar.validator_checkpoint.as_ref(),
-            Some(&checkpoint),
-            "validator checkpoint should be persisted"
-        );
-        assert_eq!(
-            sidecar.roster_snapshot().as_deref(),
-            Some(commit_cert.validator_set.as_slice()),
-            "roster snapshot should match commit certificate"
+        assert!(
+            kura.read_roster_metadata(commit_cert.height).is_none(),
+            "commit-roster recording should not persist sidecars"
         );
         let view = state.view();
         let stored = view

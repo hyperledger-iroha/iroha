@@ -5785,18 +5785,6 @@ pub struct SumeragiRecovery {
         default = "defaults::sumeragi::RECOVERY_MAX_FORCED_PROPOSAL_ATTEMPTS_PER_VIEW"
     )]
     pub max_forced_proposal_attempts_per_view: u32,
-    /// Number of views where no-roster fallback broadcasts remain allowed.
-    #[config(
-        env = "SUMERAGI_RECOVERY_NO_ROSTER_FALLBACK_VIEWS",
-        default = "defaults::sumeragi::RECOVERY_NO_ROSTER_FALLBACK_VIEWS"
-    )]
-    pub no_roster_fallback_views: u32,
-    /// Number of deterministic no-roster topology refresh retries allowed per view.
-    #[config(
-        env = "SUMERAGI_RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW",
-        default = "defaults::sumeragi::RECOVERY_NO_ROSTER_REFRESH_RETRY_PER_VIEW"
-    )]
-    pub no_roster_refresh_retry_per_view: u32,
     /// Rotate immediately when the missing-QC reacquire window is exhausted.
     #[config(
         env = "SUMERAGI_RECOVERY_ROTATE_AFTER_REACQUIRE_EXHAUSTED",
@@ -6865,15 +6853,6 @@ impl Sumeragi {
         } else {
             true
         };
-        let no_roster_refresh_retry_per_view_ok = if recovery.no_roster_refresh_retry_per_view == 0
-        {
-            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
-                "sumeragi.recovery.no_roster_refresh_retry_per_view must be greater than zero",
-            ));
-            false
-        } else {
-            true
-        };
         let backlog_extension_factor_ok =
             if !recovery.view_change_backlog_extension_factor.is_finite()
                 || recovery.view_change_backlog_extension_factor < 1.0
@@ -7094,7 +7073,6 @@ impl Sumeragi {
             && hash_miss_cap_ok
             && missing_qc_reacquire_window_ok
             && max_forced_proposal_attempts_ok
-            && no_roster_refresh_retry_per_view_ok
             && backlog_extension_factor_ok
             && backlog_extension_cap_ok
             && deferred_qc_ttl_ok
@@ -7280,8 +7258,6 @@ impl Sumeragi {
                 max_forced_proposal_attempts_per_view: recovery
                     .max_forced_proposal_attempts_per_view
                     .max(1),
-                no_roster_fallback_views: recovery.no_roster_fallback_views,
-                no_roster_refresh_retry_per_view: recovery.no_roster_refresh_retry_per_view.max(1),
                 rotate_after_reacquire_exhausted: recovery.rotate_after_reacquire_exhausted,
                 missing_block_signer_fallback_attempts: recovery
                     .missing_block_signer_fallback_attempts,
@@ -14594,6 +14570,11 @@ pub struct ToriiOnboarding {
     pub private_key: ExposedPrivateKey,
     /// Optional domain restriction for new accounts (defaults to node domain).
     pub allowed_domain: Option<String>,
+    /// Permission names that onboarding is allowed to grant to new accounts.
+    #[config(default)]
+    pub allowed_permissions: Vec<String>,
+    /// Optional sponsor account granted via `CanUseFeeSponsor`.
+    pub fee_sponsor_account: Option<String>,
 }
 
 impl ToriiOnboarding {
@@ -14615,10 +14596,24 @@ impl ToriiOnboarding {
                 panic!("invalid torii.onboarding.allowed_domain `{domain}`: {err}")
             })
         });
+        let allowed_permissions = self
+            .allowed_permissions
+            .into_iter()
+            .map(|permission| permission.trim().to_owned())
+            .filter(|permission| !permission.is_empty())
+            .collect();
+        let fee_sponsor_account = self.fee_sponsor_account.map(|account| {
+            AccountId::parse_encoded(&account).map_or_else(
+                |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
+                iroha_data_model::account::ParsedAccountId::into_account_id,
+            )
+        });
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
             allowed_domain,
+            allowed_permissions,
+            fee_sponsor_account,
         })
     }
 }
