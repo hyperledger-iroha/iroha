@@ -6238,7 +6238,10 @@ fn record_relay_error(err: &LaneRelayError) {
 }
 
 fn upsert_lane_relay_envelope(storage: &mut Vec<LaneRelayEnvelope>, envelope: LaneRelayEnvelope) {
-    match envelope.verify() {
+    match envelope
+        .verify()
+        .and_then(|()| envelope.verify_fastpq_proof_material())
+    {
         Ok(()) => {}
         Err(err) => {
             record_relay_error(&err);
@@ -7620,7 +7623,10 @@ mod tests {
             ValidatorSetCheckpoint,
         },
         name::Name,
-        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneStorageProfile, LaneVisibility},
+        nexus::{
+            DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, LaneStorageProfile,
+            LaneVisibility,
+        },
         peer::PeerId,
     };
     use iroha_primitives::numeric::Numeric;
@@ -9374,7 +9380,14 @@ mod tests {
             0,
         );
         let settlement = sample_lane_commitment(block_height, lane_id, u64::from(lane_id) + 10);
-        LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope")
+        let envelope =
+            LaneRelayEnvelope::new(header, None, None, settlement, 0).expect("valid envelope");
+        let verified_at_height = Some(block_height);
+        let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
+        envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest,
+            verified_at_height,
+        }))
     }
 
     #[test]

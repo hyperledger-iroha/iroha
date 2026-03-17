@@ -17,7 +17,7 @@ use std::time::Duration;
 
 fn main() {
     let keypair = KeyPair::from_seed(b"trigger-fixture-authority".to_vec(), Algorithm::Ed25519);
-    let authority = AccountId::new("wonderland".parse().unwrap(), keypair.public_key().clone());
+    let authority = AccountId::new(keypair.public_key().clone());
 
     let trigger_id: TriggerId = "mint_rose".parse().unwrap();
 

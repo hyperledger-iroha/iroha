@@ -29,12 +29,12 @@ public final class CanonicalRequestSignerTests {
     final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
     final KeyPair keyPair = generator.generateKeyPair();
     final URI uri =
-        new URI("http://localhost:8080/v1/accounts/6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp/assets?limit=5");
+        new URI("http://localhost:8080/v1/accounts/6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV/assets?limit=5");
     final byte[] body = "{\"foo\":1}".getBytes(StandardCharsets.UTF_8);
 
     final Map<String, String> headers =
         CanonicalRequestSigner.buildHeaders(
-            "get", uri, body, "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp", keyPair.getPrivate());
+            "get", uri, body, "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV", keyPair.getPrivate());
     final byte[] message = CanonicalRequestSigner.canonicalRequestMessage("get", uri, body);
     final byte[] signature =
         Base64.getDecoder().decode(headers.get(CanonicalRequestSigner.HEADER_SIGNATURE));

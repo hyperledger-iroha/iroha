@@ -71,7 +71,7 @@ public final class OfflineWalletSafetyDetectTests {
         """;
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "deadbeef",
-        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV",
         "Alice",
         "norito:00",
         Instant.now().toEpochMilli(),

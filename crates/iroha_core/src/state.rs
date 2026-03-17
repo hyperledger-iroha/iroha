@@ -27948,7 +27948,6 @@ mod tests {
         signers: &[&KeyPair],
         signers_bitmap: Vec<u8>,
     ) -> LaneRelayEnvelope {
-        let fastpq_proof = sample_fastpq_proof_material(height, lane_id, view);
         let header = BlockHeader::new(
             NonZeroU64::new(height).expect("non-zero height"),
             None,
@@ -27985,23 +27984,20 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
             }],
         };
-        LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
-            .expect("valid envelope")
-            .with_fastpq_proof_material(Some(fastpq_proof))
+        let envelope =
+            LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0).expect("valid envelope");
+        let fastpq_proof = sample_fastpq_proof_material(&envelope, view);
+        envelope.with_fastpq_proof_material(Some(fastpq_proof))
     }
 
     fn sample_fastpq_proof_material(
-        height: u64,
-        lane_id: LaneId,
+        envelope: &LaneRelayEnvelope,
         view: u64,
     ) -> LaneFastpqProofMaterial {
+        let verified_at_height = Some(envelope.block_height.saturating_add(view));
         LaneFastpqProofMaterial {
-            proof_digest: Hash::new([
-                u8::try_from(lane_id.as_u32()).unwrap_or(0),
-                u8::try_from(height & 0xFF).unwrap_or(0),
-                u8::try_from(view & 0xFF).unwrap_or(0),
-            ]),
-            verified_at_height: Some(height),
+            proof_digest: envelope.expected_fastpq_proof_digest(verified_at_height),
+            verified_at_height,
         }
     }
 
@@ -28510,12 +28506,9 @@ mod tests {
             }],
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
-            .expect("lane relay envelope")
-            .with_fastpq_proof_material(Some(sample_fastpq_proof_material(
-                height,
-                LaneId::new(0),
-                0,
-            )));
+            .expect("lane relay envelope");
+        let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
+        let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
         let inserted = state
             .record_lane_relay(&envelope)
             .expect("relay accepted with emergency override");
@@ -28652,12 +28645,9 @@ mod tests {
             }],
         };
         let envelope = LaneRelayEnvelope::new(header, Some(qc), None, settlement, 0)
-            .expect("lane relay envelope")
-            .with_fastpq_proof_material(Some(sample_fastpq_proof_material(
-                height,
-                LaneId::new(0),
-                0,
-            )));
+            .expect("lane relay envelope");
+        let fastpq_proof = sample_fastpq_proof_material(&envelope, 0);
+        let envelope = envelope.with_fastpq_proof_material(Some(fastpq_proof));
         let inserted = state
             .record_lane_relay(&envelope)
             .expect("relay accepted on expiry height");

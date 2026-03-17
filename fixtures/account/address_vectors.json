@@ -8,7 +8,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSz",
+        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS1",
         "note": "Checksum tampering on I105 alias for the default-domain vector."
       },
       {
@@ -22,15 +22,6 @@
         "format": "i105",
         "input": "n754uﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
-      },
-      {
-        "case_id": "i105_default-missing-sentinel",
-        "expected_error": {
-          "kind": "MissingI105Sentinel"
-        },
-        "format": "i105_default",
-        "input": "uﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "note": "Missing required sora sentinel prefix."
       },
       {
         "case_id": "i105_default-invalid-character",
@@ -47,7 +38,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "i105_default",
-        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSﾇ",
+        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS1",
         "note": "Checksum nibble replaced to trigger Bech32m verification failure."
       },
       {

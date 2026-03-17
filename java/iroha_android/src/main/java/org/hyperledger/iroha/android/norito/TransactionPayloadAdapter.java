@@ -1,6 +1,8 @@
 package org.hyperledger.iroha.android.norito;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,6 +49,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       NoritoAdapters.option(NoritoAdapters.uint(32));
   private static final TypeAdapter<Executable> EXECUTABLE_ADAPTER = new ExecutableAdapter();
   private static final TypeAdapter<Map<String, String>> METADATA_ADAPTER = new MetadataAdapter();
+  // Protect decode paths from pathological allocations on hostile payloads.
+  private static final int MAX_DECODE_FIELD_BYTES = 64 * 1024 * 1024;
 
   @Override
   public void encode(final NoritoEncoder encoder, final TransactionPayload value) {
@@ -146,10 +150,119 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
   }
 
+  /**
+   * Encodes/decodes AccountId which is {@code #[norito(transparent)]} over AccountController.
+   *
+   * <p>Rust layout:
+   *
+   * <pre>
+   *   struct AccountId { controller: AccountController }   // #[norito(transparent)]
+   *   enum AccountController {
+   *       Single(PublicKey),           // discriminant 0
+   *       Multisig(MultisigPolicy),    // discriminant 1
+   *   }
+   * </pre>
+   *
+   * The transparent attribute means AccountId serializes directly as AccountController. The Java
+   * side represents authority as the canonical I105 address string.
+   */
   private static final class AccountIdAdapter implements TypeAdapter<String> {
+    private static final long SINGLE_DISCRIMINANT = 0L;
+    private static final long MULTISIG_DISCRIMINANT = 1L;
+
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
-      STRING_ADAPTER.encode(encoder, normalizeAuthority(value));
+      final String i105 = normalizeAuthority(value);
+      final AccountAddress address;
+      try {
+        address = AccountAddress.parseEncoded(i105, null).address;
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException("Failed to parse I105 address: " + i105, ex);
+      }
+
+      try {
+        final Optional<AccountAddress.SingleKeyPayload> singleKey = address.singleKeyPayload();
+        if (singleKey.isPresent()) {
+          encodeSingle(encoder, singleKey.get());
+          return;
+        }
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException("Failed to extract controller from I105 address", ex);
+      }
+
+      try {
+        final Optional<AccountAddress.MultisigPolicyPayload> multisig = address.multisigPolicyPayload();
+        if (multisig.isPresent()) {
+          encodeMultisig(encoder, multisig.get());
+          return;
+        }
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException("Failed to extract controller from I105 address", ex);
+      }
+
+      throw new IllegalArgumentException(
+          "I105 address contains neither single-key nor multisig controller");
+    }
+
+    private static void encodeSingle(
+        final NoritoEncoder encoder, final AccountAddress.SingleKeyPayload key) {
+      final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      ENUM_TAG_ADAPTER.encode(encoder, SINGLE_DISCRIMINANT);
+      final String multihashHex =
+          PublicKeyCodec.encodePublicKeyMultihash(key.curveId(), key.publicKey());
+      final NoritoEncoder child = encoder.childEncoder();
+      STRING_ADAPTER.encode(child, multihashHex);
+      final byte[] payload = child.toByteArray();
+      encoder.writeLength(payload.length, compact);
+      encoder.writeBytes(payload);
+    }
+
+    private static void encodeMultisig(
+        final NoritoEncoder encoder, final AccountAddress.MultisigPolicyPayload policy) {
+      final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      ENUM_TAG_ADAPTER.encode(encoder, MULTISIG_DISCRIMINANT);
+
+      final NoritoEncoder policyEncoder = encoder.childEncoder();
+      encodeSizedField(policyEncoder, UINT8_ADAPTER, (long) policy.version());
+      encodeSizedField(policyEncoder, UINT16_ADAPTER, (long) policy.threshold());
+      encodeMultisigMembers(policyEncoder, policy.members());
+
+      final byte[] policyPayload = policyEncoder.toByteArray();
+      encoder.writeLength(policyPayload.length, compact);
+      encoder.writeBytes(policyPayload);
+    }
+
+    private static void encodeMultisigMembers(
+        final NoritoEncoder encoder, final List<AccountAddress.MultisigMemberPayload> members) {
+      final List<AccountAddress.MultisigMemberPayload> sorted = new ArrayList<>(members);
+      sorted.sort(
+          (a, b) -> {
+            final byte[] keyA = canonicalSortKey(a);
+            final byte[] keyB = canonicalSortKey(b);
+            return compareUnsigned(keyA, keyB);
+          });
+      for (int i = 1; i < sorted.size(); i++) {
+        if (Arrays.equals(canonicalSortKey(sorted.get(i - 1)), canonicalSortKey(sorted.get(i)))) {
+          throw new IllegalArgumentException("Duplicate multisig member");
+        }
+      }
+
+      final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+      final NoritoEncoder vecEncoder = encoder.childEncoder();
+      vecEncoder.writeLength(sorted.size(), false);
+      for (final AccountAddress.MultisigMemberPayload member : sorted) {
+        final NoritoEncoder memberEncoder = vecEncoder.childEncoder();
+        final String memberMultihash =
+            PublicKeyCodec.encodePublicKeyMultihash(member.curveId(), member.publicKey());
+        encodeSizedField(memberEncoder, STRING_ADAPTER, memberMultihash);
+        encodeSizedField(memberEncoder, UINT16_ADAPTER, (long) member.weight());
+        final byte[] memberPayload = memberEncoder.toByteArray();
+        vecEncoder.writeLength(memberPayload.length, compact);
+        vecEncoder.writeBytes(memberPayload);
+      }
+      final byte[] vecPayload = vecEncoder.toByteArray();
+      encoder.writeLength(vecPayload.length, compact);
+      encoder.writeBytes(vecPayload);
     }
 
     @Override
@@ -158,14 +271,129 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       return decodePayload(payload, decoder.flags(), decoder.flagsHint());
     }
 
-    private static String decodePayload(
+    static String decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder stringDecoder = new NoritoDecoder(payload, flags, flagsHint);
-      final String literal = STRING_ADAPTER.decode(stringDecoder);
-      if (stringDecoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after authority payload");
+      final NoritoDecoder d = new NoritoDecoder(payload, flags, flagsHint);
+      final long tag = ENUM_TAG_ADAPTER.decode(d);
+      final int variantLen =
+          checkedLength(d.readLength(d.compactLenActive()), "AccountController variant payload");
+      final byte[] variantPayload = d.readBytes(variantLen);
+      if (d.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after AccountController");
       }
-      return normalizeAuthority(literal);
+
+      if (tag == SINGLE_DISCRIMINANT) {
+        return decodeSingleVariant(variantPayload, flags, flagsHint);
+      }
+      if (tag == MULTISIG_DISCRIMINANT) {
+        return decodeMultisigVariant(variantPayload, flags, flagsHint);
+      }
+      throw new IllegalArgumentException("Unknown AccountController discriminant: " + tag);
+    }
+
+    private static String decodeSingleVariant(
+        final byte[] payload, final int flags, final int flagsHint) {
+      final NoritoDecoder d = new NoritoDecoder(payload, flags, flagsHint);
+      final String multihashHex = STRING_ADAPTER.decode(d);
+      if (d.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after PublicKey");
+      }
+      final PublicKeyCodec.PublicKeyPayload pk = PublicKeyCodec.decodePublicKeyLiteral(multihashHex);
+      if (pk == null) {
+        throw new IllegalArgumentException("Invalid public key multihash: " + multihashHex);
+      }
+      try {
+        return AccountAddress.fromAccount(pk.keyBytes(), algorithmForCurveId(pk.curveId()))
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException("Failed to reconstruct I105 from public key", ex);
+      }
+    }
+
+    private static String decodeMultisigVariant(
+        final byte[] payload, final int flags, final int flagsHint) {
+      final NoritoDecoder d = new NoritoDecoder(payload, flags, flagsHint);
+      final int version = Math.toIntExact(decodeSizedField(d, UINT8_ADAPTER));
+      final int threshold = Math.toIntExact(decodeSizedField(d, UINT16_ADAPTER));
+
+      final int vecLen =
+          checkedLength(d.readLength(d.compactLenActive()), "MultisigPolicy vector payload");
+      final byte[] vecPayload = d.readBytes(vecLen);
+      if (d.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after MultisigPolicy");
+      }
+
+      final NoritoDecoder vecDecoder = new NoritoDecoder(vecPayload, flags, flagsHint);
+      final long count = vecDecoder.readLength(false);
+      if (count < 0L) {
+        throw new IllegalArgumentException("MultisigMember count must be non-negative");
+      }
+      if (count > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("MultisigMember count too large");
+      }
+      final int minPrefixLen = vecDecoder.compactLenActive() ? 1 : 8;
+      if (count > (long) vecDecoder.remaining() / minPrefixLen) {
+        throw new IllegalArgumentException("MultisigMember count exceeds payload bounds");
+      }
+      final List<AccountAddress.MultisigMemberPayload> members = new ArrayList<>();
+      for (long i = 0; i < count; i++) {
+        final int memberLen =
+            checkedLength(vecDecoder.readLength(vecDecoder.compactLenActive()), "MultisigMember payload");
+        final byte[] memberPayload = vecDecoder.readBytes(memberLen);
+        final NoritoDecoder memberDecoder = new NoritoDecoder(memberPayload, flags, flagsHint);
+        final String memberMultihash = decodeSizedField(memberDecoder, STRING_ADAPTER);
+        final int weight = Math.toIntExact(decodeSizedField(memberDecoder, UINT16_ADAPTER));
+        if (memberDecoder.remaining() != 0) {
+          throw new IllegalArgumentException("Trailing bytes after MultisigMember");
+        }
+        final PublicKeyCodec.PublicKeyPayload pk =
+            PublicKeyCodec.decodePublicKeyLiteral(memberMultihash);
+        if (pk == null) {
+          throw new IllegalArgumentException("Invalid member public key: " + memberMultihash);
+        }
+        members.add(AccountAddress.MultisigMemberPayload.of(pk.curveId(), weight, pk.keyBytes()));
+      }
+      if (vecDecoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after MultisigMember vector");
+      }
+
+      try {
+        return AccountAddress.fromMultisigPolicy(
+                AccountAddress.MultisigPolicyPayload.of(version, threshold, members))
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException("Failed to reconstruct I105 from multisig policy", ex);
+      }
+    }
+
+    private static byte[] canonicalSortKey(final AccountAddress.MultisigMemberPayload member) {
+      final String algorithm = algorithmForCurveId(member.curveId());
+      final byte[] algorithmBytes = algorithm.getBytes(StandardCharsets.UTF_8);
+      final byte[] key = member.publicKey();
+      final byte[] sortKey = new byte[algorithmBytes.length + 1 + key.length];
+      System.arraycopy(algorithmBytes, 0, sortKey, 0, algorithmBytes.length);
+      sortKey[algorithmBytes.length] = 0;
+      System.arraycopy(key, 0, sortKey, algorithmBytes.length + 1, key.length);
+      return sortKey;
+    }
+
+    private static int compareUnsigned(final byte[] a, final byte[] b) {
+      final int len = Math.min(a.length, b.length);
+      for (int i = 0; i < len; i++) {
+        final int cmp = (a[i] & 0xFF) - (b[i] & 0xFF);
+        if (cmp != 0) {
+          return cmp;
+        }
+      }
+      return Integer.compare(a.length, b.length);
+    }
+
+    private static String algorithmForCurveId(final int curveId) {
+      final String algorithm = PublicKeyCodec.algorithmForCurveId(curveId);
+      if (algorithm == null) {
+        throw new IllegalArgumentException("Unknown curve id: " + curveId);
+      }
+      return algorithm;
     }
 
     private static String normalizeAuthority(final String authority) {
@@ -227,11 +455,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static <T> T decodeSizedField(final NoritoDecoder decoder, final TypeAdapter<T> adapter) {
-    final long length = decoder.readLength(decoder.compactLenActive());
-    if (length > Integer.MAX_VALUE) {
-      throw new IllegalArgumentException("Field payload too large");
-    }
-    final byte[] payload = decoder.readBytes((int) length);
+    final int length = checkedLength(decoder.readLength(decoder.compactLenActive()), "Field payload");
+    final byte[] payload = decoder.readBytes(length);
     final NoritoDecoder child = new NoritoDecoder(payload, decoder.flags(), decoder.flagsHint());
     final T value = adapter.decode(child);
     if (child.remaining() != 0) {
@@ -241,12 +466,22 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   }
 
   private static String decodeAuthorityField(final NoritoDecoder decoder) {
-    final long length = decoder.readLength(decoder.compactLenActive());
-    if (length > Integer.MAX_VALUE) {
-      throw new IllegalArgumentException("Field payload too large");
-    }
-    final byte[] payload = decoder.readBytes((int) length);
+    final int length = checkedLength(decoder.readLength(decoder.compactLenActive()), "Field payload");
+    final byte[] payload = decoder.readBytes(length);
     return AccountIdAdapter.decodePayload(payload, decoder.flags(), decoder.flagsHint());
+  }
+
+  private static int checkedLength(final long length, final String field) {
+    if (length < 0L) {
+      throw new IllegalArgumentException(field + " must be non-negative");
+    }
+    if (length > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(field + " too large");
+    }
+    if (length > MAX_DECODE_FIELD_BYTES) {
+      throw new IllegalArgumentException(field + " exceeds decode cap");
+    }
+    return (int) length;
   }
 
   private static InstructionBox tryDecodeWireInstruction(

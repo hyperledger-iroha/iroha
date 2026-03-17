@@ -18,6 +18,8 @@ use crate::{
     prelude::Metadata,
 };
 
+const FASTPQ_PROOF_DIGEST_DOMAIN: &[u8] = b"iroha:nexus:lane-relay:fastpq-proof:v1";
+
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -337,7 +339,7 @@ impl LaneRelayEnvelope {
     /// # Errors
     ///
     /// Returns [`LaneRelayError::MissingFastpqProof`] when proof metadata is absent and
-    /// [`LaneRelayError::InvalidFastpqProof`] when the digest is zero-like.
+    /// [`LaneRelayError::InvalidFastpqProof`] when the proof binding is malformed.
     pub fn verify_fastpq_proof_material(&self) -> Result<(), LaneRelayError> {
         let Some(material) = self.fastpq_proof.as_ref() else {
             return Err(LaneRelayError::MissingFastpqProof);
@@ -348,7 +350,37 @@ impl LaneRelayEnvelope {
         if is_zero_like {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
+        if material
+            .verified_at_height
+            .is_some_and(|verified_height| verified_height < self.block_height)
+        {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
+        if material.proof_digest != self.expected_fastpq_proof_digest(material.verified_at_height) {
+            return Err(LaneRelayError::InvalidFastpqProof);
+        }
         Ok(())
+    }
+
+    /// Compute the canonical FastPQ proof digest expected for this envelope.
+    #[must_use]
+    pub fn expected_fastpq_proof_digest(&self, verified_at_height: Option<u64>) -> Hash {
+        let mut payload = Vec::with_capacity(
+            FASTPQ_PROOF_DIGEST_DOMAIN.len() + (core::mem::size_of::<u64>() * 3) + 96,
+        );
+        payload.extend_from_slice(FASTPQ_PROOF_DIGEST_DOMAIN);
+        payload.extend_from_slice(&self.lane_id.as_u32().to_be_bytes());
+        payload.extend_from_slice(&self.dataspace_id.as_u64().to_be_bytes());
+        payload.extend_from_slice(&self.block_height.to_be_bytes());
+        payload.extend_from_slice(
+            &verified_at_height
+                .unwrap_or(self.block_height)
+                .to_be_bytes(),
+        );
+        payload.extend_from_slice(self.block_header.hash().as_ref());
+        payload.extend_from_slice(self.settlement_hash.as_ref());
+        payload.extend_from_slice(self.manifest_root.unwrap_or([0; 32]).as_ref());
+        Hash::new(payload)
     }
 
     /// Re-compute the settlement hash and ensure it matches the envelope.
