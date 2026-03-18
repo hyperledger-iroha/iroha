@@ -1,0 +1,41 @@
+{
+  "gateway": {
+    "target": "https://gw-stage.example/",
+    "version": "v1.2.3",
+    "profile": "sorafs.sf1@1.0.0"
+  },
+  "fixtures_commit": "COMMIT_SHA",
+  "run_id": "UUID",
+  "timestamp": "2026-02-20T12:34:56Z",
+  "scenarios": [
+    { "id": "replay-happy-path", "status": "pass", "duration_ms": 412 },
+    { "id": "replay-corrupt-chunk", "status": "pass" },
+    { "id": "load-hot-cache", "status": "pass", "p95_latency_ms": 92 }
+  ],
+  "telemetry": {
+    "chunk_range_requests_total": 128,
+    "chunk_range_5xx_total": 0,
+    "stream_token_denials": {
+      "expired": 0,
+      "rate_limited": 0
+    }
+  },
+  "provider_reports": [
+    {
+      "provider": "gw-stage",
+      "successes": 64,
+      "failures": 0,
+      "disabled": false
+    }
+  ],
+  "chunk_receipts": [
+    { "chunk_index": 0, "provider": "gw-stage", "attempts": 1 }
+  ],
+  "signature": {
+    "algorithm": "ed25519",
+    "public_key_hex": "PUBKEY_HEX",
+    "payload_hash_blake3_hex": "BLAKE3_HEX",
+    "payload_hash_blake3_multibase": "zMULTIBASE",
+    "signature_hex": "SIGNATURE_HEX"
+  }
+}

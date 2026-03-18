@@ -1,0 +1,19 @@
+{
+  "version": "baseline-v1",
+  "default_panel_size": 7,
+  "panel_rewards": {
+    "stipend_per_juror_xor": "25",
+    "case_bonus_xor": "10"
+  },
+  "rules": {
+    "decisions": {
+      "uphold": { "refund_rate": "0", "treasury_rate": "1" },
+      "overturn": { "refund_rate": "1", "treasury_rate": "0" },
+      "modify": { "refund_rate": "1", "treasury_rate": "0" }
+    },
+    "withdrawn_before_panel": { "refund_rate": "0.9", "treasury_rate": "0" },
+    "withdrawn_after_panel": { "refund_rate": "0", "treasury_rate": "1" },
+    "frivolous": { "refund_rate": "0.5", "treasury_rate": "0.5" },
+    "escalated": { "refund_rate": "0", "treasury_rate": "0" }
+  }
+}

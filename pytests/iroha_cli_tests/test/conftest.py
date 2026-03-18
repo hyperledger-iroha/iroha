@@ -6,7 +6,7 @@ This module contains pytest fixtures for testing.
 import allure  # type: ignore
 import pytest
 
-from typing import Any, Generator, List
+from typing import Any, Generator
 
 from ..common.helpers import (
     fake_asset_name,

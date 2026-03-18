@@ -1,0 +1,16 @@
+seiyaku AuthorityProbe {
+  meta { abi_version: 1 }
+
+  kotoage fn main() permission(Admin) {
+    let caller = authority();
+    let alice = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let key = name!("authority_probe");
+
+    if (caller == alice) {
+      set_account_detail(caller, key, json!{ match: "alice" });
+      return;
+    }
+
+    set_account_detail(caller, key, json!{ match: "other" });
+  }
+}

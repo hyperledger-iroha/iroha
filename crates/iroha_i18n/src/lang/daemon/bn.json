@@ -1,0 +1,14 @@
+{
+  "info.welcome": "হাইপারলেজার ইরোহায় স্বাগতম!",
+  "error.trace_config_setup": "কনফিগারেশন ট্রেসিং সেট আপ করা যায়নি",
+  "error.config": "কনফিগারেশনে ত্রুটি",
+  "error.logger": "লগার আরম্ভ করা যায়নি",
+  "error.start": "Iroha শুরু করতে ব্যর্থ হয়েছে",
+  "error.run": "Iroha চালানোর সময় ত্রুটি ঘটেছে",
+  "error.start_p2p": "পিয়ার-টু-পিয়ার নেটওয়ার্ক শুরু করতে অক্ষম",
+  "error.init_kura": "Kura (ব্লক স্টোরেজ) আরম্ভ করতে অক্ষম",
+  "error.start_dev_telemetry": "DEV টেলিমেট্রি পরিষেবা শুরু করতে অক্ষম",
+  "error.start_telemetry": "টেলিমেট্রি পরিষেবা শুরু করতে অক্ষম",
+  "error.listen_os_signal": "OS সিগন্যালের জন্য শোনার সেট আপ করতে অক্ষম",
+  "error.start_torii": "Torii শুরু করতে অক্ষম (Iroha HTTP API গেটওয়ে)"
+}

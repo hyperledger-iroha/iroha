@@ -1,9 +1,12 @@
 //! Crate with macros that facilitate writing a custom executor
+// darling-generated code triggers this lint
+#![allow(clippy::needless_continue)]
 
-use iroha_macro_utils::Emitter;
-use manyhow::{emit, manyhow};
+use manyhow::{Emitter, emit, manyhow};
 use proc_macro2::TokenStream;
 
+mod emitter_ext;
+use crate::emitter_ext::EmitterExt;
 mod default;
 mod entrypoint;
 
@@ -18,7 +21,8 @@ mod entrypoint;
 ///
 /// #[migrate]
 /// fn migrate(host: Iroha, context: Context) {
-///     todo!()
+///     // apply schema migrations or seed state as needed
+///     let _ = (host, context);
 /// }
 /// ```
 #[manyhow]
@@ -53,17 +57,23 @@ pub fn migrate(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// #[entrypoint]
 /// fn execute_transaction(transaction: SignedTransaction, host: Iroha, context: Context) -> Result {
-///     todo!()
+///     // inspect transaction and delegate to instruction executor
+///     let _ = (transaction, host, context);
+///     Ok(())
 /// }
 ///
 /// #[entrypoint]
 /// fn execute_instruction(instruction: InstructionBox, host: Iroha, context: Context) -> Result {
-///     todo!()
+///     // run a single instruction
+///     let _ = (instruction, host, context);
+///     Ok(())
 /// }
 ///
 /// #[entrypoint]
 /// fn validate_query(query: QueryBox, host: Iroha, context: Context) -> Result {
-///     todo!()
+///     // validate query permissions and return Ok to allow execution
+///     let _ = (query, host, context);
+///     Ok(())
 /// }
 /// ```
 #[manyhow]

@@ -1,0 +1,21 @@
+rule_files:
+  - ../nexus_audit_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'nexus_audit_outcome_total{trace_id="TRACE-TELEMETRY-BRIDGE", status="fail"}'
+        values: '0 0 0 0 1 1 1'
+    alert_rule_test:
+      - alertname: NexusAuditOutcomeFailure
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: NexusAuditOutcomeFailure
+        eval_time: 5m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              status: fail
+              trace_id: TRACE-TELEMETRY-BRIDGE
+            exp_annotations:
+              summary: "Routed-trace audit failed"

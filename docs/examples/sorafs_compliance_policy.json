@@ -1,0 +1,34 @@
+{
+  "scoreboard": {
+    "latency_cap_ms": 5000,
+    "weight_scale": 10000,
+    "telemetry_grace_secs": 900
+  },
+  "transport_policy": "soranet_first",
+  "anonymity_policy": "anon-guard-pq",
+  "compliance": {
+    "operator_jurisdictions": ["US", "JP"],
+    "jurisdiction_opt_outs": ["US"],
+    "blinded_cid_opt_outs": [
+      "C6B434E5F23ABD318F01FEDB834B34BD16B46E0CC44CD70536233A632DFA3828"
+    ],
+    "audit_contacts": [
+      "mailto:compliance@example.org",
+      "https://gov.example.org/gar"
+    ],
+    "attestations": [
+      {
+        "jurisdiction": "US",
+        "document_uri": "https://gov.example.org/gar/us-attestation.pdf",
+        "digest_hex": "37E8AA2E0C9BE3D64B2812747307D534642856A3F234D6F087E42A54B3A8380F",
+        "issued_at_ms": 1704000000000,
+        "expires_at_ms": 1706000000000
+      },
+      {
+        "document_uri": "https://gov.example.org/gar/global-attestation.json",
+        "digest_hex": "9D0E16C6F42449F57AD1BB221B35A484AF881B40B3F99588635B9A5FB1F88DA2",
+        "issued_at_ms": 1704500000000
+      }
+    ]
+  }
+}

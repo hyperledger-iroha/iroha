@@ -1,0 +1,299 @@
+{
+  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+  "chain": "iroha3-testus",
+  "consensus_fingerprint": "0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8",
+  "consensus_mode": "Npos",
+  "crypto": {
+    "allowed_curve_ids": [
+      1,
+      4
+    ],
+    "allowed_signing": [
+      "ed25519",
+      "secp256k1"
+    ],
+    "default_hash": "blake2b-256",
+    "sm2_distid_default": "1234567812345678",
+    "sm_intrinsics": "auto",
+    "sm_openssl_preview": false
+  },
+  "executor": null,
+  "ivm_dir": ".",
+  "transactions": [
+    {
+      "instructions": [
+        {
+          "Register": {
+            "Domain": {
+              "id": "wonderland",
+              "logo": null,
+              "metadata": {
+                "key": "value"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "label": null,
+              "metadata": {
+                "key": "value"
+              },
+              "opaque_ids": [
+                
+              ],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "TransparentOnly",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "id": "rose#wonderland",
+              "logo": null,
+              "metadata": {
+                
+              },
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "garden_of_live_flowers",
+              "logo": null,
+              "metadata": {
+                
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "6cmzPVPX9g5LPdtBLCo3EgGtBJ7X9P1Y4pTocgsnjrziQFDxrWi3AGU",
+              "label": null,
+              "metadata": {
+                
+              },
+              "opaque_ids": [
+                
+              ],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "TransparentOnly",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "id": "cabbage#garden_of_live_flowers",
+              "logo": null,
+              "metadata": {
+                
+              },
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [
+        
+      ],
+      "parameters": {
+        "block": {
+          "max_transactions": 512
+        },
+        "custom": {
+          "ivm_gas_limit_per_block": {
+            "id": "ivm_gas_limit_per_block",
+            "payload": 1680000
+          },
+          "sumeragi_npos_parameters": {
+            "id": "sumeragi_npos_parameters",
+            "payload": {
+              "activation_lag_blocks": 1,
+              "epoch_length_blocks": 3600,
+              "epoch_seed": "8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B",
+              "evidence_horizon_blocks": 7200,
+              "finality_margin_blocks": 8,
+              "k_aggregators": 3,
+              "max_entity_correlation_pct": 25,
+              "max_nominator_concentration_pct": 25,
+              "max_validators": 128,
+              "min_nomination_bond": 1,
+              "min_self_bond": 1000,
+              "redundant_send_r": 3,
+              "seat_band_pct": 5,
+              "slashing_delay_blocks": 259200,
+              "vrf_commit_window_blocks": 100,
+              "vrf_reveal_window_blocks": 40
+            }
+          }
+        },
+        "executor": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "smart_contract": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "sumeragi": {
+          "block_time_ms": 100,
+          "collectors_k": 3,
+          "collectors_redundant_send_r": 3,
+          "commit_time_ms": 100,
+          "da_enabled": true,
+          "key_activation_lead_blocks": 1,
+          "key_allowed_algorithms": [
+            "bls_normal"
+          ],
+          "key_allowed_hsm_providers": [
+            "pkcs11",
+            "yubihsm",
+            "softkey"
+          ],
+          "key_expiry_grace_blocks": 0,
+          "key_overlap_grace_blocks": 8,
+          "key_require_hsm": false,
+          "max_clock_drift_ms": 1000,
+          "min_finality_ms": 100,
+          "pacing_factor_bps": 10000
+        },
+        "transaction": {
+          "ivm_bytecode_size": 4194304,
+          "max_decompressed_bytes": 10485760,
+          "max_instructions": 50000,
+          "max_metadata_depth": 8,
+          "max_signatures": 16,
+          "max_tx_bytes": 10485760,
+          "require_height_ttl": false,
+          "require_sequence": false
+        }
+      },
+      "topology": [
+        
+      ]
+    },
+    {
+      "instructions": [
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c7000000000000001dca78b6e91809aa00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e0000000000000046000000000000006564303132304345374641343643394443453745413442313235453245333642444236334541333330373345373539304143393238313641453145383631423730343842303336000000000000001a0000000000000012000000000000000a00000000000000776f6e6465726c616e640c000000000000000400000000000000726f7365",
+              "object": "13"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200d6000000000000004b9fa464dfc100ea00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033450000000000000026000000000000001e00000000000000160000000000000067617264656e5f6f665f6c6976655f666c6f776572730f00000000000000070000000000000063616262616765",
+              "object": "44"
+            }
+          }
+        },
+        {
+          "Transfer": {
+            "AssetDefinition": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": "rose#wonderland",
+              "source": "6cmzPVPX95gYbXrP7UnfTUDLtn3Ynet18uDqS4S7njAFJS8GG8ds6MS"
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": {
+                "name": "CanSetParameters"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": {
+                "name": "CanRegisterDomain"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": {
+                "name": "CanRegisterAccount"
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [
+        
+      ],
+      "topology": [
+        {
+          "peer": "ea0130A71AAB00BE72C1BDF6B6A7F5D107E9D224DE900C3DDF6C84C1F17B0BB31E59A1403C9028320058E08D6659E0E7F92F0F",
+          "pop_hex": "b08719da2ee0976152c12bd33e4f3e40670287ce1a6b764fe58bf1f21ce379e38f72e379bf0623101bbe63a2687ecf06047fd807f14fd2cde9c565c2bd25b29a96986944ca71b962d7d0e1a96ea0d692ec592a2971112ba8f582f06c0a546f43"
+        },
+        {
+          "peer": "ea0130A7E9D016D723F72942FCF4B988FB599EA0E092F73C8B68E69F4E8B3FE542A3F7E48AD6CD15F3EB484E45F79399071F77",
+          "pop_hex": "a14eb180f0d78c55d2c034e91ccf691378e9c3ceed8e0b81d3e4b7c215c0dbb633bb9f1c5063911c31af4610016c164015f0f93db3c7df6a2ad0c39338fe7695b976a59fd13797615f229fbd77276a8bb2842e4e44fadcafdb7b37f4a143b913"
+        },
+        {
+          "peer": "ea0130B0AC152F7A4288F1ABE531D50CCC01EF5958EFA12F9F39168E2D0D6FCFF3800F3DCF30203A9F30D3A9F262556CE414B4",
+          "pop_hex": "a0ff6f7dfc6e4109bb1a341ea118b0eb7012bcb1be809444c0c131664a00beb0e0318b5dbf75f1ab878d9c696625646805fece416ed8865549176b25871ac3bb17e80f49d4231c8f13f057075192d8edc9a7d4f4f1280406281b880a729b01e5"
+        },
+        {
+          "peer": "ea0130B42F548672230B0A7F38AC30686F9F5B24799507B7A4A904F7E08C98C3385A4095906FC6D1BF8D67CC181084D68DAE73",
+          "pop_hex": "a9ed4797dfda4ce53a4e7ad945196969b300fd984d553a5da7c230a7796bdef99c86e90cc11db3703f49948f11238d360130b7b9642dafb3cf9c644a3828ed74a5b0eb1e229879d87651e5e04852b18a1de0b8119058291aca5a48534523fc21"
+        },
+        {
+          "peer": "ea01308524AA484E6E6F06DD88E20D74A2493C3586B036F5394EB0B53C7C172653BFBE6EF08BF6468D5F1335547B6878138C20",
+          "pop_hex": "a0fba64c24895c6d5634abdf56d13c8f720bcb5b98f3245db3c1a6306226a8b7815df2e3c2545de9b77b48713a48f7fd18fcd2373b30d74b1dc89833b27f305101671319213f9177fe3e2d64906951737e2869560ace7f0deeb707b7154daee0"
+        },
+        {
+          "peer": "ea0130A844144B7FC75B277AD83C3608B17613EE8336A1EE5F39406627B7C183416CE19F064FCDC26F85F7F21380077CB5BDDD",
+          "pop_hex": "870ef4af8ac87b313e1322029f62039d95897c400f719ca8db58aa5b63e85179cead1d7ddb0b0533a972c6fc0307798505aafff4dd50262c41107b5b5c183eaf1dc6ae50e9236acc9ab2d1062d145bbf222eb3c9e53fae3bd20272d8b31b0414"
+        },
+        {
+          "peer": "ea01308E10E640916ADFAC87A8B22FE4EF7383AAC610D09DC07322029A0913CA919176887FF1B418DEF885113E3CCC4C9CAC53",
+          "pop_hex": "935f3cb1167a391410d16ba2a7558a0400b76b8433c6fc9cafa23f8c584c5167354ea180672cab3be55db8c86ec81e7d133a03bada91ccfa69c0cca4675398dea7299abc51f086b1760d37281d61fc01de20279cd0bd597a970e0549b035c00e"
+        }
+      ]
+    }
+  ],
+  "wire_proto_versions": [
+    1
+  ]
+}

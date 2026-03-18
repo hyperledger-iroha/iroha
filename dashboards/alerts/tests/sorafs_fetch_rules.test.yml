@@ -1,0 +1,19 @@
+rule_files:
+  - ../sorafs_fetch_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_orchestrator_stalls_total{manifest_id="0xstall", provider_id="fixture"}'
+        values: '0 0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12'
+    alert_rule_test:
+      - alertname: SoraFSStallBurst
+        eval_time: 9m
+        exp_alerts: []
+      - alertname: SoraFSStallBurst
+        eval_time: 15m
+        exp_alerts:
+          - exp_labels:
+              provider_id: fixture
+            exp_annotations:
+              summary: "Latency stall burst"

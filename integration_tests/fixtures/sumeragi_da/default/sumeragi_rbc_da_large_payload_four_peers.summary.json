@@ -1,0 +1,62 @@
+{
+  "scenario": "sumeragi_rbc_da_large_payload_four_peers",
+  "peers": 4,
+  "payload_bytes": 11010048,
+  "timings": {
+    "rbc_deliver_ms": 3120,
+    "commit_ms": 3380,
+    "rbc_delivered_seconds": 3.12,
+    "commit_elapsed_seconds": 3.38,
+    "throughput_mib_s": 3.28
+  },
+  "rbc": {
+    "height": 58,
+    "view": 2,
+    "total_chunks": 168,
+    "received_chunks": 168,
+    "ready_count": 4,
+    "block_hash": "0x8f2fd8804f98af203597f9a208329efadc1b345039f5a90c67c68b9df7eb3a04"
+  },
+  "queue": {
+    "bg_post_queue_depth_max": 18.0,
+    "p2p_queue_dropped_total_max": 0.0
+  },
+  "per_peer_metrics": [
+    {
+      "peer_index": 0,
+      "payload_bytes": 11010048.0,
+      "deliver_total": 1.0,
+      "ready_total": 1.0,
+      "bg_post_queue_depth": 12.0,
+      "bg_post_queue_depth_labeled_max": 18.0,
+      "p2p_queue_dropped_total": 0.0
+    },
+    {
+      "peer_index": 1,
+      "payload_bytes": 11010048.0,
+      "deliver_total": 1.0,
+      "ready_total": 1.0,
+      "bg_post_queue_depth": 14.0,
+      "bg_post_queue_depth_labeled_max": 18.0,
+      "p2p_queue_dropped_total": 0.0
+    },
+    {
+      "peer_index": 2,
+      "payload_bytes": 11010048.0,
+      "deliver_total": 1.0,
+      "ready_total": 1.0,
+      "bg_post_queue_depth": 17.0,
+      "bg_post_queue_depth_labeled_max": 18.0,
+      "p2p_queue_dropped_total": 0.0
+    },
+    {
+      "peer_index": 3,
+      "payload_bytes": 11010048.0,
+      "deliver_total": 1.0,
+      "ready_total": 1.0,
+      "bg_post_queue_depth": 11.0,
+      "bg_post_queue_depth_labeled_max": 18.0,
+      "p2p_queue_dropped_total": 0.0
+    }
+  ]
+}

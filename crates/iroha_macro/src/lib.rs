@@ -1,7 +1,5 @@
 //! Crate containing Iroha macros
 
-#![cfg_attr(not(feature = "std"), no_std)]
-
 pub use iroha_derive::*;
 
 /// Crate with errors
@@ -15,7 +13,6 @@ pub mod error {
         to: PhantomData<T>,
     }
 
-    #[cfg(feature = "std")]
     impl<F, T> std::error::Error for ErrorTryFromEnum<F, T> {}
 
     impl<F, T> fmt::Debug for ErrorTryFromEnum<F, T> {

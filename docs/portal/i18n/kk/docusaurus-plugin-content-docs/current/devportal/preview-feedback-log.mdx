@@ -1,0 +1,273 @@
+---
+id: preview-feedback-log
+lang: kk
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback-log.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Preview feedback logging
+sidebar_label: Feedback logging
+description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+'@site/src/data/previewFeedbackSummary.json' ішінен previewFeedbackSummary импорттау;
+
+функциясы FeedbackSummaryTable() {
+  const толқындар = алдын ала қарауКері байланысЖұмыс?.толқындар ?? [];
+  егер (толқындар.ұзындығы === 0) {
+    қайтару (
+      <p>
+        Ешқандай алдын ала қарау кері байланыс жазбалары жазылмады
+        {' '}
+        <code>{previewFeedbackSummary?.көз ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+        .
+      </p>
+    );
+  }
+  қайтару (
+    <кесте>
+      <thead>
+        <tr>
+          <th>Толқын</th>
+          <th>Күй</th>
+          <th>Жалпы оқиғалар</th>
+          <th>Шақырады</th>
+          <th>Шақыруларды ашу</th>
+          <th>Расталған</th>
+          <th>Қайтарылды</th>
+          <th>Кері байланыс</th>
+          <th>Мәселелер</th>
+          <th>Аяқтау %</th>
+          <th>Қабылдау %</th>
+          <th>Жауап беру жылдамдығы</th>
+          <th>Қабылдау кідірісі (орта сағ)</th>
+          <th>Кері байланыс кідірісі (орта сағ)</th>
+          <th>Соңғы оқиға</th>
+          <th>Соңғы оқиғадан бергі күндер</th>
+        </tr>
+      </thead>
+      <tbody>
+        {waves.map((толқын) => {
+          const кері байланыс = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
+          const мәселелер = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
+          const acknowledgments =
+            wave.acknowledgements ?? wave.eventCounts?.мойындалған ?? 0;
+          const қайтарып алу =
+            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
+          const respondRate =
+            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
+          const completionPercent =
+            wave.inviteCompletionPercent == нөл
+              ? '—'
+              : `${wave.inviteCompletionPercent}%`;
+          const ackPercent =
+            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
+          const ackLatency =
+            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
+          const feedbackКідіріс =
+            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
+          қайтару (
+            <tr key={wave.wave}>
+              <td>{wave.wave}</td>
+              <td>{wave.status ?? 'күтуде'}</td>
+              <td>{wave.totalEvents}</td>
+              <td>{wave.invites?.барлығы ?? 0}</td>
+              <td>{wave.invites?.open ?? 0}</td>
+              <td>{алғыс}</td>
+              <td>{қайтарулар}</td>
+              <td>{кері байланыс}</td>
+              <td>{мәселелер}</td>
+              <td>{completionPercent}</td>
+              <td>{ackPercent}</td>
+              <td>{responseRate}</td>
+              <td title={wave.ackLatencyHoursP95 == null ? анықталмаған : `p95 ${wave.ackLatencyHoursP95}h`}>
+                {ackLatency}
+              </td>
+              <td
+                тақырып={
+                  wave.feedbackLatencyHoursP95 == нөл
+                    ? анықталмаған
+                    : `p95 ${wave.feedbackLatencyHoursP95}h`
+                }
+              >
+                {feedbackLatency}
+              </td>
+              <td>{wave.lastEventTimestamp ?? '—'}</td>
+              <td>{wave.daysSinceLastEvent ?? '—'}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </кесте>
+  );
+}
+
+Жол картасы тексерушілерді шақырған сайын тексерілетін дәлелдерді талап етеді
+docs порталының алдын ала қарауы. Бұл жазбада сол дәлелдерді қалай алу керектігі түсіндіріледі
+`preview-feedback-log` көмекшісі, нәтижесінде алынған артефактілерді бөлісу жолы
+басқару және толқын жабылғаннан кейін дайджесттерді қайда жіберу керек.
+
+## Неліктен біз кері байланысты тіркейміз
+
+- **Сәйкестік:** әрбір шақыру алдын ала қарауға кімнің қашан кіргенін жазуы керек
+  рұқсат етілген пайдалану саясатын және олардың рұқсаты қайтарылған кезде мойындады.
+- **Телеметрия корреляциясы:** журнал порталдың телеметрия өсімдерін корреляциялауға мүмкіндік береді
+  немесе Арнайы шақыру топтарымен трафикті қолданып көріңіз.
+- **Басқару дәлелдері:** әрбір DOCS-SORA бақылау нүктесіне машина оқылатын құрылғы қажет
+  шақырулар санын, ашық рецензенттерді және күтпегендердің күйін көрсететін қорытынды
+  мәселелер.
+
+Барлық дәлелдер `artifacts/docs_portal_preview/` астында сақталады, сондықтан оларды қосуға болады
+шақыру толқыны билетіне немесе CI журналдарын сызып тастамай басқаруды шолуға.
+
+## Тікелей шақыру қорытындысы
+
+`docs/portal/scripts/preview-feedback-summary.mjs` ортақ журналды және
+`npm run build` кезінде `src/data/previewFeedbackSummary.json` жазады. Үстел
+Төменде шолушылар ағымдағы шақыру ізін көре алатындай JSON көрсетеді
+CLI көмекшісін іске қоспай.
+
+<Кері байланыс жиынтық кестесі />Шақыру қорытындыларына қоса, қорытынды қазір растауды көрсетеді
+қайтарып алу саны, алынған жауап жылдамдығы (кері байланысты жіберулер
+жалпы шақырулар) және орташа кідіріс (жылжымалы p95 бар).
+шақыру және рецензенттің растауы немесе кері байланыс жіберуі. Жаңа
+**Аяқтау %** бағанында қанша шақыру жабылғанын көрсетеді (мақұлданған немесе
+күші жойылды), ал **Ack %** қанша алушының нақты расталғанын көрсетеді.
+қолайлы пайдалану қадамдары. Бұл алынған пайыздар — тек JSON үшін
+қайтарып алу/шығару мөлшерлемелері — тексерушілер растауы үшін басқару тақталарын жіберіңіз
+CLI көмекшісін іске қоспай, қатысу деңгейлері мен айналым уақыты.
+**Күй** бағаны толқынның қозғалмайтынын көрсетеді
+белсенді (`active`), жабық, бірақ 14 күндік бақылау терезесінде (`closed`) немесе
+мұрағатқа дайын (`archived`). **Соңғы оқиғадан бергі күндер** көрсеткіші қалай болатынын көрсетеді
+соңғы шақыру/кері байланыс әрекетінен бері ұзақ уақыт өтті, сондықтан кеңестер байқайды
+орамды немесе ұзаққа созылған алушыларды қайта тартуды қажет ететін толқындар.
+
+### Толқын `preview-20260218` қорытынды
+
+- **Қолдану аясы:** Қаржылық бета нұсқасы, бақылау операциялары, SDK серіктесі және экожүйені қорғаушы шолушылар келесі DOCS-SORA бақылау нүктесі алдында **2026‑02‑18** шақырылды.
+- **Көрсеткіштер:** 4 шақыру, 4 растау, 4 қайтарып алу және 4 пікір жіберу (`responseRatePercent = 100`) бақылау мүмкіндігі когорты берген бір реттік мәселемен (`DOCS-SORA-Preview-20260218`).
+- **Дәлел:** `artifacts/docs_portal_preview/feedback_log.json` енді осы толқынға арналған егжей-тегжейлі оқиға уақыт кестесін қамтиды және `artifacts/docs_portal_preview/preview-20260218-summary.json` басқару пакеттеріне тіркейтін қалыпты көрсеткіштерді түсіреді. `npm run --prefix docs/portal preview:log -- --summary --summary-json` арқылы портал деректерін қалпына келтіру `src/data/previewFeedbackSummary.json` ішіне бірдей сандарды тартады.
+- **Толқын көмекшісі:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` бір қадамда толқынның қорытындысын, дайджестті және жаңартылған портал деректерін шығарады.
+- **Кейінгі әрекеттер:** Байқау мүмкіндігіне қатысты кері байланыс әрекет ету сұраулары үшін қосымша CSP мысалдарын қамтиды; Docs/DevRel `docs/portal/docs/sorafs/observability-plan.md` (§4.2) астында жазуды бақылайды, осылайша келесі шақыру толқыны түзетуді растай алады. Толық қорытынды [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) ішінде [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md) ішінде түсірілген уақыт шкаласы бар.
+
+## Оқиғалар таксономиясы
+
+| Оқиға | Оны қашан жазу керек | Ескертпелер |
+| --- | --- | --- |
+| `invite-sent` | Шақыру электрондық поштасын жібергеннен кейін бірден. | Шақырулар саны дәл болу үшін әр алушыға бір жазба қосыңыз. |
+| `acknowledged` | Тексеруші растаған кезде, олар қауіпсіздік/бақылау құжаттарын оқып, бақылау сомасының қақпасын іске қосты. | Қосымша, бірақ серіктес когорталарға ұсынылады. |
+| `feedback-submitted` | Тексеруші қорытындыны келісілген трекер арқылы жіберген кезде. | `--notes` өрісіне мәселені/сілтемені қосыңыз. |
+| `issue-opened` | DOCS-SORA файлды жіберген кезде, кері байланыстан алынған кейінгі мәселе. | Кері байланыстарды алдын ала қарау үшін басқаруға жол картасы элементтерін салыстыруға көмектеседі. |
+| `access-revoked` | Тексерушінің алдын ала қарау терезесі аяқталғаннан кейін немесе рұқсат мерзімінен бұрын жойылады. | «Ашық алушылар» саны дәл болып қалуы үшін қажет. |
+
+Қосымша оқиға қажет болса, оны қосыңыз
+`VALID_EVENTS` ішіндегі `docs/portal/scripts/preview-feedback-log.mjs` және жаңарту
+бұл кесте бірдей өзгерісте.
+
+## Тіркеу жұмыс процесі
+
+`npm run preview:log` артындағы көмекші бір JSON журналын жазады.
+барлық оқиғалар. Әрбір жазбада толқын белгісі, алушы, оқиға, уақыт белгісі және
+қосымша жазбалар. Мысалы:
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-02-04T18:20:15.321Z",
+  "entries": [
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "invite-sent",
+      "timestamp": "2026-02-04T18:05:02.114Z",
+      "notes": "seed reviewer"
+    },
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "feedback-submitted",
+      "timestamp": "2026-02-05T09:14:43.009Z",
+      "notes": "docs-preview/42"
+    }
+  ]
+}
+```
+
+Пәрмендер:
+
+```bash
+# Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
+npm run --prefix docs/portal preview:log -- \
+  --wave preview-20260204 \
+  --recipient alice@example.com \
+  --event invite-sent \
+  --notes "seed reviewer"
+
+# Produce a text summary for the current repo
+npm run --prefix docs/portal preview:log -- --summary
+
+# Emit machine-readable summary for a specific wave
+npm run --prefix docs/portal preview:log -- \
+  --summary --summary-json --filter-wave preview-20260204 \
+  > artifacts/docs_portal_preview/preview-20260204-summary.json
+
+# Regenerate the portal summary data file
+npm run --prefix docs/portal generate:preview-summary
+
+# Generate a Markdown digest skeleton for a wave
+npm run --prefix docs/portal preview:digest -- \
+  --wave preview-20260204 \
+  --invite-start 2026-02-04T00:00:00Z \
+  --invite-end 2026-02-18T00:00:00Z \
+  --dashboard "https://grafana.example/d/docs-preview?var-wave=preview-20260204" \
+  --out artifacts/docs_portal_preview/preview-20260204-digest.md
+```
+
+Кеңестер:
+
+- Функция тармағында жұмыс істеген кезде журналды нұсқа бақылауына қойыңыз
+  қолдаушылар өзгерістерді қарай алады. Ұзақ жұмыс істейтін толқындар үшін журналды сақтаңыз
+  басқару билеті және соңғы нұсқасын шығарылым артефактілеріне тіркеңіз.
+- `preview:log` `--log <path>` жүйесіне тікелей кіру қажет болғанда қабылдайды.
+  SoraFS бумасы немесе CI жұмыс кеңістігі.
+- Әрқашан `--notes` анықтамасын қосыңыз (мәселе сілтемесі, GitHub дескрипті, когорт идентификаторы)
+  қорытынды ретроспективада пайдалы.
+- Сізге детерминирленген жиынтық уақыт белгілері қажет болғанда (CI немесе құжаттардың суреті үшін),
+  қорытындыны іске қоспас бұрын `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` орнатыңыз
+  көмекші. Бұл `generatedAt`, күй және күн есептегіштерін дәйекті сақтайды
+  қайта құрулар бойынша.
+
+## Түйіндемелер, дайджесттер және мұрағаттар1. **Толқын бойынша қорытынды:** JSON қорытындысын жасаңыз және оны шақыруға тіркеңіз
+   шикі журналмен бірге билет. Қорытынды жалпы шақыруларды санайды, ашық
+   алушылар және кері байланыс есептеледі, сондықтан басқару біз әрбір түсіргенімізді растай алады
+   шолушы. Портал құрастыру сонымен қатар жиынтық қорытындыны мына мекенжайда жариялайды
+   `src/data/previewFeedbackSummary.json`, сондықтан мүдделі тараптар ағымды көре алады
+   CLI іске қоспай суретке түсіру.
+2. **Апталық дайджест:** `npm run --prefix docs/portal preview:digest -- --wave <label>` іске қосыңыз
+   Markdown көрсеткіштерін алдын ала толтыру үшін, одан кейін толтырғыш бөлімдерін бейімдеңіз
+   үлгісін пайдалану
+   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
+   оны мүдделі тараптармен бөліспес бұрын. Кем дегенде мыналарды қосыңыз: толқын белгісі, ашық
+   шолушылар, маңызды тұжырымдар және келесі әрекеттер.
+3. **Мұрағат:** жабық толқын журналдарын жылжытыңыз
+   `artifacts/docs_portal_preview/archive/<wave>/` және ең соңғысын ғана сақтаңыз
+   тамырдағы белсенді толқын. Бұл CI артефактілерін сақтай отырып, кішірейтеді
+   аудит ізі.
+
+## Жол картасымен байланыстыру
+
+- Сұраған кезде шақыру және оқу кітаптарындағы осы құжатқа сілтеме жасаңыз
+  рецензенттер пікір қалдыру үшін (қараңыз
+  [`preview-invite-flow`](./preview-invite-flow.md),
+  [`reviewer-onboarding`](./reviewer-onboarding.md), және
+  [`public-preview-invite`](./public-preview-invite.md)).
+- DOCS-SORA толқынын жабу кезінде `status.md` ішінде жасалған қорытындыны атап өтіңіз
+  жол картасының элементтері (мысалы, DOCS-1b/2b/3c) артефактіге сілтеме жасай алады.
+- Сыртқы SoraFS файлына жүктеп салу кезінде хэш дайджесттерін қорытындымен бірге сақтаңыз.
+  рецензенттер дәлелдер бумасын тексере алады.
+
+Тіркеу жұмыс процесін осы жерде кодталған күйде сақтау жол картасы талабын бұғаттаудан босатады
+«басқару үшін кері байланысты/телеметрияны түсіру» және жұмсалған уақытты қысқартады
+әр кезеңде шақыру тарихын қайта құру.

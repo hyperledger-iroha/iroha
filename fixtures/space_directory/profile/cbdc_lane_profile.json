@@ -1,0 +1,66 @@
+{
+  "profile_id": "profile.cbdc.wholesale.v1",
+  "dataspace": 11,
+  "activation_epoch": 4096,
+  "governance": {
+    "issuer": "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan",
+    "evidence_ticket": "gov-2026-01-15-cbdc-wholesale",
+    "quorum": 5
+  },
+  "validators": [
+    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+    "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+    "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
+  ],
+  "validator_quorum": 3,
+  "protected_namespaces": [
+    "cbdc",
+    "gov"
+  ],
+  "da_profile": {
+    "class": "A",
+    "quorum": 8,
+    "attesters": [
+      "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+      "6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81",
+      "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et",
+      "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+      "6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY",
+      "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+      "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+      "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cz",
+      "6cmzPVPX5s45jk9DYbm2AAPACe6C3MyvakdpYkXeT2YUnfPu9VmyhbM",
+      "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChkB2",
+      "6cmzPVPX6y3sc78Afv2PhjjTDK2EjkvWtQCyc4kKLYNSyWFSLbozEeZ",
+      "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"
+    ],
+    "rotation_epochs": 96
+  },
+  "composability_group": {
+    "group_id_hex": "3b2a4e8b7047e36de62a1b4a64f48870664f581e06e4b1340f9e963835d02c8b",
+    "activation_epoch": 4097,
+    "whitelist": [
+      {
+        "dataspace": 11,
+        "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+        "capability_manifest": "../capability/cbdc_wholesale.manifest.json"
+      },
+      {
+        "dataspace": 12,
+        "uaid": "uaid:62af083a61d42ca6c269585b9a33c563f4e0a5c0726614f7a98b6aab6b98f70b",
+        "capability_manifest": "../capability/retail_dapp_access.manifest.json"
+      }
+    ],
+    "deny_wins_policy": "UAID revocations take effect immediately; re-activation requires council approval."
+  },
+  "audit_hooks": {
+    "events": [
+      "SpaceDirectoryEvent.ManifestActivated",
+      "SpaceDirectoryEvent.ManifestRevoked"
+    ],
+    "log_schema": "metrics/nexus_space_directory_audit.prom",
+    "pagerduty_service": "Nexus-SpaceDirectory"
+  }
+}

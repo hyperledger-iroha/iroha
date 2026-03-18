@@ -1,0 +1,33 @@
+{
+  "uaid": [
+    "hash:5B19D94748E8629E1000C18EE0D6C5CBA3F3F51CB293F262E345F65B6B01BD99#FA04"
+  ],
+  "dataspaces": [
+    {
+      "dataspace_id": 0,
+      "dataspace_alias": "universal",
+      "accounts": [
+        {
+          "account_id": "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+          "label": null,
+          "assets": [
+            {
+              "asset_definition_id": "cash#portfolio_fixture",
+              "asset_id": "norito:4e52543000000001",
+              "quantity": "875"
+            },
+            {
+              "asset_definition_id": "points#portfolio_fixture",
+              "asset_id": "norito:4e52543000000002",
+              "quantity": "320"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "accounts": 1,
+    "positions": 2
+  }
+}

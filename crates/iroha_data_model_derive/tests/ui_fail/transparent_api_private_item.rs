@@ -1,3 +1,7 @@
-use iroha_data_model::block::BlockPayload;
+mod block {
+    struct BlockPayload;
+}
+
+use block::BlockPayload;
 
 fn main() {}

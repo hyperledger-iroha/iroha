@@ -1,0 +1,14 @@
+{
+  "info.welcome": "\u2066Hyperledger Iroha\u2069 وچ سُھڻاں آوݨ آ!",
+  "error.trace_config_setup": "ترتیب ٹریسنگ سیٹ اپ نہ تھی سڳی",
+  "error.config": "ترتیب دی غلطی!",
+  "error.logger": "لاگنگ نظام شروع نہ تھی سڳیا",
+  "error.start": "\u2066Iroha\u2069 شروع نہ تھی سڳیا",
+  "error.run": "\u2066Iroha\u2069 چلاندے ہویاں غلطی وِڄی",
+  "error.start_p2p": "\u2066P2P\u2069 نیٹورک شروع نہ تھی سڳیا",
+  "error.init_kura": "\u2066Kura\u2069 (بلاک سٹوریج) شروع نہ تھی سڳیا",
+  "error.start_dev_telemetry": "ڈولپمینٹ ٹیلے میٹری خدمت شروع نہ تھی سڳی",
+  "error.start_telemetry": "ٹیلے میٹری خدمت شروع نہ تھی سڳی",
+  "error.listen_os_signal": "OS سِگنل سݨ واسطے سیٹ اپ نہ تھی سڳیا",
+  "error.start_torii": "\u2066Torii\u2069 (\u2066Iroha HTTP API\u2069 گیٹ وے) شروع نہ تھی سڳیا"
+}

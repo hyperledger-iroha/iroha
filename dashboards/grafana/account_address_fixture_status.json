@@ -1,0 +1,229 @@
+{
+  "title": "Account Address Fixture Status",
+  "uid": "account-address-fixture",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "tags": ["addr2", "address", "compliance"],
+  "templating": {
+    "list": [
+      {
+        "name": "target",
+        "label": "Target",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(account_address_fixture_check_status, target)",
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Passing Targets",
+      "id": 1,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "expr": "sum(account_address_fixture_check_status{target=~\"$target\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "addr2_fixture_pass_count"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 0}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Failing Targets",
+      "id": 2,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "expr": "sum((account_address_fixture_check_status{target=~\"$target\"}) == 0)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "metric_id": "addr2_fixture_fail_count"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": 0},
+              {"color": "red", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "description": "Any non-zero value indicates at least one SDK/CLI copy has drifted from fixtures/account/address_vectors.json."
+    },
+    {
+      "type": "table",
+      "title": "Fixture Status",
+      "id": 3,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 6},
+      "targets": [
+        {
+          "expr": "account_address_fixture_check_status{target=~\"$target\"}",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "footer": {"show": false}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "metric_id": "addr2_fixture_status"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        }
+      ],
+      "description": "Latest value per target (1 = OK, 0 = drift)."
+    },
+    {
+      "type": "table",
+      "title": "Remote Digest",
+      "id": 4,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 6},
+      "targets": [
+        {
+          "expr": "account_address_fixture_remote_info{target=~\"$target\"}",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "footer": {"show": false}
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "metric_id": "addr2_fixture_remote_digest"
+          }
+        },
+        "overrides": []
+      },
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        }
+      ],
+      "description": "Prometheus labels expose the remote sha256 digest for auditor evidence."
+    },
+    {
+      "type": "timeseries",
+      "title": "Status Timeline",
+      "id": 5,
+      "datasource": "Prometheus",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 16},
+      "targets": [
+        {
+          "expr": "account_address_fixture_check_status{target=~\"$target\"}",
+          "legendFormat": "{{target}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "metric_id": "addr2_fixture_timeline"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": 0},
+              {"color": "green", "value": 1}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "Tracks pass/fail transitions for each surface over time."
+    }
+  ]
+}

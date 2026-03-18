@@ -1,0 +1,8 @@
+{
+  "authority": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  "private_key": "ed0120...",
+  "backend": "halo2/ipa",
+  "name": "vk_unshield",
+  "version": 1,
+  "vk_bytes": "AQID"
+}

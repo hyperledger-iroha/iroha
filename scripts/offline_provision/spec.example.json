@@ -1,0 +1,31 @@
+{
+  "inspector": {
+    "manifest_schema": "offline_provisioning_v1",
+    "manifest_version": 1,
+    "private_key": "ed25519:13e39eb6c47c1fef4d6c3756378f01c1af4f4e3d0ece8f1d4cf4a1633c2e6c08"
+  },
+  "proofs": [
+    {
+      "challenge": {
+        "amount": "25.00",
+        "asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c000000000000000e082ce4c4819da4c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230463946393237353845383135313231463633374339373034444644413534383432424139333741413732314330363033303138453230384436453235373837452f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000786f72",
+        "invoice_id": "INV-OA10-3-DEMO",
+        "issued_at_ms": 1730314876000,
+        "nonce_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "receiver": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"
+      },
+      "counter": 7,
+      "device_manifest": {
+        "android.provisioned.audit_ticket": "A1B2C3-INSPECT-9001",
+        "android.provisioned.boot_slot": "a",
+        "android.provisioned.device_id": "retail-device-001",
+        "android.provisioned.notes": {
+          "operator": "Sora Retail Pilot"
+        },
+        "android.provisioned.os_patch": "2025-10-05"
+      },
+      "label": "kiosk-demo",
+      "manifest_issued_at_ms": 1730314876000
+    }
+  ]
+}

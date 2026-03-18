@@ -1,0 +1,3 @@
+# TYPE nexus_scheduler_lane_teu_capacity gauge
+nexus_scheduler_lane_teu_capacity{lane="cbdc"} 512
+nexus_scheduler_lane_teu_slot_committed{lane="cbdc"} 128

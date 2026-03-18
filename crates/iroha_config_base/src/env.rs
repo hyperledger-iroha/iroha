@@ -4,19 +4,18 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     collections::{HashMap, HashSet},
+    error::Error as StdError,
     ops::Sub,
     rc::Rc,
     str::FromStr,
 };
 
-use error_stack::Context;
-
 /// Convertation from a string read from an environment variable to a specific value.
 ///
-/// Has an implementation for any type that implements [`FromStr`] (with an error that is [Context]).
+/// Has an implementation for any type that implements [`FromStr`] (with an error that implements [`StdError`]).
 pub trait FromEnvStr {
     /// Error that might occur during conversion
-    type Error: Context;
+    type Error: StdError + Send + Sync + 'static;
 
     /// The conversion itself.
     ///
@@ -30,7 +29,7 @@ pub trait FromEnvStr {
 impl<T> FromEnvStr for T
 where
     T: FromStr,
-    <T as FromStr>::Err: Context,
+    <T as FromStr>::Err: StdError + Send + Sync + 'static,
 {
     type Error = <T as FromStr>::Err;
 
@@ -69,10 +68,7 @@ pub fn std_env(key: &str) -> Option<Cow<'static, str>> {
         Ok(value) => Some(Cow::from(value)),
         Err(std::env::VarError::NotPresent) => None,
         Err(_) => {
-            log::error!(
-                "Found non-unicode characters in env var `{}`, ignoring",
-                key
-            );
+            log::error!("Found non-unicode characters in env var `{key}`, ignoring",);
             None
         }
     }

@@ -1,0 +1,42 @@
+{
+  "total": 2,
+  "items": [
+    {
+      "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000101",
+      "issuer_id": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+      "issuer_display": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+      "revoked_at_ms": 1730314876000,
+      "reason": "device_compromised",
+      "note": "Retail kiosk tamper alert",
+      "metadata": {
+        "ticket": "INC-4012",
+        "jurisdiction": "EU"
+      },
+      "record": {
+        "verdict_id": "0000000000000000000000000000000000000000000000000000000000000101",
+        "issuer": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+        "revoked_at_ms": 1730314876000,
+        "reason": "device_compromised",
+        "note": "Retail kiosk tamper alert",
+        "metadata": {
+          "ticket": "INC-4012",
+          "jurisdiction": "EU"
+        }
+      }
+    },
+    {
+      "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000202",
+      "issuer_id": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+      "issuer_display": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+      "revoked_at_ms": 1730414876000,
+      "reason": "issuer_request",
+      "record": {
+        "verdict_id": "0000000000000000000000000000000000000000000000000000000000000202",
+        "issuer": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp",
+        "revoked_at_ms": 1730414876000,
+        "reason": "issuer_request",
+        "metadata": {}
+      }
+    }
+  ]
+}

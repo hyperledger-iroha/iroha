@@ -1,7 +1,8 @@
 {
-    "id": "wonderland",
-    "logo": "/ipfs/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu",
-    "metadata": {
-        "Is_Jabberwocky_alive": true
-    }
+  "id": "wonderland",
+  "logo": "/ipfs/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu",
+  "metadata": {
+    "Is_Jabberwocky_alive": true
+  },
+  "owned_by": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn@wonderland"
 }

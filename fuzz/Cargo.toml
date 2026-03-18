@@ -1,0 +1,42 @@
+[package]
+name = "iroha-da-replay-cache-fuzz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+libfuzzer-sys = "0.4.10"
+arbitrary = { version = "1.4.2", features = ["derive"] }
+iroha_core = { path = "../crates/iroha_core" }
+sorafs_car = { path = "../crates/sorafs_car" }
+flate2 = "1.1.5"
+zstd = { workspace = true }
+base64 = "0.22.1"
+iroha_data_model = { path = "../crates/iroha_data_model" }
+norito = { path = "../crates/norito" }
+iroha_crypto = { path = "../crates/iroha_crypto", default-features = false, features = ["std"] }
+rand = { workspace = true, default-features = false, features = ["std"] }
+rand_chacha = { version = "0.9" }
+
+[[bin]]
+name = "da_replay_cache"
+path = "da_replay_cache.rs"
+
+[[bin]]
+name = "proof_stream_transport"
+path = "proof_stream_transport.rs"
+
+[[bin]]
+name = "da_ingest_schema"
+path = "da_ingest_schema.rs"
+
+[[bin]]
+name = "soranet_handshake"
+path = "soranet_handshake.rs"
+
+[[bin]]
+name = "lane_relay_envelope"
+path = "lane_relay_envelope.rs"
+
+[profile.release]
+debug = 1

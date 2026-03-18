@@ -1,0 +1,131 @@
+{
+  "allowances": [
+    {
+      "label": "ios-demo",
+      "certificate_id_hex": "E4FAE1AF777A00A1D991FA061DF22EC12E773C64CA424894A6C2CA2069C75B0F",
+      "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "allowance_asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c000000000000000b57ac4d1c457ecf700810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230434537464134364339444345374541344231323545324533364244423633454133333037334537353930414339323831364145314538363142373034384230332f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000786f72",
+      "allowance_amount": "250.00",
+      "commitment_hex": "26B02D14C45C0092AB5B719D78FFF20AD9A4167364BAE30ED2C749F19C5F3308",
+      "blinding_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "attestation_bytes": 4,
+      "metadata_keys": [
+        "ios.app_attest.bundle_id",
+        "ios.app_attest.environment",
+        "ios.app_attest.team_id"
+      ],
+      "verdict_id_hex": null,
+      "attestation_nonce_hex": null,
+      "refresh_at_ms": null,
+      "certificate_json": "ios-demo/certificate.json",
+      "certificate_norito": "ios-demo/certificate.norito",
+      "register_instruction_json": "ios-demo/register_instruction.json",
+      "register_instruction_norito": "ios-demo/register_instruction.norito",
+      "submitted": false
+    },
+    {
+      "label": "android-demo",
+      "certificate_id_hex": "73087C8BCC90FD722EC54041BE52AC240B586C5A72A9EE17F7BBA201F6082FBF",
+      "controller": "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan",
+      "allowance_asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c0000000000000005c0d942ec37b449c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230413938424146423036363343453038443735454244353036464543333841383445353736413743394230383937363933454434423034464439454632443138442f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000757364",
+      "allowance_amount": "150.00",
+      "commitment_hex": "06DCBBC179F71CF54A222DC6A4D1CF1B9BCCD67F591C807073A80473899EEC04",
+      "blinding_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "attestation_bytes": 4,
+      "metadata_keys": [
+        "android.attestation.package_names",
+        "android.attestation.require_rollback_resistance",
+        "android.attestation.require_strongbox",
+        "android.attestation.signing_digests_sha256",
+        "android.integrity.policy"
+      ],
+      "verdict_id_hex": null,
+      "attestation_nonce_hex": null,
+      "refresh_at_ms": null,
+      "certificate_json": "android-demo/certificate.json",
+      "certificate_norito": "android-demo/certificate.norito",
+      "register_instruction_json": "android-demo/register_instruction.json",
+      "register_instruction_norito": "android-demo/register_instruction.norito",
+      "submitted": false
+    },
+    {
+      "label": "android-hms-demo",
+      "certificate_id_hex": "A073A6DF5D0DDD086DF4302C721F85399EF1BB2B02F952210E7466D33A5155E5",
+      "controller": "6cmzPVPX6y3sc78Afv2PhjjTDK2EjkvWtQCyc4kKLYNSyWFSLbozEeZ",
+      "allowance_asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c000000000000000b2c7dae1813db7be00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230373233334246433839444342443638433139464445364345363135383232353239384543313133314236413133304431414542343534433141423531383343302f0000000000000014000000000000000c000000000000000400000000000000736f72610b0000000000000003000000000000006a7079",
+      "allowance_amount": "90",
+      "commitment_hex": "B4C25EF1B00CB0D8EA5E3C675DF4826A5AF782C12EF0846DC36A5704E9CCE84C",
+      "blinding_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "attestation_bytes": 4,
+      "metadata_keys": [
+        "android.hms_safety_detect.app_id",
+        "android.hms_safety_detect.max_token_age_ms",
+        "android.hms_safety_detect.package_names",
+        "android.hms_safety_detect.required_evaluations",
+        "android.hms_safety_detect.signing_digests_sha256",
+        "android.integrity.policy"
+      ],
+      "verdict_id_hex": null,
+      "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "refresh_at_ms": 1730318476000,
+      "certificate_json": "android-hms-demo/certificate.json",
+      "certificate_norito": "android-hms-demo/certificate.norito",
+      "register_instruction_json": "android-hms-demo/register_instruction.json",
+      "register_instruction_norito": "android-hms-demo/register_instruction.norito",
+      "submitted": false
+    },
+    {
+      "label": "android-play-demo",
+      "certificate_id_hex": "A0A04B7F8FE433B665B57053F1B91CF8AD6BC9669170ABA9E40B9EC86BCD659B",
+      "controller": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+      "allowance_asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c000000000000000f0a3399fd6d749de00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230303446463542383130343644444343463139453245343531433435444642364635333735394434454233304641324546413830373238344431434333333031362f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000786f72",
+      "allowance_amount": "175.00",
+      "commitment_hex": "4C99F19069BA2F6419C2C7C40B21EB503ECA8A0DDB38EF930DAFFAC10EA5BE50",
+      "blinding_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+      "attestation_bytes": 4,
+      "metadata_keys": [
+        "android.integrity.policy",
+        "android.play_integrity.allowed_app_verdicts",
+        "android.play_integrity.allowed_device_verdicts",
+        "android.play_integrity.cloud_project_number",
+        "android.play_integrity.environment",
+        "android.play_integrity.max_token_age_ms",
+        "android.play_integrity.package_names",
+        "android.play_integrity.signing_digests_sha256"
+      ],
+      "verdict_id_hex": null,
+      "attestation_nonce_hex": null,
+      "refresh_at_ms": null,
+      "certificate_json": "android-play-demo/certificate.json",
+      "certificate_norito": "android-play-demo/certificate.norito",
+      "register_instruction_json": "android-play-demo/register_instruction.json",
+      "register_instruction_norito": "android-play-demo/register_instruction.norito",
+      "submitted": false
+    },
+    {
+      "label": "android-provisioned-demo",
+      "certificate_id_hex": "54A1AE54817EE1BA3CB192D18F9D29E5DEFCC0580C285F5D8BCF4167C8102E9F",
+      "controller": "6cmzPVPX9g5LPdtBLCo3EgGtBJ7X9P1Y4pTocgsnjrziQFDxrWi3AGU",
+      "allowance_asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c0000000000000001e31b679aaa9601200810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230453946363332443330333442414236424232364439324143384644393345463837384439433545363945303142363142344334373130313838344545324639392f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000786f72",
+      "allowance_amount": "200.00",
+      "commitment_hex": "DC4B4C7185597948E512CA7D8EFFFCEA1EF138E282EE5926EA0E43E7441D6774",
+      "blinding_hex": "6666666666666666666666666666666666666666666666666666666666666666",
+      "attestation_bytes": 1250,
+      "metadata_keys": [
+        "android.integrity.policy",
+        "android.provisioned.inspector_public_key",
+        "android.provisioned.manifest_schema",
+        "android.provisioned.manifest_version",
+        "android.provisioned.max_manifest_age_ms"
+      ],
+      "verdict_id_hex": null,
+      "attestation_nonce_hex": null,
+      "refresh_at_ms": null,
+      "certificate_json": "android-provisioned-demo/certificate.json",
+      "certificate_norito": "android-provisioned-demo/certificate.norito",
+      "register_instruction_json": "android-provisioned-demo/register_instruction.json",
+      "register_instruction_norito": "android-provisioned-demo/register_instruction.norito",
+      "submitted": false
+    }
+  ]
+}

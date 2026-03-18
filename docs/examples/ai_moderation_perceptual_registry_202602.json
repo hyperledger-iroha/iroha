@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "issued_at_unix": 1738368000,
+  "cohort_label": "2026-Q1",
+  "families": [
+    {
+      "family_id": "00112233-4455-6677-8899-aabbccddeeff",
+      "description": "JPEG jitter corpus (mirrors 2026-Q1 calibration)",
+      "variants": [
+        {
+          "variant_id": "ffeeddcc-bbaa-9988-7766-554433221100",
+          "attack_vector": "jpeg_jitter",
+          "reference_cid_b64": "c29yYWZzLXNhbXBsZS1qaXR0ZXI=",
+          "perceptual_hash": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+          "hamming_radius": 4,
+          "embedding_digest": null,
+          "notes": "Delta=2, 85% JPEG quality"
+        },
+        {
+          "variant_id": "11111111-2222-3333-4444-555555555555",
+          "attack_vector": "mosaic",
+          "reference_cid_b64": "c29yYWZzLXNhbXBsZS1tb3NhaWM=",
+          "perceptual_hash": null,
+          "hamming_radius": 0,
+          "embedding_digest": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "notes": "Downsampled to 320p with 6px mosaic tiles"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">
+  <rect x="10" y="10" width="700" height="340" rx="32" ry="32" fill="#ffffff" stroke="#d7d7d7" stroke-width="2" />
+  <text x="40" y="48" font-family="SanFrancisco,Helvetica,Arial,sans-serif" font-size="22" font-weight="600" fill="#111">iOS Norito demo — address preview card</text>
+  <text x="40" y="82" font-size="14" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#555">Domainless account literal: render domain context separately when a workflow requires it.</text>
+  <text x="40" y="110" font-size="15" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#444">I105 (preferred, prefix 753)</text>
+  <rect x="40" y="120" width="640" height="40" rx="10" ry="10" fill="#f8f8f8" stroke="#e2e2e2" />
+  <text x="50" y="147" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">i105:sora1hjwa8c6ppf2l0n5s3ex7dwcd4m93q2m7q5pc4l5ca8xx7sc</text>
+  <text x="40" y="175" font-size="15" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#444">i105-default (`sora`) Sora-only (second-best)</text>
+  <rect x="40" y="185" width="640" height="40" rx="10" ry="10" fill="#f8f8f8" stroke="#e2e2e2" />
+  <text x="50" y="212" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">sora ｲﾍ0t... (kana glyphs preserved)</text>
+  <text x="40" y="240" font-size="13" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#c55400">i105-default (`sora`) Sora addresses are second-best and rely on half-width kana; prefer I105 externally.</text>
+  <rect x="40" y="255" width="150" height="40" rx="12" ry="12" fill="#007aff" />
+  <text x="60" y="282" font-size="15" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#fff">Copy I105</text>
+  <rect x="210" y="255" width="200" height="40" rx="12" ry="12" fill="#007aff" />
+  <text x="230" y="282" font-size="15" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#fff">Copy i105-default</text>
+  <text x="430" y="282" font-size="13" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#666">help(“I105 preferred”) · help(“Sora-only `sora`, second-best”).</text>
+  <rect x="520" y="95" width="150" height="150" rx="16" ry="16" fill="#000" />
+  <text x="530" y="180" font-size="12" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#fff">I105 QR preview</text>
+</svg>

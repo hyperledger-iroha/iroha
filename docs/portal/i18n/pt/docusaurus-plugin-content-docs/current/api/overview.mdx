@@ -1,0 +1,84 @@
+---
+lang: pt
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+importar TryItConsole de '@site/src/components/TryItConsole.jsx';
+
+# Visão geral da API Torii
+
+O gateway Torii expõe uma superfície REST + WebSocket para interagir com Iroha
+nós. O documento canônico OpenAPI é gerado por meio de:
+
+```bash
+cargo xtask openapi
+```
+
+Executar o comando acima escreve `docs/portal/static/openapi/torii.json` e
+alimenta a integração `docusaurus-plugin-openapi-docs`, portanto esta seção é atualizada
+automaticamente. O gerador ativa um roteador Torii na memória e tenta
+consulte seu terminal OpenAPI; se isso falhar (por exemplo, inicialização do roteador
+erros) uma especificação de espaço reservado determinística é emitida em seu lugar.
+
+## Status atual
+
+- **Fonte de especificações:** `cargo xtask openapi` consulta o roteador Torii diretamente; o
+  O stub de fallback só é emitido quando o roteador não consegue expor um OpenAPI
+  documento.
+- **Determinismo:** a saída JSON é canonizada para garantir uma comparação estável no CI.
+- **Autenticação:** O sandbox “Try it” agora encaminha solicitações por meio de um
+  proxy de teste restrito. Os operadores devem fornecer um endpoint e um portador Torii
+  token antes de emitir chamadas.
+- **Seletor de versão:** Swagger UI, RapiDoc e a página Torii OpenAPI completa
+  exponha um menu suspenso que diz `openapi/versions.json` para que você possa comparar
+  instantâneos históricos. A opção `Latest (tracked)` aponta para
+  `/openapi/torii.json`, enquanto todas as outras entradas carregam o correspondente
+  Artefato `openapi/versions/<version>/torii.json`.
+- **Fluxo de trabalho de instantâneo:** depois de executar `npm run docs:version -- <label>`, atualize
+  o arquivo OpenAPI correspondente com `npm run sync-openapi -- --version=<label> --latest`
+  portanto, o menu suspenso pode carregar o instantâneo congelado e a versão “mais recente” contínua.
+
+O extrator apoiado por roteador agora emite toda a superfície Torii. Se você ver o
+stub de espaço reservado, trate-o como uma falha em tempo de construção e inspecione o Torii
+logs de inicialização do roteador.
+
+## Experimente sandbox (DOCS-3)
+
+O portal do desenvolvedor incorpora um pequeno console que retransmite solicitações REST por meio de um
+Proxy baseado em nó. O proxy impõe CORS, limites de taxa e suporte opcional
+tokens para que o widget possa se comunicar com gateways de teste sem expor credenciais.
+Consulte `docs/devportal/try-it.md` para obter a lista de verificação completa do operador.
+
+Inicie o proxy junto com o servidor de desenvolvimento Docusaurus:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- O proxy escuta em `TRYIT_PROXY_LISTEN` (padrão `127.0.0.1:8787`) e
+  encaminha quaisquer solicitações `/proxy/...` para `TRYIT_PROXY_TARGET`.
+- Forneça `TRYIT_PROXY_BEARER` para tokens de portador estáticos ou deixe que os chamadores forneçam
+  um por solicitação por meio do campo “Bearer token”.
+- Os limites de taxa são padrão para 60 solicitações por minuto e podem ser ajustados através
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ O proxy destina-se ao acesso de teste/demonstração. Implantações de produção
+> deveria correr atrás de um ingresso reforçado e reutilizar a mesma política de limitação de taxa em
+> frente do Torii.
+
+<TryItConsole />

@@ -1,0 +1,30 @@
+{
+  "certificate": {
+    "allowance": {
+      "amount": "250.00",
+      "asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c000000000000000b57ac4d1c457ecf700810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230434537464134364339444345374541344231323545324533364244423633454133333037334537353930414339323831364145314538363142373034384230332f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000786f72",
+      "commitment_hex": "26B02D14C45C0092AB5B719D78FFF20AD9A4167364BAE30ED2C749F19C5F3308"
+    },
+    "attestation_nonce_hex": null,
+    "attestation_report_b64": "qlWqVQ==",
+    "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "expires_at_ms": 1745900000000,
+    "issued_at_ms": 1730314876000,
+    "metadata": {
+      "ios.app_attest.bundle_id": "tech.iroha.retail",
+      "ios.app_attest.environment": "production",
+      "ios.app_attest.team_id": "ABCD1234"
+    },
+    "operator": "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC",
+    "operator_signature_hex": "1D5527CA0DF1AC27F371CB6DA9B21CF021DF1DBF778C58CDF0256158877A67ACB4D2C85C9A679E07D108A9F7BDFB134678E92F7DA9FEF3E3F14A9145F5E32A00",
+    "policy": {
+      "expires_at_ms": 1745900000000,
+      "max_balance": "500.00",
+      "max_tx_value": "125.00"
+    },
+    "refresh_at_ms": null,
+    "spend_public_key": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    "verdict_id_hex": null
+  },
+  "instruction": "RegisterOfflineAllowance"
+}

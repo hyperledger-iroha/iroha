@@ -1,0 +1,96 @@
+groups:
+  - name: soradns-gateway
+    interval: 1m
+    rules:
+      - alert: SoraDnsResolverSyncStale
+        expr: time() - max_over_time(soradns_resolver_last_sync_unix_seconds[5m]) > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraDNS resolver sync stale"
+          description: |
+            Resolver {{ $labels.resolver_id }} has not refreshed bundles for at least
+            15 minutes (sync lag={{ printf "%.0f" $value }}s). Check RAD fetchers,
+            transparency tailer, and network reachability before proceeding with
+            new directory releases.
+
+      - alert: SoraDnsBundleProofStale
+        expr: max_over_time(soradns_resolver_bundle_proof_age_max_seconds[10m]) > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraDNS bundle proofs older than 10 minutes"
+          description: |
+            Resolver {{ $labels.resolver_id }} reports bundle proofs older than 10 minutes
+            (age={{ printf "%.0f" $value }}s). Investigate RAD freshness, resolver clock skew,
+            and bundle ingestion before proofs expire.
+
+      - alert: SoraDnsBundleProofExpiryRisk
+        expr: min_over_time(soradns_resolver_bundle_proof_ttl_min_seconds[10m]) < 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraDNS bundle proofs expiring within 5 minutes"
+          description: |
+            Resolver {{ $labels.resolver_id }} has bundle proofs with <5 minutes of TTL remaining
+            (min_ttl={{ printf "%.0f" $value }}s). Refresh the directory or pause promotions
+            to avoid serving stale bundles.
+
+      - alert: SoraDnsCidDriftDetected
+        expr: increase(soradns_bundle_cid_drift_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraDNS bundle CID drift observed"
+          description: |
+            CID drift detected for resolver {{ $labels.resolver_id }} / {{ $labels.namehash }}
+            within the last 15 minutes (delta={{ printf "%.0f" $value }}). Validate the CAR/manifest
+            lineage and GAR bindings before promoting new aliases.
+
+      - alert: SoraDnsBundleCoverageMissing
+        expr: soradns_resolver_bundle_count == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraDNS resolver has no active bundles"
+          description: |
+            Resolver {{ $labels.resolver_id }} is serving zero proof bundles for at least 5 minutes.
+            Rehydrate the directory snapshot and verify transparency ingestion.
+
+      - alert: SoraFsGatewayTlsExpiryWindowLow
+        expr: torii_sorafs_tls_cert_expiry_seconds < 604800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS gateway TLS certificate expires within 7 days"
+          description: |
+            Gateway TLS certificate expires in under 7 days ({{ printf "%.0f" $value }}s remaining).
+            Trigger ACME renewal and confirm ECH state before the window closes.
+
+      - alert: SoraFsGatewayTlsRenewalFailures
+        expr: increase(torii_sorafs_tls_renewal_total{result="failure"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS gateway TLS renewal failures detected"
+          description: |
+            At least one TLS renewal failure occurred in the last 15 minutes (result=failure).
+            Inspect ACME logs and retry automation before certificates age out.
+
+      - alert: SoraFsAliasCacheRefreshFailures
+        expr: increase(torii_sorafs_alias_cache_refresh_total{result="failure"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SoraFS alias cache refresh failures"
+          description: |
+            Alias cache refresh failures detected ({{ printf "%.0f" $value }}) in the last 10 minutes.
+            Confirm SoraFS alias proofs remain valid and review gateway logs for refresh errors.

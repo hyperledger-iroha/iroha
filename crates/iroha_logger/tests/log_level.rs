@@ -1,4 +1,7 @@
-#![allow(missing_docs)]
+//! Integration test for log level filtering.
+//!
+//! Confirms that the `LevelFilter` drops events below the configured
+//! level by observing event flow through a custom subscriber wrapper.
 
 use std::time::Duration;
 
@@ -58,7 +61,9 @@ async fn test() {
         .await
         .unwrap()
         .unwrap();
-    assert!(time::timeout(Duration::from_millis(10), rcv.recv())
-        .await
-        .is_err());
+    assert!(
+        time::timeout(Duration::from_millis(10), rcv.recv())
+            .await
+            .is_err()
+    );
 }

@@ -1,0 +1,4 @@
+extends = "minimal_with_trusted_peers.toml"
+
+[nexus.axt]
+replay_retention_slots = 10_000

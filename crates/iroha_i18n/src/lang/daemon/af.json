@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Welkom by Hyperledger Iroha!",
+  "error.trace_config_setup": "Kon nie konfigurasiesporing opstel nie",
+  "error.config": "Konfigurasiefout!",
+  "error.logger": "Kon nie die logstelsel inisieer nie",
+  "error.start": "Kon nie Iroha begin nie",
+  "error.run": "’n Fout het plaasgevind terwyl Iroha geloop het",
+  "error.start_p2p": "Kon nie die P2P-netwerk begin nie",
+  "error.init_kura": "Kon nie Kura (blokberging) inisieer nie",
+  "error.start_dev_telemetry": "Kon nie die ontwikkelaarstelematriese diens begin nie",
+  "error.start_telemetry": "Kon nie die telematriediens begin nie",
+  "error.listen_os_signal": "Kon nie luister vir OS-seine opstel nie",
+  "error.start_torii": "Kon nie Torii (die Iroha HTTP API-hek) begin nie"
+}

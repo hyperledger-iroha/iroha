@@ -1,29 +1,33 @@
-//! Const-string related implementation and structs.
-#[cfg(not(feature = "std"))]
-use alloc::{
-    borrow::ToOwned as _,
-    boxed::Box,
-    string::{String, ToString as _},
-};
+//! Fixed-size strings with inlining for short values.
+//!
+//! This module defines [`ConstString`], a union that stores short strings
+//! inline within the structure and falls back to heap allocation for longer
+//! ones. It is intended for data that never changes after construction but
+//! needs to be transferred across FFI boundaries or serialized efficiently.
 use core::{
     borrow::Borrow,
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
     convert::TryFrom,
     fmt,
     hash::{Hash, Hasher},
-    mem::{size_of, ManuallyDrop},
+    mem::{ManuallyDrop, size_of},
     ops::Deref,
     ptr::NonNull,
-    slice::{from_raw_parts, from_raw_parts_mut},
+    slice::from_raw_parts,
     str::from_utf8_unchecked,
 };
+use std::{
+    borrow::ToOwned as _,
+    boxed::Box,
+    io::Write,
+    string::{String, ToString as _},
+};
 
-use derive_more::{DebugCustom, Display};
+use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
-use parity_scale_codec::{WrapperTypeDecode, WrapperTypeEncode};
-use serde::{
-    de::{Deserialize, Deserializer, Error, Visitor},
-    ser::{Serialize, Serializer},
+use norito::{
+    NoritoDeserialize, NoritoSerialize, core as ncore,
+    json::{self, JsonDeserialize, JsonSerialize},
 };
 
 const MAX_INLINED_STRING_LEN: usize = 2 * size_of::<usize>() - 1;
@@ -47,9 +51,8 @@ const MAX_INLINED_STRING_LEN: usize = 2 * size_of::<usize>() - 1;
 /// | Box     | ptr   | len                | tag (always 0) |
 /// +---------+-------+--------------------+----------------+
 /// ```
-#[derive(DebugCustom, Display)]
-#[display(fmt = "{}", "&**self")]
-#[debug(fmt = "{:?}", "&**self")]
+#[derive(Display)]
+#[display("{}", &**self)]
 #[repr(C)]
 pub union ConstString {
     inlined: InlinedString,
@@ -188,6 +191,12 @@ impl_eq!(String, str, &str);
 /// Can't be derived.
 impl Eq for ConstString {}
 
+impl fmt::Debug for ConstString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
+}
+
 impl<T> From<T> for ConstString
 where
     T: TryInto<InlinedString>,
@@ -230,43 +239,53 @@ impl Drop for ConstString {
     }
 }
 
-impl Serialize for ConstString {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(self)
+impl JsonSerialize for ConstString {
+    fn json_serialize(&self, out: &mut String) {
+        json::write_json_string(self.as_ref(), out);
     }
 }
 
-impl<'de> Deserialize<'de> for ConstString {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_str(ConstStringVisitor)
+impl JsonDeserialize for ConstString {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        parser.parse_string().map(Into::into)
     }
 }
 
-struct ConstStringVisitor;
-
-impl Visitor<'_> for ConstStringVisitor {
-    type Value = ConstString;
-
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("a string")
-    }
-
-    fn visit_str<E: Error>(self, v: &str) -> Result<Self::Value, E> {
-        Ok(v.into())
-    }
-
-    fn visit_string<E: Error>(self, v: String) -> Result<Self::Value, E> {
-        Ok(v.into())
+impl NoritoSerialize for ConstString {
+    fn serialize<W: Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        <&str as NoritoSerialize>::serialize(&self.as_ref(), writer)
     }
 }
 
-impl WrapperTypeEncode for ConstString {}
+impl<'a> NoritoDeserialize<'a> for ConstString {
+    fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
 
-impl WrapperTypeDecode for ConstString {
-    type Wrapped = String;
+        if let Ok(value) = <&str as NoritoDeserialize>::try_deserialize(archived.cast::<&str>()) {
+            return value.into();
+        }
+
+        if let Ok(value) = <String as NoritoDeserialize>::try_deserialize(archived.cast::<String>())
+        {
+            return value.as_str().into();
+        }
+
+        if let Ok(payload) = ncore::payload_slice_from_ptr(ptr)
+            && let Ok((value, _used)) = ncore::decode_field_canonical::<String>(payload)
+        {
+            return value.as_str().into();
+        }
+
+        let string = String::deserialize(archived.cast::<String>());
+        string.as_str().into()
+    }
+}
+
+impl<'a> ncore::DecodeFromSlice<'a> for ConstString {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        let (decoded, used) = <String as ncore::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((ConstString::from(decoded), used))
+    }
 }
 
 // darling doesn't support unions, so this can't be derived
@@ -293,8 +312,8 @@ impl IntoSchema for ConstString {
     }
 }
 
-#[derive(DebugCustom)]
-#[debug(fmt = "{:?}", "&**self")]
+#[derive(Debug)]
+#[debug("{:?}", &**self)]
 #[repr(C)]
 struct BoxedString {
     #[cfg(target_endian = "little")]
@@ -387,7 +406,10 @@ impl Drop for BoxedString {
     fn drop(&mut self) {
         // SAFETY: created from `Box<[u8]>`.
         unsafe {
-            let _dropped = Box::<[_]>::from_raw(from_raw_parts_mut(self.ptr.as_ptr(), self.len));
+            let _dropped = Box::<[_]>::from_raw(std::ptr::slice_from_raw_parts_mut(
+                self.ptr.as_ptr(),
+                self.len,
+            ));
         }
     }
 }
@@ -469,7 +491,7 @@ impl TryFrom<String> for InlinedString {
 
     #[inline]
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_str()).map_or(Err(value.clone()), Ok)
+        Self::try_from(value.as_str()).map_or_else(|_| Err(value.clone()), Ok)
     }
 }
 
@@ -482,6 +504,7 @@ mod tests {
 
         use super::*;
 
+        // Verify that `ConstString` occupies the same space as a boxed string.
         #[test]
         fn const_string_layout() {
             assert_eq!(size_of::<ConstString>(), size_of::<Box<str>>());
@@ -492,6 +515,7 @@ mod tests {
     mod api {
         use super::*;
 
+        // Strings up to the inline limit should be stored without heap allocation.
         #[test]
         fn const_string_is_inlined() {
             run_with_strings(|string| {
@@ -502,6 +526,7 @@ mod tests {
             });
         }
 
+        // Length reported by `ConstString` should match the source string.
         #[test]
         fn const_string_len() {
             run_with_strings(|string| {
@@ -511,6 +536,7 @@ mod tests {
             });
         }
 
+        // Dereferencing should yield the original string slice.
         #[test]
         fn const_string_deref() {
             run_with_strings(|string| {
@@ -519,6 +545,7 @@ mod tests {
             });
         }
 
+        // Conversion from `String` should preserve the value.
         #[test]
         fn const_string_from_string() {
             run_with_strings(|string| {
@@ -527,6 +554,7 @@ mod tests {
             });
         }
 
+        // Conversion from `&str` should preserve the value.
         #[test]
         fn const_string_from_str() {
             run_with_strings(|string| {
@@ -535,6 +563,7 @@ mod tests {
             });
         }
 
+        // Cloning should produce an identical `ConstString`.
         #[test]
         #[allow(clippy::redundant_clone)]
         fn const_string_clone() {
@@ -549,10 +578,11 @@ mod tests {
     mod integration {
         use std::collections::hash_map::DefaultHasher;
 
-        use parity_scale_codec::Encode;
+        use norito::codec::{Decode, Encode};
 
         use super::*;
 
+        // Hash output should match that of the original string.
         #[test]
         fn const_string_hash() {
             run_with_strings(|string| {
@@ -565,6 +595,7 @@ mod tests {
             });
         }
 
+        // Comparison with `String` should behave symmetrically.
         #[test]
         fn const_string_eq_string() {
             run_with_strings(|string| {
@@ -574,6 +605,7 @@ mod tests {
             });
         }
 
+        // Comparison with `&str` should behave symmetrically.
         #[test]
         fn const_string_eq_str() {
             run_with_strings(|string| {
@@ -583,6 +615,7 @@ mod tests {
             });
         }
 
+        // Two `ConstString` values from the same data should be equal.
         #[test]
         fn const_string_eq_const_string() {
             run_with_strings(|string| {
@@ -593,6 +626,7 @@ mod tests {
             });
         }
 
+        // Ordering between `ConstString`s should mirror ordering of source strings.
         #[test]
         fn const_string_cmp() {
             run_with_strings(|string_1| {
@@ -611,22 +645,25 @@ mod tests {
             });
         }
 
+        // Norito encoding then decoding should reproduce the original value.
         #[test]
-        fn const_string_scale_encode() {
+        fn const_string_norito_roundtrip() {
             run_with_strings(|string| {
                 let const_string = ConstString::from(string.as_str());
-                assert_eq!(const_string.encode(), string.encode());
+                let decoded = ConstString::decode(&mut const_string.encode().as_slice()).unwrap();
+                assert_eq!(decoded, const_string);
             });
         }
 
+        // Norito JSON serialization should match the plain string and round-trip.
         #[test]
-        fn const_string_serde_serialize() {
+        fn const_string_json_roundtrip() {
             run_with_strings(|string| {
                 let const_string = ConstString::from(string.as_str());
-                assert_eq!(
-                    serde_json::to_string(&const_string).expect("valid"),
-                    serde_json::to_string(&string).expect("valid"),
-                );
+                let json = norito::json::to_json(&const_string).expect("valid");
+                assert_eq!(json, norito::json::to_json(&string).expect("valid"));
+                let parsed: ConstString = norito::json::from_json(&json).expect("valid");
+                assert_eq!(parsed, const_string);
             });
         }
     }

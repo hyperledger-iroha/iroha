@@ -24,7 +24,6 @@ targets = [
     # You can also specify which target_features you promise are enabled for a
     # particular target. target_features are currently not validated against
     # the actual valid features supported by the target architecture.
-    #{ triple = "wasm32-unknown-unknown", features = ["atomics"] },
 ]
 
 # This section is considered when running `cargo deny check advisories`

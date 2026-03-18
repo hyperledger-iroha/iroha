@@ -1,0 +1,29 @@
+{
+  "chunk_digest_sha3_256": "13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482",
+  "files": [
+    {
+      "blake3": "d89a4fdc030b0c7c4911719ea133c780d9f4610b08eef1d6d0e0ca443391718e",
+      "file": "sf1_profile_v1.json",
+      "size": 907
+    },
+    {
+      "blake3": "66b5956826c86589a24b71ca6b400cc1335323c6371f1cec9475f09af8743f61",
+      "file": "sf1_profile_v1.rs",
+      "size": 1177
+    },
+    {
+      "blake3": "9a3bb8e4d96518b3a0a1301046b2d86a793991959ebdd8adda1fb2988e4292dc",
+      "file": "sf1_profile_v1.ts",
+      "size": 1501
+    },
+    {
+      "blake3": "0f0348b8751b0f85fe874afda3371af75b78fac5dad65182204dcb3cf3e4c0a1",
+      "file": "sf1_profile_v1.go",
+      "size": 1416
+    }
+  ],
+  "profile": "sorafs.sf1@1.0.0",
+  "profile_aliases": [
+    "sorafs.sf1@1.0.0"
+  ]
+}

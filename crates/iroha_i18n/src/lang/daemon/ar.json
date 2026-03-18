@@ -1,0 +1,14 @@
+{
+  "info.welcome": "مرحبًا بك في Hyperledger Iroha!",
+  "error.trace_config_setup": "تعذر إعداد تتبع التكوين",
+  "error.config": "خطأ في الاعدادات!",
+  "error.logger": "تعذر تهيئة المسجل",
+  "error.start": "تعذر بدء Iroha",
+  "error.run": "حدث خطأ أثناء تشغيل Iroha",
+  "error.start_p2p": "تعذر بدء تشغيل شبكة نظير إلى نظير",
+  "error.init_kura": "غير قادر على تهيئة كورا (تخزين الكتلة)",
+  "error.start_dev_telemetry": "تعذر بدء تشغيل خدمة القياس عن بُعد للتطوير",
+  "error.start_telemetry": "تعذر بدء خدمة القياس عن بعد",
+  "error.listen_os_signal": "تعذر إعداد الاستماع لإشارات نظام التشغيل",
+  "error.start_torii": "تعذر بدء Torii (Iroha HTTP API Gateway)"
+}

@@ -1,0 +1,261 @@
+---
+id: preview-feedback-log
+lang: az
+direction: ltr
+source: docs/portal/docs/devportal/preview-feedback-log.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+title: Preview feedback logging
+sidebar_label: Feedback logging
+description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+'@site/src/data/previewFeedbackSummary.json'dan previewFeedbackSummary import;funksiyası Əlaqə Xülasə Cədvəli() {
+  const dalğaları = önizləməƏlaqə Xülasə?.dalğalar ?? [];
+  əgər (dalğalar.uzunluq === 0) {
+    qayıtmaq (
+      
+        Heç bir önizləmə rəyi qeyd edilməyib
+        {' '}
+        {previewFeedbackSummary?.mənbə ?? 'artifacts/docs_portal_preview/feedback_log.json'}
+        .
+      
+    );
+  }
+  qayıtmaq (
+    
+      
+        
+          Dalğa
+          Status
+          Ümumi tədbirlər
+          Dəvət edir
+          Dəvətləri açın
+          Təqdim olundu
+          Ləğv edilib
+          Əlaqə
+          Məsələlər
+          Tamamlanma %
+          Qeyd %
+          Cavab dərəcəsi
+          Aklanma gecikməsi (orta saat)
+          Əks əlaqə gecikməsi (orta saat)
+          Son hadisə
+          Son tədbirdən sonrakı günlər
+        
+      
+      
+        {dalğalar.map((dalğa) => {
+          const rəy = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
+          const məsələlər = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
+          const acknowledgments =
+            wave.acknowledgements ?? wave.eventCounts?.tanındı ?? 0;
+          const ləğvləri =
+            dalğa.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
+          sabit cavab dərəcəsi =wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
+          tamamlanma faizi =
+            wave.inviteCompletionPercent == null
+              ? '—'
+              : `${wave.inviteCompletionPercent}%`;
+          const ackPercent =
+            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
+          const ackLatency =
+            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
+          const feedbackGecikmə =
+            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
+          qayıtmaq (
+            
+              {dalğa.dalğa}
+              {dalğa.status ?? 'gözləmədədir'}
+              {wave.totalEvents}
+              {dalğa.dəvət edir?.cəmi ?? 0}
+              {dalğa.dəvət edir?.açıq ?? 0}
+              {təşəkkürlər}
+              {ləğvlər}
+              {əlaqə}
+              {məsələlər}
+              {completionPercent}
+              {ackPercent}
+              {responseRate}
+              
+                {ackLatency}
+              
+              <td
+                başlıq={
+                  wave.feedbackLatencyHoursP95 == null
+                    ? müəyyən edilməmiş
+                    : `p95 ${wave.feedbackLatencyHoursP95}h`
+                }>
+                {feedbackLatency}
+              
+              {wave.lastEventTimestamp ?? '—'}
+              {wave.daysSinceLastEvent ?? '—'}
+            
+          );
+        })}
+      
+    
+  );
+}
+
+Biz rəyçiləri dəvət etdikdə yol xəritəsi yoxlanıla bilən sübut tələb edir
+sənədlər portalına baxış. Bu qeyd həmin dəlil ilə necə ələ keçiriləcəyini izah edir
+`preview-feedback-log` köməkçisi, ortaya çıxan artefaktları necə paylaşmaq olar
+idarəetmə və dalğa bağlandıqdan sonra həzmləri harada göndərmək lazımdır.
+
+## Niyə biz rəyi qeyd edirik
+
+- **Uyğunluq:** hər bir dəvət kimlərin ilkin baxışa nə vaxt daxil olduğunu qeyd etməlidir
+  məqbul istifadə siyasətini və onların girişi ləğv edildikdə.
+- **Telemetriya korrelyasiyası:** jurnal bizə portal telemetriya sıçrayışlarını əlaqələndirməyə imkan verir
+  və ya xüsusi dəvət kohortları ilə trafiki sınayın.
+- **İdarəetmə sübutu:** hər DOCS-SORA yoxlama məntəqəsi maşın tərəfindən oxuna bilən olmalıdır
+  dəvət sayılarını, açıq rəyçiləri və görkəmli şəxslərin vəziyyətini göstərən xülasə
+  məsələlər.
+
+Bütün sübutlar `artifacts/docs_portal_preview/` altında yaşayır, ona görə də əlavə oluna bilər
+CI qeydlərini silmədən dəvət dalğa biletinə və ya idarəetmənin nəzərdən keçirilməsinə.
+
+## Canlı dəvətin xülasəsi
+
+`docs/portal/scripts/preview-feedback-summary.mjs` paylaşılan jurnalı qəbul edir və
+`npm run build` zamanı `src/data/previewFeedbackSummary.json` yazır. Cədvəl
+aşağıdakı JSON-u təqdim edir ki, rəyçilər cari dəvət izlərini görə bilsinlər
+CLI köməkçisini işə salmadan.
+
+Dəvət cəmlərinə əlavə olaraq, xülasə indi təsdiq və üzə çıxır
+ləğvetmə sayları, əldə edilmiş cavab dərəcəsi (əlaqə təqdimetmələri
+ümumi dəvətlər) və bir arasında orta gecikmə (hoverable p95 ilə).
+dəvət və rəyçinin təsdiqi və ya rəy təqdim edilməsi. Yeni
+**Tamamlanma %** sütunu neçə dəvətin bağlandığını göstərir (təsdiq edilmiş və ya
+ləğv edildi), **Ack %** isə neçə alıcının açıq şəkildə təsdiqləndiyini vurğulayır
+məqbul istifadə addımları. Bu əldə edilmiş faizlər - əlavə olaraq yalnız JSON
+ləğvetmə/məsələ nisbətləri - rəyçilərin təsdiq edə bilməsi üçün idarəetmə panellərini qidalandırın
+CLI köməkçisini işə salmadan həm iştirak səviyyələri, həm də işləmə müddəti.
+**Status** sütunu dalğanın hərəkətsiz olub-olmadığını vurğulayır
+aktiv (`active`), qapalı, lakin 14 günlük monitorinq pəncərəsində (`closed`) və ya
+arxivə hazırdır (`archived`). **Son hadisədən sonrakı günlər** metrikası necə olduğunu göstərir
+uzun müddətdir ki, son dəvət/əlaqə aksiyasından sonra şuralar fərq edə bilsin
+sarılması və ya uzanan alıcıları yenidən cəlb etməsi lazım olan dalğalar.
+
+### Dalğa `preview-20260218` xülasəsi- **Əhatə dairəsi:** Maliyyə beta, müşahidə əməliyyatları, SDK partnyoru və ekosistem müdafiəçisi rəyçiləri növbəti DOCS-SORA yoxlama məntəqəsindən əvvəl **2026‑02‑18** tarixində dəvət olunublar.
+- **Metriklər:** Müşahidə oluna bilən kohort tərəfindən təqdim edilmiş tək təqib məsələsi (`DOCS-SORA-Preview-20260218`) ilə 4 dəvət, 4 təsdiq, 4 ləğvetmə və 4 rəy təqdimatı (`responseRatePercent = 100`).
+- **Dəlil:** `artifacts/docs_portal_preview/feedback_log.json` indi bu dalğa üçün təfərrüatlı hadisə qrafikini ehtiva edir və `artifacts/docs_portal_preview/preview-20260218-summary.json` idarəetmə paketlərinə əlavə etdiyimiz normallaşdırılmış ölçüləri çəkir. `npm run --prefix docs/portal preview:log -- --summary --summary-json` vasitəsilə portal məlumatlarının bərpası eyni nömrələri `src/data/previewFeedbackSummary.json`-ə çəkir.
+- **Dalğa köməkçisi:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` bir addımda hər dalğanın xülasəsini, həzmini və yenilənmiş portal məlumatlarını yayır.
+- **İzləmələr:** Müşahidə oluna bilən rəy, Sınaq sorğuları üçün əlavə CSP nümunələrini əhatə etdi; Sənədlər/DevRel `docs/portal/docs/sorafs/observability-plan.md` (§4.2) altında yazılanları izləyir ki, növbəti dəvət dalğası düzəlişi təsdiq edə bilsin. Tam xülasə [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)-da [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md)-də çəkilmiş qrafiklə yaşayır.
+
+## Hadisə taksonomiyası| Hadisə | Onu nə vaxt qeyd etməli | Qeydlər |
+| --- | --- | --- |
+| `invite-sent` | Dəvət məktubu göndərdikdən dərhal sonra. | Hər alıcıya bir giriş əlavə edin ki, dəvət sayları dəqiq qalsın. |
+| `acknowledged` | Nəzərdən keçirən təsdiq etdikdə, onlar təhlükəsizlik/müşahidə sənədlərini oxuyurlar və yoxlama cəmi qapısını işə salırlar. | Könüllü, lakin tərəfdaş kohortlar üçün tövsiyə olunur. |
+| `feedback-submitted` | Rəyçi razılaşdırılmış izləyici vasitəsilə nəticə çıxardıqda. | Məsələni/linkini `--notes` sahəsinə daxil edin. |
+| `issue-opened` | DOCS-SORA geribildirimdən əldə edilən təqib problemini təqdim etdikdə. | Rəyi nəzərdən keçirmək üçün idarəetməyə yol xəritəsi elementlərini əlaqələndirməyə kömək edir. |
+| `access-revoked` | Rəyçinin ilkin baxış pəncərəsi bitdikdən və ya giriş erkən ləğv edildikdən sonra. | “Açıq alıcıların” sayının dəqiq qalması üçün tələb olunur. |
+
+Əlavə tədbirə ehtiyacınız varsa, onu əlavə edin
+`docs/portal/scripts/preview-feedback-log.mjs` daxilində `VALID_EVENTS` və yeniləmə
+bu cədvəldə eyni dəyişiklik.
+
+## İş prosesini qeyd etmək
+
+`npm run preview:log`-in arxasındakı köməkçi, ələ keçirən tək JSON jurnalı yazır.
+bütün hadisələr. Hər bir girişdə dalğa etiketi, alıcı, hadisə, vaxt möhürü və
+isteğe bağlı qeydlər. Misal:
+
+```json
+{
+  "version": 1,
+  "generated_at": "2026-02-04T18:20:15.321Z",
+  "entries": [
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "invite-sent",
+      "timestamp": "2026-02-04T18:05:02.114Z",
+      "notes": "seed reviewer"
+    },
+    {
+      "wave": "preview-20260204",
+      "recipient": "alice@example.com",
+      "event": "feedback-submitted",
+      "timestamp": "2026-02-05T09:14:43.009Z",
+      "notes": "docs-preview/42"
+    }
+  ]
+}
+```
+
+Əmrlər:
+
+```bash
+# Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
+npm run --prefix docs/portal preview:log -- \
+  --wave preview-20260204 \
+  --recipient alice@example.com \
+  --event invite-sent \
+  --notes "seed reviewer"
+
+# Produce a text summary for the current repo
+npm run --prefix docs/portal preview:log -- --summary
+
+# Emit machine-readable summary for a specific wave
+npm run --prefix docs/portal preview:log -- \
+  --summary --summary-json --filter-wave preview-20260204 \
+  > artifacts/docs_portal_preview/preview-20260204-summary.json
+
+# Regenerate the portal summary data file
+npm run --prefix docs/portal generate:preview-summary
+
+# Generate a Markdown digest skeleton for a wave
+npm run --prefix docs/portal preview:digest -- \
+  --wave preview-20260204 \
+  --invite-start 2026-02-04T00:00:00Z \
+  --invite-end 2026-02-18T00:00:00Z \
+  --dashboard "https://grafana.example/d/docs-preview?var-wave=preview-20260204" \
+  --out artifacts/docs_portal_preview/preview-20260204-digest.md
+```
+
+Məsləhətlər:- Xüsusiyyət bölməsində işləyərkən jurnalı versiya nəzarəti altına qoyun
+  baxıcılar dəyişiklikləri nəzərdən keçirə bilərlər. Uzun müddət davam edən dalğalar üçün logları bir yerdə saxlayın
+  idarəetmə bileti və son versiyanı buraxılış artefaktlarına əlavə edin.
+- `preview:log`, birbaşa daxil olmaq lazım olduqda `--log <path>` qəbul edir.
+  SoraFS paketi və ya CI iş sahəsi.
+- Həmişə `--notes` göstərişini (məsələ linki, GitHub sapı, kohort ID) daxil edin ki,
+  xülasə retrospektiv zamanı faydalıdır.
+- Sizə deterministik xülasə vaxt ştamplarına ehtiyacınız olduqda (CI və ya sənədlər snapshotları üçün),
+  xülasəni işə salmazdan əvvəl `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` təyin edin
+  köməkçi. Bu, `generatedAt`, status və gün sayğaclarını ardıcıl saxlayır
+  yenidənqurmalar arasında.
+
+## Xülasələr, həzmlər və arxivlər1. **Hər dalğa xülasəsi:** JSON xülasəsini yaradın və onu dəvətə əlavə edin
+   xam log ilə birlikdə bilet. Xülasə ümumi dəvətləri sadalayır, açıqdır
+   alıcılar və rəylər nəzərə alınır ki, idarəetmə hər birini tutduğumuzu təsdiq etsin
+   rəyçi. Portal quruluşu həmçinin burada ümumi xülasə dərc edir
+   `src/data/previewFeedbackSummary.json` beləliklə maraqlı tərəflər cari vəziyyəti görə bilsinlər
+   CLI-ni işə salmadan snapshot.
+2. **Həftəlik həzm:** `npm run --prefix docs/portal preview:digest -- --wave <label>` işləyin
+   Markdown ölçülərini əvvəlcədən doldurmaq üçün, sonra yertutan bölmələri uyğunlaşdırın
+   şablonundan istifadə edərək
+   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
+   maraqlı tərəflərlə paylaşmazdan əvvəl. Ən azı daxil edin: dalğa etiketi, açın
+   rəyçilər, diqqətəlayiq tapıntılar və növbəti tədbirlər.
+3. **Arxiv:** qapalı dalğa qeydlərini daxil edin
+   `artifacts/docs_portal_preview/archive/<wave>/` və yalnız ən sonunu saxlayın
+   kökdə aktiv dalğa. Bu, CI artefaktlarını qoruyarkən kiçik saxlayır
+   audit izi.
+
+## Yol xəritəsi ilə əlaqə- İstədiyiniz zaman dəvət və işə qəbul kitabçalarından bu sənədə istinad edin
+  rəy bildirmək üçün rəyçilər (bax
+  [`preview-invite-flow`](./preview-invite-flow.md),
+  [`reviewer-onboarding`](./reviewer-onboarding.md) və
+  [`public-preview-invite`](./public-preview-invite.md)).
+- DOCS-SORA dalğasını bağlayarkən `status.md`-də yaradılan xülasəni qeyd edin
+  yol xəritəsi elementləri (məsələn, DOCS-1b/2b/3c) artefaktdan istinad edə bilər.
+- Xarici olaraq SoraFS-ə yükləyərkən xülasə ilə yanaşı hash həzmlərini saxlayın
+  rəyçilər sübut paketini yoxlaya bilərlər.
+
+Qeydiyyat iş axınının burada kodlaşdırılmış saxlanması yol xəritəsi tələbini blokdan çıxarır
+“İdarəetmə üçün rəy/temetriya əldə edin” və sərf olunan vaxtı azaldır
+hər bir mərhələdə dəvət tarixinin yenidən qurulması.

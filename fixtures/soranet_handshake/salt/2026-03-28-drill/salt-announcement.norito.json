@@ -1,0 +1,17 @@
+{
+  "announcement": {
+    "epoch_id": 98765,
+    "valid_after": "2026-03-28T00:00:00Z",
+    "valid_until": "2026-03-29T00:00:00Z",
+    "blinded_cid_salt_hex": "REMOVED_FOR_PUBLIC_ARCHIVE",
+    "previous_epoch": 98764,
+    "emergency_rotation": false,
+    "notes": "Routine rotation rehearsal (tabletop)"
+  },
+  "council_signatures": [
+    "dilithium3:REMOVED_FOR_PUBLIC_ARCHIVE"
+  ],
+  "witness_signature": "ed25519:REMOVED_FOR_PUBLIC_ARCHIVE",
+  "manifest_version": 3,
+  "redaction_notice": "Sensitive signature material removed; full artefact stored in governance vault."
+}

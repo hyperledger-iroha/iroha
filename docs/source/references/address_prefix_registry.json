@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "generated_at": "2025-12-14T00:00:00Z",
+  "entries": [
+    {
+      "network": "sora-nexus",
+      "display_name": "Sora Nexus (Global)",
+      "chain_id": "sora:nexus:global",
+      "chain_discriminant": {
+        "decimal": 753,
+        "hex": "0x02F1"
+      },
+      "i105_prefix": {
+        "decimal": 753,
+        "hex": "0x02F1"
+      },
+      "status": "production",
+      "notes": [
+        "Canonical prefix for the global Nexus deployment.",
+        "Matches the chain discriminant used in manifests and configuration defaults."
+      ]
+    },
+    {
+      "network": "sora-testus",
+      "display_name": "Sora Testus (Testnet)",
+      "chain_id": "809574f5-fee7-5e69-bfcf-52451e42d50f",
+      "chain_discriminant": {
+        "decimal": 369,
+        "hex": "0x0171"
+      },
+      "i105_prefix": {
+        "decimal": 369,
+        "hex": "0x0171"
+      },
+      "status": "testnet",
+      "notes": [
+        "Canonical prefix for the public Testus network.",
+        "Use this prefix for staging and pre-release validation ahead of Nexus promotion."
+      ]
+    },
+    {
+      "network": "dev-local",
+      "display_name": "Development (local)",
+      "chain_id": "dev.local",
+      "chain_discriminant": {
+        "decimal": 0,
+        "hex": "0x0000"
+      },
+      "i105_prefix": {
+        "decimal": 0,
+        "hex": "0x0000"
+      },
+      "status": "reserved",
+      "notes": [
+        "Reserved for CI pipelines, single-node sandboxes, and documentation examples.",
+        "Must not be reused for publicly reachable or federated networks."
+      ]
+    }
+  ]
+}

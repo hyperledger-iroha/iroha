@@ -1,18 +1,19 @@
 //! Pipeline events.
-
-#[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, format, string::String, vec::Vec};
-use core::num::NonZeroU64;
+use std::{boxed::Box, format, num::NonZeroU64, string::String, vec::Vec};
 
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
-use parity_scale_codec::{Decode, Encode};
-use serde::{Deserialize, Serialize};
+use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
-use crate::{block::BlockHeader, transaction::SignedTransaction};
+use crate::{
+    block::{BlockHeader, consensus::ExecWitnessMsg},
+    merge::MergeLedgerEntry,
+    nexus::{DataSpaceId, LaneId},
+    transaction::SignedTransaction,
+};
 
 #[model]
 mod model {
@@ -20,41 +21,21 @@ mod model {
 
     use super::*;
 
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        FromVariant,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[ffi_type(opaque)]
+    #[derive(Debug, Clone, PartialEq, Eq, FromVariant, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum PipelineEventBox {
         Transaction(TransactionEvent),
         Block(BlockEvent),
+        /// Warning emitted by the pipeline (non-forking informational signal).
+        Warning(PipelineWarning),
+        /// Merge-ledger entry committed by the merge committee.
+        Merge(MergeLedgerEvent),
+        /// Execution witness produced after block execution.
+        Witness(super::ExecWitnessMsg),
     }
 
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Getters,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[ffi_type]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
     pub struct BlockEvent {
         pub header: BlockHeader,
@@ -72,36 +53,25 @@ mod model {
         Getters,
         Decode,
         Encode,
-        Deserialize,
-        Serialize,
         IntoSchema,
     )]
-    #[ffi_type]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TransactionEvent {
         #[getset(get = "pub")]
         pub hash: HashOf<SignedTransaction>,
         #[getset(get_copy = "pub")]
         pub block_height: Option<NonZeroU64>,
+        #[getset(get_copy = "pub")]
+        pub lane_id: LaneId,
+        #[getset(get_copy = "pub")]
+        pub dataspace_id: DataSpaceId,
         #[getset(get = "pub")]
         pub status: TransactionStatus,
     }
 
     /// Report of block's status in the pipeline
-    #[derive(
-        Debug,
-        Clone,
-        Copy,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[ffi_type(opaque)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum BlockStatus {
         /// Block created (only emitted by the leader node)
         Created,
@@ -115,21 +85,29 @@ mod model {
         Applied,
     }
 
+    /// Pipeline warning payload.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct PipelineWarning {
+        /// Block header associated with the warning.
+        pub header: BlockHeader,
+        /// Machine-readable warning kind.
+        pub kind: String,
+        /// Human-readable details.
+        pub details: String,
+    }
+
+    /// Merge-ledger entry that was appended to persistent storage.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct MergeLedgerEvent {
+        /// Merge-ledger entry payload.
+        pub entry: MergeLedgerEntry,
+    }
+
     /// Report of transaction's status in the pipeline
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
-    )]
-    #[ffi_type(opaque)]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum TransactionStatus {
         /// Transaction was received and enqueued
         Queued,
@@ -142,23 +120,14 @@ mod model {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        FromVariant,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
-    #[ffi_type]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub enum PipelineEventFilterBox {
         Transaction(TransactionEventFilter),
         Block(BlockEventFilter),
+        Merge(MergeLedgerEventFilter),
+        Witness(WitnessEventFilter),
     }
 
     #[derive(
@@ -173,11 +142,9 @@ mod model {
         Getters,
         Decode,
         Encode,
-        Deserialize,
-        Serialize,
         IntoSchema,
     )]
-    #[ffi_type]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct BlockEventFilter {
         #[getset(get_copy = "pub")]
         pub height: Option<NonZeroU64>,
@@ -186,27 +153,129 @@ mod model {
     }
 
     #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Default,
-        Getters,
-        Decode,
-        Encode,
-        Deserialize,
-        Serialize,
-        IntoSchema,
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
     )]
-    #[ffi_type]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct TransactionEventFilter {
         #[getset(get = "pub")]
         pub hash: Option<HashOf<SignedTransaction>>,
+        #[getset(get_copy = "pub")]
         pub block_height: Option<Option<NonZeroU64>>,
+        #[getset(get_copy = "pub")]
+        pub lane_id: Option<LaneId>,
+        #[getset(get_copy = "pub")]
+        pub dataspace_id: Option<DataSpaceId>,
         #[getset(get = "pub")]
         pub status: Option<TransactionStatus>,
+    }
+
+    /// Filter merge-ledger events by epoch.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct MergeLedgerEventFilter {
+        #[getset(get_copy = "pub")]
+        pub epoch_id: Option<u64>,
+    }
+
+    /// Filter witness events by block metadata.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[getset(get = "pub")]
+    pub struct WitnessEventFilter {
+        /// Block hash associated with the witness event.
+        pub block_hash: Option<HashOf<BlockHeader>>,
+        #[getset(get_copy = "pub")]
+        /// Optional block height filter.
+        pub height: Option<NonZeroU64>,
+        #[getset(get_copy = "pub")]
+        /// Optional view filter.
+        pub view: Option<u64>,
+    }
+
+    impl MergeLedgerEventFilter {
+        /// Match only merge-ledger events for the given epoch identifier.
+        #[must_use]
+        pub fn for_epoch(mut self, epoch_id: u64) -> Self {
+            self.epoch_id = Some(epoch_id);
+            self
+        }
+    }
+
+    impl WitnessEventFilter {
+        /// Match only witnesses for the given block hash.
+        #[must_use]
+        pub fn for_block_hash(mut self, block_hash: HashOf<BlockHeader>) -> Self {
+            self.block_hash = Some(block_hash);
+            self
+        }
+
+        /// Match only witnesses at the specified block height.
+        #[must_use]
+        pub fn for_height(mut self, height: NonZeroU64) -> Self {
+            self.height = Some(height);
+            self
+        }
+
+        /// Match only witnesses emitted in the specified view.
+        #[must_use]
+        pub fn for_view(mut self, view: u64) -> Self {
+            self.view = Some(view);
+            self
+        }
+
+        /// Returns `true` when the witness event satisfies the stored filter predicates.
+        pub fn matches(&self, event: &super::ExecWitnessMsg) -> bool {
+            self.block_hash
+                .as_ref()
+                .is_none_or(|hash| hash == &event.block_hash)
+                && self.height.is_none_or(|h| h.get() == event.height)
+                && self.view.is_none_or(|v| v == event.view)
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl_json_via_norito_bytes!(
+    PipelineEventBox,
+    BlockEvent,
+    TransactionEvent,
+    BlockStatus,
+    PipelineWarning,
+    TransactionStatus,
+    PipelineEventFilterBox,
+    BlockEventFilter,
+    TransactionEventFilter,
+    MergeLedgerEvent,
+    MergeLedgerEventFilter,
+    ExecWitnessMsg,
+    WitnessEventFilter
+);
+
+#[cfg(test)]
+#[cfg(feature = "transparent_api")]
+mod getter_tests {
+    use iroha_crypto::Hash;
+    use nonzero_ext::nonzero;
+
+    use super::*;
+
+    #[test]
+    fn transaction_event_filter_block_height_getter_works() {
+        let h = HashOf::from_untyped_unchecked(Hash::prehashed([0u8; Hash::LENGTH]));
+        let filter = TransactionEventFilter::default()
+            .for_hash(h)
+            .for_status(TransactionStatus::Queued)
+            .for_block_height(Some(nonzero!(42_u64)));
+
+        // Use generated getters where available
+        assert!(filter.hash().is_some());
+        assert!(filter.status().is_some());
+        // Access the field directly to avoid name clash with getter generation
+        assert_eq!(filter.block_height, Some(Some(nonzero!(42_u64))));
     }
 }
 
@@ -233,6 +302,24 @@ impl BlockEventFilter {
         self.status = Some(status);
         self
     }
+
+    #[cfg(feature = "transparent_api")]
+    fn status_matches(filter: Option<&BlockStatus>, event: BlockStatus) -> bool {
+        match filter {
+            None => true,
+            Some(BlockStatus::Rejected(reason)) => match event {
+                BlockStatus::Rejected(_)
+                    if *reason
+                        == crate::block::error::BlockRejectionReason::ConsensusBlockRejection =>
+                {
+                    true
+                }
+                BlockStatus::Rejected(actual) => reason == &actual,
+                _ => false,
+            },
+            Some(expected) => *expected == event,
+        }
+    }
 }
 
 impl TransactionEventFilter {
@@ -242,6 +329,8 @@ impl TransactionEventFilter {
         Self {
             hash: None,
             block_height: None,
+            lane_id: None,
+            dataspace_id: None,
             status: None,
         }
     }
@@ -267,11 +356,21 @@ impl TransactionEventFilter {
         self
     }
 
-    /// Block height
-    // TODO: Derive with getset
-    pub fn block_height(&self) -> Option<Option<NonZeroU64>> {
-        self.block_height
+    /// Match only transactions scheduled on the given lane.
+    #[must_use]
+    pub fn for_lane_id(mut self, lane_id: LaneId) -> Self {
+        self.lane_id = Some(lane_id);
+        self
     }
+
+    /// Match only transactions targeting the given dataspace.
+    #[must_use]
+    pub fn for_dataspace_id(mut self, dataspace_id: DataSpaceId) -> Self {
+        self.dataspace_id = Some(dataspace_id);
+        self
+    }
+
+    // Getter is provided by `getset(get_copy = "pub")` above: `fn block_height(&self)`.
 }
 
 #[cfg(feature = "transparent_api")]
@@ -301,7 +400,7 @@ impl super::EventFilter for PipelineEventFilterBox {
                     block_filter.height.as_ref(),
                     &block_event.header.height,
                 ),
-                BlockEventFilter::field_matches(block_filter.status.as_ref(), &block_event.status),
+                BlockEventFilter::status_matches(block_filter.status.as_ref(), block_event.status),
             ]
             .into_iter()
             .all(core::convert::identity),
@@ -318,12 +417,24 @@ impl super::EventFilter for PipelineEventFilterBox {
                     &transaction_event.block_height,
                 ),
                 TransactionEventFilter::field_matches(
+                    transaction_filter.lane_id.as_ref(),
+                    &transaction_event.lane_id,
+                ),
+                TransactionEventFilter::field_matches(
+                    transaction_filter.dataspace_id.as_ref(),
+                    &transaction_event.dataspace_id,
+                ),
+                TransactionEventFilter::field_matches(
                     transaction_filter.status.as_ref(),
                     &transaction_event.status,
                 ),
             ]
             .into_iter()
             .all(core::convert::identity),
+            (Self::Merge(merge_filter), PipelineEventBox::Merge(merge_event)) => merge_filter
+                .epoch_id
+                .is_none_or(|epoch| epoch == merge_event.entry.epoch_id),
+            (Self::Witness(filter), PipelineEventBox::Witness(event)) => filter.matches(event),
             _ => false,
         }
     }
@@ -332,22 +443,24 @@ impl super::EventFilter for PipelineEventFilterBox {
 /// Exports common structs and enums from this module.
 pub mod prelude {
     pub use super::{
-        BlockEvent, BlockStatus, PipelineEventBox, PipelineEventFilterBox, TransactionEvent,
-        TransactionStatus,
+        BlockEvent, BlockStatus, MergeLedgerEvent, MergeLedgerEventFilter, PipelineEventBox,
+        PipelineEventFilterBox, TransactionEvent, TransactionStatus, WitnessEventFilter,
     };
 }
 
 #[cfg(test)]
 #[cfg(feature = "transparent_api")]
 mod tests {
-    #[cfg(not(feature = "std"))]
-    use alloc::{string::ToString as _, vec, vec::Vec};
+    use std::vec::Vec;
 
     use iroha_crypto::Hash;
     use nonzero_ext::nonzero;
 
     use super::{super::EventFilter, *};
-    use crate::{transaction::error::TransactionRejectionReason::*, ValidationFail};
+    use crate::{
+        ValidationFail, merge::MergeQuorumCertificate,
+        transaction::error::TransactionRejectionReason::*,
+    };
 
     impl BlockHeader {
         fn dummy(height: NonZeroU64) -> Self {
@@ -357,109 +470,159 @@ mod tests {
                 prev_block_hash: None,
                 merkle_root: Some(merkle_root),
                 result_merkle_root: None,
+                da_proof_policies_hash: None,
+                da_commitments_hash: None,
+                da_pin_intents_hash: None,
+                prev_roster_evidence_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
+                confidential_features: None,
             }
         }
     }
+    fn sample_pipeline_events() -> Vec<PipelineEventBox> {
+        let merge_entry = MergeLedgerEntry {
+            epoch_id: 42,
+            lane_snapshots: vec![crate::merge::MergeLaneSnapshot {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+                lane_block_height: 9,
+                tip_hash: HashOf::from_untyped_unchecked(Hash::prehashed([3_u8; Hash::LENGTH])),
+                merge_hint_root: Hash::new(b"hint"),
+            }],
+            global_state_root: Hash::new(b"global"),
+            merge_qc: MergeQuorumCertificate::new(
+                7,
+                42,
+                vec![0x01],
+                vec![0xAA],
+                Hash::new(b"digest"),
+            ),
+        };
 
-    #[test]
-    fn events_are_correctly_filtered() {
+        let tx_queued: PipelineEventBox = TransactionEvent {
+            hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
+            block_height: None,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Queued,
+        }
+        .into();
+        let tx_rejected: PipelineEventBox = TransactionEvent {
+            hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
+            block_height: Some(nonzero!(3_u64)),
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Rejected(Box::new(Validation(ValidationFail::TooComplex))),
+        }
+        .into();
+        let tx_approved: PipelineEventBox = TransactionEvent {
+            hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
+            block_height: None,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::GLOBAL,
+            status: TransactionStatus::Approved,
+        }
+        .into();
+        let block_committed: PipelineEventBox = BlockEvent {
+            header: BlockHeader::dummy(nonzero!(7_u64)),
+            status: BlockStatus::Committed,
+        }
+        .into();
+        let merge_event: PipelineEventBox = MergeLedgerEvent { entry: merge_entry }.into();
+        let witness_event: PipelineEventBox = ExecWitnessMsg {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([4_u8; Hash::LENGTH])),
+            height: 2,
+            view: 1,
+            epoch: 0,
+            witness: crate::block::consensus::ExecWitness {
+                reads: Vec::new(),
+                writes: Vec::new(),
+                fastpq_transcripts: Vec::new(),
+                fastpq_batches: Vec::new(),
+            },
+        }
+        .into();
+
         let events = vec![
-            TransactionEvent {
-                hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
-                block_height: None,
-                status: TransactionStatus::Queued,
-            }
-            .into(),
-            TransactionEvent {
-                hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
-                block_height: Some(nonzero!(3_u64)),
-                status: TransactionStatus::Rejected(Box::new(Validation(
-                    ValidationFail::TooComplex,
-                ))),
-            }
-            .into(),
-            TransactionEvent {
-                hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
-                block_height: None,
-                status: TransactionStatus::Approved,
-            }
-            .into(),
-            BlockEvent {
-                header: BlockHeader::dummy(nonzero!(7_u64)),
-                status: BlockStatus::Committed,
-            }
-            .into(),
+            tx_queued.clone(),
+            tx_rejected.clone(),
+            tx_approved.clone(),
+            block_committed.clone(),
+            merge_event.clone(),
+            witness_event.clone(),
         ];
 
-        assert_eq!(
-            events
-                .iter()
-                .filter(|&event| {
-                    let filter: PipelineEventFilterBox = TransactionEventFilter::default()
-                        .for_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
-                            [0_u8; Hash::LENGTH],
-                        )))
-                        .into();
+        events
+    }
 
-                    filter.matches(event)
-                })
-                .cloned()
-                .collect::<Vec<PipelineEventBox>>(),
-            vec![
-                TransactionEvent {
-                    hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
-                    block_height: None,
-                    status: TransactionStatus::Queued,
-                }
-                .into(),
-                TransactionEvent {
-                    hash: HashOf::from_untyped_unchecked(Hash::prehashed([0_u8; Hash::LENGTH])),
-                    block_height: Some(nonzero!(3_u64)),
-                    status: TransactionStatus::Rejected(Box::new(Validation(
-                        ValidationFail::TooComplex,
-                    ))),
-                }
-                .into(),
-            ],
-        );
+    fn apply_filter(
+        events: &[PipelineEventBox],
+        filter: &PipelineEventFilterBox,
+    ) -> Vec<PipelineEventBox> {
+        events
+            .iter()
+            .filter(|event| filter.matches(event))
+            .cloned()
+            .collect()
+    }
 
-        assert_eq!(
-            events
-                .iter()
-                .filter(|&event| {
-                    let filter: PipelineEventFilterBox = BlockEventFilter::default().into();
-                    filter.matches(event)
-                })
-                .cloned()
-                .collect::<Vec<_>>(),
-            vec![BlockEvent {
-                status: BlockStatus::Committed,
-                header: BlockHeader::dummy(nonzero!(7_u64)),
-            }
-            .into()],
-        );
-        assert_eq!(
-            events
-                .iter()
-                .filter(|&event| {
-                    let filter: PipelineEventFilterBox = TransactionEventFilter::default()
-                        .for_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
-                            [2_u8; Hash::LENGTH],
-                        )))
-                        .into();
+    #[test]
+    fn transaction_filters_match_expected_hashes() {
+        let events = sample_pipeline_events();
+        let filter: PipelineEventFilterBox = TransactionEventFilter::default()
+            .for_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [0_u8; Hash::LENGTH],
+            )))
+            .into();
 
-                    filter.matches(event)
-                })
-                .cloned()
-                .collect::<Vec<PipelineEventBox>>(),
-            vec![TransactionEvent {
-                hash: HashOf::from_untyped_unchecked(Hash::prehashed([2_u8; Hash::LENGTH])),
-                block_height: None,
-                status: TransactionStatus::Approved,
-            }
-            .into()],
-        );
+        let matched = apply_filter(&events, &filter);
+        assert_eq!(matched, vec![events[0].clone(), events[1].clone()]);
+    }
+
+    #[test]
+    fn block_filters_match_committed_events() {
+        let events = sample_pipeline_events();
+        let filter: PipelineEventFilterBox = BlockEventFilter::default().into();
+
+        let matched = apply_filter(&events, &filter);
+        assert_eq!(matched, vec![events[3].clone()]);
+    }
+
+    #[test]
+    fn transaction_filters_match_other_hash() {
+        let events = sample_pipeline_events();
+        let filter: PipelineEventFilterBox = TransactionEventFilter::default()
+            .for_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [2_u8; Hash::LENGTH],
+            )))
+            .into();
+
+        let matched = apply_filter(&events, &filter);
+        assert_eq!(matched, vec![events[2].clone()]);
+    }
+
+    #[test]
+    fn merge_filters_match_epoch() {
+        let events = sample_pipeline_events();
+        let filter: PipelineEventFilterBox = MergeLedgerEventFilter::default().for_epoch(42).into();
+
+        let matched = apply_filter(&events, &filter);
+        assert_eq!(matched, vec![events[4].clone()]);
+    }
+
+    #[test]
+    fn witness_filters_match_metadata() {
+        let events = sample_pipeline_events();
+        let filter: PipelineEventFilterBox = WitnessEventFilter::default()
+            .for_block_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+                [4_u8; Hash::LENGTH],
+            )))
+            .for_height(nonzero!(2_u64))
+            .for_view(1)
+            .into();
+
+        let matched = apply_filter(&events, &filter);
+        assert_eq!(matched, vec![events[5].clone()]);
     }
 }

@@ -1,0 +1,5 @@
+error: To make an FFI type robust you must annotate the type definition with `#[repr(C)]`. If that is not possible, add `#[ffi_type(opaque)]` to the same item as this derive to mark it opaque
+ --> tests/ui_fail/missing_repr.rs:5:10
+  |
+5 | #[derive(Clone, Copy, FfiType)]
+  |          ^^^^^^^^^^^^^^^^^^^^

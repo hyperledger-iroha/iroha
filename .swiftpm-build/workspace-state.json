@@ -1,0 +1,31 @@
+{
+  "object" : {
+    "artifacts" : [
+      {
+        "kind" : {
+          "xcframework" : {
+
+          }
+        },
+        "packageRef" : {
+          "identity" : "irohaswift",
+          "kind" : "root",
+          "location" : "/Users/mtakemiya/dev/iroha/IrohaSwift",
+          "name" : "IrohaSwift"
+        },
+        "path" : "/Users/mtakemiya/dev/iroha/dist/NoritoBridge.xcframework",
+        "source" : {
+          "type" : "local"
+        },
+        "targetName" : "NoritoBridge"
+      }
+    ],
+    "dependencies" : [
+
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

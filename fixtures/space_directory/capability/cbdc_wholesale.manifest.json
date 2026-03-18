@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+  "dataspace": 11,
+  "issued_ms": 1762723200000,
+  "activation_epoch": 4097,
+  "expiry_epoch": 4600,
+  "entries": [
+    {
+      "scope": {
+        "dataspace": 11,
+        "program": "cbdc.transfer",
+        "method": "transfer",
+        "asset": "aid:6e156b5010e645f883eb831946b88db8",
+        "role": "Initiator"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "500000000",
+          "window": "PerDay"
+        }
+      },
+      "notes": "Wholesale transfer allowance (per UAID, per day)."
+    },
+    {
+      "scope": {
+        "dataspace": 11,
+        "program": "cbdc.kit",
+        "method": "withdraw"
+      },
+      "effect": {
+        "Deny": {
+          "reason": "Withdrawals disabled for this UAID."
+        }
+      },
+      "notes": "Deny wins over any preceding allowance."
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+// Upgrade hook placeholder (permissions are enforced by the runtime dispatcher).
+seiyaku UpgradeDemo {
+  kaizen(_new_impl: int) permission(Admin) {
+    info("upgrade requested");
+  }
+}

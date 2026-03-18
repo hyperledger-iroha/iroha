@@ -1,0 +1,76 @@
+---
+lang: ru
+direction: ltr
+source: docs/source/sorafs/runbooks/sorafs_capacity_simulation.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: a74e1cb5abc86822ff9d24b9ce42a6567d964cbc01ca4c619b49ca6d239101da
+source_last_modified: "2025-11-05T18:02:08.787799+00:00"
+translation_last_reviewed: 2026-01-30
+---
+
+# Ранбук симуляции емкости SoraFS
+
+Этот ранбук объясняет, как упражнять набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Цель — проверить переговоры по квотам, обработку failover и ремедиацию slashing end-to-end с использованием воспроизводимых фикстур в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_stub capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifest/CAR.
+
+## 1. Сгенерировать CLI-артефакты
+
+```bash
+cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
+./run_cli.sh ./artifacts
+```
+
+Скрипт вызывает `sorafs_manifest_stub capacity`, чтобы выпускать детерминированные Norito payloads, base64-кодирования, тела запросов Torii и JSON-сводки для:
+
+- Трех деклараций провайдеров, участвующих в сценарии переговоров по квотам.
+- Одного распоряжения о репликации, распределяющего staged‑манифест между провайдерами.
+- Снимков телеметрии, фиксирующих базовую линию до сбоя, окно сбоя и восстановление failover.
+- Payload спора с запросом на slashing после смоделированного сбоя.
+
+Артефакты записываются в `./artifacts` (или в путь, заданный первым аргументом). Проверьте файлы `_summary.json` для читаемого состояния.
+
+## 2. Агрегировать результаты и выпустить метрики
+
+```bash
+./analyze.py --artifacts ./artifacts
+```
+
+Скрипт анализа формирует:
+
+- `capacity_simulation_report.json` — агрегированные распределения, дельты failover и метаданные спора.
+- `capacity_simulation.prom` — метрики textfile Prometheus (`sorafs_simulation_*`), подходящие для импорта через textfile collector node-exporter или отдельный Prometheus scrape job.
+
+Пример конфигурации scrape `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: sorafs-capacity-sim
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["localhost:9100"]
+        labels:
+          scenario: "capacity-sim"
+    metrics_path: /metrics
+    params:
+      format: ["prometheus"]
+```
+
+Укажите textfile collector на сгенерированный `.prom` (для node-exporter скопируйте его в настроенный `--collector.textfile.directory`).
+
+## 3. Импортировать дашборд Grafana
+
+1. В Grafana импортируйте `dashboards/grafana/sorafs_capacity_simulation.json`.
+2. Привяжите вход datasource `Prometheus` к конфигурации scrape выше.
+3. Проверьте панели:
+   - **Quota Allocation (GiB)** показывает баланс commit/assign для каждого провайдера.
+   - **Failover Trigger** переключается на *Failover Active*, когда загружены метрики сбоя.
+   - **Uptime Drop During Outage** отображает процент потери провайдера `alpha`.
+   - **Requested Slash Percentage** визуализирует коэффициент ремедиации из фикстуры спора.
+
+## 4. Ожидаемые проверки
+
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` равен 600, пока общий commit остаётся ≥600.
+- `sorafs_simulation_failover_triggered` показывает `1`, а метрика заменяющего провайдера выделяет `beta`.
+- `sorafs_simulation_slash_requested` показывает `0.15` (15% slash) для идентификатора провайдера `alpha`.
+
+Запустите `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit`, чтобы подтвердить, что фикстуры продолжают валидироваться схемой CLI.

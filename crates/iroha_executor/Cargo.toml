@@ -10,9 +10,9 @@ license.workspace = true
 workspace = true
 
 [features]
+default = []
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`
 debug = ["iroha_smart_contract/debug"]
-
 [dependencies]
 iroha_executor_derive = { path = "../iroha_executor_derive" }
 
@@ -20,6 +20,10 @@ iroha_executor_data_model.workspace = true
 iroha_smart_contract_utils.workspace = true
 iroha_smart_contract.workspace = true
 iroha_schema.workspace = true
+iroha_crypto.workspace = true
+iroha_smart_contract_codec.workspace = true
 
-serde.workspace = true
-serde_json.workspace = true
+norito = {workspace = true}
+
+[dev-dependencies]
+iroha_data_model.workspace = true

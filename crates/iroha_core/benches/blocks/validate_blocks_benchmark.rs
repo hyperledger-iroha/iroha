@@ -1,11 +1,16 @@
-#![allow(missing_docs)]
-
+//! Criterion benchmark driver for validating blocks.
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 mod validate_blocks;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::Criterion;
 use validate_blocks::StateValidateBlocks;
 
 fn validate_blocks(c: &mut Criterion) {
+    // Ensure instruction registry is initialized for (de)serialization in benches
+    iroha_data_model::isi::set_instruction_registry(
+        iroha_data_model::instruction_registry::default(),
+    );
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -23,5 +28,15 @@ fn validate_blocks(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(state, validate_blocks);
-criterion_main!(state);
+/// Entry point for the benchmark binary.
+fn main() {
+    // Silence IVM banner for block-validation benches.
+    #[allow(unused_imports)]
+    {
+        use ivm::set_banner_enabled;
+        set_banner_enabled(false);
+    }
+    let mut c = Criterion::default().configure_from_args();
+    validate_blocks(&mut c);
+    c.final_summary();
+}

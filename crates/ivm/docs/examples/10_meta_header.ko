@@ -1,0 +1,23 @@
+// Demonstrates seiyaku-level metadata controlling the IVM header.
+// - abi_version: syscall policy selection
+// - vector_length: logical SIMD width hint
+// - max_cycles: optional cap for cycle padding/enforcement
+// - zk/vector: set mode bits explicitly
+
+seiyaku MetaDemo {
+  meta {
+    abi_version: 1;
+    vector_length: 8;
+    max_cycles: 2000;
+    zk: true;
+    vector: true;
+  }
+
+  // Contract initializer (run on deploy by the runtime)
+  hajimari() {
+    // Emit vector/zk opcodes so the meta flags are exercised.
+    setvl(8);
+    assert(true);
+    let a = 1;
+  }
+}

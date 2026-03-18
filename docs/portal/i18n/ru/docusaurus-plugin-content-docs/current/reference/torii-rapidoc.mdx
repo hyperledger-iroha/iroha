@@ -1,0 +1,31 @@
+---
+lang: ru
+direction: ltr
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+импортируйте RapiDocPanel из @site/src/comComponents/RapiDocPanel.jsx;
+
+# Torii API (RapiDoc)
+
+`RapiDoc` предлагает компактную, ориентированную на документацию визуализацию того же Torii.
+Документ OpenAPI. Используйте его, когда вам нужен более подробный обзор или обзор, доступный только для чтения.
+модели запрос/ответ.
+
+## Советы по использованию
+
+- Введите токен носителя, чтобы включить интерактивные вызовы. Значение передается как
+  `X-TryIt-Auth` и нормализуется прокси.
+- Настройте `TRYIT_PROXY_PUBLIC_URL` при обслуживании портала в интерактивном режиме.
+  запросы направляются через промежуточный прокси. Виджет предупреждает, когда прокси
+  URL-адрес отсутствует.
+- Используйте раскрывающийся список «OpenAPI snapshot», чтобы загрузить исторические характеристики, опубликованные
+  `npm run sync-openapi`; опция `Latest (tracked)` всегда разрешается в
+  `/openapi/torii.json`.
+- Объедините с консолью «[Попробуйте] (/api/overview#try-it-sandbox-docs-3)», когда
+  работа с поэтапными шлюзами, требующими прокси.
+

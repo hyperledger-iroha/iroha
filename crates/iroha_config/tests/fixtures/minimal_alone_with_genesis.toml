@@ -1,4 +1,4 @@
 extends = "base.toml"
 
 [genesis]
-file = "genesis.json"
+file = "./genesis.signed.nrt"

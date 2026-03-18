@@ -1,0 +1,14 @@
+{
+  "info.welcome": "歡迎使用 Hyperledger Iroha！",
+  "error.trace_config_setup": "無法設定組態追蹤",
+  "error.config": "組態錯誤！",
+  "error.logger": "無法初始化日誌記錄器",
+  "error.start": "無法啟動 Iroha",
+  "error.run": "執行 Iroha 時發生錯誤",
+  "error.start_p2p": "無法啟動點對點 (P2P) 網路",
+  "error.init_kura": "無法初始化 Kura（區塊儲存）",
+  "error.start_dev_telemetry": "無法啟動開發遙測服務",
+  "error.start_telemetry": "無法啟動遙測服務",
+  "error.listen_os_signal": "無法設定對作業系統訊號的監聽",
+  "error.start_torii": "無法啟動 Torii（Iroha HTTP API 閘道）"
+}

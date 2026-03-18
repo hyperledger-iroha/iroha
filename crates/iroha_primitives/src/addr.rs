@@ -1,24 +1,26 @@
-//! Because we require that the `iroha_data_model` crate be `no_std`
-//! compatible, we cannot use the `std::net::Ipv4Addr` and the
-//! like. As such it makes sense to duplicate them, and redefine the
-//! behaviour.
+//! Network address types used by Iroha with deterministic serialization and schema support.
+//!
+//! The standard library's [`std::net`] types carry platform-specific behaviour and serde impls
+//! we do not control, so lightweight wrappers are provided here and shared across the
+//! Iroha data model. A companion [`socket_addr!`] macro parses address literals at compile
+//! time for convenience while keeping the canonical Norito codecs.
+#![allow(unexpected_cfgs)]
 
-#[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
+use std::{borrow::Cow, format, string::String, vec::Vec};
 
-use derive_more::{AsRef, DebugCustom, Display, From, IntoIterator};
+use derive_more::{AsRef, Debug, Display, From, IntoIterator};
 use iroha_macro::FromVariant;
+/// Parses an IPv4 or IPv6 socket address literal at compile time.
 pub use iroha_primitives_derive::socket_addr;
 use iroha_schema::IntoSchema;
-use parity_scale_codec::{Decode, Encode};
-use serde::{Deserialize, Serialize};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
+#[cfg(feature = "json")]
+use norito::json::{self, FastJsonWrite, JsonDeserialize};
+use norito::{Decode, Encode, literal};
 
 use crate::{conststr::ConstString, ffi};
 
 /// Error when parsing an address
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
 pub enum ParseError {
     /// Not enough segments in IP address
     NotEnoughSegments,
@@ -35,10 +37,9 @@ pub enum ParseError {
 }
 
 ffi::ffi_item! {
-    /// An Iroha-native version of [`std::net::Ipv4Addr`], duplicated here
-    /// to remain `no_std` compatible.
-    #[derive(
-        DebugCustom,
+    /// An Iroha-native version of [`std::net::Ipv4Addr`] that integrates with Norito and schema tooling.
+        #[derive(
+        Debug,
         Display,
         Clone,
         Copy,
@@ -50,16 +51,14 @@ ffi::ffi_item! {
         AsRef,
         From,
         IntoIterator,
-        DeserializeFromStr,
-        SerializeDisplay,
         Encode,
         Decode,
         IntoSchema,
     )]
-    #[display(fmt = "{}.{}.{}.{}", "self.0[0]", "self.0[1]", "self.0[2]", "self.0[3]")]
-    #[debug(fmt = "{}.{}.{}.{}", "self.0[0]", "self.0[1]", "self.0[2]", "self.0[3]")]
+    #[display("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
+    #[debug("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
     #[repr(transparent)]
-    pub struct Ipv4Addr([u8; 4]);
+pub struct Ipv4Addr([u8; 4]);
 
     // SAFETY: `Ipv4Addr` has no trap representation in [u8; 4]
     ffi_type(unsafe {robust})
@@ -71,6 +70,8 @@ impl Ipv4Addr {
         Self(octets)
     }
 }
+
+// Norito slice-based decoding via the derived codec implementation
 
 impl core::ops::Index<usize> for Ipv4Addr {
     type Output = u8;
@@ -105,6 +106,26 @@ impl core::str::FromStr for Ipv4Addr {
     }
 }
 
+#[cfg(feature = "json")]
+impl FastJsonWrite for Ipv4Addr {
+    fn write_json(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for Ipv4Addr {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        value
+            .parse::<Ipv4Addr>()
+            .map_err(|err| json::Error::InvalidField {
+                field: "ipv4_addr".into(),
+                message: format!("invalid IPv4 address `{value}`: {err}"),
+            })
+    }
+}
+
 impl Ipv4Addr {
     /// The address normally associated with the local machine.
     pub const LOCALHOST: Self = Self([127, 0, 0, 1]);
@@ -116,9 +137,8 @@ impl Ipv4Addr {
 }
 
 ffi::ffi_item! {
-    /// An Iroha-native version of [`std::net::Ipv6Addr`], duplicated here
-    /// to remain `no_std` compatible.
-    #[derive(
+    /// An Iroha-native version of [`std::net::Ipv6Addr`] that integrates with Norito and schema tooling.
+        #[derive(
         Debug,
         Clone,
         Copy,
@@ -130,14 +150,12 @@ ffi::ffi_item! {
         AsRef,
         From,
         IntoIterator,
-        DeserializeFromStr,
-        SerializeDisplay,
         Encode,
         Decode,
         IntoSchema,
     )]
     #[repr(transparent)]
-    pub struct Ipv6Addr([u16; 8]);
+pub struct Ipv6Addr([u16; 8]);
 
     // SAFETY: `Ipv6Addr` has no trap representation in [u16; 8]
     ffi_type(unsafe {robust})
@@ -217,18 +235,88 @@ impl core::str::FromStr for Ipv6Addr {
 
 impl core::fmt::Display for Ipv6Addr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        // TODO: Implement omission of zeroes.
-        for i in 0_usize..7_usize {
-            write!(f, "{:x}:", self[i])?; // Need hexadecimal
+        let segments = self.0;
+
+        // Find the longest run of zero segments. Only runs of length >= 2 are
+        // eligible for compression. In case of a tie the left-most run wins.
+        let mut best_start = None;
+        let mut best_len = 0;
+        let mut cur_start = None;
+
+        for (i, &seg) in segments.iter().enumerate() {
+            if seg == 0 {
+                if cur_start.is_none() {
+                    cur_start = Some(i);
+                }
+            } else if let Some(s) = cur_start {
+                let len = i - s;
+                if len > best_len {
+                    best_start = Some(s);
+                    best_len = len;
+                }
+                cur_start = None;
+            }
         }
-        write!(f, "{:x}", self[7])
+
+        if let Some(s) = cur_start {
+            let len = 8 - s;
+            if len > best_len {
+                best_start = Some(s);
+                best_len = len;
+            }
+        }
+
+        if best_len < 2 {
+            best_start = None;
+        }
+
+        let mut i = 0_usize;
+        let mut need_colon = false;
+        while i < 8 {
+            if Some(i) == best_start {
+                write!(f, "::")?;
+                need_colon = false;
+                i += best_len;
+                if i == 8 {
+                    break;
+                }
+            } else {
+                if need_colon {
+                    write!(f, ":")?;
+                }
+                write!(f, "{:x}", segments[i])?;
+                need_colon = true;
+                i += 1;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(feature = "json")]
+impl FastJsonWrite for Ipv6Addr {
+    fn write_json(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for Ipv6Addr {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        value
+            .parse::<Ipv6Addr>()
+            .map_err(|err| json::Error::InvalidField {
+                field: "ipv6_addr".into(),
+                message: format!("invalid IPv6 address `{value}`: {err}"),
+            })
     }
 }
 
 ffi::ffi_item! {
-    /// An Iroha-native version of [`std::net::IpAddr`], duplicated here
-    /// to remain `no_std` compatible.
-    #[derive(
+    /// An Iroha-native version of [`std::net::IpAddr`] used for deterministic serialization.
+        #[derive(
         Debug,
         Clone,
         Copy,
@@ -236,8 +324,6 @@ ffi::ffi_item! {
         Eq,
         PartialOrd,
         Ord,
-        Deserialize,
-        Serialize,
         Encode,
         Decode,
         IntoSchema,
@@ -253,11 +339,43 @@ ffi::ffi_item! {
     }
 }
 
+#[cfg(feature = "json")]
+impl FastJsonWrite for IpAddr {
+    fn write_json(&self, out: &mut String) {
+        match self {
+            IpAddr::V4(addr) => addr.write_json(out),
+            IpAddr::V6(addr) => addr.write_json(out),
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for IpAddr {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        let v4 = value.parse::<Ipv4Addr>();
+        if let Ok(addr) = v4 {
+            return Ok(IpAddr::V4(addr));
+        }
+        let v4_err = v4.err().unwrap();
+        let v6 = value.parse::<Ipv6Addr>();
+        if let Ok(addr) = v6 {
+            return Ok(IpAddr::V6(addr));
+        }
+        let v6_err = v6.err().unwrap();
+        Err(json::Error::InvalidField {
+            field: "ip_addr".into(),
+            message: format!(
+                "invalid IP address `{value}` (IPv4 error: {v4_err}; IPv6 error: {v6_err})"
+            ),
+        })
+    }
+}
+
 ffi::ffi_item! {
-    /// This struct provides an Iroha-native version of [`std::net::SocketAddrV4`]. It is duplicated here
-    /// in order to remain `no_std` compatible.
-    #[derive(
-        DebugCustom,
+    /// This struct provides an Iroha-native version of [`std::net::SocketAddrV4`] used for deterministic serialization.
+        #[derive(
+        Debug,
         Display,
         Clone,
         Copy,
@@ -266,15 +384,13 @@ ffi::ffi_item! {
         PartialOrd,
         Ord,
         Hash,
-        DeserializeFromStr,
-        SerializeDisplay,
         Encode,
         Decode,
         IntoSchema,
     )]
-    #[display(fmt = "{}:{}", "self.ip", "self.port")]
-    #[debug(fmt = "{}:{}", "self.ip", "self.port")]
-    pub struct SocketAddrV4 {
+    #[display("{}:{}", self.ip, self.port)]
+    #[debug("{}:{}", self.ip, self.port)]
+pub struct SocketAddrV4 {
         /// The Ipv4 address.
         pub ip: Ipv4Addr,
         /// The port number.
@@ -291,6 +407,19 @@ impl From<([u8; 4], u16)> for SocketAddrV4 {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for Ipv4Addr {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        if bytes.len() < 4 {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(&bytes[..4]);
+        Ok((Self::from(buf), 4))
+    }
+}
+
+// `DecodeFromSlice` is provided by derives for this type.
+
 impl core::str::FromStr for SocketAddrV4 {
     type Err = ParseError;
 
@@ -303,11 +432,32 @@ impl core::str::FromStr for SocketAddrV4 {
     }
 }
 
+#[cfg(feature = "json")]
+impl FastJsonWrite for SocketAddrV4 {
+    fn write_json(&self, out: &mut String) {
+        let literal = format_addr_literal(&SocketAddr::Ipv4(*self));
+        json::write_json_string(&literal, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SocketAddrV4 {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        match parse_addr_literal(&value, "socket_addr_v4")? {
+            SocketAddr::Ipv4(addr) => Ok(addr),
+            _ => Err(json::Error::InvalidField {
+                field: "socket_addr_v4".into(),
+                message: format!("expected IPv4 socket address literal, got `{value}`"),
+            }),
+        }
+    }
+}
+
 ffi::ffi_item! {
-    /// This struct provides an Iroha-native version of [`std::net::SocketAddrV6`]. It is duplicated here
-    /// in order to remain `no_std` compatible.
-    #[derive(
-        DebugCustom,
+    /// This struct provides an Iroha-native version of [`std::net::SocketAddrV6`] used for deterministic serialization.
+        #[derive(
+        Debug,
         Display,
         Clone,
         Copy,
@@ -316,15 +466,13 @@ ffi::ffi_item! {
         PartialOrd,
         Ord,
         Hash,
-        DeserializeFromStr,
-        SerializeDisplay,
         Encode,
         Decode,
         IntoSchema,
     )]
-    #[display(fmt = "[{}]:{}", "self.ip", "self.port")]
-    #[debug(fmt = "[{}]:{}", "self.ip", "self.port")]
-    pub struct SocketAddrV6 {
+    #[display("[{}]:{}", self.ip, self.port)]
+    #[debug("[{}]:{}", self.ip, self.port)]
+pub struct SocketAddrV6 {
         /// The Ipv6 address.
         pub ip: Ipv6Addr,
         /// The port number.
@@ -341,6 +489,24 @@ impl From<([u16; 8], u16)> for SocketAddrV6 {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for Ipv6Addr {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        if bytes.len() < 16 {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        let mut segments = [0u16; 8];
+        for (i, seg) in segments.iter_mut().enumerate() {
+            let start = i * 2;
+            let mut buf = [0u8; 2];
+            buf.copy_from_slice(&bytes[start..start + 2]);
+            *seg = u16::from_le_bytes(buf);
+        }
+        Ok((Self::from(segments), 16))
+    }
+}
+
+// `DecodeFromSlice` is provided by derives for this type.
+
 impl core::str::FromStr for SocketAddrV6 {
     type Err = ParseError;
 
@@ -354,9 +520,31 @@ impl core::str::FromStr for SocketAddrV6 {
     }
 }
 
+#[cfg(feature = "json")]
+impl FastJsonWrite for SocketAddrV6 {
+    fn write_json(&self, out: &mut String) {
+        let literal = format_addr_literal(&SocketAddr::Ipv6(*self));
+        json::write_json_string(&literal, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SocketAddrV6 {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        match parse_addr_literal(&value, "socket_addr_v6")? {
+            SocketAddr::Ipv6(addr) => Ok(addr),
+            _ => Err(json::Error::InvalidField {
+                field: "socket_addr_v6".into(),
+                message: format!("expected IPv6 socket address literal, got `{value}`"),
+            }),
+        }
+    }
+}
+
 ffi::ffi_item! {
     /// Socket address defined by hostname and port
-    #[derive(
+        #[derive(
         Debug,
         Clone,
         PartialEq,
@@ -364,13 +552,11 @@ ffi::ffi_item! {
         PartialOrd,
         Ord,
         Hash,
-        SerializeDisplay,
-        DeserializeFromStr,
         Encode,
         Decode,
         IntoSchema,
     )]
-    pub struct SocketAddrHost {
+pub struct SocketAddrHost {
         /// The hostname
         pub host: ConstString,
         /// The port number
@@ -397,26 +583,46 @@ impl core::str::FromStr for SocketAddrHost {
     }
 }
 
+#[cfg(feature = "json")]
+impl FastJsonWrite for SocketAddrHost {
+    fn write_json(&self, out: &mut String) {
+        let literal = format_addr_literal(&SocketAddr::Host(self.clone()));
+        json::write_json_string(&literal, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SocketAddrHost {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        match parse_addr_literal(&value, "socket_addr_host")? {
+            SocketAddr::Host(addr) => Ok(addr),
+            _ => Err(json::Error::InvalidField {
+                field: "socket_addr_host".into(),
+                message: format!("expected hostname socket address literal, got `{value}`"),
+            }),
+        }
+    }
+}
+
+// Norito derives now implement DecodeFromSlice for these enums and structs.
+
 ffi::ffi_item! {
-    /// This enum provides an Iroha-native version of [`std::net::SocketAddr`]. It is duplicated here
-    /// in order to remain `no_std` compatible.
-    #[derive(
-        DebugCustom,
+    /// This enum provides an Iroha-native version of [`std::net::SocketAddr`] used for deterministic serialization.
+        #[derive(
+        Debug,
         Display,
         Clone,
         PartialEq,
         Eq,
         PartialOrd,
         Ord,
-        Deserialize,
-        Serialize,
         Encode,
         Decode,
         IntoSchema,
         FromVariant,
     )]
-    #[serde(untagged)]
-    pub enum SocketAddr {
+pub enum SocketAddr {
         /// An Ipv4 socket address.
         Ipv4(SocketAddrV4),
         /// An Ipv6 socket address.
@@ -425,6 +631,83 @@ ffi::ffi_item! {
         Host(SocketAddrHost),
     }
 }
+
+#[cfg(feature = "json")]
+fn parse_socket_addr(input: &str) -> Option<SocketAddr> {
+    if let Ok(addr) = input.parse::<SocketAddrV4>() {
+        return Some(SocketAddr::Ipv4(addr));
+    }
+    if let Ok(addr) = input.parse::<SocketAddrV6>() {
+        return Some(SocketAddr::Ipv6(addr));
+    }
+    if let Ok(addr) = input.parse::<SocketAddrHost>() {
+        return Some(SocketAddr::Host(addr));
+    }
+    None
+}
+
+fn canonicalize_socket_addr(mut addr: SocketAddr) -> SocketAddr {
+    if let SocketAddr::Host(ref mut host) = addr {
+        let lower = host.host.as_ref().to_ascii_lowercase();
+        if host.host.as_ref() != lower {
+            host.host = lower.into();
+        }
+    }
+    addr
+}
+
+fn canonical_addr_body(addr: &SocketAddr) -> String {
+    match addr {
+        SocketAddr::Ipv4(inner) => format!("{}:{}", inner.ip, inner.port),
+        SocketAddr::Ipv6(inner) => format!("[{}]:{}", inner.ip, inner.port),
+        SocketAddr::Host(inner) => format!("{}:{}", inner.host.as_ref(), inner.port),
+    }
+}
+
+fn format_addr_literal(addr: &SocketAddr) -> String {
+    let canonical = canonicalize_socket_addr(addr.clone());
+    literal::format("addr", &canonical_addr_body(&canonical))
+}
+
+#[cfg(feature = "json")]
+fn parse_addr_literal(value: &str, field: &str) -> Result<SocketAddr, json::Error> {
+    let body = literal::parse("addr", value)?;
+    let addr = parse_socket_addr(body).ok_or_else(|| json::Error::InvalidField {
+        field: field.into(),
+        message: format!("invalid {field} literal body `{body}`"),
+    })?;
+    let canonical = canonicalize_socket_addr(addr);
+    let expected_body = canonical_addr_body(&canonical);
+    if expected_body != body {
+        let expected_literal = literal::format("addr", &expected_body);
+        return Err(json::Error::InvalidField {
+            field: field.into(),
+            message: format!(
+                "addr literal `{value}` is not canonical (expected `{expected_literal}`)"
+            ),
+        });
+    }
+    Ok(canonical)
+}
+
+#[cfg(feature = "json")]
+impl FastJsonWrite for SocketAddr {
+    fn write_json(&self, out: &mut String) {
+        json::write_json_string(&format_addr_literal(self), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl JsonDeserialize for SocketAddr {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        parse_addr_literal(&value, "socket_addr")
+    }
+}
+
+// NOTE: `DecodeFromSlice` is now provided by Norito derives for enums as well,
+// so the explicit impls for `IpAddr` and `SocketAddr` are redundant and have
+// been removed to avoid conflicts.
 
 impl SocketAddr {
     /// Extracts [`IpAddr`] from [`Self::Ipv4`] and [`Self::Ipv6`] variants
@@ -464,6 +747,133 @@ impl SocketAddr {
         }
         bytes
     }
+
+    /// Returns the canonical Norito literal form of this socket address (`addr:<body>#<crc16>`).
+    #[must_use]
+    pub fn to_literal(&self) -> String {
+        format_addr_literal(self)
+    }
+
+    /// Returns the host portion of the socket address.
+    ///
+    /// Hostname-based addresses borrow their host string, while IP variants return
+    /// an owned textual representation of the address.
+    #[must_use]
+    pub fn host_str(&self) -> Cow<'_, str> {
+        match self {
+            SocketAddr::Ipv4(addr) => Cow::Owned(addr.ip.to_string()),
+            SocketAddr::Ipv6(addr) => Cow::Owned(addr.ip.to_string()),
+            SocketAddr::Host(addr) => Cow::Borrowed(addr.host.as_ref()),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod tests {
+    use norito::json::{self, FastJsonWrite};
+
+    use super::*;
+
+    #[test]
+    fn socket_addr_json_roundtrip() {
+        let addr: SocketAddr = "127.0.0.1:8080".parse::<SocketAddrV4>().unwrap().into();
+        let mut json_repr = String::new();
+        addr.write_json(&mut json_repr);
+        let expected_literal = format_addr_literal(&addr);
+        assert_eq!(json_repr, format!("\"{expected_literal}\""));
+
+        let decoded: SocketAddr = json::from_json(&json_repr).expect("roundtrip socket addr");
+        assert_eq!(decoded, addr);
+    }
+
+    #[test]
+    fn socket_addr_literal_rejects_bad_checksum() {
+        let json_literal = "\"addr:127.0.0.1:8080#0000\"";
+        let err = json::from_json::<SocketAddr>(json_literal).expect_err("checksum mismatch");
+        match err {
+            json::Error::InvalidField { .. } | json::Error::Message(_) => {}
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn socket_addr_literal_requires_lowercase_host() {
+        let body = "Example.COM:8080";
+        let literal = literal::format("addr", body);
+        let json_literal = format!("\"{literal}\"");
+        let err =
+            json::from_json::<SocketAddr>(&json_literal).expect_err("non-canonical host must fail");
+        match err {
+            json::Error::InvalidField { .. } | json::Error::Message(_) => {}
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn socket_addr_raw_literal_is_rejected() {
+        let err =
+            json::from_json::<SocketAddr>("\"127.0.0.1:8080\"").expect_err("raw literal must fail");
+        match err {
+            json::Error::InvalidField { .. } | json::Error::Message(_) => {}
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod literal_tests {
+    use super::*;
+
+    #[test]
+    fn socket_addr_literal_roundtrip_ipv4() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
+        let literal = addr.to_literal();
+        assert!(
+            literal.starts_with("addr:127.0.0.1:8080#"),
+            "unexpected literal: {literal}"
+        );
+        let body = literal::parse("addr", &literal).expect("parse addr literal");
+        assert_eq!(body, "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn socket_addr_literal_canonicalizes_host_case() {
+        let addr: SocketAddr = "Example.COM:3030".parse().expect("host socket addr");
+        let literal = addr.to_literal();
+        assert!(
+            literal.starts_with("addr:example.com:3030#"),
+            "unexpected literal: {literal}"
+        );
+        let body = literal::parse("addr", &literal).expect("parse addr literal");
+        assert_eq!(body, "example.com:3030");
+    }
+
+    #[test]
+    fn socket_addr_literal_formats_ipv6() {
+        let addr = SocketAddr::from(([0x2001, 0x0db8, 0, 0, 0, 0, 0, 1], 4040));
+        let literal = addr.to_literal();
+        assert!(
+            literal.starts_with("addr:[2001:db8::1]:4040#"),
+            "unexpected literal: {literal}"
+        );
+        let body = literal::parse("addr", &literal).expect("parse addr literal");
+        assert_eq!(body, "[2001:db8::1]:4040");
+    }
+
+    #[test]
+    fn host_str_reports_host_component() {
+        let v4 = SocketAddr::from(([10, 0, 0, 1], 3030));
+        assert_eq!(v4.host_str(), "10.0.0.1");
+
+        let v6 = SocketAddr::from(([0u16; 8], 4040));
+        assert_eq!(v6.host_str(), "::");
+
+        let host = SocketAddr::Host(SocketAddrHost {
+            host: "example.com".into(),
+            port: 5050,
+        });
+        assert_eq!(host.host_str(), "example.com");
+    }
 }
 
 impl From<([u8; 4], u16)> for SocketAddr {
@@ -492,7 +902,6 @@ impl core::str::FromStr for SocketAddr {
     }
 }
 
-#[cfg(feature = "std")]
 mod std_compat {
     use std::net::ToSocketAddrs;
 
@@ -501,8 +910,8 @@ mod std_compat {
     impl From<Ipv4Addr> for std::net::Ipv4Addr {
         #[inline]
         fn from(other: Ipv4Addr) -> Self {
-            let Ipv4Addr([a, b, c, d]) = other;
-            std::net::Ipv4Addr::new(a, b, c, d)
+            let Ipv4Addr(octets) = other;
+            std::net::Ipv4Addr::from_octets(octets)
         }
     }
 
@@ -517,8 +926,8 @@ mod std_compat {
         #[allow(clippy::many_single_char_names)]
         #[inline]
         fn from(other: Ipv6Addr) -> Self {
-            let Ipv6Addr([a, b, c, d, e, f, g, h]) = other;
-            std::net::Ipv6Addr::new(a, b, c, d, e, f, g, h)
+            let Ipv6Addr(segments) = other;
+            std::net::Ipv6Addr::from_segments(segments)
         }
     }
 
@@ -612,6 +1021,7 @@ mod std_compat {
 mod test {
     use super::*;
 
+    // Parsing IPv4 strings should yield the correct address or errors for invalid input.
     #[test]
     fn ipv4() {
         assert_eq!(
@@ -640,6 +1050,7 @@ mod test {
         );
     }
 
+    // Parsing IPv6 strings should handle compressed and full forms as well as error cases.
     #[test]
     fn ipv6() {
         assert_eq!(
@@ -680,6 +1091,26 @@ mod test {
         );
     }
 
+    // Formatting should compress leading, trailing and internal zero groups.
+    #[test]
+    fn ipv6_display_leading_zero_compression() {
+        let addr = Ipv6Addr([0, 0, 0, 1, 2, 3, 4, 5]);
+        assert_eq!(addr.to_string(), "::1:2:3:4:5");
+    }
+
+    #[test]
+    fn ipv6_display_trailing_zero_compression() {
+        let addr = Ipv6Addr([1, 2, 3, 4, 0, 0, 0, 0]);
+        assert_eq!(addr.to_string(), "1:2:3:4::");
+    }
+
+    #[test]
+    fn ipv6_display_internal_zero_compression() {
+        let addr = Ipv6Addr([1, 2, 0, 0, 0, 3, 4, 5]);
+        assert_eq!(addr.to_string(), "1:2::3:4:5");
+    }
+
+    // Ensure `SocketAddrV4` parsing succeeds with a port and reports errors otherwise.
     #[test]
     fn socket_v4() {
         assert_eq!(
@@ -701,6 +1132,7 @@ mod test {
         );
     }
 
+    // Ensure `SocketAddrV6` parsing succeeds with a port and reports errors otherwise.
     #[test]
     fn socket_v6() {
         assert_eq!(
@@ -722,42 +1154,51 @@ mod test {
         );
     }
 
+    // Parsing into the enum variant should cover IPv4, IPv6 and hostname forms.
     #[test]
     fn full_socket() {
+        let v4 = SocketAddr::Ipv4(SocketAddrV4 {
+            ip: Ipv4Addr([192, 168, 1, 0]),
+            port: 9019,
+        });
+        let v4_literal = format!("\"{}\"", format_addr_literal(&v4));
         assert_eq!(
-            serde_json::from_str::<SocketAddr>("\"192.168.1.0:9019\"").unwrap(),
-            SocketAddr::Ipv4(SocketAddrV4 {
-                ip: Ipv4Addr([192, 168, 1, 0]),
-                port: 9019
-            })
+            norito::json::from_json::<SocketAddr>(&v4_literal).unwrap(),
+            v4
         );
 
+        let v6 = SocketAddr::Ipv6(SocketAddrV6 {
+            ip: Ipv6Addr([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0]),
+            port: 9019,
+        });
+        let v6_literal = format!("\"{}\"", format_addr_literal(&v6));
         assert_eq!(
-            serde_json::from_str::<SocketAddr>("\"[2001:0db8::]:9019\"").unwrap(),
-            SocketAddr::Ipv6(SocketAddrV6 {
-                ip: Ipv6Addr([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0]),
-                port: 9019
-            })
+            norito::json::from_json::<SocketAddr>(&v6_literal).unwrap(),
+            v6
         );
 
+        let host = SocketAddr::Host(SocketAddrHost {
+            host: "localhost".into(),
+            port: 9019,
+        });
+        let host_literal = format!("\"{}\"", format_addr_literal(&host));
         assert_eq!(
-            serde_json::from_str::<SocketAddr>("\"localhost:9019\"").unwrap(),
-            SocketAddr::Host(SocketAddrHost {
-                host: "localhost".into(),
-                port: 9019
-            })
+            norito::json::from_json::<SocketAddr>(&host_literal).unwrap(),
+            host
         );
     }
 
+    // Serialising and deserialising addresses should round-trip without loss.
     #[test]
-    fn serde_roundtrip() {
+    fn json_roundtrip() {
         let v4 = SocketAddr::Ipv4(SocketAddrV4 {
             ip: Ipv4Addr([192, 168, 1, 0]),
             port: 9019,
         });
 
+        let serialized_v4 = norito::json::to_json(&v4).unwrap();
         assert_eq!(
-            serde_json::from_str::<SocketAddr>(&serde_json::to_string(&v4).unwrap()).unwrap(),
+            norito::json::from_json::<SocketAddr>(&serialized_v4).unwrap(),
             v4
         );
 
@@ -766,8 +1207,8 @@ mod test {
             port: 9019,
         });
 
-        let addr_str = &serde_json::to_string(&v6).unwrap();
-        let addr = serde_json::from_str::<SocketAddr>(addr_str).unwrap();
+        let addr_str = norito::json::to_json(&v6).unwrap();
+        let addr = norito::json::from_json::<SocketAddr>(&addr_str).unwrap();
         assert_eq!(addr, v6);
 
         let host = SocketAddr::Host(SocketAddrHost {
@@ -775,12 +1216,14 @@ mod test {
             port: 9019,
         });
 
+        let host_json = norito::json::to_json(&host).unwrap();
         assert_eq!(
-            serde_json::from_str::<SocketAddr>(&serde_json::to_string(&host).unwrap()).unwrap(),
+            norito::json::from_json::<SocketAddr>(&host_json).unwrap(),
             host
         );
     }
 
+    // Host-style addresses should parse into `SocketAddrHost` correctly.
     #[test]
     fn host() {
         assert_eq!(

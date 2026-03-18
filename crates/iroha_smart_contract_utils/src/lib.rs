@@ -1,17 +1,13 @@
 //! Crate with utilities for implementing smart contract FFI
-// do not use `no_std` when not running in wasm
-// this is useful to implement `dbg` and `log` functions for host-side tests
-#![cfg_attr(target_family = "wasm", no_std)]
+// This crate relies on the standard library.
 #![allow(unsafe_code)]
-
-extern crate alloc;
-
-use alloc::{boxed::Box, format, vec::Vec};
-use core::ops::RangeFrom;
 
 pub use dbg::*;
 pub use getrandom;
-pub use parity_scale_codec::{DecodeAll, Encode};
+pub use iroha_smart_contract_codec::{
+    decode_with_length_prefix_from_raw, encode_with_length_prefix,
+};
+pub use norito::{NoritoDeserialize, NoritoSerialize};
 
 mod dbg;
 pub mod log;
@@ -28,77 +24,47 @@ macro_rules! register_getrandom_err_callback {
         ///
         /// # Panics
         ///
-        /// Always Panics with [`unimplemented!()`];
+        /// Never panics when compiled with `test`; fills the buffer with a
+        /// deterministic pattern instead. In production builds this logs an
+        /// error and fills deterministically to preserve peer parity.
         ///
         /// # Errors
         ///
-        /// No errors, always panics.
-        fn stub_getrandom(_dest: &mut [u8]) -> Result<(), $crate::getrandom::Error> {
+        /// Returns `Ok(())` after populating the destination buffer with a
+        /// deterministic, non-cryptographic pattern.
+        #[unsafe(no_mangle)]
+        unsafe extern "Rust" fn __getrandom_v03_custom(
+            dest: *mut u8,
+            len: usize,
+        ) -> Result<(), $crate::getrandom::Error> {
             const ERROR_MESSAGE: &str =
                 "`getrandom()` is not implemented. To provide your custom function \
-                 see https://docs.rs/getrandom/0.2/getrandom/macro.register_custom_getrandom.html. \
+                 see https://docs.rs/getrandom/0.3/getrandom/#custom-backend. \
                  Be aware that your function must give the same result on different peers at the same execution round,
                  and keep in mind the consequences of purely implemented random function.";
 
-            // we don't support logging in our current wasm test runner implementation
+            // we don't support logging in our current IVM test runner implementation
             #[cfg(not(test))]
             $crate::error!(ERROR_MESSAGE);
-            unimplemented!("{ERROR_MESSAGE}")
+            #[cfg(test)]
+            let _ = ERROR_MESSAGE;
+            if dest.is_null() {
+                return Err($crate::getrandom::Error::UNSUPPORTED);
+            }
+            // Fill with a deterministic, non-cryptographic pattern so peers
+            // remain in sync even without a true RNG.
+            let slice = unsafe { core::slice::from_raw_parts_mut(dest, len) };
+            for (idx, byte) in slice.iter_mut().enumerate() {
+                // Wrap the index to a single byte to keep the pattern stable for long buffers.
+                let offset = u8::try_from(idx).unwrap_or_else(|_| {
+                    u8::try_from(idx.wrapping_rem(u8::MAX as usize + 1))
+                        .expect("wrapped to u8 range")
+                });
+                *byte = offset.wrapping_mul(0x5A).wrapping_add(0xA5);
+            }
+            Ok(())
         }
-
-        $crate::getrandom::register_custom_getrandom!(stub_getrandom);
     };
-}
-
-/// Decode the object from given pointer and length in the given range
-///
-/// # Warning
-///
-/// This method takes ownership of the given pointer
-///
-/// # Safety
-///
-/// It's safe to call this function as long as it's safe to construct, from the given
-/// pointer, `Box<[u8]>` containing the encoded object
-unsafe fn decode_from_raw_in_range<T: DecodeAll>(
-    ptr: *const u8,
-    len: usize,
-    range: RangeFrom<usize>,
-) -> T {
-    let bytes = Box::from_raw(core::slice::from_raw_parts_mut(ptr.cast_mut(), len));
-
-    #[allow(clippy::expect_fun_call)]
-    T::decode_all(&mut &bytes[range]).expect(
-        format!(
-            "Decoding of {} failed. This is a bug",
-            core::any::type_name::<T>()
-        )
-        .as_str(),
-    )
-}
-
-/// Decode the object from given pointer where first element is the size of the object
-/// following it. This can be considered a custom encoding format.
-///
-/// # Warning
-///
-/// This method takes ownership of the given pointer
-///
-/// # Safety
-///
-/// It's safe to call this function as long as it's safe to construct, from the given
-/// pointer, byte array of prefix length and `Box<[u8]>` containing the encoded object
-#[doc(hidden)]
-pub unsafe fn decode_with_length_prefix_from_raw<T: DecodeAll>(ptr: *const u8) -> T {
-    let len_size_bytes = core::mem::size_of::<usize>();
-
-    let len = usize::from_le_bytes(
-        core::slice::from_raw_parts(ptr, len_size_bytes)
-            .try_into()
-            .expect("Prefix length size(bytes) incorrect. This is a bug."),
-    );
-
-    decode_from_raw_in_range(ptr, len, len_size_bytes..)
 }
 
 /// Encode the given object and call the given function with the pointer and length of the allocation
@@ -111,37 +77,70 @@ pub unsafe fn decode_with_length_prefix_from_raw<T: DecodeAll>(ptr: *const u8) -
 ///
 /// The given function must not take ownership of the pointer argument
 #[doc(hidden)]
-pub unsafe fn encode_and_execute<T: Encode, O>(
+pub unsafe fn encode_and_execute<T: NoritoSerialize, O>(
     obj: &T,
     fun: unsafe extern "C" fn(*const u8, usize) -> O,
 ) -> O {
     // NOTE: It's imperative that encoded object is stored on the heap
-    // because heap corresponds to linear memory when compiled to wasm
-    let bytes = obj.encode();
+    // because heap corresponds to linear memory when compiled for the IVM
+    let bytes = norito::to_bytes(obj).expect("Norito serialization must succeed");
 
-    fun(bytes.as_ptr(), bytes.len())
+    unsafe { fun(bytes.as_ptr(), bytes.len()) }
 }
 
-/// Encode the given `val` as a vector of bytes with the size of the object at the beginning
-//
-// TODO: Write a separate crate for codec/protocol between Iroha and smartcontract
-#[doc(hidden)]
-pub fn encode_with_length_prefix<T: Encode>(val: &T) -> Box<[u8]> {
-    let len_size_bytes = core::mem::size_of::<usize>();
+#[cfg(test)]
+register_getrandom_err_callback!();
 
-    let mut r = Vec::with_capacity(
-        len_size_bytes
-            .checked_add(val.size_hint())
-            .expect("Overflow during length computation"),
-    );
+#[cfg(test)]
+mod tests {
+    // The Norito derive macros may reference cfg(feature = "packed-struct")
+    // internally. Our workspace enables strict check-cfg, so allow the
+    // unexpected-cfgs lint in this test module only.
+    #![allow(unexpected_cfgs)]
+    use core::{convert::TryInto, ptr};
 
-    // Reserve space for length
-    r.resize(len_size_bytes, 0);
-    val.encode_to(&mut r);
+    // Silence unexpected-cfgs emitted from norito derives inside tests where
+    // the workspace enables strict cfg checking for feature names.
+    #[allow(unexpected_cfgs)]
+    #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+    #[norito(decode_from_slice)]
+    struct Dummy {
+        a: u32,
+        b: bool,
+    }
 
-    // Store length of the whole vector as byte array at the beginning of the vec
-    let len = r.len();
-    r[..len_size_bytes].copy_from_slice(&len.to_le_bytes());
+    #[test]
+    fn encode_decode_roundtrip() {
+        let value = Dummy { a: 5, b: true };
+        let bytes = super::encode_with_length_prefix(&value);
+        let len_size_bytes = core::mem::size_of::<usize>();
+        assert_eq!(
+            bytes.len(),
+            usize::from_le_bytes(bytes[..len_size_bytes].try_into().unwrap())
+        );
 
-    r.into_boxed_slice()
+        // SAFETY: `decode_with_length_prefix_from_raw` takes ownership of the pointer.
+        let ptr = Box::into_raw(bytes) as *const u8;
+        let decoded = unsafe { super::decode_with_length_prefix_from_raw::<Dummy>(ptr) };
+        assert_eq!(decoded, value);
+    }
+
+    #[test]
+    fn getrandom_callback_fills_deterministically() {
+        // Safety: destination buffer is valid for writes.
+        let mut buf = [0u8; 8];
+        unsafe {
+            super::__getrandom_v03_custom(buf.as_mut_ptr(), buf.len()).expect("callback ok");
+        }
+        assert_eq!(
+            buf,
+            [0xA5, 0xFF, 0x59, 0xB3, 0x0D, 0x67, 0xC1, 0x1B],
+            "deterministic pattern must remain stable"
+        );
+
+        // Null pointer should be rejected.
+        let err = unsafe { super::__getrandom_v03_custom(ptr::null_mut(), 1) }
+            .expect_err("expected error on null dest");
+        assert_eq!(err, crate::getrandom::Error::UNSUPPORTED);
+    }
 }

@@ -1,19 +1,16 @@
-#![allow(missing_docs)]
-
-extern crate alloc;
-
-use core::any::TypeId;
+//! Transparent types schema tests.
+use std::any::TypeId;
 
 use iroha_schema::prelude::*;
-use parity_scale_codec::{Decode, Encode};
+use norito::{Decode, Encode};
 
 /// This type tests transparent type inference
-#[derive(Decode, Encode, IntoSchema)]
+#[derive(IntoSchema, Encode, Decode)]
 #[schema(transparent)]
 struct TransparentStruct(u32);
 
 /// This type tests explicit transparent type (u32)
-#[derive(Decode, Encode, IntoSchema)]
+#[derive(IntoSchema, Encode, Decode)]
 #[schema(transparent = "u32")]
 struct TransparentStructExplicitInt {
     a: u32,
@@ -21,7 +18,7 @@ struct TransparentStructExplicitInt {
 }
 
 /// This type tests explicit transparent type (String)
-#[derive(Decode, Encode, IntoSchema)]
+#[derive(IntoSchema, Encode, Decode)]
 #[schema(transparent = "String")]
 struct TransparentStructExplicitString {
     a: u32,
@@ -29,7 +26,7 @@ struct TransparentStructExplicitString {
 }
 
 /// This type tests transparent type being an enum
-#[derive(Decode, Encode, IntoSchema)]
+#[derive(IntoSchema, Encode, Decode)]
 #[schema(transparent = "String")]
 enum TransparentEnum {
     Variant1,
@@ -38,14 +35,14 @@ enum TransparentEnum {
 
 #[test]
 fn transparent_types() {
-    use alloc::collections::BTreeMap;
+    use std::collections::BTreeMap;
 
     use IntMode::*;
     use Metadata::*;
 
     let expected = [
         (
-            TypeId::of::<std::string::String>(),
+            TypeId::of::<::std::string::String>(),
             MetaMapEntry {
                 type_id: "String".to_owned(),
                 type_name: "String".to_owned(),

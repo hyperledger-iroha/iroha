@@ -1,0 +1,53 @@
+{
+  "$schema": "https://grafana.com/docs/grafana/latest/dashboards/reference/json-model/",
+  "title": "SoraFS Provider Admission Rollout",
+  "timezone": "",
+  "editable": false,
+  "version": 1,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Admission Outcomes (5m rate)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by(result)(rate(torii_sorafs_admission_total[5m]))",
+          "legendFormat": "{{result}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Warning Ratio (5m)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(torii_sorafs_admission_total{result=\"warn\"}[5m])) / sum(rate(torii_sorafs_admission_total[5m]))",
+          "legendFormat": "warn_ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rejection Reasons (5m rate)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by(reason)(rate(torii_sorafs_admission_total{result=\"reject\"}[5m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Refresh Debt (1h)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(torii_sorafs_admission_total{reason=\"stale\"}[1h]))",
+          "legendFormat": "stale_refresh_rate"
+        }
+      ]
+    }
+  ]
+}

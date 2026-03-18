@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Sample Torii configuration snippet for the SNNet-5a direct-mode fallback.
+# Replace the placeholder values with the output from
+# `iroha app sorafs gateway direct-mode plan --manifest …`.
+
+[torii.sorafs_gateway]
+require_manifest_envelope = false
+enforce_admission = false
+enforce_capabilities = false
+# Optional: point to the staged SoraNet salt schedule bundle if available.
+salt_schedule_dir = "/etc/sorafs/salts"
+
+[torii.sorafs_gateway.rate_limit]
+# Keep the rolling window conservative while operating outside SoraNet.
+max_requests = 120
+window = "60s"
+ban = "10m"
+
+[torii.sorafs_gateway.denylist]
+path = "/etc/sorafs/gateway/denylist.json"
+
+[torii.sorafs_gateway.direct_mode]
+provider_id_hex = "1111111111111111111111111111111111111111111111111111111111111111"
+chain_id = "soranet.stage"
+canonical_host = "provider-0001.stage.sorafs.example"
+vanity_host = "gw-stage.example"
+direct_car_canonical = "https://provider-0001.stage.sorafs.example/direct/v1/car/b1d3..."
+direct_car_vanity = "https://gw-stage.example/direct/v1/car/b1d3..."
+manifest_digest_hex = "b1d3f00d7e1ce3d7ff93dcee11223344556677889900aabbccddeeff00112233"

@@ -1,0 +1,218 @@
+[
+  {
+    "suffix": ".dao",
+    "cycle": "2026-03",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-03",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-03",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-04",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-04",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-04",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-05",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-05",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-05",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-06",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-06",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-06",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-07",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-07",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-07",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-08",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-08",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-08",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-09",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-09",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-09",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-10",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-10",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-10",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-11",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-11",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-11",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2026-12",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2026-12",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2026-12",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2027-01",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2027-01",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2027-01",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".dao",
+    "cycle": "2027-02",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".nexus",
+    "cycle": "2027-02",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  },
+  {
+    "suffix": ".sora",
+    "cycle": "2027-02",
+    "jurisdiction": "eu-dsa",
+    "dashboard": "dashboards/grafana/sns_suffix_analytics.json"
+  }
+]

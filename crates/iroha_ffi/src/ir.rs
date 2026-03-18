@@ -3,9 +3,9 @@
 //! While you can implement [`crate::FfiType`] on your `Rust` type directly, it is encouraged
 //! that you map your type into IR by providing the implementation of [`Ir`] and benefit
 //! from automatic, correct and performant conversions from IR to C type equivalent.
-use alloc::{boxed::Box, vec::Vec};
+use std::{boxed::Box, vec::Vec};
 
-use crate::{repr_c::Cloned, Extern, LocalRef, LocalSlice};
+use crate::{Extern, LocalRef, LocalSlice, repr_c::Cloned};
 
 /// Type which is replaced by an opaque pointer on FFI import
 ///
@@ -307,12 +307,15 @@ where
     type Type = <&'itm [R] as Ir>::Type;
 }
 
-mod transmute {
+/// Specialized transmutation helpers re-exported for crates that need to hook
+/// into the FFI conversion pipeline.
+pub mod transmute {
     use super::*;
     use crate::ReprC;
 
     /// The same as [`Ir`] but used to implement specialized impls of [`Transmute`]
     pub trait TransmuteIr {
+        /// Internal representation used when deriving [`Transmute`].
         type Type;
     }
 
@@ -401,7 +404,7 @@ mod transmute {
         type Target = &'itm R::Target;
 
         unsafe fn is_valid(target: &Self::Target) -> bool {
-            R::is_valid(target)
+            unsafe { R::is_valid(target) }
         }
     }
 
@@ -410,7 +413,7 @@ mod transmute {
         type Target = &'itm mut R::Target;
 
         unsafe fn is_valid(target: &Self::Target) -> bool {
-            R::is_valid(target)
+            unsafe { R::is_valid(target) }
         }
     }
 
@@ -419,7 +422,7 @@ mod transmute {
         type Target = [R::Target; N];
 
         unsafe fn is_valid(target: &Self::Target) -> bool {
-            target.iter().all(|elem| R::is_valid(elem))
+            target.iter().all(|elem| unsafe { R::is_valid(elem) })
         }
     }
 
@@ -428,7 +431,7 @@ mod transmute {
         type Target = <R as SpecializedTransmute<R::Type>>::Target;
 
         unsafe fn is_valid(target: &Self::Target) -> bool {
-            <R as SpecializedTransmute<R::Type>>::is_valid(target)
+            unsafe { <R as SpecializedTransmute<R::Type>>::is_valid(target) }
         }
     }
 }

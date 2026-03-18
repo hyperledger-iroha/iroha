@@ -1,0 +1,33 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+יבא את SwaggerUiPanel מ-'@site/src/components/SwaggerUiPanel.jsx';
+
+# Torii API (ממשק משתמש של Swagger)
+
+דף זה מטמיע את המסמך Torii OpenAPI באמצעות `swagger-ui-react`. השתמש בו מתי
+אתה רוצה את הפריסה המוכרת של Swagger, בקש דוגמאות ויכולת לנסות
+להוציא בקשות ישירות בדפדפן.
+
+## טיפים לשימוש
+
+- ספק אסימון נושא בפאנל כדי לאשר מראש כל בקשה. אסימונים הם
+  מועברים ל-proxy באמצעות הכותרת `X-TryIt-Auth` ולעולם לא נמשכים.
+- הגדר את `TRYIT_PROXY_PUBLIC_URL` בעת הגשת הפורטל כך שהווידג'ט
+  מעביר בקשות דרך ה-Staging proxy המצורף. מופיעה באנר אזהרה
+  אם ה-proxy מושבת.
+- בחר תמונת מצב OpenAPI מהתפריט הנפתח כדי לעבור בין המפרט העדכני ביותר
+  וגרסאות בארכיון שנוצרו על ידי `npm run sync-openapi`.
+- נסה את קונסולת "[נסה את זה](/api/overview#try-it-sandbox-docs-3)" המגובת ב-proxy
+  עבור סביבות מבוימות שבהן CORS מונע גישה ישירה של Torii.
+- שמור על תמונת המצב OpenAPI טרייה עם `cargo xtask openapi` (ראה
+  `docs/portal/static/openapi/torii.json`).
+
+<SwaggerUiPanel />

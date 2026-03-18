@@ -1,0 +1,59 @@
+{
+  "pop_name": "lab-h3-sjc",
+  "asn": 65210,
+  "router_id": "10.255.0.1",
+  "loopback_ipv4": "203.0.113.10",
+  "loopback_ipv6": "2001:db8:10::a",
+  "bfd_profiles": [
+    {
+      "name": "fast",
+      "transmit_ms": 300,
+      "receive_ms": 300,
+      "detect_multiplier": 3
+    }
+  ],
+  "rpki_caches": [
+    {
+      "address": "rpki-lab.sora.net",
+      "port": 3323,
+      "description": "lab rpki cache"
+    }
+  ],
+  "prefixes": {
+    "ipv4": [
+      "203.0.113.0/24"
+    ],
+    "ipv6": [
+      "2001:db8:10::/48"
+    ]
+  },
+  "communities": {
+    "drain": "65210:300",
+    "blackhole": "65535:666"
+  },
+  "neighbors": [
+    {
+      "name": "lab-edge-ix",
+      "address": "198.51.100.1",
+      "peer_asn": 64512,
+      "bfd_profile": "fast",
+      "local_pref": 300,
+      "med": 20,
+      "import_rpki_deny_invalid": true,
+      "send_community_both": true,
+      "max_prefix": 500,
+      "description": "IX peer"
+    },
+    {
+      "name": "lab-core",
+      "address": "203.0.113.254",
+      "peer_asn": 65209,
+      "bfd_profile": "fast",
+      "keepalive_secs": 3,
+      "hold_secs": 9,
+      "multihop_ttl": 2,
+      "send_community_both": true,
+      "description": "core uplink"
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+[
+  {
+    "id": "C1",
+    "description": "Unsupported chunker handle refusal",
+    "status": 406,
+    "error": "unsupported_chunker",
+    "reason": "chunk profile sorafs.sf1@1.0.0 is not enabled on this gateway",
+    "details": {
+      "profile": "sorafs.sf1@1.0.0"
+    },
+    "request_fixture": "C1/request.json",
+    "response_fixture": "C1/response.json",
+    "gateway_fixture": "C1/gateway.json"
+  },
+  {
+    "id": "C2",
+    "description": "Manifest variant missing refusal",
+    "status": 412,
+    "error": "manifest_variant_missing",
+    "reason": "requested manifest alias is not bound in the governance envelope",
+    "details": {
+      "alias": "sorafs.sf1@1.0.0"
+    },
+    "request_fixture": "C2/request.json",
+    "response_fixture": "C2/response.json",
+    "gateway_fixture": "C2/gateway.json"
+  },
+  {
+    "id": "C3",
+    "description": "Admission envelope mismatch refusal",
+    "status": 412,
+    "error": "admission_mismatch",
+    "reason": "manifest digest is not covered by the admission envelope",
+    "details": {
+      "manifest_digest": "ecc2e8564dda27834b8bd53a3eebdc56055d3e2cbdd30b0f96938fb9f04b216e"
+    },
+    "request_fixture": "C3/request.json",
+    "response_fixture": "C3/response.json",
+    "gateway_fixture": "C3/gateway.json"
+  },
+  {
+    "id": "C4",
+    "description": "Unsupported capability TLV refusal",
+    "status": 428,
+    "error": "unsupported_capability",
+    "reason": "capability tlv vendor_reserved#0xff is not permitted for this profile",
+    "details": {
+      "capability": "vendor_reserved#0xff"
+    },
+    "request_fixture": "C4/request.json",
+    "response_fixture": "C4/response.json",
+    "gateway_fixture": "C4/gateway.json"
+  },
+  {
+    "id": "C5",
+    "description": "Missing dag-scope header refusal",
+    "status": 428,
+    "error": "missing_header",
+    "reason": "dag-scope header is required for trustless range requests",
+    "details": {
+      "header": "Sora-Dag-Scope"
+    },
+    "request_fixture": "C5/request.json",
+    "response_fixture": "C5/response.json",
+    "gateway_fixture": "C5/gateway.json"
+  },
+  {
+    "id": "C6",
+    "description": "Unsupported compression refusal",
+    "status": 406,
+    "error": "unsupported_encoding",
+    "reason": "gzip compression is not allowed for sorafs.sf1@1.0.0",
+    "details": {
+      "encoding": "gzip"
+    },
+    "request_fixture": "C6/request.json",
+    "response_fixture": "C6/response.json",
+    "gateway_fixture": "C6/gateway.json"
+  },
+  {
+    "id": "C7",
+    "description": "Proof tampering refusal",
+    "status": 422,
+    "error": "proof_mismatch",
+    "reason": "proof sample does not match gateway tree",
+    "details": {
+      "section": "proof.chunks[0]"
+    },
+    "request_fixture": "C7/request.json",
+    "response_fixture": "C7/response.json",
+    "gateway_fixture": "C7/gateway.json"
+  }
+]

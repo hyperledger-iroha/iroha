@@ -10,11 +10,14 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+trybuild-tests = []
+
 [lib]
 proc-macro = true
 
 [dependencies]
-iroha_macro_utils = { path = "../iroha_macro_utils" }
+iroha_derive = { workspace = true }
 
 syn = { workspace = true, features = ["default", "full", "visit"] }
 proc-macro2 = { workspace = true }
@@ -24,5 +27,4 @@ darling = { workspace = true }
 
 [dev-dependencies]
 iroha_schema = { workspace = true }
-
 trybuild = { workspace = true }

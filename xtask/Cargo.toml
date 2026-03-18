@@ -1,0 +1,79 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "torii-mock-harness"
+path = "src/bin/torii_mock_harness.rs"
+
+[[bin]]
+name = "control-plane-mock"
+path = "src/bin/control_plane_mock.rs"
+
+[features]
+default = []
+vote-tally = ["dep:halo2_proofs"]
+schema-structural = []
+packed-struct = []
+compact-len = []
+
+[dependencies]
+hex = { workspace = true }
+norito = { workspace = true, features = ["bench-internal", "simd-accel", "parallel-stage1"] }
+tempfile = { workspace = true }
+iroha_core = { workspace = true }
+iroha_config = { workspace = true }
+iroha_torii = { workspace = true }
+iroha_crypto = { workspace = true }
+iroha_data_model = { workspace = true, features = ["transparent_api", "json"] }
+iroha_telemetry = { workspace = true }
+iroha_genesis = { workspace = true }
+iroha_primitives = { workspace = true }
+iroha = { workspace = true }
+ivm = { workspace = true }
+mv = { path = "../crates/mv" }
+fastpq_isi = { path = "../crates/fastpq_isi" }
+arrow-array = { version = "53.4.1", default-features = false }
+arrow-schema = { version = "53.4.1", default-features = false }
+parquet = { version = "53.4.1", default-features = false, features = ["arrow"] }
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"], optional = true }
+rand_chacha = "0.9.0"
+rand = { version = "0.9.2", features = ["std", "std_rng"] }
+rand_distr = "0.5.1"
+rand_core_06 = { version = "0.6.4", package = "rand_core" }
+tar = "0.4.44"
+flate2 = { version = "1.1.5" }
+walkdir = "2.5"
+blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
+curve25519-dalek = { version = "4.1.3", default-features = false, features = ["alloc"] }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std", "rand_core"] }
+soranet-handshake-harness = { path = "../tools/soranet-handshake-harness" }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sorafs_car = { workspace = true }
+sorafs_manifest = { path = "../crates/sorafs_manifest" }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
+tower = { version = "0.5.2", features = ["util"] }
+axum = { workspace = true }
+base64 = "0.22.1"
+data-encoding = "2.5.0"
+zeroize = "1.8.2"
+blake3 = { version = "1.8.2" }
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "rustls-tls"] }
+sorafs_chunker = { path = "../crates/sorafs_chunker" }
+integration_tests = { path = "../integration_tests" }
+time = { version = "0.3.44", features = ["formatting", "macros"] }
+thiserror = "2.0.17"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+toml = "0.9.8"
+eyre = { workspace = true }
+once_cell = { workspace = true }
+soranet-relay = { path = "../tools/soranet-relay" }
+
+[dev-dependencies]
+assert_cmd = "2.1.1"
+tempfile = { workspace = true }
+norito = { path = "../crates/norito" }
+soranet_pq = { path = "../crates/soranet_pq" }

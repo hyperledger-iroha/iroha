@@ -1,0 +1,196 @@
+#+LANGUAGE: fr
+#+DIRECTION: ltr
+#+SOURCE: docs/source/lts_selection.org
+#+STATUS: complete
+#+GENERATOR: scripts/sync_docs_i18n.py
+#+SOURCE_HASH: 1535fc970027c05003b4e03135f47b565d1434f8dc3c42946525a1b16252d40d
+#+SOURCE_LAST_MODIFIED: 2026-01-04T16:47:58+00:00
+#+TRANSLATION_LAST_REVIEWED: 2026-02-07
+
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+#+TRANSLATOR: machine-google-reviewed
+
+#+TITLE: On selecting versions as LTS candidates
+#+AUTHOR: Aleksandr Petrosyan
+#+DATE: 12-08-2023
+* À propos
+
+Dans un souci de préservation des ressources d'ingénierie, il est de notre devoir
+intérêts pour limiter la portée du support post-version. Si l'on a
+plusieurs versions de Iroha fonctionnant en parallèle, elles devront peut-être
+reproduire le travail de support autant de fois qu'il y a de parallèles
+versions.
+
+Au lieu d'essayer de mal supporter plusieurs versions, nous essayons de
+répondre à 80 % des cas d'utilisation avec 20 % de l'effort et atteindre un
+compromis entre la prise en charge égale et unique de chaque version publiée
+prenant en charge la dernière version stable.
+
+Plus précisément, nous prenons en charge la dernière version =stable=. Souvent ceci
+soit la version n’est pas aussi bien testée, ni aussi bien documentée, ou
+bien supporté par les SDK, en plus de changer souvent en termes de
+avoir donc une cadence de sortie mensuelle et une sortie par an est choisie
+être la cible d’un soutien et d’un développement à long terme.
+
+* Critères de sélection LTS
+
+Ce qui suit est une liste non exhaustive de considérations recommandées
+pour sélectionner une version particulière en tant que candidat LTS
+
+1. Il est /peu probable/ que la version contienne des problèmes majeurs /connus/ qui
+   l'empêcherait d'être utile.
+
+   Plus précisément, le communiqué doit avoir une bonne couverture d'un
+   cas d'utilisation de base, par exemple, (Pre-)RC-6[fn:1] était la dernière version qui
+   contenait l’ancien moteur de consensus. Étant donné que le modèle basé sur l'acteur
+   le consensus avait un débit stable maximum de 10 TPS, le (Pre-)RC-6 était
+   n'est pas étiqueté comme LTS, bien qu'il soit utilisé comme tel.
+
+   RC-9 contenait toutes les fonctionnalités nécessaires pour exécuter un nœud Iroha
+   sur le nouveau consensus, quelques changements dans la structure du
+   configuration et quelques correctifs du sous-système =p2p=. Cela aurait pu
+   rempli toutes les niches possibles de tout projet basé sur Iroha, et
+   en tant que tel, il a été étiqueté comme une version LTS bien qu'il soit moins bien
+   testé.
+
+   Les versions RC8, RC12, RC13 et RC17 ont été disqualifiées sur cette base.
+   critère.
+
+2. S'il existe une fonctionnalité importante qui entraîne une rupture d'API, le
+   version qui possède la version la plus stable de "l'ancienne façon de faire"
+   choses" devraient être prioritaires en tant que candidat LTS.
+
+   Par exemple, RC12 et RC13 étaient les dernières versions de Iroha qui
+   utilisait toujours un validateur d'autorisation codé en dur. Ils sont étiquetés
+   car un candidat LTS était exclu en raison des problèmes majeurs connus,
+   en particulier avec la stabilité, une mauvaise couverture et parce que la libération
+   un LTS après RC9 aurait séparé les ressources de développement
+   de résoudre le problème des validateurs d'autorisation rigides et non modifiables.
+
+   Les RC14 et RC15, en revanche, étaient en train de ralentir leur progression.
+   migration des fonctionnalités. Ainsi, ces dernières versions seraient
+   considéré comme des mises à niveau directes par rapport à la précédente, ayant plus
+   optimisations et meilleure couverture des fonctionnalités.
+
+3. La version doit être dotée de fonctionnalités complètes pour un cas d'utilisation.Ceci est différent du point 1, car même si RC10 et RC13 étaient gratuits
+   de problèmes majeurs, ils n'offraient pas une couverture suffisamment complète
+   des fonctionnalités requises pour les grands acteurs du projet.
+
+4. La version doit être prise en charge par tous les SDK.
+
+   Alors que la prise en charge dans Iroha Python est largement limitée à LTS
+   candidats, créant une situation sans issue, c'est une exception. Le
+   deux autres SDK majeurs, à savoir Kotlin et TypeScript, doivent prendre en charge
+   le candidat LTS. Si le SDK ne peut pas être conçu pour prendre en charge le
+   candidat, la libération du candidat est disqualifiée.
+
+5. La version doit être bien testée.
+
+   Ce point complète le point 1, dans la mesure où il manque des fonctionnalités connues
+   couplé à une mauvaise couverture des tests ne signifie pas, en fait, l'absence de
+   problèmes majeurs.
+
+   Cela s'applique généralement à toutes les versions après RC6 et jusqu'à RC17, comme
+   l'équipe de développement a été informée d'un moyen de restructurer le
+   tests d'intégration, mais le processus ne s'est terminé qu'avec RC17 et le
+   introduction du framework =pytest=.
+
+   Même si la réussite des tests d'intégration est nécessaire, elle n'est pas suffisante,
+   les tests minimaux suivants sont requis pour qualifier une version comme
+   un candidat LTS
+
+   1. Tests unitaires et d’intégration. Il faut veiller à tout faire fonctionner
+      tests d'intégration, y compris les plus longs et feuilletés. Si des tests
+      sont inhabituellement floconneux, ce qui indique un problème, et le
+      la libération doit être disqualifiée (voir [[../../flakyness.org]]).
+
+   2. Tests =pytest=, techniquement qualifiés d'intégration
+      essais.
+
+   3. Tests de longévité. Le candidat doit être testé pendant au moins deux
+      semaines pour être admissible. Si le candidat est accepté comme LTS, le
+      les tests de longévité doivent être effectués pendant au moins quatre semaines.
+
+   4. Test de charge. Le candidat LTS doit satisfaire à tous les critères
+      défini par l'équipe d'assurance qualité comme étant opérationnel et développemental
+      exigences sous charge (également appelées extra-fonctionnelles, et
+      à tort comme non fonctionnel). L'incapacité de produire des blocs dans un
+      la mode opportune est une disqualification automatique. Autre
+      les critères de disqualification sont laissés à la discrétion de l'AQ
+      équipe.
+
+   5. Il doit être déployé en tant que conteneur =development= dans au moins un
+      projet pendant au moins deux semaines, sans problèmes majeurs. RC9 l'a fait
+      pas réussi ce test et aurait été disqualifié avec le
+      critères mis à jour énumérés dans le présent document.
+
+6. La sortie doit être bien documentée.
+
+   Il ne doit pas contenir plusieurs nouvelles fonctionnalités qui manquent
+   documentation. Tout déficit en termes de couverture documentaire
+   doit être réparable dans le délai maximum correspondant à la fenêtre de publication
+   pour le candidat. Ne pas le faire constitue une disqualification automatique.
+
+En plus de la procédure de libération régulière décrite dans
+[[release_procedure.org]], le LTS doit respecter les exigences supplémentaires suivantes
+étapes.En /en plus/ d'effectuer une version régulière, un PR distinct avec le
+titre =[release]: <semver> LTS= où =<semver>= est la sémantique
+Une version du code de la branche de développement doit être créée. Le
+la liste de contrôle régulière doit être évitée, et à la place la Pull Request doit
+être examiné par le même personnel qui a examiné et approuvé le
+Version =stable=. Deux examens au maximum sont nécessaires pour garantir que tous
+les changements s'effectueront dans le bon ordre et que non
+des problèmes non documentés sont passés inaperçus.
+
+Une fois la version LTS effectuée, le CI produira un conteneur Docker
+avec la version LTS sur la plateforme Alpine Linux et sur Ubuntu Linux,
+en utilisant la version native de la plateforme de =glibc=. L'IC doit également produire
+tous les packages pris en charge et publiez-les sur leurs
+référentiels. Cela signifie, par exemple, que le package AUR est mis à jour
+une fois la pull request fusionnée et produisant le package correct. Le
+La page de version de GitHub doit être remplie avec une version distincte intitulée
+LTS et contenant le fichier unique =AppImage=. Ces versions doivent
+sont fournis sous forme de packages distincts marqués comme non installables à côté du
+version stable.
+
+* Politique de rétroportage
+
+Généralement, le rétroportage vers le LTS est déconseillé. Ce qui suit
+les raisons du rétroportage sont considérées comme acceptables :
+1. Ajout qui n'est pas lié à l'API Iroha, comme par ex. un général
+   outil d'aide et/ou documentation.
+2. Correction d'une faille de sécurité majeure.
+3. Correction d'un bug majeur.
+4. Corriger un oubli de conception majeur qui empêche l'utilisation, à condition que
+   les principales parties prenantes/utilisateurs du LTS actuel ont verbalement
+   certifié qu'un backport est une solution préférable.
+
+Les back-ports doivent être annoncés via les mêmes canaux que la sortie
+lui-même. Les modifications requises doivent être étiquetées comme rétroportées dans le
+version amont dans laquelle ils ont été corrigés et la version dans laquelle
+ils ont été rétroportés.
+
+L'annonce doit expliquer
+1. Pourquoi le backport a été choisi (voir les raisons ci-dessus)
+2. Quel doit être l’impact du backport
+3. Quel est l’état actuel des fonctionnalités, de l’intégration et
+   tests de charge/longévité.
+
+* Applicabilité
+
+La politique LTS/version stable doit être révisée dès la première
+La version complète des fonctionnalités de Iroha est annoncée (v2.0.0). On n'en donne plus
+développement actif, l'équipe de développement principale peut (et devrait) être capable
+se concentrer davantage sur la prise en charge des versions divergentes.
+
+* Notes de bas de page[fn:1] La convention de dénomination a été stabilisée bien avant tout projet de
+release, une version de Iroha a été créée.  En tant que tel, appeler n'importe quelle version de
+Iroha, une version candidate a certaines implications.  Je les appelle avant
+les candidats à la libération sont un type d'expression similaire, mais moins flagrant,
+car plutôt qu'une mauvaise application d'un terme existant, il s'agit d'un
+invention d'un terme qui /pourrait/ avoir des différences subtiles par rapport à un
+candidat à la libération.  En réalité, ils auraient dû s'appeler
+*instantanés de développement*.  Mais pour ne pas trop rompre la continuité
+avec les SDK existants, un compromis a été choisi.

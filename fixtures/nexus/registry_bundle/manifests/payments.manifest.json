@@ -1,0 +1,29 @@
+{
+  "lane": "payments",
+  "governance": "parliament",
+  "version": 1,
+  "validators": [
+    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"
+  ],
+  "quorum": 2,
+  "protected_namespaces": [
+    "payments",
+    "settlement"
+  ],
+  "hooks": {
+    "runtime_upgrade": {
+      "allow": true,
+      "require_metadata": false
+    },
+    "admission": {
+      "allow": true,
+      "require_metadata": true,
+      "metadata_key": "payments_batch",
+      "allowed_ids": [
+        "batch-alpha",
+        "batch-beta"
+      ]
+    }
+  }
+}

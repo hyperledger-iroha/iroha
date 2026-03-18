@@ -1,0 +1,16 @@
+{
+  "policy_version": "2026-02-18T00:00:00Z",
+  "enforced_certificate_id_hex": "0000000000000000000000000000000000000000000000000000000000000101",
+  "expected_attestation_nonce_hex": "00000000000000000000000000000001",
+  "verdict_grace_period_ms": 7200000,
+  "grace_period_profiles": {
+    "demo-short": 1800000,
+    "extended": 14400000
+  },
+  "pinned_roots": [
+    {
+      "alias": "mock-osp-root",
+      "sha256": "bf25fa06eb409c2e022b263cfeb7fe168a9491f506fa78ab3fc7202f2842cf8b"
+    }
+  ]
+}

@@ -10,6 +10,9 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+trybuild-tests = []
+
 [lib]
 proc-macro = true
 
@@ -21,3 +24,7 @@ manyhow.workspace = true
 
 [dev-dependencies]
 iroha_executor_data_model.workspace = true
+iroha_data_model.workspace = true
+iroha_schema.workspace = true
+norito.workspace = true
+trybuild.workspace = true

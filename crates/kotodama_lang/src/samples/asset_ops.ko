@@ -1,0 +1,24 @@
+seiyaku AssetOps {
+  kotoage fn execute() permission(Admin) {
+    // Typed pointer‑ABI arguments via constructors
+    let alice = authority();
+    let bob = authority();
+    let coin = asset_definition!("coin#wonder");
+    mint_asset(
+      alice,
+      coin,
+      1000
+    );
+    transfer_asset(
+      alice,
+      bob,
+      coin,
+      500
+    );
+    burn_asset(
+      bob,
+      coin,
+      100
+    );
+  }
+}

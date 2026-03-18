@@ -1,0 +1,40 @@
+---
+lang: my
+direction: ltr
+source: docs/account_structure_sdk_alignment.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
+source_last_modified: "2026-01-28T17:11:30.632934+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+SDK နှင့် Codec ပိုင်ရှင်များအတွက် # I105 ထုတ်ဝေမှုမှတ်စု
+
+အဖွဲ့များ- Rust SDK၊ TypeScript/JavaScript SDK၊ Python SDK၊ Kotlin SDK၊ Codec tooling
+
+အကြောင်းအရာ- ယခု `docs/account_structure.md` သည် I105 အကောင့် ID ကို ရောင်ပြန်ဟပ်ပါသည်။
+အကောင်အထည်ဖော်ခြင်း။ SDK အပြုအမူနှင့် စမ်းသပ်မှုများကို canonical spec နှင့် ချိန်ညှိပါ။
+
+အဓိက ကိုးကားချက်များ-
+- လိပ်စာကုဒ်ဒက် + ခေါင်းစီးအပြင်အဆင် — `docs/account_structure.md` §2
+- Curve registry — `docs/source/references/address_curve_registry.md`
+- Norm v1 ဒိုမိန်း ကိုင်တွယ်ခြင်း — `docs/source/references/address_norm_v1.md`
+- Fixture vectors — `fixtures/account/address_vectors.json`
+
+လုပ်ဆောင်ချက်များ-
+1. ** Canonical အထွက်-** `AccountId::to_string()`/Display သည် I105 ကိုသာ ထုတ်လွှတ်ရမည်
+   (နံပါတ် `@domain` နောက်ဆက်တွဲ)။ Canonical hex သည် အမှားရှာပြင်ခြင်းအတွက် (`0x...`) ဖြစ်သည်။
+2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
+4. **I105 checksum-** `I105PRE || prefix || payload` ကျော် Blake2b-512 ကိုသုံးပါ၊ ယူပါ။
+   ပထမ 2 bytes ။ ချုံ့ထားသော အက္ခရာအခြေခံသည် **105** ဖြစ်သည်။
+5. ** Curve gating-** SDKs များသည် မူရင်း Ed25519-only သို့ဖြစ်သည်။ တိကျပြတ်သားသော ရွေးချယ်မှုကို ပေးပါ။
+   ML-DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`)။ လုပ်ပါ။
+   secp256k1 ကို Rust ပြင်ပတွင် ပုံမှန်အားဖြင့် ဖွင့်ထားသည်ဟု မထင်ပါ။
+6. ** CAIP-10 မရှိပါ :** ပို့ဆောင်ထားသော CAIP-10 မြေပုံဆွဲခြင်းမရှိသေးပါ။ မဖော်ထုတ်ပါနှင့်
+   CAIP-10 ပြောင်းလဲမှုများအပေါ် မူတည်သည်။
+
+codecs/tests များကို အပ်ဒိတ်လုပ်ပြီးသည်နှင့် အတည်ပြုပါ။ အဖွင့်မေးခွန်းများကို ခြေရာခံနိုင်ပါသည်။
+account-addressing RFC thread တွင်။

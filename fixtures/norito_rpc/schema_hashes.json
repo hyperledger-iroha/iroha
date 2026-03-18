@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "generated_at": "2026-03-07T02:01:03.852996Z",
+  "entries": [
+    {
+      "type_name": "iroha_data_model::sns::FreezeNameRequestV1",
+      "alias": "FreezeNameRequestV1",
+      "schema_hash": "0xfde27a5caea12759fde27a5caea12759"
+    },
+    {
+      "type_name": "iroha_data_model::sns::GovernanceHookV1",
+      "alias": "GovernanceHookV1",
+      "schema_hash": "0x919f9138e3325d91919f9138e3325d91"
+    },
+    {
+      "type_name": "iroha_data_model::sns::NameControllerV1",
+      "alias": "NameControllerV1",
+      "schema_hash": "0x8d30e4d8cdaccaa58d30e4d8cdaccaa5"
+    },
+    {
+      "type_name": "iroha_data_model::sns::NameRecordV1",
+      "alias": "NameRecordV1",
+      "schema_hash": "0x04893756fcfa7d3304893756fcfa7d33"
+    },
+    {
+      "type_name": "iroha_data_model::sns::NameSelectorV1",
+      "alias": "NameSelectorV1",
+      "schema_hash": "0x043e16ef09ac8e3d043e16ef09ac8e3d"
+    },
+    {
+      "type_name": "iroha_data_model::sns::NameStatus",
+      "alias": "NameStatus",
+      "schema_hash": "0xe674407e0a323888e674407e0a323888"
+    },
+    {
+      "type_name": "iroha_data_model::sns::PaymentProofV1",
+      "alias": "PaymentProofV1",
+      "schema_hash": "0x3ae1fed11f5f9faf3ae1fed11f5f9faf"
+    },
+    {
+      "type_name": "iroha_data_model::sns::RegisterNameRequestV1",
+      "alias": "RegisterNameRequestV1",
+      "schema_hash": "0x6be4962f8806147f6be4962f8806147f"
+    },
+    {
+      "type_name": "iroha_data_model::sns::RegisterNameResponseV1",
+      "alias": "RegisterNameResponseV1",
+      "schema_hash": "0xd7360a149081fe2ad7360a149081fe2a"
+    },
+    {
+      "type_name": "iroha_data_model::sns::RenewNameRequestV1",
+      "alias": "RenewNameRequestV1",
+      "schema_hash": "0x7d797634291c1aa97d797634291c1aa9"
+    },
+    {
+      "type_name": "iroha_data_model::sns::ReservedAssignmentRequestV1",
+      "alias": "ReservedAssignmentRequestV1",
+      "schema_hash": "0x6aa524b5dfeb57d86aa524b5dfeb57d8"
+    },
+    {
+      "type_name": "iroha_data_model::transaction::signed::model::SignedTransaction",
+      "alias": "SignedTransaction",
+      "schema_hash": "0x7ad1ae306dffd89a7ad1ae306dffd89a"
+    },
+    {
+      "type_name": "iroha_data_model::sns::SuffixPolicyV1",
+      "alias": "SuffixPolicyV1",
+      "schema_hash": "0xed51d33be7246329ed51d33be7246329"
+    },
+    {
+      "type_name": "iroha_data_model::transaction::signed::model::TransactionPayload",
+      "alias": "TransactionPayload",
+      "schema_hash": "0x343fe6995c579fb1343fe6995c579fb1"
+    },
+    {
+      "type_name": "iroha_data_model::sns::TransferNameRequestV1",
+      "alias": "TransferNameRequestV1",
+      "schema_hash": "0x099667cc8fc9fb59099667cc8fc9fb59"
+    },
+    {
+      "type_name": "iroha_data_model::sns::UpdateControllersRequestV1",
+      "alias": "UpdateControllersRequestV1",
+      "schema_hash": "0x212e73db92ad5053212e73db92ad5053"
+    }
+  ]
+}

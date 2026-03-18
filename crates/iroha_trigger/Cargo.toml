@@ -18,3 +18,4 @@ iroha_trigger_derive = { path = "../iroha_trigger_derive" }
 
 iroha_smart_contract_utils.workspace = true
 iroha_smart_contract.workspace = true
+iroha_smart_contract_codec.workspace = true

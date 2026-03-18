@@ -11,37 +11,45 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["std", "rand"]
-# Enable static linkage of the rust standard library.
-# Please refer to https://docs.rust-embedded.org/book/intro/no-std.html
-std = [
-    "rand/std",
-    "blake2/std",
-    "digest/std",
-    "sha2/std",
-    "hkdf/std",
-    "w3f-bls/std",
-    "signature/std",
-    "ed25519-dalek/std",
-    "rand/std",
-    "rand_core/std",
-    "rand_chacha/std",
-    "zeroize/std",
-    "aead/std",
-    "chacha20poly1305/std",
-    "elliptic-curve/std",
-    "k256/std",
-    "dep:thiserror",
-    "displaydoc/std",
-]
+default = ["std", "rand", "json", "ecc-batch"]
+std = []
+json = ["norito/json", "mv"]
+# Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.
+# Implementation lives in `signature::gost` (Streebog hashing + TC26 curves).
+gost = ["dep:once_cell", "dep:num-bigint", "dep:num-traits", "dep:streebog", "dep:crypto-bigint", "dep:subtle"]
+# Enable Chinese national (SM2/SM3/SM4) algorithms.
+sm-ccm = []
+sm = ["sm-ccm", "dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979", "dep:sm4_gcm", "sm-neon"]
+sm-ffi-openssl = ["dep:openssl"]
+sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
+sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
+sm_proptest = []
+# Enable support for BLS signatures. Disabled by default due to long compile times.
+# Backend selection:
+# - bls-backend-blstrs: pure Rust blstrs backend (no arkworks)
+# - default (no bls-backend-blstrs): w3f-bls backend
+bls = ["bls-backend-w3f", "dep:blstrs", "dep:group", "dep:pairing"]
+bls-backend-blstrs = ["bls", "dep:blstrs", "dep:group", "dep:subtle", "dep:pairing", "dep:w3f-bls"]
+# Baseline backend (enabled when bls is set and bls-backend-blstrs is NOT set)
+bls-backend-w3f = ["bls", "dep:w3f-bls"]
+# Optional: enable single pairing-product for multi-message aggregates via blstrs
+bls-multi-pairing = ["dep:blstrs", "dep:group", "dep:subtle", "dep:pairing"]
 # Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)
 #ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import"]
 
 # Expose FFI API for dynamic linking (Internal use only)
-ffi_export = ["std", "iroha_ffi", "iroha_primitives/ffi_export"]
+ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export"]
 
 # Allow creating key using random number generator which is tricky in some environments like Smart Contracts
 rand = []
+# Enable parallel helpers for Merkle tree construction
+rayon = ["dep:rayon"]
+# Prepare ECDSA MSM-based batch under this feature (currently delegates to per-sig)
+secp256k1-msm-batch = []
+# Enable elliptic-curve batch verification (deterministic) where available.
+# - Ed25519 uses ed25519-dalek's MSM-based batch verify with a deterministic transcript
+# - Secp256k1 remains per-signature (no secure MSM batch included); kept for symmetry
+ecc-batch = ["dep:subtle", "ed25519-dalek/batch"]
 
 [dependencies]
 iroha_primitives = { workspace = true }
@@ -49,48 +57,116 @@ iroha_macro = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
 iroha_schema = { workspace = true }
 
-derive_more = { workspace = true, features = ["deref", "deref_mut", "display"] }
-parity-scale-codec = { workspace = true, features = ["derive", "full"] }
-serde = { workspace = true, features = ["derive"] }
-serde_with = { workspace = true, features = ["macros", "hex"] }
-hex = { workspace = true, features = ["alloc", "serde"] }
+derive_more = { workspace = true, features = ["deref", "deref_mut", "display", "debug"] }
+norito = {workspace = true}
+hex = { workspace = true, features = ["alloc", "std"] }
+hex-literal = { workspace = true }
 getset = { workspace = true }
+mv = { path = "../mv", optional = true }
+thiserror = { version = "2.0.17" }
+displaydoc = { workspace = true, features = ["std"] }
+blake3 = { workspace = true }
+base64 = { workspace = true }
+soranet_pq = { workspace = true }
 
-thiserror = { version = "1.0.63", optional = true }
-displaydoc = { workspace = true }
+digest = { version = "0.10.7", default-features = false, features = ["alloc", "std"] }
+blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
+w3f-bls = { version = "0.1.9", default-features = false, optional = true, features = ["std"] }
+rayon = { version = "1.11.0", optional = true }
+blstrs = { version = "0.7.1", default-features = false, optional = true }
+group = { version = "0.13", default-features = false, optional = true }
+subtle = { version = "2.6.1", default-features = false, optional = true }
+pairing = { version = "0.23", default-features = false, optional = true }
+parking_lot = { workspace = true }
 
-digest = { version = "0.10.7", default-features = false, features = ["alloc"] }
-blake2 = { version = "0.10.6", default-features = false }
-sha2 = { version = "0.10.8", default-features = false }
-hkdf = { version = "0.12.4", default-features = false }
-w3f-bls = { version = "0.1.4", default-features = false }
-
-signature = { version = "2.2.0", default-features = false, features = ["alloc"] }
-ed25519-dalek = { version = "2.1.1", default-features = false, features = ["alloc", "rand_core", "zeroize"] }
+signature = { version = "2.2.0", default-features = false, features = ["alloc", "std"] }
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["alloc", "rand_core", "zeroize", "std"] }
 curve25519-dalek = { version = "4.1.3", default-features = false }
 x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"] }
 
-rand = { workspace = true, default-features = false, features = ["std_rng", "alloc"] }
-rand_core = { version = "0.6.4", default-features = false, features = ["alloc"] }
-rand_chacha = { version = "0.3.1", default-features = false }
+rand = { workspace = true, default-features = false, features = ["std_rng", "alloc", "std"] }
+rand_core_06 = { workspace = true }
+rand_core = { version = "0.9.3", default-features = false, features = ["os_rng", "std"] }
+rand_chacha = { version = "0.9.0", default-features = false, features = ["std"] }
+once_cell = { version = "1.21.3", default-features = false, features = ["std"], optional = true }
+tempfile = { workspace = true }
+num-bigint = { version = "0.4.6", default-features = false, features = ["std"], optional = true }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"], optional = true }
+streebog = { version = "0.11.0-rc.3", default-features = false, optional = true }
+crypto-bigint = { version = "0.6.1", default-features = false, features = ["alloc", "rand"], optional = true }
+sm2 = { version = "0.13.3", optional = true, default-features = false, features = ["std", "dsa", "pkcs8", "pem"] }
+sm3 = { version = "0.5.0-rc.3", optional = true }
+sm4 = { version = "0.5.1", optional = true }
+rfc6979 = { version = "0.4", optional = true, default-features = false }
+sm4_gcm = { package = "sm4-gcm", version = "0.1.2", optional = true, default-features = false }
+sm4-neon = { path = "../sm4_neon", optional = true }
+sm3-neon = { path = "../sm3_neon", optional = true }
+openssl = { version = "0.10.75", optional = true, default-features = false, features = ["vendored"] }
 
 
-zeroize = { version = "1.8.1", default-features = false }
-arrayref = { version = "0.3.8", default-features = false }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
+arrayref = { version = "0.3.9", default-features = false }
 
-aead = { version = "0.5.2", default-features = false, features = ["alloc"] }
-chacha20poly1305 = { version = "0.10.1", default-features = false }
+aead = { version = "0.6.0-rc.3", default-features = false, features = ["alloc"] }
+chacha20poly1305 = { version = "0.11.0-rc.2", default-features = false, features = ["alloc", "getrandom", "rand_core"] }
 
-elliptic-curve = { version = "0.13.8", default-features = false }
-k256 = { version = "0.13.3", default-features = false, features = ["alloc", "ecdsa", "sha256"] }
+elliptic-curve = { version = "0.13.8", default-features = false, features = ["std"] }
+k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecdsa", "sha256", "std"] }
+
+argon2 = { version = "0.5.3", default-features = false, features = ["std"] }
+
+# PQC (Dilithium available by default, Kyber always available for streaming HPKE)
+pqcrypto-dilithium = { version = "0.5" }
+pqcrypto-traits = { version = "0.3.5" }
+time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-hex-literal = { workspace = true }
-serde_json = { workspace = true, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 
 # these crypto libraries are not used to implement actual crypto algorithms
 # but to test some of the primitives against them
 amcl = { version = "0.2.0", default-features = false, features = ["secp256k1"] }
-secp256k1 = { version = "0.29.0", features = ["rand", "serde"] }
-libsodium-sys-stable = "1.20.9"
-openssl = { version = "0.10.66", features = ["vendored"] }
+secp256k1 = { version = "0.31.1", features = ["rand"] }
+libsodium-sys-stable = "1.22.4"
+openssl = { version = "0.10.75", features = ["vendored"] }
+criterion = { version = "0.7.0" }
+num-bigint = "0.4.6"
+lazy_static = "1.5.0"
+tempfile = "3.23.0"
+
+# Utility binary used to detect the available BLS backend at build time.
+[[bin]]
+name = "bls-variant-detect"
+path = "src/bin/bls_variant_detect.rs"
+required-features = ["bls", "bls-backend-blstrs"]
+
+[[bin]]
+name = "bls_check"
+path = "src/bin/bls_check.rs"
+required-features = ["bls"]
+
+[[bin]]
+name = "gost_perf_check"
+path = "src/bin/gost_perf_check.rs"
+required-features = ["gost"]
+
+[[bin]]
+name = "sm_perf_check"
+path = "src/bin/sm_perf_check.rs"
+required-features = ["sm"]
+[[bench]]
+name = "gost_sign"
+harness = false
+required-features = ["gost"]
+
+[[bench]]
+name = "sm_perf"
+harness = false
+required-features = ["sm"]
+
+[[bench]]
+name = "soranet_handshake"
+harness = false

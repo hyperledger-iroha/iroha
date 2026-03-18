@@ -1,0 +1,45 @@
+[package]
+name = "mochi-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Core supervisor library for the MOCHI local Iroha network GUI."
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["governance", "bridge", "fast_dsl"]
+governance = []
+bridge = []
+fast_dsl = ["iroha_data_model/fast_dsl"]
+schema-structural = []
+compact-len = []
+packed-struct = []
+
+[dependencies]
+iroha_crypto = { workspace = true, features = ["std", "rand"] }
+iroha_data_model = { workspace = true, features = ["http", "transparent_api"] }
+iroha_executor_data_model = { workspace = true }
+iroha_genesis = { workspace = true }
+iroha_primitives = { workspace = true }
+iroha_test_samples = { workspace = true }
+iroha_telemetry = { workspace = true }
+norito = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+color-eyre = { workspace = true }
+reqwest = { workspace = true, features = ["rustls-tls"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio-tungstenite = { workspace = true }
+tokio-stream = { workspace = true }
+url = { workspace = true }
+iroha_version = { workspace = true }
+once_cell = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+futures = { workspace = true, features = ["std", "async-await"] }
+tempfile = { workspace = true }
+httpmock = "0.8.2"

@@ -1,0 +1,34 @@
+groups:
+  - name: iroha3-slo
+    interval: 1m
+    rules:
+      - alert: I3FinalityP99Slow
+        expr: histogram_quantile(0.99, rate(iroha_slot_duration_ms_bucket[5m])) > 2000
+        for: 5m
+        labels:
+          severity: page
+          service: iroha3
+          slo: finality_slot_p99
+        annotations:
+          summary: "Finality slot p99 above 2s (NX-18 budget)"
+          description: "Observed slot p99 {{ $value }}ms over last 5m; target ≤2000ms."
+      - alert: I3ZkVerifyP99Slow
+        expr: histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m]))) > 80
+        for: 5m
+        labels:
+          severity: page
+          service: iroha3
+          slo: zk_verify_p99
+        annotations:
+          summary: "Proof verification p99 above 80ms budget"
+          description: "zk_verify_latency_ms p99 {{ $value }}ms (budget 80ms) over last 5m."
+      - alert: I3ProofEndpointP99Slow
+        expr: histogram_quantile(0.99, sum by (le) (rate(zk_verify_latency_ms_bucket{status="Verified"}[5m]))) > 120
+        for: 5m
+        labels:
+          severity: page
+          service: iroha3
+          slo: proof_endpoint_p99
+        annotations:
+          summary: "Torii proof endpoint (verify path proxy) p99 above 120ms budget"
+          description: "zk_verify_latency_ms p99 {{ $value }}ms (budget 120ms) over last 5m as a proxy for proof endpoint handling."

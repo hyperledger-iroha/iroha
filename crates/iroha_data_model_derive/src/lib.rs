@@ -1,14 +1,23 @@
 //! A crate containing various derive macros for `iroha_data_model`
+// darling-generated code triggers this lint
+#![allow(clippy::needless_continue)]
+mod emitter_ext;
 mod enum_ref;
 mod event_set;
 mod has_origin;
 mod id;
 mod model;
-mod partially_tagged;
+mod registrable_builder;
+mod utils;
 
-use iroha_macro_utils::Emitter;
-use manyhow::{emit, manyhow, Result};
+use darling::{FromMeta, ast::NestedMeta};
+use emitter_ext::EmitterExt;
+use manyhow::{Emitter, Result, emit, manyhow};
 use proc_macro2::TokenStream;
+use quote::quote;
+use syn::Item;
+
+use crate::utils::darling_error;
 
 /// Construct a matching enum with references in place of enum variant fields
 ///
@@ -17,7 +26,7 @@ use proc_macro2::TokenStream;
 /// ```
 /// mod model {
 ///     use iroha_data_model_derive::EnumRef;
-///     use parity_scale_codec::Encode;
+///     use norito::codec::Encode;
 ///
 ///     #[derive(EnumRef)]
 ///     #[enum_ref(derive(Encode))]
@@ -161,6 +170,43 @@ pub fn model_single(input: TokenStream) -> TokenStream {
     emitter.finish_token_stream_with(model::process_item(input))
 }
 
+/// Attribute macro to attach a stable wire identifier to an instruction type.
+///
+/// Usage: `#[instruction(id = "iroha.log")]` applied to a struct/enum.
+/// It generates an inherent associated constant `WIRE_ID: &str` on the type.
+///
+/// This macro does not alter registration automatically; the registry can
+/// choose to use the constant, or you can pass the same ID into
+/// `InstructionRegistry::register_with_id::<T>(id)`.
+#[manyhow]
+#[proc_macro_attribute]
+pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream> {
+    #[derive(FromMeta)]
+    struct Args {
+        id: String,
+    }
+    let metas = NestedMeta::parse_meta_list(attr.clone())?;
+    let args = Args::from_list(&metas).map_err(darling_error)?;
+
+    let item: Item = syn::parse2(input.clone())?;
+    let (ident, generics) = match &item {
+        Item::Struct(s) => (s.ident.clone(), s.generics.clone()),
+        Item::Enum(e) => (e.ident.clone(), e.generics.clone()),
+        _ => return Ok(quote! { #item }),
+    };
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let wire_id_lit = syn::LitStr::new(&args.id, proc_macro2::Span::call_site());
+
+    let expanded = quote! {
+        #item
+        impl #impl_generics #ident #ty_generics #where_clause {
+            /// Stable wire identifier for instruction encoding
+            pub const WIRE_ID: &'static str = #wire_id_lit;
+        }
+    };
+    Ok(expanded)
+}
+
 /// Derive macro for `Identifiable` trait which also automatically implements [`Ord`], [`Eq`],
 /// and [`Hash`] for the annotated struct by delegating to it's identifier field. Identifier
 /// field for the struct can be selected by annotating the desired field with `#[id]` or
@@ -285,108 +331,6 @@ pub fn id_eq_ord_hash(input: TokenStream) -> TokenStream {
 
     let result = id::impl_id_eq_ord_hash(&mut emitter, &input);
     emitter.finish_token_stream_with(result)
-}
-
-/// Derive `::serde::Serialize` trait for `enum` with possibility to avoid tags for selected variants
-///
-/// ```
-/// use iroha_data_model_derive::PartiallyTaggedSerialize;
-/// use serde::Serialize;
-///
-/// #[derive(PartiallyTaggedSerialize)]
-/// enum Outer {
-///     A(u64),
-///     #[serde_partially_tagged(untagged)]
-///     Inner(Inner),
-/// }
-///
-/// #[derive(Serialize)]
-/// enum Inner {
-///     B(u32),
-/// }
-///
-/// assert_eq!(
-///     &serde_json::to_string(&Outer::Inner(Inner::B(42))).expect("Failed to serialize"),
-///     r#"{"B":42}"#
-/// );
-///
-/// assert_eq!(
-///     &serde_json::to_string(&Outer::A(42)).expect("Failed to serialize"),
-///     r#"{"A":42}"#
-/// );
-/// ```
-#[manyhow]
-#[proc_macro_derive(PartiallyTaggedSerialize, attributes(serde_partially_tagged, serde))]
-pub fn partially_tagged_serialize_derive(input: TokenStream) -> Result<TokenStream> {
-    let input = syn::parse2(input)?;
-
-    partially_tagged::impl_partially_tagged_serialize(&input)
-}
-
-/// Derive `::serde::Deserialize` trait for `enum` with possibility to avoid tags for selected variants
-///
-/// ```
-/// use std::string::ToString;
-///
-/// use iroha_data_model_derive::PartiallyTaggedDeserialize;
-/// use serde::Deserialize;
-///
-/// #[derive(Debug, PartialEq, Eq, PartiallyTaggedDeserialize)]
-/// enum Outer {
-///     A(u64),
-///     #[serde_partially_tagged(untagged)]
-///     Inner(Inner),
-/// }
-///
-/// #[derive(Debug, PartialEq, Eq, Deserialize)]
-/// enum Inner {
-///     B(u128),
-/// }
-///
-/// assert_eq!(
-///     serde_json::from_str::<Outer>(r#"{"B":42}"#).expect("Failed to deserialize B"),
-///     Outer::Inner(Inner::B(42))
-/// );
-///
-/// assert_eq!(
-///     serde_json::from_str::<Outer>(r#"{"A":42}"#).expect("Failed to deserialize A"),
-///     Outer::A(42)
-/// );
-/// ```
-///
-/// Deserialization of untagged variants happens in declaration order.
-/// Should be used with care to avoid ambiguity.
-///
-/// ```
-/// use serde::Deserialize;
-/// use iroha_data_model_derive::PartiallyTaggedDeserialize;
-///
-/// #[derive(Debug, PartialEq, Eq, PartiallyTaggedDeserialize)]
-/// enum Outer {
-///     A(u64),
-///     // Ambiguity is created here because without tag it is impossible to distinguish `Inner1` and `Inner2`.
-///     // Due to deserialization order `Inner1` will be deserialized in case of ambiguity.
-///     #[serde_partially_tagged(untagged)]
-///     Inner1(Inner),
-///     #[serde_partially_tagged(untagged)]
-///     Inner2(Inner),
-/// }
-///
-/// #[derive(Debug, PartialEq, Eq, Deserialize)]
-/// enum Inner {
-///     B(u32),
-/// }
-///
-/// assert_eq!(
-///     serde_json::from_str::<Outer>(r#"{"B":42}"#).expect("Failed to deserialize"), Outer::Inner1(Inner::B(42))
-/// );
-/// ```
-#[manyhow]
-#[proc_macro_derive(PartiallyTaggedDeserialize, attributes(serde_partially_tagged, serde))]
-pub fn partially_tagged_deserialize_derive(input: TokenStream) -> Result<TokenStream> {
-    let input = syn::parse2(input)?;
-
-    partially_tagged::impl_partially_tagged_deserialize(&input)
 }
 
 /// Derive macro for `HasOrigin`.
@@ -541,8 +485,8 @@ pub fn has_origin_derive(input: TokenStream) -> TokenStream {
 ///     PartialOrd,
 ///     Ord,
 ///     Hash,
-///     parity_scale_codec::Decode,
-///     parity_scale_codec::Encode,
+///     norito::codec::Decode,
+///     norito::codec::Encode,
 ///     iroha_schema::IntoSchema,
 /// )]
 ///
@@ -566,4 +510,14 @@ pub fn event_set_derive(input: TokenStream) -> TokenStream {
     let result = event_set::impl_event_set_derive(&mut emitter, &input);
 
     emitter.finish_token_stream_with(result)
+}
+
+/// Derive macro generating registration builders for data model structs.
+#[manyhow]
+#[proc_macro_derive(RegistrableBuilder, attributes(registrable_builder))]
+pub fn registrable_builder(input: TokenStream) -> Result<TokenStream> {
+    let input = syn::parse2(input)?;
+    let mut emitter = Emitter::new();
+    let result = registrable_builder::impl_registrable_builder(&mut emitter, &input);
+    Ok(emitter.finish_token_stream_with(result))
 }

@@ -1,0 +1,7 @@
+profile: Iroha3Testus
+chain_id: iroha3-testus
+collectors: k=3 r=3
+vrf_seed: 8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B
+peers_with_pop: 7
+consensus_fingerprint: 0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8
+kagami_version: 2.0.0-rc.2.0

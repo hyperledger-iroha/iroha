@@ -1,7 +1,4 @@
-#![allow(missing_docs)]
-
-extern crate alloc;
-
+//! `IntoSchema` derive tests for generic bounds.
 #[derive(iroha_schema::IntoSchema)]
 struct Foo<V> {
     _value: Option<V>,
@@ -9,13 +6,12 @@ struct Foo<V> {
 
 #[test]
 fn check_generic() {
-    use alloc::collections::BTreeMap;
-    use core::any::TypeId;
+    use std::{any::TypeId, collections::BTreeMap};
 
-    use iroha_schema::prelude::*;
     use Metadata::*;
+    use iroha_schema::prelude::*;
 
-    let option_id = TypeId::of::<core::option::Option<bool>>();
+    let option_id = TypeId::of::<::std::option::Option<bool>>();
     let expected_struct = Struct(NamedFieldsMeta {
         declarations: vec![Declaration {
             name: "_value".to_owned(),
@@ -32,7 +28,7 @@ fn check_generic() {
             },
         ),
         (
-            TypeId::of::<core::option::Option<bool>>(),
+            TypeId::of::<::std::option::Option<bool>>(),
             MetaMapEntry {
                 type_id: "Option<bool>".to_owned(),
                 type_name: "Option<bool>".to_owned(),

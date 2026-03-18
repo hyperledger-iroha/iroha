@@ -9,18 +9,31 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 ENV PATH=$POETRY_HOME/bin:$PATH
 
-RUN pacman -Syu rustup mold musl rust-musl openssl libgit2 jq unzip \
+RUN pacman -Syu rustup mold openssl libgit2 jq unzip \
     git docker docker-buildx docker-compose \
     python python-pip --noconfirm --disable-download-timeout && \
     curl -sSL https://install.python-poetry.org | python3 -
-
-RUN rustup toolchain install nightly-2025-05-08-x86_64-unknown-linux-gnu
-RUN rustup default nightly-2025-05-08-x86_64-unknown-linux-gnu
-RUN rustup component add llvm-tools-preview clippy
-RUN rustup component add rust-src
-RUN rustup component add rustfmt
-RUN rustup target add wasm32-unknown-unknown
+RUN rustup component add --toolchain stable \
+    llvm-tools-preview clippy rust-src rustfmt
 RUN cargo install grcov
 
-# TODO: Figure out a way to pull in libgit2, which doesn't crash if this useless variable is gone.
-RUN git config --global --add safe.directory .
+ARG BUILDER_USER=iroha
+ARG BUILDER_UID=1000
+ARG BUILDER_GID=1000
+
+RUN groupadd --gid "${BUILDER_GID}" "${BUILDER_USER}" \
+    && useradd --uid "${BUILDER_UID}" \
+        --gid "${BUILDER_GID}" \
+        --create-home \
+        --shell /bin/bash \
+        "${BUILDER_USER}" \
+    && usermod --append --groups docker "${BUILDER_USER}" \
+    && install -d -o "${BUILDER_USER}" -g "${BUILDER_USER}" /workspace \
+    && chown -R "${BUILDER_USER}":"${BUILDER_USER}" \
+        /usr/local/rustup \
+        /usr/local/cargo \
+        /opt/poetry
+
+USER ${BUILDER_USER}
+WORKDIR /workspace
+ENV HOME=/home/${BUILDER_USER}

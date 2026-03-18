@@ -13,20 +13,20 @@ workspace = true
 [features]
 default = []
 # Support lightweight telemetry, including diagnostics
-telemetry = ["iroha_futures_derive/telemetry"]
+telemetry = ["iroha_derive/telemetry"]
 
 [dependencies]
-iroha_futures_derive = { path = "../iroha_futures_derive" }
+iroha_derive = { workspace = true, features = ["futures"] }
 
 iroha_config = { workspace = true }
 iroha_logger = { workspace = true }
+norito = {workspace = true}
 
 rand = { workspace = true }
-serde_json = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
+error-stack = { workspace = true }
 
 [dev-dependencies]
-tokio-stream = { version = "0.1.15", features = ["sync"] }
+tokio-stream = { version = "0.1.17", features = ["sync"] }

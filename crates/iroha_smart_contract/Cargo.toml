@@ -13,6 +13,8 @@ workspace = true
 [features]
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`
 debug = ["iroha_smart_contract_utils/debug"]
+trybuild-tests = []
+packed-struct = []
 
 [dependencies]
 iroha_smart_contract_derive = { path = "../iroha_smart_contract_derive" }
@@ -20,12 +22,14 @@ iroha_smart_contract_derive = { path = "../iroha_smart_contract_derive" }
 iroha_macro.workspace = true
 iroha_data_model.workspace = true
 iroha_smart_contract_utils.workspace = true
+iroha_smart_contract_codec.workspace = true
 
-parity-scale-codec.workspace = true
+norito = {workspace = true}
 derive_more.workspace = true
 
 displaydoc.workspace = true
 
 [dev-dependencies]
-webassembly-test = "0.1.0"
+# Removed `webassembly-test` to eliminate compile-time failures from
+# transitive `mv` crate. Tests rely solely on `trybuild` now.
 trybuild = { workspace = true }

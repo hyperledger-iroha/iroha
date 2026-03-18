@@ -1,0 +1,164 @@
+{
+  "title": "Confidential Assets Telemetry",
+  "uid": "confidential-assets",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["confidential", "zk"],
+  "templating": {
+    "list": [
+      {
+        "name": "asset",
+        "label": "Asset Definition",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(iroha_confidential_tree_commitments, asset_id)",
+        "refresh": 1,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Commitment Tree State",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "iroha_confidential_tree_commitments{asset_id=~\"$asset\"}",
+          "legendFormat": "Commitments — {{asset_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "iroha_confidential_root_history_entries{asset_id=~\"$asset\"}",
+          "legendFormat": "Root history — {{asset_id}}",
+          "refId": "B"
+        },
+        {
+          "expr": "iroha_confidential_frontier_checkpoints{asset_id=~\"$asset\"}",
+          "legendFormat": "Frontier checkpoints — {{asset_id}}",
+          "refId": "C"
+        },
+        {
+          "expr": "iroha_confidential_tree_depth{asset_id=~\"$asset\"}",
+          "legendFormat": "Tree depth — {{asset_id}}",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Root & Frontier Evictions (15m rate)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (asset_id) (rate(iroha_confidential_root_evictions_total{asset_id=~\"$asset\"}[15m]))",
+          "legendFormat": "Root evictions — {{asset_id}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (asset_id) (rate(iroha_confidential_frontier_evictions_total{asset_id=~\"$asset\"}[15m]))",
+          "legendFormat": "Frontier evictions — {{asset_id}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "1/s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Verifier Cache Miss Ratio (5m)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(iroha_zk_verifier_cache_events_total{event=\"miss\"}[5m])) / clamp_min(sum(rate(iroha_zk_verifier_cache_events_total{event=~\"hit|miss\"}[5m])), 1e-6)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": ["last"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "colorMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "percentage",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 0.2},
+              {"color": "red", "value": 0.5}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "Ratio of verifier cache misses to total lookups over the past 5 minutes. Values above 50% signal degraded cache reuse."
+    },
+    {
+      "type": "timeseries",
+      "title": "Verifier Cache Events (5m rate)",
+      "id": 4,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (cache, event) (rate(iroha_zk_verifier_cache_events_total[5m]))",
+          "legendFormat": "{{cache}} — {{event}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "1/s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

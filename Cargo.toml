@@ -1,8 +1,9 @@
 [workspace.package]
-edition = "2021"
+edition = "2024"
+rust-version = "1.92"
 version = "2.0.0-rc.2.0"
-# TODO: teams are being deprecated update the authors URL
-authors = ["Iroha 2 team <https://github.com/orgs/soramitsu/teams/iroha2>"]
+# GitHub org teams pages are no longer supported; point to project contributors instead.
+authors = ["Iroha 2 contributors <https://github.com/hyperledger-iroha/iroha/graphs/contributors>"]
 
 description = "Efficient, simple, Byzantine-fault-tolerant DLT inspired by the Kaizen principle"
 repository = "https://github.com/hyperledger-iroha/iroha"
@@ -13,115 +14,164 @@ license = "Apache-2.0"
 keywords = ["blockchain", "crypto", "iroha", "ledger"]
 categories = ["cryptography::cryptocurrencies"]
 
+[workspace.metadata]
+docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kagami"]
+
 [workspace.dependencies]
-iroha_core = { version = "=2.0.0-rc.2.0 ", path = "crates/iroha_core" }
+iroha_core = { path = "crates/iroha_core" }
 
-iroha_torii = { version = "=2.0.0-rc.2.0", path = "crates/iroha_torii" }
-iroha_torii_shared = { version = "=2.0.0-rc.2.0", path = "crates/iroha_torii_shared" }
+iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-halo2", "zk-halo2-ipa", "ipa-commitment"] }
+iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 
-iroha = { version = "=2.0.0-rc.2.0", path = "crates/iroha" }
+iroha = { path = "crates/iroha" }
 
-iroha_macro_utils = { version = "=2.0.0-rc.2.0", path = "crates/iroha_macro_utils" }
-iroha_telemetry = { version = "=2.0.0-rc.2.0", path = "crates/iroha_telemetry" }
-iroha_p2p = { version = "=2.0.0-rc.2.0", path = "crates/iroha_p2p" }
-iroha_primitives = { version = "=2.0.0-rc.2.0", path = "crates/iroha_primitives", default-features = false }
-iroha_config = { version = "=2.0.0-rc.2.0", path = "crates/iroha_config" }
-iroha_config_base = { version = "=2.0.0-rc.2.0", path = "crates/iroha_config_base" }
-iroha_schema_gen = { version = "=2.0.0-rc.2.0", path = "crates/iroha_schema_gen" }
-iroha_schema = { version = "=2.0.0-rc.2.0", path = "crates/iroha_schema", default-features = false }
-iroha_logger = { version = "=2.0.0-rc.2.0", path = "crates/iroha_logger" }
-iroha_crypto = { version = "=2.0.0-rc.2.0", path = "crates/iroha_crypto", default-features = false }
-iroha_macro = { version = "=2.0.0-rc.2.0", path = "crates/iroha_macro", default-features = false }
-iroha_futures = { version = "=2.0.0-rc.2.0", path = "crates/iroha_futures" }
-iroha_genesis = { version = "=2.0.0-rc.2.0", path = "crates/iroha_genesis" }
-iroha_ffi = { version = "=2.0.0-rc.2.0", path = "crates/iroha_ffi" }
-iroha_version = { version = "=2.0.0-rc.2.0", path = "crates/iroha_version", default-features = false }
-iroha_wasm_codec = { version = "=2.0.0-rc.2.0", path = "crates/iroha_wasm_codec" }
-iroha_wasm_builder = { version = "=2.0.0-rc.2.0", path = "crates/iroha_wasm_builder" }
+iroha_macro_utils = { path = "crates/iroha_macro_utils" }
+iroha_telemetry = { path = "crates/iroha_telemetry" }
+iroha_p2p = { path = "crates/iroha_p2p" }
+iroha_primitives = { path = "crates/iroha_primitives", default-features = false }
+iroha_config = { path = "crates/iroha_config" }
+iroha_config_base = { path = "crates/iroha_config_base" }
+iroha_derive = { path = "crates/iroha_derive" }
+iroha_derive_primitives = { path = "crates/iroha_derive_primitives" }
+iroha_schema_gen = { path = "crates/iroha_schema_gen" }
+iroha_schema = { path = "crates/iroha_schema", default-features = false }
+iroha_logger = { path = "crates/iroha_logger" }
+iroha_crypto = { path = "crates/iroha_crypto", default-features = false, features = ["std", "rand", "bls", "bls-multi-pairing"] }
+iroha_macro = { path = "crates/iroha_macro", default-features = false }
+iroha_futures = { path = "crates/iroha_futures" }
+iroha_genesis = { path = "crates/iroha_genesis" }
+norito = { path = "crates/norito", features = ["json", "json-std-io", "strict-safe", "gpu-compression"] }
+norito_derive = { path = "crates/norito_derive" }
+iroha_ffi = { path = "crates/iroha_ffi" }
+iroha_version = { path = "crates/iroha_version", default-features = false, features = ["json"] }
+connect_norito_bridge = { path = "crates/connect_norito_bridge" }
+iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
+iroha_i18n = { path = "crates/iroha_i18n" }
 
-iroha_smart_contract = { version = "=2.0.0-rc.2.0", path = "crates/iroha_smart_contract" }
-iroha_smart_contract_utils = { version = "=2.0.0-rc.2.0", path = "crates/iroha_smart_contract_utils" }
-iroha_executor = { version = "=2.0.0-rc.2.0", path = "crates/iroha_executor" }
+iroha_smart_contract = { path = "crates/iroha_smart_contract" }
+iroha_smart_contract_utils = { path = "crates/iroha_smart_contract_utils" }
+iroha_executor = { path = "crates/iroha_executor" }
+iroha_smart_contract_codec = { path = "crates/iroha_smart_contract_codec" }
+iroha_trigger = { path = "crates/iroha_trigger" }
+iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 
-iroha_data_model = { version = "=2.0.0-rc.2.0", path = "crates/iroha_data_model", default-features = false }
-iroha_executor_data_model = { version = "=2.0.0-rc.2.0", path = "crates/iroha_executor_data_model" }
+iroha_data_model = { path = "crates/iroha_data_model", default-features = false, features = ["json", "governance", "http", "bridge", "bls"] }
+iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
-iroha_test_network = { version = "=2.0.0-rc.2.0", path = "crates/iroha_test_network" }
-iroha_test_samples = { version = "=2.0.0-rc.2.0", path = "crates/iroha_test_samples" }
+iroha_test_network = { path = "crates/iroha_test_network" }
+iroha_test_samples = { path = "crates/iroha_test_samples" }
+ivm = { path = "crates/ivm" }
+ivm_abi = { path = "crates/ivm_abi" }
+kotodama_lang = { path = "crates/kotodama_lang" }
+sorafs_car = { path = "crates/sorafs_car" }
+sorafs_chunker = { path = "crates/sorafs_chunker" }
+sorafs_manifest = { path = "crates/sorafs_manifest" }
+sorafs_orchestrator = { path = "crates/sorafs_orchestrator" }
+soranet_pq = { path = "crates/soranet_pq" }
 
-proc-macro2 = "1.0.86"
-syn = { version = "2.0.72", default-features = false }
-quote = "1.0.36"
-manyhow = { version = "0.8.1", features = ["darling"] }
-darling = "0.20.10"
+# Note: remaining dependencies stay pinned until we resolve the outstanding
+# compatibility issues with their latest major releases.
+
+proc-macro2 = "1.0.103"
+syn = { version = "2.0.109", default-features = false }
+quote = "1.0.42"
+manyhow = { version = "0.11.4", features = ["darling"] }
+darling = "0.23.0"
 drop_bomb = "0.1.5"
 
-futures = { version = "0.3.30", default-features = false }
-tokio = "1.40.0"
-tokio-stream = "0.1.15"
-tokio-tungstenite = "0.21.0"
-tokio-util = "0.7.11"
-tungstenite = "0.21.0"
-crossbeam-queue = "0.3.11"
-parking_lot = { version = "0.12.3" }
+futures = { version = "0.3.31", default-features = false }
+tokio = "1.48.0"
+tokio-stream = "0.1.17"
+tokio-tungstenite = "0.28.0"
+tokio-util = "0.7.17"
+tokio-rustls = { version = "0.26.4", default-features = false }
+rustls = { version = "0.23.35", default-features = false, features = ["std"] }
+tungstenite = "0.28.0"
+crossbeam-queue = "0.3.12"
+parking_lot = { version = "0.12.5" }
+blake3 = "1.8.2"
+blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
+once_cell = "1.21.3"
 
-tempfile = "3.10.1"
+tempfile = "3.23.0"
 path-absolutize = "3.1.1"
-bytes = "1.6.1"
+bytes = "1.10.1"
 
-vergen = { version = "8.3.1", default-features = false }
-trybuild = "1.0.97"
+trybuild = "1.0.114"
 impls = "1.0.3"
 
 base64 = { version = "0.22.1", default-features = false }
 hex = { version = "0.4.3", default-features = false }
+http-body-util = "0.1.3"
+http = "1.3.1"
+httpmock = "0.8.2"
 nonzero_ext = { version = "0.3.0", default-features = false }
+rust_decimal = { version = "1.39", default-features = false }
 
-url = "2.5.2"
-prometheus = { version = "0.13.4", default-features = false }
+heck = "0.5.0"
 
-clap = "4.5.11"
-owo-colors = "4.1.0"
-supports-color = "2.1.0"
-spinoff = "0.8.0"
-humantime = "2.1.0"
+url = "2.5.7"
+reqwest = { version = "0.12.24", default-features = false }
+prometheus = { version = "0.14.0", default-features = false }
 
-criterion = "0.5.1"
-expect-test = "1.5.0"
-assertables = "7"
+clap = "4.5.51"
+owo-colors = "4.2.3"
+supports-color = "3.0.2"
+humantime = "2.3.0"
+crossterm = "0.29"
+eframe = { version = "0.33.0", default-features = true }
+
+criterion = "0.8.0"
+expect-test = "1.5.1"
+assertables = "9.8.2"
 
 eyre = "0.6.12"
-color-eyre = "0.6.3"
-thiserror = { version = "1.0.63", default-features = false }
+color-eyre = "0.6.5"
+thiserror = { version = "2.0.17", default-features = false }
 displaydoc = { version = "0.2.5", default-features = false }
-error-stack = "0.4.1"
+error-stack = "0.6.0"
 
-cfg-if = "1.0.0"
-derive_more = { version = "0.99.18", default-features = false }
-async-trait = "0.1.81"
-strum = { version = "0.25.0", default-features = false }
-getset = "0.1.2"
-hex-literal = "0.4.1"
-derive-where = "1.2.7"
+# Removed cfg-if dependency as we now use explicit cfg attributes
+derive_more = { version = "2.0.1", default-features = false }
+async-trait = "0.1.89"
+strum = { version = "0.27.2", default-features = false }
+getset = "0.1.6"
+hex-literal = "1.1.0"
+derive-where = "1.6.0"
 
-rand = { version = "0.8.5", default-features = false, features = ["getrandom", "alloc"] }
-axum = { version = "0.7.5", default-features = false }
-wasmtime = "22.0.0"
+rand = { version = "0.9.2", default-features = false, features = ["alloc", "os_rng", "small_rng", "std", "std_rng", "thread_rng"] }
+rand_core_06 = { package = "rand_core", version = "0.6.4", default-features = false, features = ["std"] }
+axum = { version = "0.8.6", default-features = false }
 
-tracing = { version = "0.1.40", features = ["log"] }
-tracing-subscriber = { version = "0.3.18", default-features = false }
+tracing = { version = "0.1.41", features = ["log"] }
+tracing-subscriber = { version = "0.3.20", default-features = false }
 
-dashmap = { version = "5.5.3", features = ["serde"] }
-rustc-hash = "1.1.0"
+rayon = "1.11.0"
 
-serde = { version = "1.0.204", default-features = false }
-serde_json = { version = "1.0.121", default-features = false, features = ["alloc"] }
-serde_with = { version = "3.9.0", default-features = false }
-parity-scale-codec = { version = "3.6.12", default-features = false }
-json5 = "0.4.1"
-toml = "0.8.16"
+dashmap = { version = "6.1.0" }
+rustc-hash = "2.1.1"
 
-mv = { version = "0.1.0" }
+json5 = "1.0.0"
+toml = "0.9.8"
+bincode = "2.0.1"
+zstd = "0.13.3"
+time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
+
+tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+halo2curves = { version = "0.9" }
+
+mv = { path = "crates/mv" }
+concread = "=0.5.7"
+
+# [patch.crates-io] was temporarily disabled; keep the local overrides we still
+# rely on for Halo2 helpers and the CUDA helper.
+[patch.crates-io]
+halo2-axiom = { path = "vendor/halo2-axiom" }
+halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
+find_cuda_helper = { path = "vendor/find_cuda_helper" }
+#streebog = { path = "vendor/streebog" }
+#opus = { path = "vendor/opus_stub" }
+#icrate = { path = "vendor/icrate" }
 
 [workspace.lints]
 rustdoc.private_doc_tests = "deny"
@@ -146,11 +196,42 @@ rust.non_ascii_idents = "deny"
 rust.elided_lifetimes_in_paths = "allow"
 rust.unknown_lints = "warn"
 rust.single_use_lifetimes = "warn"
-# TODO: reenable
-# rust.unsafe_op_in_unsafe_fn = "deny"
+rust.unsafe_op_in_unsafe_fn = "deny"
 rust.unexpected_cfgs = { level = "warn", check-cfg = [
     # FIXME: https://github.com/hyperledger-iroha/iroha/issues/3102
+    'cfg(feature, values("adaptive-telemetry"))',
+    'cfg(feature, values("adaptive-telemetry-log"))',
+    'cfg(feature, values("bench-internal"))',
+    'cfg(feature, values("columnar"))',
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("compression"))',
+    'cfg(feature, values("crc-key-hash"))',
+    'cfg(feature, values("cuda-stage1"))',
+    'cfg(feature, values("derive"))',
     'cfg(feature, values("ffi_import"))',
+    'cfg(feature, values("gpu-compression"))',
+    'cfg(feature, values("iroha_schema"))',
+    'cfg(feature, values("iroha-core-tests"))',
+    'cfg(feature, values("halo2-dev-tests"))',
+    'cfg(feature, values("json"))',
+    'cfg(feature, values("json-raw-value"))',
+    'cfg(feature, values("json-std-io"))',
+    'cfg(feature, values("metal-stage1"))',
+    'cfg(feature, values("packed-seq"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("parallel-stage1"))',
+    'cfg(feature, values("parallel-stage1-rayon"))',
+    'cfg(feature, values("parity-scale"))',
+    'cfg(feature, values("schema-structural"))',
+    'cfg(feature, values("sm"))',
+    'cfg(target_feature, values("neon", "pmull"))',
+    'cfg(feature, values("simd-accel"))',
+    'cfg(feature, values("simdutf8-validate"))',
+    'cfg(feature, values("stage1-validate"))',
+    'cfg(feature, values("std"))',
+    'cfg(feature, values("strict-safe"))',
+    'cfg(feature, values("transparent_api"))',
+    'cfg(feature, values("trybuild-tests"))',
     # It is set by `cargo-llvm-cov`
     'cfg(coverage)'
 ] }
@@ -200,9 +281,53 @@ clippy.wildcard_dependencies = "deny"
 resolver = "2"
 members = [
     "crates/*",
+    "crates/norito/accelerators/jsonstage1_cuda",
+    "crates/norito/accelerators/jsonstage1_metal",
+    "crates/iroha_ffi/proc_macro",
+    "vendor/find_cuda_helper",
+    "mochi/*",
     "data_model/samples/*",
-    "integration_tests"
+    "integration_tests",
+    "python/iroha_python/iroha_python_rs",
+    "xtask",
+    "tools/soranet-handshake-harness",
+    "tools/soranet-puzzle-service",
+    "tools/soranet-relay",
+    "tools/norito_codegen_exporter",
+    "tools/soradns-resolver",
+    "tools/telemetry-schema-diff"
 ]
+exclude = [
+    "mochi/fixtures",
+    "crates/gpuzstd_metal.ignore"
+]
+
+[profile.dev]
+incremental = true
+split-debuginfo = "packed"
+debug = "line-tables-only"
+
+[profile.dev.build-override]
+debug = 0
+codegen-units = 256
+
+[profile.test]
+# Avoid long dsymutil phases on macOS test binaries.
+split-debuginfo = "unpacked"
+debug = "line-tables-only"
+incremental = true
+
+[profile.test.build-override]
+debug = 0
+codegen-units = 256
+
+[profile.dev.package."*"]
+debug = 0
+codegen-units = 256
+
+[profile.test.package."*"]
+debug = 0
+codegen-units = 256
 
 [profile.deploy]
 inherits = "release"

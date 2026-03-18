@@ -1,0 +1,21 @@
+[
+  {
+    "issuer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "metadata": {
+      "ticket": "INC-4012"
+    },
+    "note": "Retail device reported stolen",
+    "reason": "device_compromised",
+    "revoked_at_ms": 1730314876000,
+    "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000001"
+  },
+  {
+    "issuer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "metadata": {
+      "program": "pilot"
+    },
+    "reason": "issuer_request",
+    "revoked_at_ms": 1730414876000,
+    "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000003"
+  }
+]

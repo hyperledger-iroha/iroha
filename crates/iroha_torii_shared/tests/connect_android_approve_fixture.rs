@@ -1,0 +1,58 @@
+//! Interop fixture checks for Android-emitted Connect approve frames.
+
+use base64::Engine as _;
+use iroha_data_model::account::{AccountId, ParsedAccountId};
+use iroha_torii_shared::connect::{ConnectControlV1, FrameKind, decode_connect_frame_bare};
+
+#[test]
+fn decodes_android_approve_frame_fixture() {
+    let hex = include_str!("fixtures/android_approve_frame.hex").trim();
+    let bytes = hex::decode(hex).expect("fixture hex should decode");
+    let frame = decode_connect_frame_bare(&bytes).expect("android approve frame should decode");
+
+    assert_eq!(frame.seq, 1);
+    assert_eq!(frame.sid, [0xCDu8; 32]);
+    assert!(matches!(
+        frame.dir,
+        iroha_torii_shared::connect::Dir::WalletToApp
+    ));
+
+    match frame.kind {
+        FrameKind::Control(ConnectControlV1::Approve {
+            wallet_pk,
+            account_id,
+            permissions,
+            proof,
+            sig_wallet,
+        }) => {
+            assert_eq!(wallet_pk, [0x07u8; 32]);
+            assert_eq!(
+                account_id,
+                "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+            );
+            let parsed = AccountId::parse_encoded(&account_id)
+                .map(ParsedAccountId::into_account_id)
+                .expect("fixture account id should be encoded account literal");
+            assert_eq!(parsed.to_string(), account_id);
+            assert!(
+                !account_id.contains('@'),
+                "fixture must not use historical account@domain literal"
+            );
+            assert_eq!(permissions, None);
+            assert_eq!(proof, None);
+            assert_eq!(sig_wallet.bytes(), [0x09u8; 64]);
+        }
+        _ => panic!("expected control approve frame"),
+    }
+}
+
+#[test]
+fn fixture_base64_roundtrip_sanity() {
+    let hex = include_str!("fixtures/android_approve_frame.hex").trim();
+    let bytes = hex::decode(hex).expect("fixture hex should decode");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("base64 decode");
+    assert_eq!(decoded, bytes);
+}

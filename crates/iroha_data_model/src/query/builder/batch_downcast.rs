@@ -1,9 +1,30 @@
-#[cfg(not(feature = "std"))]
-use alloc::vec::{self, Vec};
-#[cfg(feature = "std")]
-use std::vec;
+use std::vec::{self, Vec};
 
-use crate::query::{QueryOutputBatchBox, QueryOutputBatchBoxTuple};
+use iroha_crypto::{HashOf, PublicKey};
+use iroha_primitives::{json::Json, numeric::Numeric};
+
+use crate::{
+    account::{Account, AccountId},
+    asset::{AssetDefinitionId, AssetId, definition::AssetDefinition, value::Asset},
+    block::{BlockHeader, SignedBlock},
+    domain::{Domain, DomainId},
+    metadata::Metadata,
+    name::Name,
+    nft::{Nft, NftId},
+    offline::{
+        OfflineAllowanceRecord, OfflineCounterSummary, OfflineToOnlineTransfer,
+        OfflineTransferRecord, OfflineVerdictRevocation,
+    },
+    parameter::Parameter,
+    peer::PeerId,
+    permission::Permission,
+    proof::ProofRecord,
+    query::{CommittedTransaction, QueryOutputBatchBox, QueryOutputBatchBoxTuple},
+    repo::RepoAgreement,
+    role::{Role, RoleId},
+    transaction::{TransactionEntrypoint, TransactionResult as TxResultType},
+    trigger::{Trigger, TriggerId, action::Action},
+};
 
 #[derive(Debug)]
 pub struct TypedBatchIterUntupled<T> {
@@ -24,8 +45,7 @@ impl<T> ExactSizeIterator for TypedBatchIterUntupled<T> {
     }
 }
 
-#[derive(Debug, Copy, Clone, displaydoc::Display)]
-#[cfg_attr(feature = "std", derive(thiserror::Error))]
+#[derive(Debug, Copy, Clone, displaydoc::Display, thiserror::Error)]
 pub enum TypedBatchDowncastError {
     /// Not enough slices in the tuple
     NotEnoughSlices,
@@ -34,6 +54,64 @@ pub enum TypedBatchDowncastError {
     /// Wrong type at index {0}
     WrongType(usize),
 }
+
+mod single_item {
+    use super::*;
+
+    pub trait Sealed {}
+
+    macro_rules! impl_single_item {
+        ($($ty:path),+ $(,)?) => {
+            $(impl Sealed for $ty {})+
+        };
+    }
+
+    impl_single_item!(
+        PublicKey,
+        String,
+        Metadata,
+        Json,
+        Numeric,
+        Name,
+        DomainId,
+        Domain,
+        AccountId,
+        Account,
+        AssetId,
+        Asset,
+        AssetDefinitionId,
+        AssetDefinition,
+        RepoAgreement,
+        NftId,
+        Nft,
+        Role,
+        Parameter,
+        Permission,
+        CommittedTransaction,
+        TxResultType,
+        HashOf<TxResultType>,
+        TransactionEntrypoint,
+        HashOf<TransactionEntrypoint>,
+        PeerId,
+        RoleId,
+        TriggerId,
+        Trigger,
+        Action,
+        SignedBlock,
+        BlockHeader,
+        HashOf<BlockHeader>,
+        ProofRecord,
+        OfflineAllowanceRecord,
+        OfflineCounterSummary,
+        OfflineToOnlineTransfer,
+        OfflineTransferRecord,
+        OfflineVerdictRevocation,
+    );
+}
+
+pub trait SingleBatchItem: single_item::Sealed {}
+
+impl<T> SingleBatchItem for T where T: single_item::Sealed {}
 
 pub trait HasTypedBatchIter {
     type TypedBatchIter: Iterator<Item = Self> + ExactSizeIterator;
@@ -44,6 +122,7 @@ pub trait HasTypedBatchIter {
 
 impl<T> HasTypedBatchIter for T
 where
+    T: SingleBatchItem,
     Vec<T>: TryFrom<QueryOutputBatchBox>,
 {
     type TypedBatchIter = TypedBatchIterUntupled<T>;
@@ -66,7 +145,6 @@ where
         Ok(TypedBatchIterUntupled { t: t1 })
     }
 }
-
 macro_rules! typed_batch_tuple {
     (
         $(

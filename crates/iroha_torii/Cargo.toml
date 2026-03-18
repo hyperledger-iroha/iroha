@@ -5,6 +5,8 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
+build = "../build-support/script.rs"
+
 description.workspace = true
 repository.workspace = true
 homepage.workspace = true
@@ -18,47 +20,145 @@ categories.workspace = true
 workspace = true
 
 [features]
+default = [
+    "app_api",
+    "transparent_api",
+    "ws_integration_tests",
+    "connect",
+    "push",
+    "circuit-params",
+    "zk-halo2",
+    "zk-halo2-ipa",
+    "ipa-commitment"
+]
 # Enables Telemetry (i.e. Status, Metrics, and API Version) endpoints
-telemetry = ["iroha_telemetry", "iroha_core/telemetry", "serde_json"]
+telemetry = ["iroha_telemetry", "iroha_core/telemetry", "dep:prometheus"]
 # Enables profiling endpoint
 profiling = ["pprof"]
 # Enables Data Model Schema endpoint
 schema = ["iroha_schema", "iroha_schema_gen"]
-
+# App-facing JSON API (convenience endpoints, JSON DSL).
+app_api = []
+## Enable ZK batch verify handler and tests that depend on iroha_zkp_halo2.
+zk-verify-batch = ["dep:iroha_zkp_halo2", "app_api"]
+# Forward `transparent_api` to data model so Torii can gate fields like authority/timestamp
+transparent_api = ["iroha_data_model/transparent_api"]
+## Expose a `/p2p` WebSocket endpoint for P2P fallback (server-side), feature-gated.
+p2p_ws = ["iroha_p2p/p2p_ws"]
+## WalletConnect-style WS + minimal in-node relay. Non-consensus.
+connect = []
+## Enable HTTPS webhook delivery using hyper + rustls (client-only).
+app_api_https = ["dep:hyper-rustls"]
+## Enable WebSocket/WebSocket Secure webhook delivery using tokio-tungstenite (client-only).
+app_api_wss = ["dep:tokio-tungstenite"]
+## Optional push notification bridge for app-facing API (FCM/APNS via HTTP).
+push = ["app_api"]
+## Experimental: scaffold for CommittedTransaction predicate atoms mapping.
+tx_predicates = []
+## Enable WebSocket integration tests (requires tokio-tungstenite). On by default; disable with
+## `--no-default-features --features app_api,transparent_api`.
+ws_integration_tests = ["app_api_wss"]
+## Governance VRF-backed council derivation (app API). Optional.
+gov_vrf = []
+## Prototype: read-only debug endpoints for proof tag index; forwards to `iroha_core/zk-proof-tags`.
+zk-proof-tags = ["iroha_core/zk-proof-tags"]
+zk-ballot = ["iroha_data_model/zk-ballot"]
+goldilocks_backend = [
+    "dep:iroha_zkp_halo2",
+    "iroha_zkp_halo2/goldilocks_backend",
+    "iroha_core/goldilocks_backend",
+    "ivm/goldilocks_backend",
+]
+zk-halo2 = ["iroha_core/zk-halo2"]
+zk-halo2-ipa = ["iroha_core/zk-halo2-ipa"]
+zk-stark = ["iroha_core/zk-stark"]
+ipa-commitment = ["dep:iroha_zkp_halo2"]
+circuit-params = ["iroha_core/circuit-params", "halo2_proofs/circuit-params"]
+zk-tests = ["iroha_core/zk-tests"]
+halo2-dev-tests = ["iroha_core/halo2-dev-tests"]
 [dependencies]
-iroha_core = { workspace = true }
+norito = { workspace = true }
+iroha_core = { workspace = true, features = ["app_api", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
 iroha_config = { workspace = true }
-iroha_primitives = { workspace = true, features = ["std"] }
+iroha_primitives = { workspace = true, features = ["simd-accel"] }
 iroha_logger = { workspace = true }
-iroha_data_model = { workspace = true, features = ["http"] }
+iroha_data_model = { workspace = true, features = ["http", "json", "bridge"] }
+iroha_executor_data_model = { workspace = true }
+iroha_crypto = { workspace = true }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_chunker = { workspace = true }
+sorafs_node = { path = "../sorafs_node" }
 iroha_version = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_futures = { workspace = true }
-iroha_macro = { workspace = true }
+iroha_p2p = { workspace = true }
 iroha_schema = { workspace = true, optional = true }
 iroha_schema_gen = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true, optional = true }
+iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", optional = true }
+ivm = { path = "../ivm" }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
+reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots"] }
+url = { workspace = true }
+prometheus = { workspace = true, optional = true }
 
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
-axum = { workspace = true, features = ["multipart", "ws", "query", "json", "tokio", "http1"] }
-tower-http = { version = "0.5.0", features = ["trace", "timeout"] }
+axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros"] }
+tower-http = { version = "0.6.6", features = ["trace", "timeout"] }
+tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
+tokio-stream = { workspace = true }
 eyre = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true, optional = true }
 async-trait = { workspace = true }
-parity-scale-codec = { workspace = true, features = ["derive"] }
-# TODO: switch to original crate once fix is merged (https://github.com/tikv/pprof-rs/pull/241)
-pprof = { git = " https://github.com/Erigara/pprof-rs", branch = "fix_pointer_align", optional = true, default-features = false, features = ["protobuf-codec", "frame-pointer", "cpp"] }
+base64 = { workspace = true }
+ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
+hex = { workspace = true }
+blake3 = { workspace = true }
+ed25519-dalek = "2.2.0"
+libc = "0.2.177"
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa", "pkcs8"] }
+time = { version = "0.3.44", features = ["formatting"] }
+# Security: avoid vulnerable 2.x codec; use prost instead
+pprof = { version = "0.15.0", optional = true, default-features = false, features = ["prost-codec", "frame-pointer", "cpp"] }
 nonzero_ext = { workspace = true }
-pretty-error-debug = "0.3.0"
+pretty-error-debug = "0.3.2"
 tungstenite = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false }
+tempfile = { workspace = true }
+mv = { workspace = true }
+dashmap = { workspace = true }
+hyper = { version = "1.7.0", default-features = false, features = ["http1", "client", "server" ] }
+humantime = { workspace = true }
+http-body-util = { workspace = true }
+http = { workspace = true }
+hyper-rustls = { version = "0.27.7", default-features = false, features = ["http1", "tls12"], optional = true }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"], optional = true }
+urlencoding = "2.1.3"
+rand = { workspace = true }
+regex = "1.11.0"
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+parking_lot = { workspace = true }
+flate2 = "1.1.5"
+zstd = { workspace = true }
+futures-util = "0.3.31"
 
 [build-dependencies]
-vergen = { workspace = true }
+build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
-http-body-util = "0.1.2"
+criterion = { workspace = true }
+tower = "0.5.2"
+hyper = "1.7.0"
+ivm = { path = "../ivm" }
+iroha_telemetry = { workspace = true }
+iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
+iroha_test_samples = { path = "../iroha_test_samples" }
+
+[[bench]]
+name = "status_tail"
+harness = false
+required-features = ["telemetry"]

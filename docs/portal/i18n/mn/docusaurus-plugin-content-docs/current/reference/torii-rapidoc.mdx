@@ -1,0 +1,32 @@
+---
+lang: mn
+direction: ltr
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+RapiDocPanel-ийг '@site/src/components/RapiDocPanel.jsx'-аас импортлох;
+
+# Torii API (RapiDoc)
+
+`RapiDoc` нь ижил Torii-ийн авсаархан, баримтжуулалтыг санал болгодог.
+OpenAPI баримт. Илүү нягтралтай тойм эсвэл зөвхөн унших боломжтой тойм хэрэгтэй үед үүнийг ашиглаарай
+хүсэлт/хариултын загварууд.
+
+## Хэрэглэх зөвлөмж
+
+- Интерактив дуудлагыг идэвхжүүлэхийн тулд эзэмшигчийн токеныг оруулна уу. утгыг a хэлбэрээр дамжуулна
+  `X-TryIt-Auth` толгой ба проксигоор хэвийн болгосон.
+- Порталыг интерактив байдлаар үйлчлэх үед `TRYIT_PROXY_PUBLIC_URL`-г тохируулна уу
+  хүсэлтийг прокси проксигоор дамжуулдаг. Виджет нь прокси илгээх үед анхааруулдаг
+  URL байхгүй байна.
+- "OpenAPI хормын хувилбар"-ыг ашиглан нийтэлсэн түүхэн үзүүлэлтүүдийг ачаална уу.
+  `npm run sync-openapi`; `Latest (tracked)` сонголт үргэлж шийдэгддэг
+  `/openapi/torii.json`.
+- "[Оролдоод үзээрэй](/api/overview#try-it-sandbox-docs-3)" консолтой хослуулах үед
+  прокси шаарддаг үе шаттай гарцуудын эсрэг ажиллах.
+
+<RapiDocPanel />

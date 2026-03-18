@@ -18,28 +18,32 @@ fn main() {
 
 fn measure_accounts_in_vec() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
+    let domain_id = genesis_domain.id().clone();
 
     let v = (0..N)
-        .map(|_| gen_account_in(&genesis_domain.id).0)
-        .map(|id| Account::new(id).into_account())
+        .map(|_| gen_account_in(genesis_domain.id()).0)
+        .map(|id| Account::new(id.to_account_id(domain_id.clone())).into_account())
         .collect::<Vec<_>>();
     done(v);
 }
 
 fn measure_accounts_in_world() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
+    let domain_id = genesis_domain.id().clone();
 
     let accounts = (0..N)
-        .map(|_| gen_account_in(&genesis_domain.id).0)
-        .map(|id| Account::new(id).into_account());
+        .map(|_| gen_account_in(genesis_domain.id()).0)
+        .map(|id| Account::new(id.to_account_id(domain_id.clone())).into_account());
     let world = World::with_assets([], accounts, [], [], []);
     done(world);
 }
 
 fn measure_assets_in_world() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
-    let asset_definition_id: AssetDefinitionId =
-        format!("mandatory#{genesis_domain}").parse().unwrap();
+    let asset_definition_id = AssetDefinitionId::new(
+        genesis_domain.id().clone(),
+        "mandatory".parse().expect("valid asset name"),
+    );
 
     let assets = (0..N).map(|_| gen_asset(asset_definition_id.clone()));
     let world = World::with_assets([], [], [], assets, []);
@@ -48,15 +52,15 @@ fn measure_assets_in_world() {
 
 fn measure_nfts_in_world() {
     let (genesis_domain, _genesis_account) = genesis_domain_and_account();
-    let owner = gen_account_in(&genesis_domain.id).0;
+    let owner = gen_account_in(genesis_domain.id()).0;
 
-    let nfts = (0..N).map(|_| gen_nft(&owner));
+    let nfts = (0..N).map(|_| gen_nft(&owner, genesis_domain.id()));
     let world = World::with_assets([], [], [], [], nfts);
     done(world);
 }
 
 fn print_world_memory_usage() {
-    macro_rules! gen {
+    macro_rules! r#gen {
         ($($p:ident,)+) => {
             $(
                 println!(
@@ -69,12 +73,10 @@ fn print_world_memory_usage() {
             )+
         };
     }
-    gen!(Domain, Account, AssetDefinition, Asset, Nft, Role,);
+    r#gen!(Domain, Account, AssetDefinition, Asset, Nft, Role,);
 }
 
 mod util {
-    use std::fmt::Display;
-
     use iroha_core::smartcontracts::Registrable;
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude::*;
@@ -84,19 +86,19 @@ mod util {
             "ed012003415E0E516BE83870CE5A2165605E8719216B5ECCCE4AEDFB0B2B77862B3798"
                 .parse()
                 .unwrap();
-        let genesis_account_id =
-            AccountId::new(iroha_genesis::GENESIS_DOMAIN_ID.clone(), genesis_public_key);
-        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let genesis_account_id = AccountId::new(genesis_public_key);
+        let genesis_account = Account::new(
+            genesis_account_id.to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        )
+        .build(&genesis_account_id);
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id);
         (genesis_domain, genesis_account)
     }
 
-    pub fn gen_account_in(domain: impl Display) -> (AccountId, KeyPair) {
+    pub fn gen_account_in(_domain: &DomainId) -> (AccountId, KeyPair) {
         let key_pair = KeyPair::random();
-        let account_id = format!("{}@{}", key_pair.public_key(), domain)
-            .parse()
-            .unwrap();
+        let account_id = AccountId::new(key_pair.public_key().clone());
         (account_id, key_pair)
     }
 
@@ -107,9 +109,9 @@ mod util {
         Asset::new(asset_id, value)
     }
 
-    pub fn gen_nft(owner: &AccountId) -> Nft {
+    pub fn gen_nft(owner: &AccountId, domain: &DomainId) -> Nft {
         let value: u64 = rand::random();
-        let nft_id = format!("n{}${}", value, &owner.domain).parse().unwrap();
+        let nft_id = format!("n{value}${domain}").parse().unwrap();
         Nft::new(nft_id, Metadata::default()).build(owner)
     }
 

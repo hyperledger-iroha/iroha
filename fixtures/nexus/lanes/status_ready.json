@@ -1,0 +1,27 @@
+{
+  "lane_governance": [
+    {
+      "alias": "payments",
+      "manifest_ready": true,
+      "manifest_required": true,
+      "manifest_path": "/var/lib/iroha/manifests/payments.json",
+      "validator_ids": [
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"
+      ],
+      "quorum": 2
+    },
+    {
+      "alias": "core",
+      "manifest_ready": true,
+      "manifest_required": true,
+      "manifest_path": "/var/lib/iroha/manifests/core.json",
+      "validator_ids": [
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+        "6cmzPVPX8gQ65j3aqa3YHGbjs9CfKCxx1zJP4n2P7stQ4CwadqpmGED"
+      ],
+      "quorum": 3
+    }
+  ]
+}

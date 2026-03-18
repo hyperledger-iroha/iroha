@@ -1,0 +1,114 @@
+norito_streaming.md:1195:## 21. Issues (closed)
+CHANGELOG.md:1414:  - Support multiple subscriptions from the same actor type (previously a TODO)
+CHANGELOG.md:1666:- Sumeragi: peers in set b related TODO fixes.
+crates/iroha_core/src/beacon.rs:10://!   participation and penalties. See TODOs inline.
+AGENTS.ja.md:54:- 作業が大きくても断らず、細かいタスクに分解して TODO を残し、実装可能な部分から進めてください。
+AGENTS.ja.md:64:- 一時的・未完成の実装には `TODO:` コメントを必ず付けてください。
+AGENTS.ja.md:111:- 優先度付き TODO と実装計画は `roadmap.md` を参照してください。
+crates/iroha_core/src/block.rs:2224:            // TODO(pipeline): Two-phase validation — split stateless validation
+crates/iroha_core/src/block.rs:2558:            // TODO(pipeline-opt): SIMD small-set ops (sort/dedup/intersect on u32 keys)
+crates/iroha_core/src/block.rs:2761:                    // TODO(pipeline-opt): Pre-fetch authority/account state lines for this layer
+crates/iroha_core/src/block.rs:4267:    // TODO(pipeline-opt): Key interning per block. Convert string keys to compact u32 IDs
+crates/iroha_core/src/block.rs:4270:    // TODO(pipeline-opt): Disjoint-set forest prepass (union-find) on undirected conflicts to
+crates/iroha_core/src/block.rs:4273:    // TODO(pipeline-opt): SIMD-accelerate parent dedup using portable intrinsics; keep scalar
+crates/iroha_core/src/executor.rs:1041:        // TODO(executor-migrate): Call into the user-provided `migrate()` entrypoint
+crates/iroha_core/src/state.rs:2373:// TODO(pipeline-opt): Consider a Structure-of-Arrays (SoA) layout for hot
+crates/iroha_core/src/state.rs:2616:        // TODO(parallel-apply): This merge path mirrors sequential semantics for supported
+java/norito_java/DESIGN.md:96:## Future Work / TODOs
+java/norito_java/CHANGELOG.md:8:  error when RLE payloads omit the terminator; Java bindings await streaming TODO.
+java/norito_java/CHANGELOG.md:11:  implementation for deterministic resume (TODO).
+crates/iroha_core/src/kura.rs:60:/// `docs/source/merge_ledger.md`; follow the TODOs added there when wiring
+crates/iroha_core/src/alias/mod.rs:4://! container. The full VOPRF/STARK pipeline is tracked via TODO markers to keep
+docs/source/sorafs_hedging_plan.md:82:These decisions complete the outstanding TODOs and provide clear guidance on hedging data sources,
+crates/iroha_cli/src/main.rs:19:// TODO: refactor the CLI command plumbing to shrink macros, reduce redundant closures, and
+docs/source/sorafs_reserve_rent_plan.md:85:These details complete the outstanding TODOs by specifying financial formulas, lifecycle governance rules,
+docs/source/sorafs_orderbook_plan.md:84:These additions replace the TODO and provide a concrete roadmap for pricing coordination, contract
+scripts/ci/schedule_fraud_scoring.sh:18:Each run appends a TODO checklist so CI can surface upcoming work.
+vendor/icrate/src/Foundation/additions/geometry.rs:18:// TODO: Use a newtype here?
+vendor/icrate/src/Foundation/additions/geometry.rs:24:// TODO: Adjust `objc2-encode` so that this is handled there, and so that we
+docs/source/sorafs/council_minutes_2025-10-29.md:19:- **Governance sections**: Confirmed the RFC now documents the provider admission policy, chunker profile upgrade pipeline, hybrid envelope migration plan, and council hand-off procedure. No outstanding TODOs remain in the governance chapter.
+docs/source/ivm_isi_kotodama_alignment.ja.md:150:## TODO トラッキング（2026-03-14 更新）
+docs/source/sorafs_ai_prescreen_plan.md:101:These details finalize the outstanding TODO items for the AI pre-screening plan.
+CONTRIBUTING.md:363:- You may leave `TODO` markers in code as long as you reference an issue that you created for it. Not creating an issue means it doesn't get merged.
+roadmap.md:285:- [ ] TODO: Thread deal telemetry and settlement DAG publishing through Torii/governance surfaces once SF-8b/SF-12 specifications land.
+roadmap.md:846:#### Governance TODO Burn-Down (Q1 2026)
+roadmap.md:1368:### Swift Immediate TODOs (Agent Sync)
+roadmap.md:2044:- Status: 🈺 In Progress — Implement settlement lifecycle (initiation, cash/collateral leg booking, rate accrual, unwind) in `iroha_core`/IVM hosts, including deterministic interest calculations and collateral substitution hooks. Bilateral repo flows and ACT/360 accrual are live; tri-party coverage and margin callbacks remain TODO.【crates/iroha_core/src/smartcontracts/isi/repo.rs:300】【integration_tests/tests/repo.rs:1】
+roadmap.md:1320:## STARK Verifier (Production Track)
+vendor/icrate/src/Foundation/additions/iter.rs:13:/// TODO: Consider lowering this a bit, since the most common type of
+vendor/icrate/src/Foundation/additions/iter.rs:27:    // TODO: We could possibly optimize things a bit by doing
+vendor/icrate/src/Foundation/additions/iter.rs:232:        // Note: GNUStep may sometimes return unaligned pointers. TODO: Should
+docs/source/sorafs_reputation_plan.md:85:These additions resolve the outstanding TODOs by specifying the scoring methodology and publication pipeline.
+AGENTS.he.md:56:- אם המשימה גדולה מדי, אל תדחו אותה: פרקו לשלבים, הוסיפו הערות `TODO:` והשלימו את מה שניתן.
+AGENTS.he.md:67:- הוסיפו הערת `TODO:` לכל מימוש זמני או חלקי.
+docs/source/soranet_salt_plan.md:60:These additions complete the outstanding TODOs for the salt rotation plan.
+docs/source/sorafs_appeal_pricing_plan.md:65:These details finalize the appeal pricing engine plan and resolve the outstanding TODOs.
+docs/source/fastpq_plan.md:3:This document captures the staged plan for delivering a production-ready FASTPQ-ISI prover and wiring it into the data-space scheduling pipeline. Every definition below is normative unless marked as a TODO. Estimated soundness uses Cairo-style DEEP-FRI bounds; automated rejection-sampling tests in CI fail if the measured bound drops below 128 bits.
+serde_usage.json:3094:          "text": "// TODO: remove once `serde::__private::ContentDeserializer` properly handles `u128`."
+AGENTS.md:44:- If some work is too big, don't reject doing it. Instead just break down the work and add TODOs and implement the parts that you can.
+AGENTS.md:55:- Add a `TODO:` comment explaining any temporary or incomplete implementation.
+AGENTS.md:103:- Check `roadmap.md` for the prioritized TODOs and implementation plan.
+status.md:153:- **SM NEON helpers online.** The `sm4-neon` crate ships the NEON round/key-schedule with runtime detection, `sm3-neon` now exposes the same API surface (currently delegating to the scalar path with TODO markers for the upcoming compression port), and `sm_accel` wires both behind `sm-neon`/`sm-neon-force` with tests covering disable guards and forced overrides (`SM-5a.1a`/`SM-5a.1b`/`SM-5a.2a`).【crates/sm4_neon/src/lib.rs:75】【crates/sm3_neon/src/lib.rs:8】【crates/iroha_crypto/src/sm.rs#L736】【crates/iroha_crypto/src/sm.rs#L924】
+status.md:156:- **SM acceleration scaffolding staged.** `iroha_crypto::sm::sm_accel` now centralises the future SM3/SM4 hardware hooks while continuing to fall back to the deterministic RustCrypto path; inline TODOs cover the pending NEON implementation and x86/RISC-V parity follow-up.【crates/iroha_crypto/src/sm.rs:702】【crates/iroha_crypto/src/sm.rs:733】【docs/source/crypto/sm_program.md#L34】
+status.md:184:- **Dual-track release runbook published.** Documented the branching, build, validation, and publication flow for parallel Iroha 2 / Iroha 3 releases, including approval gates and TODOs for bucket endpoints.【docs/source/release_dual_track_runbook.md:1】
+status.md:215:- **SF3 chunk store prototype.** `sorafs_car::ChunkStore` ingests payloads with the SF-1 registry profile, emits deterministic chunk metadata/BLAKE3 payload hashes, now builds the 64 KiB / 4 KiB domain-tagged PoR sampling tree for every chunk, and exposes per-leaf witnesses through the `sorafs_chunk_store` CLI (`--por-proof`/`--por-proof-out`, `--por-sample`) alongside a verifier (`--por-proof-verify`) so schedulers can confirm samples without re-reading full payloads; fixture-backed tests assert leaf/segment/chunk hashes while storage backend wiring remains TODO. Both chunk store CLIs now resolve profile descriptors directly from the shared registry so `--list-profiles` output and helper tests stay aligned with manifest metadata, and they accept canonical handles (`--profile=sorafs.sf1@1.0.0`) alongside numeric IDs for automation-friendly selection. The manifest stub mirrors the behaviour via `--chunker-profile` support, and the provider advert helper now accepts the same handle flag while emitting namespace/name/semver metadata in its JSON report.【crates/sorafs_car/src/bin/sorafs_chunk_store.rs:77】【crates/sorafs_car/src/bin/sorafs_chunk_store.rs:92】【crates/sorafs_car/src/bin/sorafs_chunk_store.rs:101】【crates/sorafs_car/src/bin/sorafs_chunk_store.rs:187】【crates/sorafs_car/src/chunker_registry.rs:60】【crates/sorafs_manifest/src/bin/sorafs_chunk_store.rs:82】【crates/sorafs_manifest/src/bin/sorafs_chunk_store.rs:95】【crates/sorafs_manifest/src/bin/sorafs_chunk_store.rs:104】【crates/sorafs_manifest/src/bin/sorafs_manifest_stub.rs:48】【crates/sorafs_manifest/src/bin/sorafs_manifest_stub.rs:57】【crates/sorafs_manifest/src/bin/sorafs_manifest_stub.rs:114】【crates/sorafs_manifest/src/bin/sorafs_provider_advert_stub.rs:36】【crates/sorafs_manifest/src/bin/sorafs_provider_advert_stub.rs:242】【crates/sorafs_manifest/src/bin/sorafs_provider_advert_stub.rs:394】
+status.md:300:- **JS iterable query helpers.** Added `list/query/iterate` helpers for accounts, domains, asset definitions, and (now that the endpoint exists) account permissions, keeping docs/tests in sync and leaving TODOs for future NFT/account-asset parity.【F:javascript/iroha_js/src/toriiClient.js#L84】【F:javascript/iroha_js/index.d.ts#L32】【F:javascript/iroha_js/test/toriiClient.test.js#L360】【F:javascript/iroha_js/README.md#L392】【F:docs/source/sdk/js/quickstart.md#L120】
+status.md:344:- **Backpressure log correlation tool.** Added `scripts/sumeragi_backpressure_log_scraper.py` to pair pacemaker backpressure deferrals with nearby RBC retry/abort logs, wired optional JSON output for alerting pipelines, and documented the workflow in the telemetry runbook so the outstanding troubleshooting TODO is cleared.【F:scripts/sumeragi_backpressure_log_scraper.py:1】【F:docs/source/telemetry.md:524】
+status.md:455:- **Roadmap acceptance criteria tightened.** `roadmap.md` documents deterministic DA retry rules, reveal pruning policy, confidential handshake compatibility, and streaming transport obligations. The follow-up documentation for Norito streaming SLAs and confidential reveal/nullifier retention is now in place (`docs/source/norito_streaming.md`, `docs/source/confidential_assets.md`), closing the outstanding TODO markers.
+status.md:495:- Norito consensus fixtures now exercise encode/decode round-trips for proposals, votes, VRF envelopes, RBC messages, and evidence records, giving the new `block::consensus` types deterministic coverage for the NPoS wire surface and matching Milestone A2’s test TODO.【F:crates/iroha_data_model/tests/consensus_roundtrip.rs#L1-L328】
+status.md:528:  `iroha_config` knobs with TODOs so Milestone 5 owners can wire the
+status.md:543:  the same reduction, and the merge-ledger notes drop the placeholder TODO in
+status.md:602:  tests while CLI smoke tests carry a TODO for full regression coverage.【F:IrohaSwift/Sources/IrohaSwift/ToriiClient.swift#L1】【F:IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift#L1】【F:IrohaSwift/README.md#L5】【F:python/iroha_torii_client/client.py#L1】【F:pytests/iroha_torii_tests/test/zk/test_python_sdk.py#L1】【F:crates/iroha_cli/tests/cli_smoke.rs#L73】
+status.md:735:  TODO for this work.【F:norito.md†L195-L299】【F:roadmap.md†L379-L382】
+status.md:997:  `crates/norito/tests/json_tuple_struct.rs`. Enum support remains on the TODO list. ✅
+status.md:1023:- Serde migration prep: refreshed `serde_inventory.json` via `scripts/inventory_serde_usage.py --json` and appended a TODO checklist to `docs/source/norito_json_migration.md` covering enum derives, visitor helpers, config loader work, snapshot codec swaps, and manifest cleanup.
+status.md:1181:- iroha_monitor: added a compact E2E demo to `docs/source/iroha_monitor.md` and two smoke tests covering `--spawn-lite` and `--attach` modes (local stubs). Screenshots remain TODO and are tracked in `roadmap.md`. ✅
+status.md:1210: - Kotodama state (ephemeral): added `state Type name;` lowering to allocate per-run storage at function entry. Maps and struct-held maps are supported (1‑level named fields); added e2e tests. Durable host-backed state overlays remain TODO with conflict docs. 🟨
+status.md:1246:- iOS demo: added `examples/ios/NoritoDemoXcode` checked-in Xcode project with SwiftUI UI for Connect session creation and WS join; updated `examples/ios/NoritoDemo` to replace the TODO with a working demo UI. ✅
+status.md:1368:- Kotodama wrappers: added vendor/verify helpers in `crates/ivm/src/kotodama_std.rs` (`zk_verify_*`, `vendor_execute_*_bytes`) to build TLVs and invoke syscalls/bridges; compiler intrinsics remain TODO. ✅
+status.md:1660:    - Simplified multisig pending-proposal inspection (no downcast into custom payload at the moment; TODO added).
+status.md:1787:- Core: BLS admission-time micro-batching is now available behind a compile-time feature. Build `iroha_core` with `--features bls` to enable the deterministic grouping + bisection path; set `[pipeline].signature_batch_max_bls > 0` in `iroha_config` to activate. When all messages are identical in a micro‑batch, Core attempts an aggregate verification; otherwise it falls back to deterministic per‑signature verification. Full multi‑message aggregate pairing remains a TODO.
+vendor/halo2curves-axiom/src/msm.rs:466:    // TODO: consider adjusting it with emprical data?
+vendor/pasta_curves/src/fields/fp.rs:757:        // TODO: don't reduce, just hash the Montgomery form. (Requires rebuilding perfect hash table.)
+pytests/scripts/sync_docs_i18n_test.py:17:        assert "TODO" not in stub.org_todo, f"org_todo for {code} still contains TODO marker"
+pytests/scripts/sync_docs_i18n_test.py:18:        assert "TODO" not in stub.markdown_todo, f"markdown_todo for {code} still contains TODO marker"
+vendor/pasta_curves/src/fields/fq.rs:731:        // TODO: don't reduce, just hash the Montgomery form. (Requires rebuilding perfect hash table.)
+vendor/pasta_curves/book/src/design.md:17:   - TODO: Check how consistent we are with this, and update the code and docs to match.
+vendor/halo2curves-axiom/src/pluto_eris/fields/fp2.rs:208:    // TODO: This is a naive method using 4 multiplications
+vendor/halo2curves-axiom/src/pluto_eris/fields/fp2.rs:222:    // TODO: This is a naive method using 3 multiplications
+vendor/halo2curves-axiom/src/pluto_eris/fields/fp2.rs:286:        //TODO Replace with constant time version if needed
+vendor/halo2curves-axiom/src/pluto_eris/fields/fp2.rs:460:    // TODO: Check that we can just 0 this and forget.
+vendor/halo2curves-axiom/src/bn256/fq2.rs:433:    // TODO: Check that we can just 0 this and forget.
+crates/norito/src/lib.rs:4909:    /// implement the nibble-LUT SIMD classification noted in the historical TODO.
+vendor/halo2-axiom/src/poly/kzg/multiopen/shplonk/prover.rs:140:        // TODO: explore if it is safe to use same challenge
+vendor/halo2-axiom/src/poly/kzg/commitment.rs:268:// TODO: see the issue at https://github.com/appliedzkp/halo2/issues/45
+crates/iroha_torii_shared/src/connect.rs:443:    // so we keep the coverage but no longer guard it behind a TODO.
+vendor/halo2-axiom/src/poly/domain.rs:441:    // TODO/FIXME: caller should be responsible for truncating
+vendor/halo2-axiom/src/poly/ipa/commitment/prover.rs:107:        // TODO: If we modify multiexp to take "extra" bases, we could speed
+vendor/halo2-axiom/src/poly/ipa/commitment/prover.rs:133:        // TODO: parallelize
+vendor/halo2-axiom/src/fft/recursive.rs:397:    // TODO: reuse scratch buffer between FFTs
+vendor/halo2-axiom/src/dev/graph/layout.rs:113:        // TODO: For now, just render them in the order they were configured.
+vendor/halo2-axiom/src/dev.rs:590:        // TODO: Do something with namespaces :)
+vendor/halo2-axiom/src/dev.rs:594:        // TODO: Do something with namespaces :)
+vendor/halo2-axiom/src/dev.rs:774:                    // TODO: This will trip up on the reverse case, where leaving a selector
+vendor/halo2-axiom/src/dev.rs:1176:                    // TODO: This will trip up on the reverse case, where leaving a selector
+vendor/halo2-axiom/src/plonk/keygen.rs:399:    // TODO: this can be done more efficiently
+vendor/halo2-axiom/src/plonk/error.rs:9:// TODO: these errors need to be cleaned up
+vendor/halo2-axiom/src/circuit/layouter.rs:52:/// TODO: It would be great if we could constrain the columns in these types to be
+vendor/halo2-axiom/src/circuit.rs:177:/// TODO: It would be great if we could constrain the columns in these types to be
+vendor/halo2-axiom/src/poly.rs:41:// TODO: these errors need to be cleaned up
+vendor/halo2-axiom/examples/cost-model.rs:276:        // TODO: Estimate cost of BLAKE2b.
+vendor/halo2-axiom/examples/cost-model.rs:278:        // TODO: This isn't accurate; most of these will have zero scalars.
+crates/ivm/AGENTS.md:23:- If some work is too big, don't reject doing it. Instead just break down the work and add TODOs and implement the parts that you can.
+crates/ivm/AGENTS.md:28:- When an implementation remains temporary or incomplete, add a `TODO:` comment describing the remaining work.
+crates/ivm/AGENTS.md:52:- Metal: SHA‑256 compression uses Metal when available; vector bitwise kernels exist but are not wired broadly. TODO: integrate into hot paths.
+crates/ivm/AGENTS.md:53:- CUDA: `cuda` feature exposes bindings, but PTX build and several kernels are TODO; CPU fallbacks remain the default without artifacts.
+crates/ivm/AGENTS.md:54:- ZK circuits: mock (Rust) circuits are used for verification; replacing with real Halo2 circuits is TODO.
+vendor/icrate/Cargo.toml.orig:171:# TODO: Autogenerate this
+vendor/icrate/examples/nspasteboard.rs:25:    // TODO: Investigate and find a better way to express this in `objc2`.
+vendor/icrate/examples/delegate.rs:46:            // TODO: `ns_string` can't be used inside closures; investigate!
+vendor/icrate/examples/delegate.rs:70:    // TODO: Investigate this!
+crates/ivm/README.md:49:## Status and TODOs
+crates/ivm/docs/iso20022.md:8:- The repository now ships a schema-driven ISO 20022 helper (see `src/iso20022.rs`) that understands canonical field layouts for `pacs.008`, `pacs.009`, `pacs.004`, `pacs.007`, `pacs.002`, `pacs.028`, `pacs.029`, `pain.001`, `pain.002`, `camt.052`, `camt.053`, `camt.054`, and `camt.056` messages. Initial scaffolding for DvP/PvP and collateral substitution flows adds schemas for `sese.023`, `sese.025`, and `colr.007`; these currently cover the settlement identifiers, leg amounts, execution plans, and substitution metadata required by roadmap Milestone F2/F3, with TODOs in the source noting the remaining field-mapping work. Each schema encodes mandatory fields, multiplicity, enumerations, and format predicates, and `.001.x` aliases (e.g., `pacs.008.001.10`) resolve automatically to their canonical rule sets.
+crates/ivm/docs/architecture_spec.md:11:- This document is a living specification. Several described features are partially implemented or prototyped in the repository (e.g., Metal acceleration for SHA‑256, mock Halo2 circuits, conflict-aware scheduler). Remaining work such as full CUDA kernel coverage, interpreter vector-length scaling, and production Halo2 circuits is tracked in `crates/ivm/README.md` and the roadmap.
+crates/ivm/docs/kotodama_grammar.md:238:- Code generation currently covers constants, a subset of arithmetic, comparisons, and selected built-ins/syscalls. Many opcodes and control-flow forms are still TODO.

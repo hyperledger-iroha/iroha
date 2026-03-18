@@ -1,0 +1,31 @@
+---
+lang: zh-hant
+direction: ltr
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+從 '@site/src/components/RapiDocPanel.jsx' 導入 RapiDocPanel；
+
+# Torii API (RapiDoc)
+
+`RapiDoc` 提供了相同 Torii 的緊湊、文檔優先的渲染
+OpenAPI 文檔。當您需要更深入的概述或只讀審查時使用它
+請求/響應模型。
+
+## 使用技巧
+
+- 輸入不記名令牌以啟用交互式呼叫。該值被轉發為
+  `X-TryIt-Auth` 標頭並由代理標準化。
+- 在為門戶提供交互式服務時配置 `TRYIT_PROXY_PUBLIC_URL`
+  請求通過暫存代理進行路由。當代理出現時，小部件會發出警告
+  網址缺失。
+- 使用“OpenAPI 快照”下拉列表加載發布的歷史規格
+  `npm run sync-openapi`； `Latest (tracked)` 選項始終解析為
+  `/openapi/torii.json`。
+- 與“[Try it](/api/overview#try-it-sandbox-docs-3)”控制台結合使用
+  針對需要代理的分階段網關。
+

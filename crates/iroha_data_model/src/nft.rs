@@ -1,28 +1,28 @@
 //! This module contains [`Nft`] structure and it's implementation
 
-#[cfg(not(feature = "std"))]
-use alloc::{format, string::String, vec::Vec};
-use core::str::FromStr;
+use std::{format, str::FromStr, string::String, vec::Vec};
 
 use iroha_data_model_derive::model;
-use serde::{Deserialize, Serialize};
 
 pub use self::model::*;
 use crate::{
-    metadata::Metadata, prelude::AccountId, IntoKeyValue, ParseError, Registered, Registrable,
+    IntoKeyValue, Registered, Registrable,
+    common::{Owned, Ref, split_nonempty},
+    error::ParseError,
+    metadata::Metadata,
+    prelude::AccountId,
 };
 
 #[model]
 mod model {
-    use derive_more::{Constructor, DebugCustom, Display};
+    use derive_more::Constructor;
     use getset::{CopyGetters, Getters};
-    use iroha_data_model_derive::IdEqOrdHash;
+    use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder};
     use iroha_schema::IntoSchema;
-    use parity_scale_codec::{Decode, Encode};
-    use serde_with::{DeserializeFromStr, SerializeDisplay};
+    use norito::codec::{Decode, Encode};
 
     use super::*;
-    use crate::{account::prelude::*, domain::prelude::*, Identifiable, Name};
+    use crate::{Identifiable, Name, account::prelude::*, domain::prelude::*};
 
     /// Identification of an Non Fungible Asset. Consists of Asset name and Domain name.
     ///
@@ -34,9 +34,9 @@ mod model {
     /// let nft_id = "nft_name$soramitsu".parse::<NftId>().expect("Valid");
     /// ```
     #[derive(
-        DebugCustom,
+        derive_more::Debug,
         Clone,
-        Display,
+        derive_more::Display,
         PartialEq,
         Eq,
         PartialOrd,
@@ -46,14 +46,12 @@ mod model {
         Getters,
         Decode,
         Encode,
-        DeserializeFromStr,
-        SerializeDisplay,
         IntoSchema,
     )]
-    #[display(fmt = "{name}${domain}")]
-    #[debug(fmt = "{name}${domain}")]
+    #[display("{name}${domain}")]
+    #[debug("{name}${domain}")]
     #[getset(get = "pub")]
-    #[ffi_type]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct NftId {
         /// Domain id.
         pub domain: DomainId,
@@ -63,20 +61,23 @@ mod model {
 
     /// Non fungible asset, represents some unique value
     #[derive(
-        Debug,
-        Display,
+        derive_more::Debug,
+        derive_more::Display,
         Clone,
         IdEqOrdHash,
         CopyGetters,
         Getters,
         Decode,
         Encode,
-        Deserialize,
-        Serialize,
         IntoSchema,
+        RegistrableBuilder,
     )]
-    #[display(fmt = "{id}")]
-    #[ffi_type]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[display("{id}")]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct Nft {
         /// An Identification of the [`Nft`].
         pub id: NftId,
@@ -85,50 +86,51 @@ mod model {
         pub content: Metadata,
         /// The account that owns this NFT.
         #[getset(get = "pub")]
+        #[registrable_builder(skip, init = authority.clone())]
         pub owned_by: AccountId,
     }
-
-    /// Builder which can be submitted in a transaction to create a new [`Nft`]
-    #[derive(
-        Debug, Display, Clone, IdEqOrdHash, Decode, Encode, Deserialize, Serialize, IntoSchema,
-    )]
-    #[display(fmt = "{id}")]
-    #[serde(rename = "Nft")]
-    #[ffi_type]
-    pub struct NewNft {
-        /// An Identification of the [`Nft`].
-        pub id: NftId,
-        /// Content of the [`Nft`], as a key-value store.
-        pub content: Metadata,
-    }
 }
+
+string_id!(NftId);
 
 /// Read-only reference to [`Nft`].
 /// Used in query filters to avoid copying.
-pub struct NftEntry<'world> {
-    /// An Identification of the [`Nft`].
-    pub id: &'world NftId,
-    /// Content of the [`Nft`], as a key-value store.
-    pub content: &'world Metadata,
-    /// The account that owns this NFT.
-    pub owned_by: &'world AccountId,
-}
+pub type NftEntry<'world> = Ref<'world, NftId, NftValue>;
 
 /// [`Nft`] without `id` field.
-/// Needed only for [`World::nfts`] map to reduce memory usage.
+/// Needed only for the world-state NFT map to reduce memory usage.
 /// In other places use [`Nft`] directly.
-#[derive(Clone, Deserialize, Serialize)]
-pub struct NftValue {
+#[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[cfg_attr(
+    feature = "json",
+    derive(
+        crate::DeriveFastJson,
+        crate::DeriveJsonSerialize,
+        crate::DeriveJsonDeserialize
+    )
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+pub struct NftData {
     /// Content of the [`Nft`], as a key-value store.
     pub content: Metadata,
     /// The account that owns this NFT.
     pub owned_by: AccountId,
 }
 
+/// Wrapper over [`NftData`] used in storages.
+pub type NftValue = Owned<NftData>;
+
 impl Nft {
     /// Constructor
     pub fn new(id: NftId, content: Metadata) -> <Self as Registered>::With {
-        NewNft { id, content }
+        <Self as Registered>::With::new(id, content)
+    }
+}
+
+impl NftId {
+    /// Convenience alias for [`Self::new`]
+    pub fn of(domain: crate::domain::prelude::DomainId, name: crate::Name) -> Self {
+        Self::new(domain, name)
     }
 }
 
@@ -137,78 +139,20 @@ impl FromStr for NftId {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.rsplit_once('$') {
-            None => Err(ParseError {
-                reason: "Non Fungible Asset ID should have format `name$domain`",
-            }),
-            Some(("", _)) => Err(ParseError {
-                reason: "Empty `name` part in `name$domain`",
-            }),
-            Some((_, "")) => Err(ParseError {
-                reason: "Empty `domain` part in `name$domain`",
-            }),
-            Some((name_candidate, domain_id_candidate)) => {
-                let name = name_candidate.parse().map_err(|_| ParseError {
-                    reason: "Failed to parse `name` part in `name$domain`",
-                })?;
-                let domain_id = domain_id_candidate.parse().map_err(|_| ParseError {
-                    reason: "Failed to parse `domain` part in `name$domain`",
-                })?;
-                Ok(Self::new(domain_id, name))
-            }
-        }
-    }
-}
-
-impl Registered for Nft {
-    type With = NewNft;
-}
-
-impl Registrable for NewNft {
-    type Target = Nft;
-
-    #[inline]
-    fn build(self, authority: &AccountId) -> Self::Target {
-        Self::Target {
-            id: self.id,
-            content: self.content,
-            owned_by: authority.clone(),
-        }
-    }
-}
-
-impl<'world> NftEntry<'world> {
-    /// Constructor
-    pub fn new(id: &'world NftId, value: &'world NftValue) -> Self {
-        Self {
-            id,
-            content: &value.content,
-            owned_by: &value.owned_by,
-        }
-    }
-
-    /// Getter for `id`
-    pub fn id(&self) -> &NftId {
-        self.id
-    }
-
-    /// Getter for `content`
-    pub fn content(&self) -> &Metadata {
-        self.content
-    }
-
-    /// Getter for `owned_by`
-    pub fn owned_by(&self) -> &AccountId {
-        self.owned_by
-    }
-
-    /// Converts to `Nft`
-    pub fn to_owned(&self) -> Nft {
-        Nft {
-            id: self.id.clone(),
-            content: self.content.clone(),
-            owned_by: self.owned_by.clone(),
-        }
+        let (name_candidate, domain_id_candidate) = split_nonempty(
+            s,
+            '$',
+            "Non Fungible Asset ID should have format `name$domain`",
+            "Empty `name` part in `name$domain`",
+            "Empty `domain` part in `name$domain`",
+        )?;
+        let name = name_candidate.parse().map_err(|_| ParseError {
+            reason: "Failed to parse `name` part in `name$domain`",
+        })?;
+        let domain_id = domain_id_candidate.parse().map_err(|_| ParseError {
+            reason: "Failed to parse `domain` part in `name$domain`",
+        })?;
+        Ok(Self::new(domain_id, name))
     }
 }
 
@@ -216,11 +160,38 @@ impl IntoKeyValue for Nft {
     type Key = NftId;
     type Value = NftValue;
     fn into_key_value(self) -> (Self::Key, Self::Value) {
-        let value = NftValue {
-            content: self.content,
-            owned_by: self.owned_by,
+        (
+            self.id,
+            Owned::new(NftData {
+                content: self.content,
+                owned_by: self.owned_by,
+            }),
+        )
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
+mod json_tests {
+    use super::*;
+    use crate::{Name, domain::prelude::DomainId, metadata::Metadata};
+
+    #[test]
+    fn new_nft_json_roundtrip() {
+        let domain: DomainId = "art".parse().expect("domain id");
+        let id = NftId::new(domain, Name::from_str("mona_lisa").expect("nft name"));
+        let mut content = Metadata::default();
+        content.insert("artist".parse().expect("metadata key"), "da_vinci");
+
+        let builder = NewNft {
+            id: id.clone(),
+            content: content.clone(),
         };
-        (self.id, value)
+
+        let json = norito::json::to_json(&builder).expect("serialize NFT builder");
+        let decoded: NewNft = norito::json::from_json(&json).expect("deserialize NFT builder");
+
+        assert_eq!(decoded.id, id);
+        assert_eq!(decoded.content, content);
     }
 }
 

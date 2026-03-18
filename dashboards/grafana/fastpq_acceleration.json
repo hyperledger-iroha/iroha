@@ -1,0 +1,176 @@
+{
+  "title": "FASTPQ Acceleration Overview",
+  "uid": "fastpq-acceleration",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": [
+    "fastpq",
+    "metal",
+    "gpu"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "requested",
+        "label": "Requested Mode",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(fastpq_execution_mode_total, requested)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "backend",
+        "label": "Backend",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(fastpq_execution_mode_total, backend)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "device_class",
+        "label": "Device Class",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(fastpq_execution_mode_total, device_class)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "chip_family",
+        "label": "Chip Family",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(fastpq_execution_mode_total, chip_family)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      },
+      {
+        "name": "gpu_kind",
+        "label": "GPU Kind",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(fastpq_execution_mode_total, gpu_kind)",
+        "refresh": 1,
+        "current": {
+          "text": "All",
+          "value": ""
+        },
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Execution Mode Resolutions",
+      "id": 1,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (device_class, chip_family, gpu_kind, resolved, backend) (rate(fastpq_execution_mode_total{requested=~\"$requested\", backend=~\"$backend\", device_class=~\"$device_class\", chip_family=~\"$chip_family\", gpu_kind=~\"$gpu_kind\"}[5m]))",
+          "legendFormat": "{{device_class}} ({{chip_family}}/{{gpu_kind}}): {{resolved}}/{{backend}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "1/min"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Metal Adoption (5m)",
+      "id": 2,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (device_class, chip_family, gpu_kind) (rate(fastpq_execution_mode_total{requested=~\"$requested\", backend=~\"metal\", device_class=~\"$device_class\", chip_family=~\"$chip_family\", gpu_kind=~\"$gpu_kind\"}[5m])) / clamp_min(sum by (device_class, chip_family, gpu_kind) (rate(fastpq_execution_mode_total{requested=~\"$requested\", device_class=~\"$device_class\", chip_family=~\"$chip_family\", gpu_kind=~\"$gpu_kind\"}[5m])), 1)",
+          "legendFormat": "{{device_class}} ({{chip_family}}/{{gpu_kind}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Fallback (backend=none)",
+      "id": 3,
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by (device_class, chip_family, gpu_kind) (rate(fastpq_execution_mode_total{requested=~\"$requested\", backend=~\"none\", device_class=~\"$device_class\", chip_family=~\"$chip_family\", gpu_kind=~\"$gpu_kind\"}[5m]))",
+          "legendFormat": "{{device_class}} ({{chip_family}}/{{gpu_kind}})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "1/min",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "type": "text",
+      "title": "Latest Benchmark",
+      "id": 4,
+      "options": {
+        "mode": "markdown",
+        "content": "### Operator Benchmark (2025-11-07)\\n\\n- Artefact: `artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json`\\n- Device class: `apple-m4` (chip `Apple M4 Max`; GPU `Apple GPU 40-core` (integrated), 76 cores)\\n- Rows: **20,000** (padded **32,768**), iterations **5**, backend `metal`\\n- Mean timings (ms): FFT 63.58 / 45.90 (x1.39), IFFT 52.87 / 54.45 (x0.97), LDE 790.34 / 692.06 (x1.14), Poseidon columns 2021.15 / 2750.09 (x0.73)\\n- Queue depth snapshot: limit=4, max in flight=0, dispatch count=0, busy ms=0, overlap ms=0, overlap ratio=0\\n- Zero-fill telemetry: sampler disabled on this capture; Stage 7 SLO allows <=0.40 ms mean when enabled.\\n- Regenerate with `FASTPQ_METAL_LIB=$(fd -g 'fastpq.metallib' target/release/build | head -n1)` and `scripts/fastpq/wrap_benchmark.py` after each macOS nightly run."
+      }
+    }
+  ]
+}

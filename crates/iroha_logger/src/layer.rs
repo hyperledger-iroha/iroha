@@ -7,10 +7,10 @@ use std::{
 };
 
 use tracing::{
+    Event, Id, Level, Metadata, Subscriber,
     level_filters::LevelFilter as TracingLevelFilter,
     span::{Attributes, Record},
     subscriber::Interest,
-    Event, Id, Level, Metadata, Subscriber,
 };
 use tracing_core::span::Current;
 
@@ -79,11 +79,6 @@ impl<E: EventInspectorTrait> Subscriber for EventSubscriber<E> {
         self.inner_subscriber().clone_span(id)
     }
 
-    #[allow(deprecated)]
-    fn drop_span(&self, id: Id) {
-        self.inner_subscriber().drop_span(id)
-    }
-
     fn try_close(&self, id: Id) -> bool {
         self.inner_subscriber().try_close(id)
     }
@@ -94,7 +89,7 @@ impl<E: EventInspectorTrait> Subscriber for EventSubscriber<E> {
 
     #[allow(unsafe_code)]
     unsafe fn downcast_raw(&self, id: TypeId) -> Option<*const ()> {
-        self.inner_subscriber().downcast_raw(id)
+        unsafe { self.inner_subscriber().downcast_raw(id) }
     }
 
     fn event(&self, event: &Event<'_>) {

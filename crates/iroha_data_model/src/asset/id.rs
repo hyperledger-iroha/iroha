@@ -1,0 +1,519 @@
+//! Asset identifiers.
+
+use std::{
+    fmt, format,
+    hash::{Hash, Hasher},
+    str::FromStr,
+    string::String,
+};
+
+use getset::Getters;
+use iroha_data_model_derive::model;
+use iroha_schema::IntoSchema;
+use norito::{
+    NoritoDeserialize, NoritoSerialize,
+    codec::{Decode, Encode},
+    to_bytes,
+};
+
+pub use self::model::*;
+use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
+
+#[model]
+mod model {
+    use super::*;
+
+    /// Canonical asset definition identifier.
+    ///
+    /// Textual form is always `aid:<32-lower-hex-no-dash>` where the 16 bytes
+    /// satisfy `UUIDv4` version/variant constraints.
+    #[derive(Debug, Clone, Getters, IntoSchema)]
+    #[getset(get = "pub")]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct AssetDefinitionId {
+        /// Canonical `UUIDv4` bytes (no textual separators).
+        #[getset(get_copy = "pub")]
+        pub aid_bytes: [u8; 16],
+        /// Deterministic domain component derived from canonical bytes.
+        pub domain: DomainId,
+        /// Deterministic name component derived from canonical bytes.
+        pub name: Name,
+    }
+
+    /// Balance partition used for a concrete asset ownership bucket.
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Hash,
+        Decode,
+        Encode,
+        IntoSchema,
+        Default,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub enum AssetBalanceScope {
+        /// Unrestricted balance bucket shared across all dataspaces.
+        #[default]
+        Global,
+        /// Dataspace-restricted bucket keyed by a specific dataspace identifier.
+        Dataspace(DataSpaceId),
+    }
+
+    /// Identification of an asset combines the entity identifier ([`AssetId`]) with the owner [`AccountId`].
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
+    #[getset(get = "pub")]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct AssetId {
+        /// Account Identification.
+        pub account: AccountId,
+        /// Entity Identification.
+        pub definition: AssetDefinitionId,
+        /// Balance partition scope for this ownership bucket.
+        #[norito(default)]
+        pub scope: AssetBalanceScope,
+    }
+}
+
+string_id!(AssetDefinitionId);
+
+const AID_PREFIX: &str = "aid:";
+
+impl PartialEq for AssetDefinitionId {
+    fn eq(&self, other: &Self) -> bool {
+        self.aid_bytes == other.aid_bytes
+    }
+}
+
+impl Eq for AssetDefinitionId {}
+
+impl PartialOrd for AssetDefinitionId {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for AssetDefinitionId {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.aid_bytes.cmp(&other.aid_bytes)
+    }
+}
+
+impl Hash for AssetDefinitionId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.aid_bytes.hash(state);
+    }
+}
+
+impl NoritoSerialize for AssetDefinitionId {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        <[u8; 16] as NoritoSerialize>::serialize(&self.aid_bytes, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        <[u8; 16] as NoritoSerialize>::encoded_len_hint(&self.aid_bytes)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        <[u8; 16] as NoritoSerialize>::encoded_len_exact(&self.aid_bytes)
+    }
+}
+
+impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
+        Self::from_uuid_bytes_unchecked(aid_bytes)
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
+        Self::from_uuid_bytes(aid_bytes)
+            .map_err(|err| norito::core::Error::Message(err.to_string()))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for AssetId {
+    fn write_json(&self, out: &mut String) {
+        let literal = self.canonical_encoded();
+        norito::json::JsonSerialize::json_serialize(&literal, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for AssetId {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        AssetId::parse_encoded(&value).map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
+
+impl AssetId {
+    /// Create a new [`AssetId`]
+    pub fn new(definition: AssetDefinitionId, account: AccountId) -> Self {
+        Self {
+            account,
+            definition,
+            scope: AssetBalanceScope::Global,
+        }
+    }
+
+    /// Convenience alias for [`Self::new`]
+    pub fn of(definition: AssetDefinitionId, account: AccountId) -> Self {
+        Self::new(definition, account)
+    }
+
+    /// Create an [`AssetId`] with an explicit balance scope.
+    pub fn with_scope(
+        definition: AssetDefinitionId,
+        account: AccountId,
+        scope: AssetBalanceScope,
+    ) -> Self {
+        Self {
+            account,
+            definition,
+            scope,
+        }
+    }
+
+    /// Parse an encoded asset identifier from `norito:<hex>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the value is empty, not prefixed with
+    /// `norito:`, contains invalid hex, or does not decode into [`AssetId`].
+    pub fn parse_encoded(input: &str) -> Result<Self, ParseError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(ParseError {
+                reason: "Asset ID must not be empty",
+            });
+        }
+        if trimmed.contains('#') {
+            return Err(ParseError {
+                reason: "Asset ID textual forms are not supported; use encoded `norito:<hex>`",
+            });
+        }
+
+        let prefix = "norito:";
+        let Some(payload_hex) = trimmed
+            .get(..prefix.len())
+            .filter(|head| head.eq_ignore_ascii_case(prefix))
+            .map(|_| &trimmed[prefix.len()..])
+        else {
+            return Err(ParseError {
+                reason: "Asset ID must use encoded `norito:<hex>` format",
+            });
+        };
+        if payload_hex.is_empty() {
+            return Err(ParseError {
+                reason: "Asset ID must include hex payload after `norito:`",
+            });
+        }
+
+        let payload = hex::decode(payload_hex).map_err(|_| ParseError {
+            reason: "Asset ID `norito:` payload must be valid hex",
+        })?;
+        norito::decode_from_bytes::<Self>(&payload).map_err(|_| ParseError {
+            reason: "Asset ID `norito:` payload is invalid",
+        })
+    }
+
+    /// Render this identifier in the canonical encoded `norito:<hex>` form.
+    #[must_use]
+    pub fn canonical_encoded(&self) -> String {
+        // `parse_encoded` expects header-framed Norito bytes.
+        let payload = to_bytes(self).expect("asset id encoding should not fail");
+        format!("norito:{}", hex::encode(payload))
+    }
+}
+
+impl AssetDefinitionId {
+    /// Construct an identifier from canonical `UUIDv4` bytes.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when `aid_bytes` do not satisfy `UUIDv4`
+    /// version/variant constraints.
+    pub fn from_uuid_bytes(aid_bytes: [u8; 16]) -> Result<Self, ParseError> {
+        if !is_uuid_v4_bytes(&aid_bytes) {
+            return Err(ParseError::new(
+                "Asset Definition ID must encode UUIDv4 bytes",
+            ));
+        }
+        let (domain, name) = synthetic_components(aid_bytes);
+        Ok(Self {
+            aid_bytes,
+            domain,
+            name,
+        })
+    }
+
+    /// Construct from UUID bytes without validation.
+    #[must_use]
+    pub fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
+        let (domain, name) = synthetic_components(aid_bytes);
+        Self {
+            aid_bytes,
+            domain,
+            name,
+        }
+    }
+
+    /// Deterministically derive canonical `aid` bytes from component labels.
+    #[must_use]
+    pub fn new(domain: DomainId, name: Name) -> Self {
+        let literal = format!("{name}#{domain}");
+        let digest = blake3::hash(literal.as_bytes());
+        let mut aid_bytes = [0u8; 16];
+        aid_bytes.copy_from_slice(&digest.as_bytes()[..16]);
+        // Force UUIDv4 version and RFC4122 variant bits.
+        aid_bytes[6] = (aid_bytes[6] & 0x0f) | 0x40;
+        aid_bytes[8] = (aid_bytes[8] & 0x3f) | 0x80;
+        Self {
+            aid_bytes,
+            domain,
+            name,
+        }
+    }
+
+    /// Canonical textual literal (`aid:<32-lower-hex>`).
+    #[must_use]
+    pub fn canonical_literal(&self) -> String {
+        format!("{AID_PREFIX}{}", hex::encode(self.aid_bytes))
+    }
+
+    /// Returns `true` when this identifier is a canonical opaque `aid:<32-hex>`
+    /// literal rather than a domain-scoped asset definition synthesized from
+    /// business domain/name components.
+    #[must_use]
+    pub fn is_opaque_canonical(&self) -> bool {
+        self.domain.name.as_ref() == "aid" && self.name.as_ref() == hex::encode(self.aid_bytes)
+    }
+
+    /// Parse strictly canonical `aid:<32-lower-hex-no-dash>` literals.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the textual form is not canonical or bytes
+    /// do not satisfy `UUIDv4` constraints.
+    pub fn parse_aid_literal(input: &str) -> Result<Self, ParseError> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Err(ParseError::new("Asset Definition ID must not be empty"));
+        }
+        let Some(payload) = trimmed.strip_prefix(AID_PREFIX) else {
+            return Err(ParseError::new(
+                "Asset Definition ID must use `aid:<32-lower-hex>` format",
+            ));
+        };
+        if payload.contains('-') {
+            return Err(ParseError::new(
+                "Asset Definition ID must not include dashes",
+            ));
+        }
+        if payload.len() != 32 {
+            return Err(ParseError::new(
+                "Asset Definition ID must contain exactly 32 hex characters",
+            ));
+        }
+        if !payload
+            .as_bytes()
+            .iter()
+            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(ch))
+        {
+            return Err(ParseError::new(
+                "Asset Definition ID must be lowercase hexadecimal",
+            ));
+        }
+        let mut aid_bytes = [0u8; 16];
+        hex::decode_to_slice(payload, &mut aid_bytes)
+            .map_err(|_| ParseError::new("Asset Definition ID payload must be valid hex"))?;
+        Self::from_uuid_bytes(aid_bytes)
+    }
+
+    /// Convenience alias for [`Self::new`].
+    pub fn of(domain: DomainId, name: Name) -> Self {
+        Self::new(domain, name)
+    }
+}
+
+fn is_uuid_v4_bytes(bytes: &[u8; 16]) -> bool {
+    (bytes[6] >> 4) == 0b0100 && (bytes[8] & 0b1100_0000) == 0b1000_0000
+}
+
+fn synthetic_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
+    let domain: DomainId = "aid"
+        .parse()
+        .expect("static `aid` domain label must remain valid");
+    let name_literal = hex::encode(aid_bytes);
+    let name: Name = name_literal
+        .parse()
+        .expect("lowercase hex must remain a valid name literal");
+    (domain, name)
+}
+
+impl fmt::Display for AssetDefinitionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.canonical_literal())
+    }
+}
+
+/// Asset definition identifier textual representation.
+impl FromStr for AssetDefinitionId {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err(ParseError::new("Asset Definition ID must not be empty"));
+        }
+        Self::parse_aid_literal(trimmed)
+    }
+}
+
+impl fmt::Display for AssetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.canonical_encoded())
+    }
+}
+
+impl fmt::Debug for AssetId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.canonical_encoded())
+    }
+}
+
+impl FromStr for AssetId {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_encoded(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::KeyPair;
+
+    use super::*;
+    use crate::account::AccountId;
+
+    #[test]
+    fn debug_formats_without_recursion() {
+        let kp = KeyPair::random();
+        let domain: DomainId = "domain".parse().unwrap();
+        let name: Name = "xor".parse().unwrap();
+        let account: AccountId = AccountId::new(kp.public_key().clone());
+        let def = AssetDefinitionId::new(domain, name);
+        let id = AssetId::new(def, account);
+        let s = format!("{id:?}");
+        // Should be the canonical encoded literal and not recurse.
+        assert!(s.starts_with("norito:"));
+    }
+
+    #[test]
+    fn asset_definition_id_parses_canonical_aid() {
+        let parsed: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+            .parse()
+            .expect("aid should parse");
+        assert_eq!(
+            parsed.to_string(),
+            "aid:2f17c72466f84a4bb8a8e24884fdcd2f".to_string()
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_distinguishes_opaque_from_domain_scoped_ids() {
+        let opaque: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+            .parse()
+            .expect("opaque aid should parse");
+        assert!(opaque.is_opaque_canonical());
+
+        let domain_scoped = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "xor".parse().expect("name"),
+        );
+        assert!(!domain_scoped.is_opaque_canonical());
+    }
+
+    #[test]
+    fn asset_id_parse_encoded_roundtrips() {
+        let kp = KeyPair::random();
+        let account = AccountId::new(kp.public_key().clone());
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let name: Name = "xor".parse().expect("name");
+        let definition = AssetDefinitionId::new(domain, name);
+        let id = AssetId::new(definition, account);
+
+        let encoded = id.canonical_encoded();
+        let parsed = AssetId::parse_encoded(&encoded).expect("encoded asset id parses");
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn asset_id_with_explicit_scope_roundtrips() {
+        let kp = KeyPair::random();
+        let account = AccountId::new(kp.public_key().clone());
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let name: Name = "xor".parse().expect("name");
+        let definition = AssetDefinitionId::new(domain, name);
+        let id = AssetId::with_scope(
+            definition,
+            account,
+            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        );
+
+        let encoded = id.canonical_encoded();
+        let parsed = AssetId::parse_encoded(&encoded).expect("encoded asset id parses");
+        assert_eq!(parsed, id);
+        assert_eq!(
+            parsed.scope(),
+            &AssetBalanceScope::Dataspace(DataSpaceId::new(7))
+        );
+    }
+
+    #[test]
+    fn asset_id_parse_encoded_rejects_textual_literal() {
+        let kp = KeyPair::random();
+        let account = AccountId::new(kp.public_key().clone());
+        let literal = format!("xor#wonderland#{account}");
+
+        let err = AssetId::parse_encoded(&literal).expect_err("textual literal must fail");
+        assert!(
+            err.reason().contains("textual forms are not supported"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_parse_aid_rejects_legacy_and_dashed_literals() {
+        assert!(AssetDefinitionId::parse_aid_literal("usd#wonderland").is_err());
+        assert!(
+            AssetDefinitionId::parse_aid_literal("aid:2f17c724-66f8-4a4b-b8a8-e24884fdcd2f")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_from_str_rejects_legacy_literal() {
+        let err = "usd#wonderland"
+            .parse::<AssetDefinitionId>()
+            .expect_err("legacy literal must be rejected");
+        assert!(
+            err.to_string().contains("aid:<32-lower-hex>"),
+            "unexpected error: {err}"
+        );
+    }
+}

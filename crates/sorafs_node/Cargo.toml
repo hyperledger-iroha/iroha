@@ -1,0 +1,43 @@
+[package]
+name = "sorafs_node"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "SoraFS node integration primitives."
+
+[features]
+# Recognize norito derive macro cfg probes to avoid unexpected-cfg warnings.
+# No behavior change.
+schema-structural = []
+packed-struct = []
+compact-len = []
+
+[dependencies]
+axum = { workspace = true, features = ["http1", "tokio", "json"] }
+clap = { workspace = true, features = ["derive"] }
+eyre = { workspace = true }
+iroha_config = { path = "../iroha_config" }
+iroha_data_model = { path = "../iroha_data_model" }
+iroha_logger = { workspace = true }
+iroha_telemetry = { path = "../iroha_telemetry" }
+norito = { workspace = true }
+sorafs_manifest = { path = "../sorafs_manifest" }
+thiserror = "2.0.17"
+sorafs_car = { path = "../sorafs_car", features = ["manifest"] }
+hex = { workspace = true }
+blake3 = "1.8.2"
+sorafs_chunker = { path = "../sorafs_chunker" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+base64 = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { version = "0.9", default-features = false, features = ["std"] }
+time = { workspace = true }
+iroha_crypto = { path = "../iroha_crypto" }
+
+[dev-dependencies]
+assert_cmd = "2.1.1"
+blake3 = "1.8.2"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+tower = { version = "0.5.2", features = ["util"] }
+base64 = { workspace = true }

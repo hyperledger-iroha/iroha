@@ -1,0 +1,16 @@
+{
+  "scenario": "salt_rotation",
+  "torii_build": "mock-2026-05-15",
+  "sid_base64url": "Y29ubmVjdC1maXh0dXJlLXNpZCE",
+  "description": "Rotate salts while frames are in-flight and verify sequence counters/nonce derivation reset cleanly.",
+  "frames": [
+    { "direction": "AppToWallet", "sequence": 3, "payload_hex": "03" },
+    { "direction": "WalletToApp", "sequence": 8, "payload_hex": "04" },
+    { "direction": "AppToWallet", "sequence": 4, "payload_hex": "05" }
+  ],
+  "events": [
+    { "timestamp_ms": 1778000003600, "state": "open", "note": "salt V1 active, queues warmed" },
+    { "timestamp_ms": 1778000004100, "state": "salt_rotated", "note": "resume token negotiated; sequence counter reset" },
+    { "timestamp_ms": 1778000004700, "state": "resumed", "note": "post-rotation frame accepted with new nonce base" }
+  ]
+}

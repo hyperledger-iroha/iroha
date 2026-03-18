@@ -1,0 +1,10 @@
+{
+  "status": 406,
+  "body": {
+    "error": "unsupported_chunker",
+    "reason": "chunk profile sorafs.sf1@1.0.0 is not enabled on this gateway",
+    "details": {
+      "profile": "sorafs.sf1@1.0.0"
+    }
+  }
+}

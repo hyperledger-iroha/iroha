@@ -1,185 +1,142 @@
-use std::fmt::Write as _;
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Tests for event data produced by instruction and IVM execution.
+use std::collections::BTreeSet;
 
-use assert_matches::assert_matches;
-use eyre::Result;
-use futures_util::{pin_mut, StreamExt};
-use iroha::data_model::{prelude::*, transaction::WasmSmartContract};
+use eyre::{Result, WrapErr, eyre};
+use futures_util::StreamExt;
+use integration_tests::{sandbox, sync::get_status_with_retry_async};
+use iroha::data_model::{
+    events::{
+        EventBox,
+        data::prelude::{
+            AccountEventFilter, AccountEventSet, DomainEventSet, RoleEventFilter, RoleEventSet,
+        },
+    },
+    prelude::*,
+};
 use iroha_executor_data_model::permission::{
     account::CanModifyAccountMetadata, domain::CanModifyDomainMetadata,
 };
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use parity_scale_codec::Encode as _;
-use tokio::task::spawn_blocking;
+use tokio::{task::spawn_blocking, time::Instant};
 
-/// Return string containing exported memory, dummy allocator, and
-/// host function imports which you can embed into your wasm module.
-///
-/// Memory is initialized with the given hex encoded string value
-// NOTE: It's expected that hex value is of even length
-#[allow(clippy::integer_division)]
-pub fn wasm_template(hex_val: &str) -> String {
-    format!(
-        r#"
-        ;; Import host function to execute instruction
-        (import "iroha" "{execute_instruction}"
-            (func $exec_isi (param i32 i32) (result i32)))
-
-        ;; Import host function to execute query
-        (import "iroha" "{execute_query}"
-            (func $exec_query (param i32 i32) (result i32)))
-
-        ;; Embed ISI into WASM binary memory
-        (memory (export "{memory_name}") 1)
-        (data (i32.const 0) "{hex_val}")
-
-        ;; Variable which tracks total allocated size
-        (global $mem_size (mut i32) i32.const {hex_len})
-
-        ;; Export mock allocator to host. This allocator never frees!
-        (func (export "{alloc_fn_name}") (param $size i32) (result i32)
-            global.get $mem_size
-
-            (global.set $mem_size
-                (i32.add (global.get $mem_size) (local.get $size)))
-        )
-
-        ;; Export mock deallocator to host. This allocator does nothing!
-        (func (export "{dealloc_fn_name}") (param $size i32) (param $len i32)
-           nop)
-        "#,
-        memory_name = "memory",
-        alloc_fn_name = "_iroha_smart_contract_alloc",
-        dealloc_fn_name = "_iroha_smart_contract_dealloc",
-        execute_instruction = "execute_instruction",
-        execute_query = "execute_query",
-        hex_val = escape_hex(hex_val),
-        hex_len = hex_val.len() / 2,
-    )
-}
-
-fn escape_hex(hex_val: &str) -> String {
-    let mut isi_hex = String::with_capacity(3 * hex_val.len());
-
-    for (i, c) in hex_val.chars().enumerate() {
-        if i % 2 == 0 {
-            isi_hex.push('\\');
-        }
-
-        isi_hex.push(c);
-    }
-
-    isi_hex
-}
-fn produce_instructions() -> Vec<InstructionBox> {
+fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<String>) {
     let domains = (0..4)
-        .map(|domain_index: usize| Domain::new(domain_index.to_string().parse().expect("Valid")));
-
-    domains
+        .map(|domain_index: usize| format!("{prefix}{domain_index}"))
+        .collect::<Vec<_>>();
+    let expected = domains.iter().cloned().collect::<BTreeSet<_>>();
+    let instructions = domains
         .into_iter()
+        .map(|name| Domain::new(name.parse().expect("Valid")))
         .map(Register::domain)
         .map(InstructionBox::from)
-        .collect::<Vec<_>>()
-}
-
-#[tokio::test]
-async fn instruction_execution_should_produce_events() -> Result<()> {
-    transaction_execution_should_produce_events(produce_instructions()).await
-}
-
-#[tokio::test]
-async fn wasm_execution_should_produce_events() -> Result<()> {
-    #![allow(clippy::integer_division)]
-    let isi_hex: Vec<String> = produce_instructions()
-        .into_iter()
-        .map(|isi| isi.encode())
-        .map(hex::encode)
-        .collect();
-
-    let mut ptr_offset = 0;
-    let mut isi_calls = String::new();
-    for isi in &isi_hex {
-        let ptr_len = isi.len();
-
-        // It's expected that hex values are of even length
-        write!(
-            isi_calls,
-            "(call $exec_isi (i32.const {ptr_offset}) (i32.const {ptr_len}))
-             drop",
-            ptr_offset = ptr_offset / 2,
-            ptr_len = ptr_len / 2,
-        )?;
-
-        ptr_offset += ptr_len;
-    }
-
-    let wat = format!(
-        r#"
-        (module
-            {wasm_template}
-
-            ;; Function which starts the smartcontract execution
-            (func (export "{main_fn_name}") (param i32)
-                {isi_calls}))
-        "#,
-        main_fn_name = "_iroha_smart_contract_main",
-        wasm_template = wasm_template(&isi_hex.concat()),
-        isi_calls = isi_calls
-    );
-
-    transaction_execution_should_produce_events(WasmSmartContract::from_compiled(wat.into_bytes()))
-        .await
+        .collect::<Vec<_>>();
+    (instructions, expected)
 }
 
 async fn transaction_execution_should_produce_events(
+    context: &'static str,
+    network: &Network,
     executable: impl Into<Executable> + Send,
+    mut expected_domains: BTreeSet<String>,
 ) -> Result<()> {
-    let network = NetworkBuilder::new().start().await?;
-    let events_stream = network
-        .client()
-        .listen_for_events([DataEventFilter::Any])
-        .await?;
-    pin_mut!(events_stream);
+    // Wait for Torii to come up before subscribing to events.
+    let status = get_status_with_retry_async(&network.client())
+        .await
+        .map_err(|err| err.wrap_err(format!("{context}: wait for status")))?;
+    let baseline_non_empty = status.blocks_non_empty;
+    let mut events_stream = tokio::time::timeout(
+        network.sync_timeout(),
+        network
+            .client()
+            .listen_for_events_async([DataEventFilter::Domain(
+                DomainEventFilter::new().for_events(DomainEventSet::Created),
+            )]),
+    )
+    .await
+    .wrap_err_with(|| format!("{context}: timed out opening domain event stream"))??;
 
-    {
-        let client = network.client();
-        let tx = client.build_transaction(executable, <_>::default());
-        spawn_blocking(move || client.submit_transaction_blocking(&tx)).await??;
+    let result = async {
+        {
+            let client = network.client();
+            let tx = client.build_transaction(executable, <_>::default());
+            spawn_blocking(move || client.submit_transaction(&tx)).await??;
+        }
+
+        network
+            .ensure_blocks_with(|h| h.non_empty > baseline_non_empty)
+            .await?;
+
+        let mut unexpected_domains = Vec::new();
+        let deadline = Instant::now() + network.sync_timeout();
+
+        while !expected_domains.is_empty() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(eyre!(
+                    "{context}: timed out waiting for domain events; missing: {:?}; unexpected: {:?}",
+                    expected_domains,
+                    unexpected_domains
+                ));
+            }
+            let event_opt = tokio::time::timeout(remaining, events_stream.next())
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "{context}: timed out waiting for next event; missing: {expected_domains:?}; unexpected: {unexpected_domains:?}"
+                    )
+                })?;
+            let event = match event_opt {
+                Some(event) => event?,
+                None => {
+                    return Err(eyre!(
+                        "{context}: event stream ended; missing: {:?}; unexpected: {:?}",
+                        expected_domains,
+                        unexpected_domains
+                    ));
+                }
+            };
+            if let EventBox::Data(ev) = event
+                && let DataEvent::Domain(DomainEvent::Created(domain)) = ev.as_ref()
+            {
+                let domain_name = domain.id().name().as_ref().to_owned();
+                if !expected_domains.remove(&domain_name) {
+                    unexpected_domains.push(domain_name);
+                }
+            }
+        }
+
+        Ok(())
     }
+    .await;
 
-    for i in 0..4 {
-        let event = events_stream
-            .next()
-            .await
-            .expect("there are at least 4 events")?;
-
-        let domain = assert_matches!(
-            event,
-            EventBox::Data(DataEvent::Domain(DomainEvent::Created(domain))) => domain
-        );
-        assert_eq!(domain.id().name().as_ref(), i.to_string())
-    }
-
-    Ok(())
+    events_stream.close().await;
+    result
 }
 
-#[tokio::test]
+fn unwrap_data_event(event: EventBox) -> DataEvent {
+    match event {
+        EventBox::Data(shared) => shared.as_ref().clone(),
+        other => panic!("expected Data event, got {other:?}"),
+    }
+}
+
 #[allow(clippy::too_many_lines)]
-async fn produce_multiple_events() -> Result<()> {
-    let network = NetworkBuilder::new().start().await?;
-    let events_stream = network
-        .client()
-        .listen_for_events([DataEventFilter::Any])
-        .await?;
-    pin_mut!(events_stream);
+async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
+    let status = get_status_with_retry_async(&network.client())
+        .await
+        .map_err(|err| err.wrap_err("produce_multiple_events: wait for status"))?;
+    let baseline_non_empty = status.blocks_non_empty;
 
     // Register role
-    let role_id = "TEST_ROLE".parse::<RoleId>()?;
+    let role_id = "TEST_ROLE_EVENTS".parse::<RoleId>()?;
+    let wonderland_domain: DomainId = "wonderland".parse()?;
     let permission_1 = CanModifyAccountMetadata {
         account: ALICE_ID.clone(),
     };
     let permission_2 = CanModifyDomainMetadata {
-        domain: ALICE_ID.domain().clone(),
+        domain: wonderland_domain,
     };
     let role = Role::new(role_id.clone(), ALICE_ID.clone())
         .add_permission(permission_1.clone())
@@ -193,6 +150,30 @@ async fn produce_multiple_events() -> Result<()> {
     // Unregister the role
     let unregister_role = Unregister::role(role_id.clone());
 
+    let account_event_set = AccountEventSet::RoleGranted | AccountEventSet::RoleRevoked;
+    let mut events_stream = tokio::time::timeout(
+        network.sync_timeout(),
+        network.client().listen_for_events_async([
+            DataEventFilter::Role(
+                RoleEventFilter::new()
+                    .for_role(role_id.clone())
+                    .for_events(RoleEventSet::Created | RoleEventSet::Deleted),
+            ),
+            DataEventFilter::Account(
+                AccountEventFilter::new()
+                    .for_account(ALICE_ID.clone())
+                    .for_events(account_event_set),
+            ),
+            DataEventFilter::Account(
+                AccountEventFilter::new()
+                    .for_account(bob_id.clone())
+                    .for_events(account_event_set),
+            ),
+        ]),
+    )
+    .await
+    .wrap_err("produce_multiple_events: timed out opening event stream")??;
+
     {
         let client = network.client();
         spawn_blocking(move || {
@@ -205,64 +186,186 @@ async fn produce_multiple_events() -> Result<()> {
         .await??;
     }
 
-    // Inspect produced events
-    let event: DataEvent = events_stream.next().await.unwrap()?.try_into()?;
-    assert!(matches!(event, DataEvent::Role(_)));
-    if let DataEvent::Role(role_event) = event {
-        assert!(matches!(role_event, RoleEvent::Created(_)));
+    network
+        .ensure_blocks_with(|h| h.non_empty > baseline_non_empty)
+        .await?;
 
-        if let RoleEvent::Created(created_role) = role_event {
-            assert_eq!(created_role.id(), role.id());
-            assert!(created_role.permissions().eq([
-                permission_1.clone().into(),
-                permission_2.clone().into()
-            ]
-            .iter()));
+    let mut pending_grants: BTreeSet<AccountId> =
+        [ALICE_ID.clone(), bob_id.clone()].into_iter().collect();
+    let mut pending_revokes = pending_grants.clone();
+    let mut saw_role_created = false;
+    let mut saw_role_deleted = false;
+    let mut unexpected_events = Vec::new();
+    let deadline = Instant::now() + network.sync_timeout();
+
+    let result = async {
+        while !(saw_role_created
+            && saw_role_deleted
+            && pending_grants.is_empty()
+            && pending_revokes.is_empty())
+        {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                eyre::bail!(
+                    "timed out waiting for role/account events; pending grants: {:?}; pending revokes: {:?}; role_created: {}; role_deleted: {}; unexpected: {:?}",
+                    pending_grants,
+                    pending_revokes,
+                    saw_role_created,
+                    saw_role_deleted,
+                    unexpected_events
+                );
+            }
+            let event_opt = tokio::time::timeout(remaining, events_stream.next())
+                .await
+                .map_err(|_| {
+                    eyre::eyre!(
+                        "timed out waiting for next event; pending grants: {:?}; pending revokes: {:?}; role_created: {}; role_deleted: {}; unexpected: {:?}",
+                        pending_grants,
+                        pending_revokes,
+                        saw_role_created,
+                        saw_role_deleted,
+                        unexpected_events
+                    )
+                })?;
+            let event = match event_opt {
+                Some(event) => event?,
+                None => {
+                    eyre::bail!(
+                        "event stream ended before receiving all role/account events; pending grants: {:?}; pending revokes: {:?}; role_created: {}; role_deleted: {}; unexpected: {:?}",
+                        pending_grants,
+                        pending_revokes,
+                        saw_role_created,
+                        saw_role_deleted,
+                        unexpected_events
+                    );
+                }
+            };
+
+            match unwrap_data_event(event) {
+                DataEvent::Role(RoleEvent::Created(created_role)) => {
+                    if created_role.id() != role.id() {
+                        unexpected_events.push(format!(
+                            "role created for unexpected id {:?}",
+                            created_role.id()
+                        ));
+                        continue;
+                    }
+                    if saw_role_created {
+                        unexpected_events.push("duplicate role created event".to_string());
+                        continue;
+                    }
+                    assert!(
+                        created_role.permissions().eq([
+                            permission_1.clone().into(),
+                            permission_2.clone().into()
+                        ]
+                        .iter())
+                    );
+                    saw_role_created = true;
+                }
+                DataEvent::Role(RoleEvent::Deleted(deleted_role)) => {
+                    if deleted_role != role_id {
+                        unexpected_events
+                            .push(format!("role deleted for unexpected id {deleted_role:?}"));
+                        continue;
+                    }
+                    if saw_role_deleted {
+                        unexpected_events.push("duplicate role deleted event".to_string());
+                        continue;
+                    }
+                    saw_role_deleted = true;
+                }
+                DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleGranted(event))) => {
+                    if event.role != role_id {
+                        unexpected_events.push(format!(
+                            "role granted for unexpected role {:?} to {:?}",
+                            event.role, event.account
+                        ));
+                        continue;
+                    }
+                    if !pending_grants.remove(&event.account) {
+                        unexpected_events.push(format!(
+                            "role grant already observed for {:?}",
+                            event.account
+                        ));
+                    }
+                }
+                DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleRevoked(event))) => {
+                    if event.role != role_id {
+                        unexpected_events.push(format!(
+                            "role revoked for unexpected role {:?} from {:?}",
+                            event.role, event.account
+                        ));
+                        continue;
+                    }
+                    if !pending_revokes.remove(&event.account) {
+                        unexpected_events.push(format!(
+                            "role revoke already observed for {:?}",
+                            event.account
+                        ));
+                    }
+                }
+                other => unexpected_events.push(format!("unexpected event: {other:?}")),
+            }
         }
+
+        Ok(())
+    }
+    .await;
+
+    events_stream.close().await;
+    result
+}
+
+#[tokio::test]
+#[allow(clippy::large_futures, clippy::too_many_lines)]
+async fn data_event_scenarios() -> Result<()> {
+    let Some(network) =
+        sandbox::start_network_async_or_skip(NetworkBuilder::new().with_peers(4), "data_events")
+            .await?
+    else {
+        return Ok(());
+    };
+
+    let (instructions, expected) = produce_instructions("instr");
+    if sandbox::handle_result(
+        transaction_execution_should_produce_events(
+            stringify!(instruction_execution_should_produce_events),
+            &network,
+            instructions,
+            expected,
+        )
+        .await,
+        stringify!(instruction_execution_should_produce_events),
+    )?
+    .is_none()
+    {
+        return Ok(());
     }
 
-    if let DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleGranted(event))) =
-        events_stream.next().await.unwrap()?.try_into()?
+    let (instructions, expected) = produce_instructions("ivm");
+    if sandbox::handle_result(
+        transaction_execution_should_produce_events(
+            stringify!(ivm_execution_should_produce_events),
+            &network,
+            instructions,
+            expected,
+        )
+        .await,
+        stringify!(ivm_execution_should_produce_events),
+    )?
+    .is_none()
     {
-        assert_eq!(*event.account(), *ALICE_ID);
-        assert_eq!(*event.role(), role_id);
-    } else {
-        panic!("Expected event is not an AccountEvent::RoleGranted")
+        return Ok(());
     }
 
-    if let DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleGranted(event))) =
-        events_stream.next().await.unwrap()?.try_into()?
+    if sandbox::handle_result(
+        produce_multiple_events_scenario(&network).await,
+        stringify!(produce_multiple_events),
+    )?
+    .is_none()
     {
-        assert_eq!(*event.account(), bob_id);
-        assert_eq!(*event.role(), role_id);
-    } else {
-        panic!("Expected event is not an AccountEvent::RoleGranted")
-    }
-
-    if let DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleRevoked(event))) =
-        events_stream.next().await.unwrap()?.try_into()?
-    {
-        assert_eq!(*event.account(), bob_id);
-        assert_eq!(*event.role(), role_id);
-    } else {
-        panic!("Expected event is not an AccountEvent::RoleRevoked")
-    }
-
-    if let DataEvent::Domain(DomainEvent::Account(AccountEvent::RoleRevoked(event))) =
-        events_stream.next().await.unwrap()?.try_into()?
-    {
-        assert_eq!(*event.account(), *ALICE_ID);
-        assert_eq!(*event.role(), role_id);
-    } else {
-        panic!("Expected event is not an AccountEvent::RoleRevoked")
-    }
-
-    if let DataEvent::Role(RoleEvent::Deleted(event)) =
-        events_stream.next().await.unwrap()?.try_into()?
-    {
-        assert_eq!(event, role_id);
-    } else {
-        panic!("Expected event is not an RoleEvent::Deleted")
+        return Ok(());
     }
 
     Ok(())

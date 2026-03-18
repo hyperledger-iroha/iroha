@@ -16,10 +16,11 @@ is-it-maintained-open-issues = { repository = "https://github.com/hyperledger-ir
 maintenance = { status = "actively-developed" }
 
 [features]
-default = ["std"]
-# Enable static linkage of the rust standard library.
-# Please refer to https://docs.rust-embedded.org/book/intro/no-std.html
-std = []
+default = []
+trybuild-tests = []
 
 [dependencies]
 iroha_derive = { path = "../iroha_derive" }
+
+[dev-dependencies]
+norito = {workspace = true}

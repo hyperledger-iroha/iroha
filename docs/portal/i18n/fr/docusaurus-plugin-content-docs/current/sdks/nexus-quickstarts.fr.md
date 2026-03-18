@@ -1,0 +1,76 @@
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sdks/nexus-quickstarts.fr.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+Le guide complet se trouve dans `docs/source/nexus_sdk_quickstarts.md`. Ce résumé du portail met en avant les prérequis communs et les commandes par SDK pour que les développeurs vérifient rapidement leur configuration.
+
+##Configuration commune
+
+```bash
+export NEXUS_TORII_URL="https://torii.nexus.sora.org"
+export NEXUS_PIPELINE_URL="https://torii.nexus.sora.org/v1/pipeline"
+export NEXUS_CHAIN_ID="iroha3"
+export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
+```
+
+Téléchargez le paquet de configuration Nexus, installez les dépendances de chaque SDK et assurez-vous que les certificats TLS correspondent au profil de release (voir `docs/source/sora_nexus_operator_onboarding.md`).
+
+## Rouille
+
+```bash
+cargo run --bin nexus_quickstart \
+  -- --torii "${NEXUS_TORII_URL}" \
+  --pipeline "${NEXUS_PIPELINE_URL}" \
+  --chain "${NEXUS_CHAIN_ID}"
+```
+
+Réfs : `docs/source/sdk/rust.md`
+
+## JavaScript/TypeScript
+
+```bash
+npm run demo:nexus
+```
+
+Le script instancie `ToriiClient` avec les variables d'environnement ci-dessus et affiche le dernier bloc.
+
+## Rapide
+
+```bash
+make swift-nexus-demo
+```
+
+Utiliser `Torii.Client` de `IrohaSwift` pour récupérateur `FindNetworkStatus`.
+
+## Android
+
+```bash
+./gradlew :iroha-android:nexusQuickstartTest \
+  -PNEXUS_TORII_URL="${NEXUS_TORII_URL}" \
+  -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
+```
+
+Exécutez le test de l'appareil gere qui vise le point de fin de staging Nexus.
+
+## CLI
+
+```bash
+iroha_cli app nexus quickstart \
+  --torii-url "${NEXUS_TORII_URL}" \
+  --pipeline-url "${NEXUS_PIPELINE_URL}" \
+  --chain-id "${NEXUS_CHAIN_ID}"
+```
+
+## Dépannage
+
+- Echecs TLS -> vérifier le bundle CA du tarball de release Nexus.
+- `ERR_UNKNOWN_LANE` -> passer `--lane-id`/`--dataspace-id` une fois le routage multi-voies appliqué.
+- `ERR_SETTLEMENT_PAUSED` -> consulter [Nexus opérations](../nexus/nexus-operations) pour le processus d'incident; la gouvernance a peut-être mis la voie en pause.
+
+Pour plus de contexte et d'explications par SDK, voir `docs/source/nexus_sdk_quickstarts.md`.

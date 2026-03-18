@@ -2,15 +2,9 @@
 
 use core::{result::Result, time::Duration};
 
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
 use futures::{SinkExt, StreamExt};
-use iroha_version::prelude::*;
-use parity_scale_codec::DecodeAll;
-
-#[cfg(test)]
-const TIMEOUT: Duration = Duration::from_millis(10_000);
-#[cfg(not(test))]
-const TIMEOUT: Duration = Duration::from_millis(1000);
+use norito::prelude::*;
 
 /// Error type with generic for actual Stream/Sink error type
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
@@ -22,30 +16,62 @@ pub enum Error {
     SendTimeout,
     /// WebSocket error: {_0}
     WebSocket(#[source] axum::Error),
-    /// Error during versioned message decoding
-    Decode(#[from] parity_scale_codec::Error),
+    /// Error during Norito message decoding
+    Decode(#[from] norito::Error),
+    /// Error during Norito message encoding
+    Encode(norito::Error),
     /// Connection is closed
     Closed,
 }
 
-/// Wrapper to send/receive scale encoded messages
+/// Wrapper to send/receive Norito encoded messages
 #[derive(Debug)]
-pub struct WebSocketScale(pub(crate) WebSocket);
+pub struct WebSocketNorito {
+    ws: WebSocket,
+    timeout: Duration,
+}
 
-impl WebSocketScale {
-    /// Send message encoded in scale
-    pub async fn send<M: Encode + Send>(&mut self, message: M) -> Result<(), Error> {
-        tokio::time::timeout(TIMEOUT, self.0.send(Message::Binary(message.encode())))
-            .await
-            .map_err(|_err| Error::SendTimeout)?
-            .map_err(extract_ws_closed)
+impl WebSocketNorito {
+    /// Create a new Norito WebSocket wrapper with a fixed message timeout.
+    #[must_use]
+    pub fn new(ws: WebSocket, timeout: Duration) -> Self {
+        Self { ws, timeout }
+    }
+
+    /// Send message encoded in Norito
+    pub async fn send<M: NoritoSerialize + Send>(&mut self, message: M) -> Result<(), Error> {
+        // Use Norito framing (header + checksum) so clients can validate payloads.
+        let buf = norito::to_bytes(&message).map_err(Error::Encode)?;
+        tokio::time::timeout(
+            self.timeout,
+            self.ws.send(Message::Binary(axum::body::Bytes::from(buf))),
+        )
+        .await
+        .map_err(|_err| Error::SendTimeout)?
+        .map_err(extract_ws_closed)
+    }
+
+    /// Send a JSON string as a Text WebSocket frame (used for convenience event streams).
+    pub async fn send_json_text(&mut self, json: &str) -> Result<(), Error> {
+        tokio::time::timeout(
+            self.timeout,
+            self.ws
+                .send(Message::Text(Utf8Bytes::from(json.to_string()))),
+        )
+        .await
+        .map_err(|_err| Error::SendTimeout)?
+        .map_err(extract_ws_closed)
     }
 
     /// Recv message and try to decode it
-    pub async fn recv<M: Decode>(&mut self) -> Result<M, Error> {
+    pub async fn recv<M>(&mut self) -> Result<M, Error>
+    where
+        for<'a> M: NoritoDeserialize<'a>,
+        M: Send,
+    {
         // NOTE: ignore non binary messages
         loop {
-            let message = tokio::time::timeout(TIMEOUT, self.0.next())
+            let message = tokio::time::timeout(self.timeout, self.ws.next())
                 .await
                 .map_err(|_err| Error::ReadTimeout)?
                 // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
@@ -54,14 +80,37 @@ impl WebSocketScale {
 
             match message {
                 Message::Binary(binary) => {
-                    return Ok(M::decode_all(&mut binary.as_slice())?);
+                    // Decode using Norito framing (header + checksum).
+                    return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
                 }
                 Message::Text(_) | Message::Ping(_) | Message::Pong(_) => {
-                    iroha_logger::debug!(?message, "Unexpected message received");
+                    iroha_logger::trace!(?message, "Unexpected message received");
                 }
                 Message::Close(_) => {
-                    iroha_logger::debug!(?message, "Close message received");
+                    iroha_logger::trace!(?message, "Close message received");
                 }
+            }
+        }
+    }
+
+    /// Recv with a custom timeout duration, returning Err(ReadTimeout) on expiry.
+    pub async fn recv_with_timeout<M>(&mut self, dur: Duration) -> Result<M, Error>
+    where
+        for<'a> M: NoritoDeserialize<'a>,
+        M: Send,
+    {
+        loop {
+            let message = tokio::time::timeout(dur, self.ws.next())
+                .await
+                .map_err(|_err| Error::ReadTimeout)?
+                .ok_or(Error::Closed)?
+                .map_err(extract_ws_closed)?;
+            match message {
+                Message::Binary(binary) => {
+                    return norito::decode_from_bytes::<M>(binary.as_ref()).map_err(Error::Decode);
+                }
+                Message::Text(_) | Message::Ping(_) | Message::Pong(_) => {}
+                Message::Close(_) => return Err(Error::Closed),
             }
         }
     }
@@ -69,7 +118,7 @@ impl WebSocketScale {
     /// Discard messages and wait for close message
     pub async fn closed(&mut self) -> Result<(), Error> {
         loop {
-            match self.0.next().await {
+            match self.ws.next().await {
                 // NOTE: `None` is the same as `ConnectionClosed` or `AlreadyClosed`
                 None => return Ok(()),
                 Some(Ok(_)) => {}
@@ -86,7 +135,7 @@ impl WebSocketScale {
     /// Close websocket
     pub async fn close(mut self) -> Result<(), Error> {
         // NOTE: use `SinkExt::close` because it's not trying to write to closed socket
-        match <_ as SinkExt<_>>::close(&mut self.0)
+        match <_ as SinkExt<_>>::close(&mut self.ws)
             .await
             .map_err(extract_ws_closed)
         {
@@ -109,3 +158,133 @@ pub fn extract_ws_closed(error: axum::Error) -> Error {
 
     Error::WebSocket(axum::Error::new(error))
 }
+
+#[cfg(feature = "p2p_ws")]
+mod ws_io {
+    use futures::stream::{SplitSink, SplitStream};
+    use futures::{Sink, Stream};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    use super::*;
+
+    /// Read half adapter over a WebSocket stream that yields bytes from Binary frames.
+    pub struct WsReadHalf {
+        inner: SplitStream<WebSocket>,
+        buf: axum::body::Bytes,
+    }
+
+    /// Write half adapter over a WebSocket sink that sends bytes as Binary frames on flush.
+    pub struct WsWriteHalf {
+        inner: SplitSink<WebSocket, Message>,
+        buf: Vec<u8>,
+    }
+
+    impl AsyncRead for WsReadHalf {
+        fn poll_read(
+            mut self: core::pin::Pin<&mut Self>,
+            cx: &mut core::task::Context<'_>,
+            dst: &mut ReadBuf<'_>,
+        ) -> core::task::Poll<std::io::Result<()>> {
+            if !self.buf.is_empty() {
+                let n = core::cmp::min(self.buf.len(), dst.remaining());
+                dst.put_slice(&self.buf.split_to(n));
+                return core::task::Poll::Ready(Ok(()));
+            }
+            let next = futures::ready!(core::pin::Pin::new(&mut self.inner).poll_next(cx));
+            match next {
+                Some(Ok(Message::Binary(b))) => {
+                    self.buf = b;
+                    let n = core::cmp::min(self.buf.len(), dst.remaining());
+                    dst.put_slice(&self.buf.split_to(n));
+                    core::task::Poll::Ready(Ok(()))
+                }
+                Some(Ok(Message::Text(_)))
+                | Some(Ok(Message::Ping(_)))
+                | Some(Ok(Message::Pong(_))) => {
+                    cx.waker().wake_by_ref();
+                    core::task::Poll::Pending
+                }
+                Some(Ok(Message::Close(_))) | None => core::task::Poll::Ready(Ok(())),
+                Some(Err(e)) => core::task::Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("ws read error: {e}"),
+                ))),
+            }
+        }
+    }
+
+    impl AsyncWrite for WsWriteHalf {
+        fn poll_write(
+            mut self: core::pin::Pin<&mut Self>,
+            _cx: &mut core::task::Context<'_>,
+            data: &[u8],
+        ) -> core::task::Poll<std::io::Result<usize>> {
+            self.buf.extend_from_slice(data);
+            core::task::Poll::Ready(Ok(data.len()))
+        }
+
+        fn poll_flush(
+            mut self: core::pin::Pin<&mut Self>,
+            cx: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<std::io::Result<()>> {
+            if !self.buf.is_empty() {
+                {
+                    let mut sink = core::pin::Pin::new(&mut self.inner);
+                    futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("ws ready error: {e}"),
+                        )
+                    }))?;
+                }
+                let data = core::mem::take(&mut self.buf);
+                {
+                    let mut sink = core::pin::Pin::new(&mut self.inner);
+                    sink.as_mut()
+                        .start_send(Message::Binary(axum::body::Bytes::from(data)))
+                        .map_err(|e| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("ws send error: {e}"),
+                            )
+                        })?;
+                }
+            }
+            let mut sink = core::pin::Pin::new(&mut self.inner);
+            futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("ws flush error: {e}"))
+            }))?;
+            core::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            mut self: core::pin::Pin<&mut Self>,
+            cx: &mut core::task::Context<'_>,
+        ) -> core::task::Poll<std::io::Result<()>> {
+            futures::ready!(self.as_mut().poll_flush(cx))?;
+
+            let mut sink = core::pin::Pin::new(&mut self.inner);
+            futures::ready!(sink.as_mut().poll_close(cx).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
+            }))?;
+            core::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    pub fn split(ws: WebSocket) -> (WsReadHalf, WsWriteHalf) {
+        let (sink, stream) = ws.split();
+        (
+            WsReadHalf {
+                inner: stream,
+                buf: axum::body::Bytes::new(),
+            },
+            WsWriteHalf {
+                inner: sink,
+                buf: Vec::new(),
+            },
+        )
+    }
+}
+
+#[cfg(feature = "p2p_ws")]
+pub use ws_io::{WsReadHalf, WsWriteHalf, split as ws_split};

@@ -1,0 +1,161 @@
+{
+  "primary_language": {
+    "code": "en",
+    "name": "English"
+  },
+  "target_languages": [
+    {
+      "code": "es",
+      "name": "Spanish",
+      "autonym": "Español",
+      "dir": "ltr"
+    },
+    {
+      "code": "pt",
+      "name": "Portuguese",
+      "autonym": "Português",
+      "dir": "ltr"
+    },
+    {
+      "code": "fr",
+      "name": "French",
+      "autonym": "Français",
+      "dir": "ltr"
+    },
+    {
+      "code": "ru",
+      "name": "Russian",
+      "autonym": "Русский",
+      "dir": "ltr"
+    },
+    {
+      "code": "ar",
+      "name": "Arabic",
+      "autonym": "العربية",
+      "dir": "rtl"
+    },
+    {
+      "code": "ur",
+      "name": "Urdu",
+      "autonym": "اردو",
+      "dir": "rtl"
+    },
+    {
+      "code": "ja",
+      "name": "Japanese",
+      "autonym": "日本語",
+      "dir": "ltr"
+    },
+    {
+      "code": "he",
+      "name": "Hebrew",
+      "autonym": "עברית",
+      "dir": "rtl"
+    },
+    {
+      "code": "my",
+      "name": "Burmese",
+      "autonym": "မြန်မာ",
+      "dir": "ltr"
+    },
+    {
+      "code": "ka",
+      "name": "Georgian",
+      "autonym": "ქართული",
+      "dir": "ltr"
+    },
+    {
+      "code": "hy",
+      "name": "Armenian",
+      "autonym": "Հայերեն",
+      "dir": "ltr"
+    },
+    {
+      "code": "az",
+      "name": "Azerbaijani",
+      "autonym": "Azərbaycan dili",
+      "dir": "ltr"
+    },
+    {
+      "code": "kk",
+      "name": "Kazakh",
+      "autonym": "Қазақ тілі",
+      "dir": "ltr"
+    },
+    {
+      "code": "ba",
+      "name": "Bashkir",
+      "autonym": "Башҡорт теле",
+      "dir": "ltr"
+    },
+    {
+      "code": "am",
+      "name": "Amharic (Ethiopian)",
+      "autonym": "አማርኛ",
+      "dir": "ltr"
+    },
+    {
+      "code": "dz",
+      "name": "Dzongkha",
+      "autonym": "རྫོང་ཁ",
+      "dir": "ltr"
+    },
+    {
+      "code": "uz",
+      "name": "Uzbek",
+      "autonym": "Oʻzbekcha",
+      "dir": "ltr"
+    },
+    {
+      "code": "mn",
+      "name": "Mongolian",
+      "autonym": "Монгол",
+      "dir": "ltr"
+    },
+    {
+      "code": "zh-hant",
+      "name": "Chinese (Traditional)",
+      "autonym": "繁體中文",
+      "dir": "ltr"
+    },
+    {
+      "code": "zh-hans",
+      "name": "Chinese (Simplified)",
+      "autonym": "简体中文",
+      "dir": "ltr"
+    }
+  ],
+  "include": [
+    "docs/**/*.md",
+    "docs/**/*.org",
+    "*.md",
+    "*.org"
+  ],
+  "exclude": [
+    "*.ja.md",
+    "*.ja.org",
+    "*.he.md",
+    "*.he.org",
+    "**/*.ja.md",
+    "**/*.ja.org",
+    "**/*.he.md",
+    "**/*.he.org",
+    "**/*.generated.md",
+    "docs/source/generated/**",
+    "docs/source/confidential_key_vectors.json",
+    "docs/source/norito_json_inventory.json",
+    "docs/source/grafana_*.json",
+    "target/**",
+    "vendor/**",
+    "artifacts/**",
+    "tmp/**",
+    "clean_copy/**",
+    "rust_out/**",
+    "node_modules/**",
+    "javascript/iroha_js/node_modules/**",
+    "docs/i18n/**",
+    "docs/portal/i18n/**",
+    "**/AGENTS.md",
+    "**/AGENTS.org"
+  ]
+}

@@ -1,0 +1,79 @@
+---
+lang: az
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+TryItConsole-u '@site/src/components/TryItConsole.jsx' ünvanından idxal edin;
+
+# Torii API Baxışı
+
+Torii şlüz Iroha ilə qarşılıqlı əlaqə üçün REST + WebSocket səthini açır.
+qovşaqlar. Kanonik OpenAPI sənədi aşağıdakılar vasitəsilə yaradılır:
+
+```bash
+cargo xtask openapi
+```
+
+Yuxarıdakı əmri işlətmək `docs/portal/static/openapi/torii.json` və yazır
+`docusaurus-plugin-openapi-docs` inteqrasiyasını təmin edir, beləliklə bu bölmə yenilənir
+avtomatik. Generator yaddaşdaxili Torii marşrutlaşdırıcısını işə salır və
+onun OpenAPI son nöqtəsini sorğulayın; bu uğursuz olarsa (məsələn, marşrutlaşdırıcının işə salınması
+səhvlər) əvəzinə deterministik yertutan spesifikasiyası buraxılır.
+
+## Cari status- **Xüsusi mənbə:** `cargo xtask openapi` birbaşa Torii marşrutlaşdırıcısını sorğulayır; the
+  ehtiyat stub yalnız marşrutlaşdırıcı OpenAPI-i ifşa etmədikdə buraxılır
+  sənəd.
+- **Determinizm:** JSON çıxışı CI-də sabit fərqi təmin etmək üçün kanonlaşdırılıb.
+- **Autentifikasiya:** “Cəhd edin” sandbox indi sorğuları a
+  məhdud səhnələşdirmə proxy. Operatorlar Torii son nöqtə və daşıyıcı təmin etməlidirlər
+  zənglər verməzdən əvvəl nişan.
+- **Versiya seçicisi:** Swagger UI, RapiDoc və tam Torii OpenAPI səhifəsi
+  `openapi/versions.json` oxuyan açılan menyunu açın ki, müqayisə edə biləsiniz
+  tarixi görüntülər. `Latest (tracked)` seçimi işarə edir
+  `/openapi/torii.json`, bütün digər girişlər isə müvafiq yüklənir
+  `openapi/versions/<version>/torii.json` artefakt.
+- **Snapshot iş axını:** `npm run docs:version -- <label>` işlətdikdən sonra yeniləyin
+  `npm run sync-openapi -- --version=<label> --latest` ilə uyğun gələn OpenAPI faylı
+  beləliklə, açılan menyu həm dondurulmuş şəkli, həm də yuvarlanan "Ən son" quruluşu yükləyə bilər.
+
+Router tərəfindən dəstəklənən ekstraktor indi tam Torii səthini yayır. Əgər görsəniz
+yer tutucu stub, onu quraşdırma zamanı nasazlığı kimi qiymətləndirin və Torii-i yoxlayın
+marşrutlaşdırıcının başlanğıc qeydləri.
+
+## Onu sınaqdan keçirin (DOCS-3)Tərtibatçı portalı REST sorğularını a vasitəsilə ötürən kiçik bir konsol daxil edir
+Node-based proxy. Proksi CORS, tarif limitləri və isteğe bağlı daşıyıcını tətbiq edir
+tokenlər, beləliklə vidcet etimadnamələri ifşa etmədən quruluş şlüzləri ilə danışa bilsin.
+Tam operator yoxlama siyahısı üçün `docs/devportal/try-it.md`-ə baxın.
+
+Docusaurus dev serveri ilə birlikdə proksi işə salın:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- Proksi `TRYIT_PROXY_LISTEN` (standart `127.0.0.1:8787`) və
+  istənilən `/proxy/...` sorğularını `TRYIT_PROXY_TARGET`-ə yönləndirir.
+- Statik daşıyıcı tokenləri üçün `TRYIT_PROXY_BEARER` təchiz edin və ya zəng edənlərin təmin etməsinə icazə verin
+  "Taşıyıcı nişanı" sahəsi vasitəsilə hər sorğu üçün bir.
+- Məhdudiyyət dərəcəsi standartı dəqiqədə 60 sorğu ilə məhdudlaşdırır və tənzimlənə bilər
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ Proksi səhnələşdirmə/demo girişi üçün nəzərdə tutulub. İstehsal yerləşdirmələri
+> sərtləşdirilmiş girişin arxasınca qaçmalı və eyni sürəti məhdudlaşdıran siyasətdən yenidən istifadə etməlidir
+> Torii ön.
+

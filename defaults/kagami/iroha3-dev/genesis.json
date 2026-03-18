@@ -1,0 +1,272 @@
+{
+  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+  "chain": "iroha3-dev.local",
+  "consensus_fingerprint": "0x6a5f187252f927e3d00eb0ea0defd132a2dfb6c5b216dd916d0e5aadff25cd25",
+  "consensus_mode": "Npos",
+  "crypto": {
+    "allowed_curve_ids": [
+      1,
+      4
+    ],
+    "allowed_signing": [
+      "ed25519",
+      "secp256k1"
+    ],
+    "default_hash": "blake2b-256",
+    "sm2_distid_default": "1234567812345678",
+    "sm_intrinsics": "auto",
+    "sm_openssl_preview": false
+  },
+  "executor": null,
+  "ivm_dir": ".",
+  "transactions": [
+    {
+      "instructions": [
+        {
+          "Register": {
+            "Domain": {
+              "id": "wonderland",
+              "logo": null,
+              "metadata": {
+                "key": "value"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "label": null,
+              "metadata": {
+                "key": "value"
+              },
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "TransparentOnly",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "id": "rose#wonderland",
+              "logo": null,
+              "metadata": {
+                
+              },
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "garden_of_live_flowers",
+              "logo": null,
+              "metadata": {
+                
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
+              "label": null,
+              "metadata": {
+                
+              },
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "TransparentOnly",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "id": "cabbage#garden_of_live_flowers",
+              "logo": null,
+              "metadata": {
+                
+              },
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [
+        
+      ],
+      "parameters": {
+        "block": {
+          "max_transactions": 512
+        },
+        "custom": {
+          "ivm_gas_limit_per_block": {
+            "id": "ivm_gas_limit_per_block",
+            "payload": 1680000
+          },
+          "sumeragi_npos_parameters": {
+            "id": "sumeragi_npos_parameters",
+            "payload": {
+              "activation_lag_blocks": 1,
+              "block_time_ms": 100,
+              "epoch_length_blocks": 3600,
+              "epoch_seed": "4D5FC075E21E35B005F84FB9A3810B339776C77DC1027BEA6A14CB2D300C9AC9",
+              "evidence_horizon_blocks": 7200,
+              "k_aggregators": 3,
+              "max_entity_correlation_pct": 25,
+              "max_nominator_concentration_pct": 25,
+              "min_self_bond": 1000,
+              "redundant_send_r": 1,
+              "seat_band_pct": 5,
+              "slashing_delay_blocks": 259200,
+              "timeout_aggregator_ms": 120,
+              "timeout_commit_ms": 150,
+              "timeout_da_ms": 300,
+              "timeout_precommit_ms": 250,
+              "timeout_prevote_ms": 300,
+              "timeout_propose_ms": 300,
+              "vrf_commit_window_blocks": 100,
+              "vrf_reveal_window_blocks": 40
+            }
+          }
+        },
+        "executor": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "smart_contract": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "sumeragi": {
+          "block_time_ms": 100,
+          "collectors_k": 1,
+          "collectors_redundant_send_r": 1,
+          "commit_time_ms": 100,
+          "da_enabled": true,
+          "key_activation_lead_blocks": 1,
+          "key_allowed_algorithms": [
+            "bls_normal"
+          ],
+          "key_allowed_hsm_providers": [
+            "pkcs11",
+            "yubihsm",
+            "softkey"
+          ],
+          "key_expiry_grace_blocks": 0,
+          "key_overlap_grace_blocks": 8,
+          "key_require_hsm": false,
+          "max_clock_drift_ms": 1000,
+          "min_finality_ms": 100
+        },
+        "transaction": {
+          "ivm_bytecode_size": 4194304,
+          "max_decompressed_bytes": 1048576,
+          "max_instructions": 4096,
+          "max_metadata_depth": 8,
+          "max_signatures": 16,
+          "max_tx_bytes": 1048576,
+          "require_height_ttl": false,
+          "require_sequence": false
+        }
+      },
+      "topology": [
+        
+      ]
+    },
+    {
+      "instructions": [
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c400000000000000ddd7a4b694c2dd9000810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365",
+              "object": "13"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200d6000000000000004b9fa464dfc100ea00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033450000000000000026000000000000001e00000000000000160000000000000067617264656e5f6f665f6c6976655f666c6f776572730f00000000000000070000000000000063616262616765",
+              "object": "44"
+            }
+          }
+        },
+        {
+          "Transfer": {
+            "AssetDefinition": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": "rose#wonderland",
+              "source": "34mSYmtx2t7jKZDQcTrSU7yorGequhMUV842SfcxYBZgXASYDFrxxbA7Jn8p4Bkx57CsYtcbB"
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": {
+                "name": "CanSetParameters"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": {
+                "name": "CanRegisterDomain"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "object": {
+                "name": "CanRegisterAccount"
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [
+        
+      ],
+      "topology": [
+        {
+          "peer": "ea0130A1DB3124CEBD4A5A9BBC968D3988FFC0DF0B8E50F9650554FD8599E7D7F07A7C8F7F1CFE1B2CBC397661A48363188EED",
+          "pop_hex": "88f92a579492d254ebdeb00b9a320a0e30aabebfcef1c15314ac93cc34f34c3cff9331815a00b31f6f311fd4852bbbcd0307c0ff355bc5495f2fcc2e5f161291791af56fcefaf2442942c6170e6529a430ce240eac8183ecf7f300b0ce6479b5"
+        }
+      ]
+    }
+  ],
+  "wire_proto_versions": [
+    1
+  ]
+}

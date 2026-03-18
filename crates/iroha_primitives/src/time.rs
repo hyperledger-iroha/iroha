@@ -1,4 +1,7 @@
-//! Provides a [`TimeSource`] - a mockable abstraction over [`std::time::SystemTime`]
+//! Provides [`TimeSource`], a mockable abstraction over [`std::time::SystemTime`].
+//!
+//! Real time is used in production, while tests can substitute a manual
+//! clock via [`MockTimeHandle`].
 
 use std::{
     sync::Arc,
@@ -26,7 +29,8 @@ impl TimeSource {
         Self(TimeSourceInner::SystemTime)
     }
 
-    /// Creates a mock [`TimeSource`] that must be advanced manually via [`MockTimeHandle`]
+    /// Creates a mock [`TimeSource`] that must be advanced manually via
+    /// [`MockTimeHandle`].
     pub fn new_mock(start_unix_time: Duration) -> (MockTimeHandle, Self) {
         let handle = MockTimeHandle::new(start_unix_time);
 
@@ -55,6 +59,12 @@ impl TimeSource {
             TimeSourceInner::MockTime(time) => *time.lock(),
         }
     }
+
+    /// Returns the duration since unix epoch corresponding to "now".
+    #[inline]
+    pub fn now(&self) -> Duration {
+        self.get_unix_time()
+    }
 }
 
 /// A handle that can be used to advance the mock [`TimeSource`].
@@ -72,21 +82,47 @@ impl MockTimeHandle {
         TimeSource(TimeSourceInner::MockTime(self.0.clone()))
     }
 
-    /// Set the mock time to a specific unix time value
+    /// Sets the mock time to a specific unix timestamp.
     pub fn set(&self, unix_time: Duration) {
         let mut time = self.0.lock();
         *time = unix_time;
     }
 
-    /// Advance mock time
+    /// Moves the mock clock forward by `advance_time`.
     pub fn advance(&self, advance_time: Duration) {
         let mut time = self.0.lock();
-        *time += advance_time;
+        *time = time.saturating_add(advance_time);
     }
 
-    /// Rewind mock time
+    /// Moves the mock clock backward by `advance_time`.
     pub fn rewind(&self, advance_time: Duration) {
         let mut time = self.0.lock();
-        *time -= advance_time;
+        *time = time.saturating_sub(advance_time);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewind_saturates_at_zero() {
+        let handle = MockTimeHandle::new(Duration::from_secs(5));
+        let source = handle.source();
+
+        handle.rewind(Duration::from_secs(10));
+
+        assert_eq!(source.now(), Duration::from_secs(0));
+    }
+
+    #[test]
+    fn advance_saturates_at_max() {
+        let start = Duration::MAX.saturating_sub(Duration::from_secs(1));
+        let handle = MockTimeHandle::new(start);
+        let source = handle.source();
+
+        handle.advance(Duration::from_secs(5));
+
+        assert_eq!(source.now(), Duration::MAX);
     }
 }

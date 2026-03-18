@@ -1,0 +1,84 @@
+---
+lang: kk
+direction: ltr
+source: docs/portal/docs/api/overview.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+TryItConsole файлын '@site/src/components/TryItConsole.jsx' ішінен импорттау;
+
+# Torii API шолуы
+
+Torii шлюзі Iroha-пен әрекеттесу үшін REST + WebSocket бетін көрсетеді.
+түйіндер. Канондық OpenAPI құжаты келесі арқылы жасалады:
+
+```bash
+cargo xtask openapi
+```
+
+Жоғарыдағы пәрменді іске қосу `docs/portal/static/openapi/torii.json` және жазады
+`docusaurus-plugin-openapi-docs` интеграциясын береді, осылайша бұл бөлім жаңартылады
+автоматты түрде. Генератор жадтағы Torii маршрутизаторын айналдырады және
+оның OpenAPI соңғы нүктесін сұрау; егер бұл сәтсіз болса (мысалы, маршрутизаторды инициализациялау
+қателер) орнына детерминирленген толтырғыш спецификациясы шығарылады.
+
+## Ағымдағы күй
+
+- **Арнайы дереккөз:** `cargo xtask openapi` Torii маршрутизаторын тікелей сұрайды; the
+  қалпына келтіру түбіртегі маршрутизатор OpenAPI көрсете алмаған кезде ғана шығарылады.
+  құжат.
+- **Детерминизм:** JSON шығысы CI бойынша тұрақты айырмашылықты қамтамасыз ету үшін канонизацияланған.
+- **Түпнұсқалық растама:** «Байқап көріңіз» құмсалғышы енді сұрауларды a арқылы жібереді
+  шектелген кезеңдік прокси. Операторлар Torii соңғы нүкте мен тасымалдаушыны қамтамасыз етуі керек
+  қоңырауларды беру алдында белгі.
+- **Нұсқа селекторы:** Swagger UI, RapiDoc және толық Torii OpenAPI беті
+  салыстыру үшін `openapi/versions.json` оқитын ашылмалы тізімді ашыңыз
+  тарихи суреттер. `Latest (tracked)` опциясы мынаны көрсетеді
+  `/openapi/torii.json`, ал барлық басқа жазбалар сәйкесті жүктейді
+  `openapi/versions/<version>/torii.json` артефакті.
+- **Суретті жұмыс процесі:** `npm run docs:version -- <label>` іске қосқаннан кейін, жаңартыңыз
+  сәйкес OpenAPI файлы `npm run sync-openapi -- --version=<label> --latest`
+  сондықтан ашылмалы тізім мұздатылған суретті де, жылжымалы «Соңғы» құрастыруды да жүктей алады.
+
+Маршрутизатор қолдайтын экстрактор енді толық Torii бетін шығарады. Егер сіз көрсеңіз
+толтырғышты белгілеңіз, оны құрастыру уақытының сәтсіздігі ретінде қарастырыңыз және Torii тексеріңіз
+маршрутизаторды іске қосу журналдары.
+
+## Құм жәшігін қолданып көріңіз (DOCS-3)
+
+Әзірлеуші порталы REST сұрауларын а арқылы жіберетін шағын консольді ендіреді
+Түйінге негізделген прокси. Прокси CORS, тарифтік шектеулерді және қосымша ұсынушыны мәжбүрлейді
+виджет тіркелгі деректерін көрсетпестен сахналық шлюздермен сөйлесе алатындай белгілер.
+Толық операторды тексеру тізімін `docs/devportal/try-it.md` қараңыз.
+
+Docusaurus әзірлеуші серверімен бірге проксиді іске қосыңыз:
+
+```bash
+cd docs/portal
+# Proxy configuration
+export TRYIT_PROXY_TARGET="https://torii.staging.sora"
+export TRYIT_PROXY_ALLOWED_ORIGINS="http://localhost:3000"
+export TRYIT_PROXY_BEARER="sora-dev-token"
+# Front-end configuration so the widget knows where the proxy lives
+export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
+
+# Run the proxy and the docs site (parallel terminals recommended)
+npm run tryit-proxy
+npm run start
+```
+
+- Прокси `TRYIT_PROXY_LISTEN` (әдепкі `127.0.0.1:8787`) арқылы тыңдайды және
+  кез келген `/proxy/...` сұрауларын `TRYIT_PROXY_TARGET` мекенжайына жібереді.
+- Статикалық жеткізуші токендері үшін `TRYIT_PROXY_BEARER` жеткізіңіз немесе қоңырау шалушыларға беруге рұқсат етіңіз
+  «Тасымалдаушы таңбалауышы» өрісі арқылы сұрауға бір.
+- Тариф әдепкі бойынша минутына 60 сұраныспен шектеледі және оны реттеуге болады
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+
+> ⚠️ Прокси сахналау/демо қатынасу үшін арналған. Өндірістік орналастырулар
+> қатайтылған кірістің артынан жүгіріп, сол жылдамдықты шектеу саясатын қайта пайдалану керек
+> Torii алдыңғы.
+
+<TryItConsole />

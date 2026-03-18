@@ -1,0 +1,105 @@
+{
+  "report_metadata": {
+    "report_version": 1,
+    "generated_at_unix": 1767225600,
+    "git_revision": "9f84f3c7d6ab4d42f3c917e62c13a2ec7fd1f034",
+    "metrics_window": {
+      "start_epoch": 18120,
+      "end_epoch": 18179
+    },
+    "metrics_directory": "telemetry/soranet/relay_metrics/2025-10-01_2025-11-29",
+    "state_snapshot": "artifacts/incentives/shadow_state.json",
+    "daemon_config": "configs/sorafs/shadow_daemon.json"
+  },
+  "summary": {
+    "processed_payouts": 360,
+    "total_relays": 6,
+    "total_payout_nanos": 5160000000000,
+    "gini_coefficient": 0.12144702842377253,
+    "top_relay_share": 0.23255813953488372,
+    "zero_score_epochs": 4,
+    "warning_epochs": 9,
+    "suspended_epochs": 3,
+    "average_availability_per_mille": 969.7166666666667,
+    "average_bandwidth_per_mille": 911.9833333333333,
+    "skipped_missing_config": 0,
+    "skipped_missing_bond": 0,
+    "skipped_duplicate": 0,
+    "errors": [],
+    "relays": [
+      {
+        "relay_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "epochs": 60,
+        "payout_nanos": 1200000000000,
+        "average_payout_nanos": 20000000000.0,
+        "average_score_per_mille": 982.4,
+        "average_availability_per_mille": 992.4,
+        "average_bandwidth_per_mille": 948.6,
+        "warning_epochs": 2,
+        "suspended_epochs": 0,
+        "zero_score_epochs": 0
+      },
+      {
+        "relay_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+        "epochs": 60,
+        "payout_nanos": 980000000000,
+        "average_payout_nanos": 16333333333.333334,
+        "average_score_per_mille": 976.3,
+        "average_availability_per_mille": 987.1,
+        "average_bandwidth_per_mille": 936.4,
+        "warning_epochs": 1,
+        "suspended_epochs": 0,
+        "zero_score_epochs": 0
+      },
+      {
+        "relay_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+        "epochs": 60,
+        "payout_nanos": 860000000000,
+        "average_payout_nanos": 14333333333.333334,
+        "average_score_per_mille": 963.7,
+        "average_availability_per_mille": 975.3,
+        "average_bandwidth_per_mille": 912.7,
+        "warning_epochs": 0,
+        "suspended_epochs": 1,
+        "zero_score_epochs": 1
+      },
+      {
+        "relay_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+        "epochs": 60,
+        "payout_nanos": 780000000000,
+        "average_payout_nanos": 13000000000.0,
+        "average_score_per_mille": 951.6,
+        "average_availability_per_mille": 964.8,
+        "average_bandwidth_per_mille": 905.1,
+        "warning_epochs": 2,
+        "suspended_epochs": 1,
+        "zero_score_epochs": 1
+      },
+      {
+        "relay_id_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+        "epochs": 60,
+        "payout_nanos": 720000000000,
+        "average_payout_nanos": 12000000000.0,
+        "average_score_per_mille": 944.8,
+        "average_availability_per_mille": 958.2,
+        "average_bandwidth_per_mille": 896.8,
+        "warning_epochs": 1,
+        "suspended_epochs": 0,
+        "zero_score_epochs": 0
+      },
+      {
+        "relay_id_hex": "6666666666666666666666666666666666666666666666666666666666666666",
+        "epochs": 60,
+        "payout_nanos": 620000000000,
+        "average_payout_nanos": 10333333333.333334,
+        "average_score_per_mille": 931.2,
+        "average_availability_per_mille": 940.5,
+        "average_bandwidth_per_mille": 872.3,
+        "warning_epochs": 3,
+        "suspended_epochs": 2,
+        "zero_score_epochs": 2
+      }
+    ]
+  }
+}
+

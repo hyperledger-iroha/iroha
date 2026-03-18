@@ -1,0 +1,7 @@
+// Subscription usage recorder (expects SubscriptionUsageDelta in trigger args).
+seiyaku SubscriptionUsageRecorder {
+  #[access(read="*", write="*")]
+  kotoage fn run() {
+    subscription_record_usage();
+  }
+}

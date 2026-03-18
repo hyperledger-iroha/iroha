@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="soraDefault" x1="16" y1="12" x2="120" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7a61"/>
+      <stop offset="1" stop-color="#ff4f4f"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#soraDefault)"/>
+  <circle cx="64" cy="64" r="50" stroke="rgba(255,255,255,0.2)" stroke-width="4" fill="none"/>
+  <path d="M94 36c-10.5-12-46-12-56.5 0-10.5 12 8.5 24 22 24s32 12 21.5 24c-10.5 12-46 12-56.5 0" stroke="#ffffff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

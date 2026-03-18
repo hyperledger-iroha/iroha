@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "uaid": "uaid:62af083a61d42ca6c269585b9a33c563f4e0a5c0726614f7a98b6aab6b98f70b",
+  "dataspace": 12,
+  "issued_ms": 1762723200000,
+  "activation_epoch": 4099,
+  "expiry_epoch": 4500,
+  "entries": [
+    {
+      "scope": {
+        "dataspace": 12,
+        "program": "retail.payments",
+        "method": "request_handle",
+        "role": "Initiator"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "2500000",
+          "window": "PerMinute"
+        }
+      },
+      "notes": "Retail dApp atomic payment handle limit."
+    },
+    {
+      "scope": {
+        "dataspace": 12,
+        "program": "retail.payments",
+        "method": "settle_handle"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "100000000",
+          "window": "PerDay"
+        }
+      }
+    },
+    {
+      "scope": {
+        "dataspace": 12,
+        "program": "retail.payments",
+        "method": "withdraw"
+      },
+      "effect": {
+        "Deny": {
+          "reason": "Withdrawals require CBDC lane approval."
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "ticket_id": "SUP-OVR-20260210-01",
+  "requested_by": "alice@example.com",
+  "approver": "Priya Deshpande",
+  "reason": "Incident AND7-override-test",
+  "duration_seconds": 3600,
+  "contact": "+1-555-0100",
+  "notes": "Temporary override requested for telemetry lab rehearsal"
+}

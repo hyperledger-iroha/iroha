@@ -1,0 +1,26 @@
+{
+  "lane": "governance",
+  "governance": "parliament",
+  "version": 1,
+  "validators": [
+    "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+    "sorauﾛ1PTYｷEヱｿsYbe7ｾｵﾆﾐﾓﾕiﾋｵYヱfﾍuGFTmｺiSaHxgﾅｼ3BYUD1"
+  ],
+  "quorum": 2,
+  "protected_namespaces": [
+    "apps",
+    "governance"
+  ],
+  "hooks": {
+    "runtime_upgrade": {
+      "allow": true,
+      "require_metadata": true,
+      "metadata_key": "gov_upgrade_id",
+      "allowed_ids": [
+        "upgrade-1",
+        "upgrade-2"
+      ]
+    }
+  }
+}

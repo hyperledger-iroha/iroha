@@ -1,0 +1,29 @@
+// Kotodama sample: placeholder for ZK verify + unshield flow
+// Note: This sample demonstrates structure and logging; real ZK verify intrinsics
+// may differ and depend on backend features. Use CLI helpers to submit Unshield ISIs.
+
+seiyaku ZkUnshieldDemo {
+  meta {
+    abi_version: 1,
+    features: ["zk"],
+    max_cycles: 0,
+  }
+
+  kotoage fn run() permission(Admin) {
+    info("ZkUnshieldDemo: preparing pointers");
+    let to = account!("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9");
+    let ad = asset_definition!("rose#wonderland");
+
+    // In a real program, you would pass proof envelopes via NoritoBytes and
+    // call zk verification builtins (backend-specific) prior to recording state.
+    // Here we log placeholders to illustrate pointer-ABI usage.
+    let proof = norito_bytes("ENV-UNSHIELD"); // minimal envelope magic as a placeholder
+    let vk_name = name!("vk_unshield");
+
+    info("ZkUnshieldDemo: (placeholder) would verify proof with vk_unshield");
+    zk_verify_unshield(proof);
+    // Example: tag detail to signal an attempted unshield (demo only)
+    set_account_detail(to, vk_name, json!{ attempt: true });
+    info("ZkUnshieldDemo: done");
+  }
+}

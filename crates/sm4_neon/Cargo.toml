@@ -1,0 +1,17 @@
+[package]
+name = "sm4-neon"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "NEON-accelerated SM4 round functions for Iroha"
+publish = false
+readme = "README.md"
+
+[features]
+default = []
+force-neon = []
+
+[dependencies]
+
+[dev-dependencies]
+sm4 = "0.5.1"

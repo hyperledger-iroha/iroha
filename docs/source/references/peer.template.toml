@@ -1,4 +1,4 @@
-## For the full reference, go to (TODO put link)
+## For the full reference, see the configuration docs under docs/source/references
 
 ## You can use another TOML file to extend from.
 ## For a single file extension:
@@ -12,36 +12,286 @@
 # chain =
 # public_key =
 # private_key =
+# default_account_domain_label = "default"  # Used only for AccountAddress selector encoding/compression; AccountId parsing stays domainless.
+# chain_discriminant = 0x02F1              # I105 prefix / chain discriminant; override for dev/test networks.
 
-# trusted_peers =
+telemetry_enabled = true
+telemetry_profile = "operator"  # {disabled, operator, extended, developer, full}
+
+# trusted_peers = [
+#   # Validators must use BLS-Normal keys; non-BLS peers are ignored for consensus.
+#   # Supply a matching PoP entry below for every validator.
+#   # "bls0120...@127.0.0.1:1337",
+# ]
+
+## BLS PoP entries corresponding to `trusted_peers`. Required for every validator.
+## Hex strings may be prefixed with 0x or raw hex.
+# [[trusted_peers_pop]]
+# public_key = "bls0120..."
+# pop_hex = "0x..."
 
 [genesis]
+# The manifest referenced here carries parameter families such as transaction.max_signatures,
+# transaction.max_instructions, transaction.ivm_bytecode_size, transaction.max_tx_bytes,
+# and transaction.max_decompressed_bytes. Adjust those values inside
+# the genesis file when tightening admission limits.
+# public_key =
 # file =
 
 [network]
 # address =
 # public_address =
-# block_gossip_period_ms = 10_000
-# block_gossip_size = 4
-# transaction_gossip_period_ms = 1_000
+# block_gossip_period_ms = 10_000  # clamped to >= 100ms
+# block_gossip_max_period_ms = 30_000 # clamped to >= block_gossip_period_ms
+# block_gossip_size = 4  # fanout cap for block-sync gossip (peer samples, block sync updates, availability votes, NEW_VIEW)
+# peer_gossip_period_ms = 1_000   # clamped to >= 100ms
+# peer_gossip_max_period_ms = 30_000 # clamped to >= peer_gossip_period_ms
+# transaction_gossip_period_ms = 1_000  # clamped to >= 100ms
+# transaction_gossip_resend_ticks = 3   # resend after N gossip periods
 # transaction_gossip_size = 500
-# idle_timeout_ms = 60_000
+# transaction_gossip_public_target_cap = 16        # public-lane fanout cap (null = broadcast)
+# transaction_gossip_restricted_target_cap = null  # restricted-lane fanout cap (null = full commit topology)
+# transaction_gossip_public_target_reshuffle_ms = 1_000     # public target reshuffle cadence (clamped to >= 100ms)
+# transaction_gossip_restricted_target_reshuffle_ms = 1_000 # restricted target reshuffle cadence (clamped to >= 100ms)
+# idle_timeout_ms = 60_000  # clamped to >= 100ms
+# connect_startup_delay_ms = 0 # delay outbound dials after startup (0 disables)
+# trust_decay_half_life_ms = 300_000 # halve negative trust scores every 5 minutes
+# trust_penalty_bad_gossip = 5       # penalty applied per invalid trust gossip
+# trust_penalty_unknown_peer = 3     # permissioned-only penalty when trust gossip mentions peers outside topology; logged + counted as p2p_trust_penalties_total{reason="unknown_peer"}
+# trust_min_score = -20              # drop trust gossip at or below this score
+# trust_gossip = true                # Advertise/accept trust gossip; set false to opt out in permissioned overlays
+#
+# # SCION capability gossip and dialing:
+# # SCION preference is automatic when both peers advertise support.
+# # Legacy/non-SCION peers keep using normal transport fallback automatically.
+# # The following legacy keys are ignored at runtime and kept only for compatibility:
+# # scion_enabled = false
+# # scion_fallback_to_legacy = true
+# # scion_listen_endpoint = "scion://0.0.0.0:30257" # reserved for future inbound support
+# # scion_routes = { "ed0120...peerkey..." = "scion-gateway.example.com:30257" }
+#
+# # Bounded queue capacities:
+# p2p_queue_cap_high = 8192     # consensus/control
+# p2p_queue_cap_low  = 32768    # gossip/sync
+# p2p_post_queue_cap = 2048     # per-peer post channel per topic
+# p2p_subscriber_queue_cap = 8192  # inbound subscriber queue feeding the node relay
+#
+# # Consensus ingress limiting (per peer):
+# consensus_ingress_rate_per_sec = 300
+# consensus_ingress_burst = 300
+# consensus_ingress_bytes_per_sec = 67_108_864
+# consensus_ingress_bytes_burst = 134_217_728
+# Critical recovery/coordination + payload delivery (BlockCreated, Proposal, QcVote/Qc,
+# VrfCommit/VrfReveal, FetchPendingBlock, RbcInit/RbcReady/RbcDeliver, Evidence) use the
+# critical caps; bulk payload frames (BlockSyncUpdate/ExecWitness/RbcChunk/BlockSync) use a
+# separate bucket seeded from the standard caps, scaled by block_time vs 2s (1s -> 2x),
+# and skip penalty cooldowns.
+# consensus_ingress_critical_rate_per_sec = 300
+# consensus_ingress_critical_burst = 300
+# consensus_ingress_critical_bytes_per_sec = 134_217_728
+# consensus_ingress_critical_bytes_burst = 268_435_456
+# consensus_ingress_rbc_session_limit = 64  # auto-raised for fast pipelines; set 0 to disable
+# consensus_ingress_penalty_threshold = 32
+# consensus_ingress_penalty_window_ms = 5000
+# consensus_ingress_penalty_cooldown_ms = 10000
+#
+# # Overflow policy: when a per-peer post channel overflows, disconnect or drop?
+# # Default: true (disconnect). Set to false to keep the connection and drop messages.
+# disconnect_on_post_overflow = true
+
+## Consensus settings (Sumeragi)
+## Participation role and collector settings for consensus.
+## - role: "validator" (proposes, votes, commits) or "observer" (sync-only, no votes)
+## - consensus_mode: "permissioned" (default) or "npos"
+## - collectors.k: number of concurrent collectors per height (K). 1 preserves the original single proxy-tail collector.
+## - collectors.redundant_send_r: redundant send fanout; upon local timeout in view 0, validators may send their vote to up to r collectors.
+## - collectors.parallel_topology_fanout: additional topology fanout alongside collectors (0 disables).
+##   Tooling seeds on-chain defaults as 2f+1 based on validator count; config fallback remains 1 if parameters are absent.
+##
+## Note: K and r are also stored on-chain in `SumeragiParameters`/`sumeragi_npos_parameters`. At startup, nodes adopt the
+## on-chain values (and log a mismatch if config differs). Ensure operator configs and on-chain
+## parameters are aligned to avoid inconsistent pacing. Invalid values (`k == 0` or `r == 0`)
+## are rejected at startup; collector selection is floored to commit quorum (bounded by non-leader
+## peers), and votes only fall back to the full commit topology when collectors are disabled or
+## local-only.
+[sumeragi]
+# role = "validator"
+# consensus_mode = "permissioned"
+
+[sumeragi.collectors]
+# k = 1
+# redundant_send_r = 3 # example for 4 validators (2f+1)
+# parallel_topology_fanout = 1
+
+[sumeragi.advanced.queues]
+# votes = 8192          # vote channel capacity
+# block_payload = 128   # block payload capacity (proposal backpressure if saturated)
+# rbc_chunks = 1024     # RBC chunk capacity (proposal backpressure if saturated)
+# blocks = 256          # block message capacity (block sync updates, params, etc.)
+# control = 1024        # control/background/lane channel capacity
+
+[sumeragi.advanced.worker]
+# iteration_budget_cap_ms = 2000       # cap worker loop time budget per iteration
+# iteration_drain_budget_cap_ms = 2000 # cap mailbox drain per iteration
+# tick_work_budget_cap_ms = 500        # cap per-tick proposal/commit work (0 disables)
+# parallel_ingress = true              # run per-queue ingress threads with a ticketed gate
+# validation_worker_threads = 0        # pre-vote validation worker threads (0 = auto)
+# validation_work_queue_cap = 0        # validation work queue per worker (0 = auto)
+# validation_result_queue_cap = 0      # validation result queue (0 = auto)
+# qc_verify_worker_threads = 0         # QC verify worker threads (0 = auto)
+# qc_verify_work_queue_cap = 0         # QC verify work queue per worker (0 = auto)
+# qc_verify_result_queue_cap = 0       # QC verify result queue (0 = auto)
+# validation_pending_cap = 8192        # deferred vote-validation backlog cap
+
+[sumeragi.advanced.pacemaker]
+# pending_stall_grace_ms = 250       # grace before pending progress counts as stalled
+# active_pending_soft_limit = 1      # allow proposals with <= N blocking pending blocks (0 = strict)
+# rbc_backlog_session_soft_limit = 8 # allow proposals with <= N backlog sessions (0 = strict)
+# rbc_backlog_chunk_soft_limit = 256  # allow proposals with <= N missing chunks (0 = strict)
+# backoff_multiplier = 1             # view-timeout backoff multiplier
+# rtt_floor_multiplier = 2           # RTT floor multiplier for pacemaker backoff
+# max_backoff_ms = 10000             # max pacemaker backoff window
+# jitter_frac_per_mille = 0          # jitter band size as permille of backoff window (0 disables)
+
+[sumeragi.advanced.pacing_governor]
+# window_blocks = 20
+# view_change_pressure_permille = 200   # view-change increments per block (permille)
+# view_change_clear_permille = 50
+# commit_spacing_pressure_permille = 1300 # avg commit spacing vs target (permille)
+# commit_spacing_clear_permille = 1100
+# step_up_bps = 1000
+# step_down_bps = 100
+# min_factor_bps = 10000
+# max_factor_bps = 20000
+
+[sumeragi.persistence]
+# commit_inflight_timeout_ms = 30000
+# commit_work_queue_cap = 1            # commit worker queue capacity
+# commit_result_queue_cap = 1          # commit worker result queue capacity
+
+[sumeragi.recovery]
+# missing_block_signer_fallback_attempts = 1 # fetch from commit certificate signers before falling back to full topology
+
+[sumeragi.gating]
+# membership_mismatch_alert_threshold = 1    # consecutive mismatches before alert/fail-closed
+# membership_mismatch_fail_closed = false    # drop consensus messages from mismatched peers
+# consensus_future_height_window = 8         # drop consensus messages beyond this height delta (0 disables)
+# consensus_future_view_window = 8           # drop consensus messages beyond this view delta (0 disables)
+# invalid_sig_penalty_threshold = 3          # invalid signatures before temporary suppression (0 disables)
+# invalid_sig_penalty_window_ms = 5000
+# invalid_sig_penalty_cooldown_ms = 15000
+
+[sumeragi.da]
+# enabled = true                       # commit waits for availability evidence when enabled
+# max_commitments_per_block = 16       # max DA commitments per block
+# max_proof_openings_per_block = 128   # max DA proof openings per block
+
+[sumeragi.advanced.da]
+# quorum_timeout_multiplier = 3          # DA quorum timeout scaling (block_time + 3 * commit_time)
+# availability_timeout_multiplier = 2    # availability timeout scaling for DA logging/rebroadcasts
+# availability_timeout_floor_ms = 2000   # floor for availability timeouts (0 disables floor)
+
+[sumeragi.npos]
+# epoch_length_blocks = 3600           # validator set epoch length
+# use_stake_snapshot_roster = true     # hydrate roster from stake snapshots
+# advanced.npos.timeouts.*_ms derive from the effective block time when omitted
+# vrf.* windows/deadlines derive from epoch_length_blocks when omitted
+
+#[sumeragi.advanced.npos.timeouts]
+# propose_ms = 350
+# prevote_ms = 450
+# precommit_ms = 550
+# exec_ms = 150
+# witness_ms = 150
+# commit_ms = 850
+# da_ms = 750
+# aggregator_ms = 120
+
+#[sumeragi.npos.vrf]
+# commit_window_blocks = 100
+# reveal_window_blocks = 40
+# commit_deadline_offset_blocks = 100
+# reveal_deadline_offset_blocks = 140
+
+[sumeragi.advanced.rbc]
+# chunk_fanout = null               # RBC chunk fanout cap (null = full roster minus local)
+# chunk_max_bytes = 262144          # RBC chunk size cap (bytes)
+# payload_chunks_per_tick = 64      # max RBC chunks broadcast per tick
+# pending_session_limit = 256       # max pending RBC sessions before INIT
 
 [torii]
 # address =
 # max_content_len = 16_000_000
+# receipt_public_key = "ed0120..."  # optional; defaults to an ephemeral Ed25519 signer when unset
+# receipt_private_key = "802620..." # optional; must be set alongside receipt_public_key
 # query_idle_time_ms = 30_000
 # query_store_capacity = 128
 # query_store_capacity_per_user = 128
+# ws_message_timeout_ms = 10_000
+
+[torii.peer_geo]
+# enabled = false
+# endpoint = "http://ip-api.com/json" # Optional ip-api compatible endpoint for peer geo lookups.
+
+[torii.operator_auth]
+# enabled = false
+# require_mtls = false
+# token_fallback = "bootstrap"
+# token_source = "operator"
+# tokens = []
+# rate_per_minute = 30
+# burst = 10
+# lockout_failures = 5
+# lockout_window_secs = 300
+# lockout_duration_secs = 900
+
+[torii.operator_auth.webauthn]
+# enabled = true
+# rp_id = "example.com"
+# rp_name = "Iroha Operator"
+# origins = ["https://example.com"]
+# user_id = "operator"
+# user_name = "operator"
+# user_display_name = "Iroha Operator"
+# challenge_ttl_secs = 120
+# session_ttl_secs = 900
+# require_user_verification = true
+# allowed_algorithms = ["es256", "ed25519"]
+
+## Network Time Service (NTS)
+## Provides a robust network time estimate for timers and diagnostics.
+## Does not affect consensus acceptance rules; block header timestamps remain the source of truth.
+[nts]
+# sample_interval_ms = 5_000          # Period between peer time probes (clamped to >= 100ms)
+# sample_cap_per_round = 8             # Max peers probed per round
+# max_rtt_ms = 500                     # Discard samples with RTT above this
+# trim_percent = 10                    # Trimmed median percent (each side)
+# per_peer_buffer = 16                 # Per-peer ring buffer depth for samples
+# smoothing_enabled = false            # Enable EMA smoothing (advisory)
+# smoothing_alpha = 0.2                # EMA alpha in [0,1]; higher = more responsive
+# max_adjust_ms_per_min = 50           # Slew cap: max ms adjustment per minute
+# min_samples = 3                      # Minimum samples required for healthy status
+# max_offset_ms = 1_000                # Max absolute offset (ms) before unhealthy (0 disables)
+# max_confidence_ms = 500              # Max MAD confidence (ms) before unhealthy (0 disables)
+# enforcement_mode = "warn"            # Admission behavior: "warn" or "reject"
 
 [kura]
 # init_mode = "strict"
 # store_dir = "./storage"
-# blocks_in_memory = 128
+# blocks_in_memory = 1024
+# block_sync_roster_retention = 7200  # Certified commit-roster snapshots retained for block-sync recovery
+# roster_sidecar_retention = 512      # Roster sidecars retained in pipeline/roster_sidecars.* before GC
 
 [logger]
 # level = "INFO"
 # format = "full"
+
+[ivm]
+# memory_budget_profile = "cpu-small" # Compute resource profile used to cap IVM guest stack budgets.
+
+[ivm.banner]
+# show = true   # Print the Norito/IVM startup banner on daemon launch.
+# beep = true   # Play the retro startup tune (requires the optional `beep` feature).
 
 ## Transactions Queue
 [queue]
@@ -49,12 +299,37 @@
 # capacity_per_user = 65536
 # transaction_time_to_live_ms = 86_400_000 # 1 day
 
+[zk.halo2]
+# enabled = false
+# max_k = 16
+# verifier_budget_ms = 20
+# verifier_max_batch = 16
+# verifier_worker_threads = 0        # 0 = auto by available parallelism
+# verifier_queue_cap = 0             # 0 = auto-derived from worker count
+# verifier_enqueue_wait_ms = 25      # bounded enqueue wait before timeout under saturation
+# verifier_retry_ring_cap = 2048     # in-memory retry ring capacity for important tasks
+# verifier_retry_max_attempts = 3    # retry rounds before final drop
+# verifier_retry_tick_ms = 5         # retry scheduler tick interval
+
+[governance]
+# Allowed JDG attestation signature schemes.
+# jdg_signature_schemes = ["simple_threshold"] # or "bls_normal_aggregate"
+
+# Runtime upgrade provenance policy.
+# [governance.runtime_upgrade_provenance]
+# mode = "optional" # or "required"
+# require_sbom = false
+# require_slsa = false
+# signature_threshold = 0
+# trusted_signers = ["ed0120..."]
+
 [snapshot]
 # mode = "read_write"
 # create_every_ms = 60_000
 # store_dir = "./storage/snapshot"
 
 [telemetry]
+# Master switch: enable telemetry outputs via `telemetry_enabled` and choose capability bundles via `telemetry_profile`.
 # name =
 # url =
 # min_retry_period_ms = 1_000
@@ -63,3 +338,43 @@
 [dev_telemetry]
 ## A path to a file with JSON logs
 # out_file = "./dev_telemetry.json"
+
+[streaming]
+# Optionally override the Ed25519 identity used for streaming control-plane signatures.
+# identity_public_key = "ed0120..."
+# identity_private_key = "802620..."
+#
+# Kyber HPKE support (both must be provided together, hex without 0x prefix).
+# kyber_public_key  = ""
+# kyber_secret_key  = ""
+#
+# Directory for encrypted streaming session snapshots.
+# session_store_dir = "./storage/streaming"
+#
+# Capability mask advertised during QUIC negotiation (bit-or of supported features).
+# feature_bits = 0b11
+
+[crypto]
+# Toggle Chinese SM2/SM3/SM4 support (verification only unless admission is configured for SM signatures).
+# Default hash algorithm fall-back when callers omit one (switch to `sm3-256` alongside SM rollouts).
+# default_hash = "blake2b-256"
+# Signing algorithms permitted during transaction admission (must include `ed25519`; append `sm2` once enabled).
+# allowed_signing = ["ed25519"]
+# Default SM2 distinguishing identifier when clients omit `distid`. The node seeds
+# `Sm2PublicKey::default_distid()` with this value during startup, so adjustments take
+# effect before any transactions execute; update it to match your PKI profile.
+# sm2_distid_default = "1234567812345678"
+
+## Hardware acceleration (optional; defaults enable all available backends)
+## These settings do not change outputs; they only affect performance by allowing
+## IVM to use Metal (macOS) and/or CUDA (when compiled) after passing golden self-tests.
+[accel]
+# enable_simd = true   # Allow SIMD/NEON/AVX; set false to force scalar execution for deterministic parity runs
+# enable_cuda = true   # Use CUDA backend when compiled and available
+# enable_metal = true  # Use Metal backend on macOS when available
+# max_gpus = 0         # Maximum GPUs to initialize (0 = auto/no cap)
+# merkle_min_leaves_gpu = 8192  # Minimum leaves to offload Merkle leaf hashing to GPU
+# merkle_min_leaves_metal = 0    # Backend-specific override for Metal (0 = inherit GPU default)
+# merkle_min_leaves_cuda = 0     # Backend-specific override for CUDA (0 = inherit GPU default)
+# prefer_cpu_sha2_max_leaves_aarch64 = 0  # Prefer CPU SHA2 for trees up to this many leaves on AArch64 (0 = default)
+# prefer_cpu_sha2_max_leaves_x86 = 0      # Prefer CPU SHA2 for trees up to this many leaves on x86/x86_64 (0 = default)

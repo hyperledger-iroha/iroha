@@ -1,0 +1,36 @@
+{
+  "feed_id": [
+    "twitter_follow_binding"
+  ],
+  "feed_config_version": [
+    1
+  ],
+  "providers": [
+    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+    "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"
+  ],
+  "connector_id": "twitter-follow",
+  "connector_version": 1,
+  "cadence_slots": 3,
+  "aggregation": {
+    "aggregation_rule": "MedianMad",
+    "value": 300
+  },
+  "outlier_policy": {
+    "outlier_policy": "Absolute",
+    "value": {
+      "max_delta": "0"
+    }
+  },
+  "min_signers": 2,
+  "committee_size": 2,
+  "risk_class": {
+    "risk_class": "Low",
+    "value": null
+  },
+  "max_observers": 4,
+  "max_value_len": 96,
+  "max_error_rate_bps": 250,
+  "dispute_window_slots": 6,
+  "replay_window_slots": 3
+}

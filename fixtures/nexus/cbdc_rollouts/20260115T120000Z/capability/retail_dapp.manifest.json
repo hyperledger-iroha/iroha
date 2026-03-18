@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "uaid": "uaid:5f77b4fcb89cb03a0ab8f46d98a72d585e3b115a55b6bdb2e893d3f49d9342f1",
+  "dataspace": 12,
+  "issued_ms": 1762723200000,
+  "activation_epoch": 4098,
+  "expiry_epoch": 4600,
+  "entries": [
+    {
+      "scope": {
+        "dataspace": 12,
+        "program": "cbdc.transfer",
+        "method": "use_asset_handle",
+        "asset": "aid:6e156b5010e645f883eb831946b88db8",
+        "role": "Participant"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "5000000",
+          "window": "PerSlot"
+        }
+      }
+    }
+  ]
+}

@@ -1,14 +1,20 @@
-//! Crate with various derive macros
+//! Crate with various derive macros.
+//!
+//! Shared helper utilities (e.g., `Emitter`, attribute parsers) live in the
+//! companion `iroha_derive_primitives` crate so other proc-macro crates can use
+//! them without depending on `iroha_derive` directly.
 
-use darling::FromDeriveInput as _;
+use darling::{Error as DarlingError, FromDeriveInput as _};
 
+#[cfg(feature = "config_base")]
+mod config_base;
 mod from_variant;
-mod serde_where;
+#[cfg(feature = "futures")]
+mod futures;
 
-use iroha_macro_utils::Emitter;
-use manyhow::{manyhow, Result};
+use manyhow::{Result, ToTokensError, manyhow};
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens as _};
+use quote::{ToTokens, quote};
 
 /// Helper macro to expand FFI functions
 #[manyhow]
@@ -51,7 +57,7 @@ pub fn ffi_impl_opaque(_: TokenStream, item: TokenStream) -> Result<TokenStream>
 ///         # stringify!(
 ///         ...
 ///         # );
-///         # todo!()
+///         # unimplemented!()
 ///     }
 /// }
 /// ```
@@ -59,45 +65,35 @@ pub fn ffi_impl_opaque(_: TokenStream, item: TokenStream) -> Result<TokenStream>
 #[proc_macro_derive(FromVariant, attributes(skip_from, skip_try_from, skip_container))]
 pub fn from_variant_derive(input: TokenStream) -> Result<TokenStream> {
     let ast = syn::parse2(input)?;
-    let ast = from_variant::FromVariantInput::from_derive_input(&ast)?;
+    let ast = from_variant::FromVariantInput::from_derive_input(&ast).map_err(darling_error)?;
     Ok(from_variant::impl_from_variant(&ast))
 }
 
-/// `#[serde_where]` attribute is a `derive-where`-like macro for serde, useful when associated types are used.
-///
-/// It allows you to specify where bounds for `Serialize` and `Deserialize` traits with a more concise syntax.
-///
-/// ```rust
-/// use iroha_derive::serde_where;
-/// use serde::{Deserialize, Serialize};
-///
-/// trait Trait {
-///     type Assoc;
-/// }
-///
-/// #[serde_where(T::Assoc)]
-/// #[derive(Serialize, Deserialize)]
-/// struct Type<T: Trait> {
-///     field: T::Assoc,
-/// }
-/// ```
+/// Macro for wrapping future for getting telemetry info about poll times and numbers
+#[cfg(feature = "futures")]
 #[manyhow]
 #[proc_macro_attribute]
-pub fn serde_where(arguments: TokenStream, item: TokenStream) -> TokenStream {
-    let mut emitter = Emitter::new();
+pub fn telemetry_future(args: TokenStream, input: TokenStream) -> TokenStream {
+    futures::telemetry_future_impl(&args, input)
+}
 
-    let Some(derive_input) = emitter.handle(syn::parse2::<syn::DeriveInput>(item.clone())) else {
-        // pass the input as-is, even if it's not a valid derive input
-        return emitter.finish_token_stream_with(item);
-    };
-    let Some(arguments) =
-        emitter.handle(syn::parse2::<serde_where::SerdeWhereArguments>(arguments))
-    else {
-        // if we can't parse the arguments - pass the input as is
-        return emitter.finish_token_stream_with(derive_input.into_token_stream());
-    };
+/// Derive `iroha_config_base::read::ReadConfig` trait.
+#[cfg(feature = "config_base")]
+#[manyhow]
+#[proc_macro_derive(ReadConfig, attributes(config))]
+pub fn derive_read_config(input: TokenStream) -> TokenStream {
+    config_base::derive_read_config_impl(input)
+}
 
-    let result = serde_where::impl_serde_where(&mut emitter, &arguments, derive_input);
+#[derive(Debug)]
+struct DarlingErrorWrapper(DarlingError);
 
-    emitter.finish_token_stream_with(result)
+impl ToTokensError for DarlingErrorWrapper {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.0.clone().write_errors().to_tokens(tokens);
+    }
+}
+
+fn darling_error(err: DarlingError) -> manyhow::Error {
+    manyhow::Error::from(DarlingErrorWrapper(err))
 }

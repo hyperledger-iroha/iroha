@@ -5,6 +5,4 @@ fn execute(_state: &World) -> Result<(), ()> {
     Ok(())
 }
 
-fn main() {
-
-}
+fn main() {}

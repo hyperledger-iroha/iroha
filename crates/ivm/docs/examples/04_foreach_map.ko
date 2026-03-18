@@ -1,0 +1,8 @@
+// Map reads using direct indexing (bounded) inside a contract.
+seiyaku MapIndexing {
+  kotoage fn sum_two(m: Map<int, int>) -> int {
+    let a = m[1];
+    let b = m[2];
+    return a + b;
+  }
+}

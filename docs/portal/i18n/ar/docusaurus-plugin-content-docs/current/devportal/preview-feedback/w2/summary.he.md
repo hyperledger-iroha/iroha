@@ -1,0 +1,49 @@
+---
+lang: he
+direction: rtl
+source: docs/portal/i18n/ar/docusaurus-plugin-content-docs/current/devportal/preview-feedback/w2/summary.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: af7a87188ff681c37e2bfa110775722b97a0e27ac31c6cfa57a88b356c4d9897
+source_last_modified: "2026-01-03T18:08:00+00:00"
+translation_last_reviewed: 2026-01-30
+---
+
+---
+id: preview-feedback-w2-summary
+lang: ar
+direction: rtl
+source: docs/portal/docs/devportal/preview-feedback/w2/summary.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+---
+
+| البند | التفاصيل |
+| --- | --- |
+| الموجة | W2 - المراجعون المجتمعيون |
+| نافذة الدعوة | 2025-06-15 -> 2025-06-29 |
+| وسم الاثر | `preview-2025-06-15` |
+| تذكرة المتتبع | `DOCS-SORA-Preview-W2` |
+| المشاركون | comm-vol-01...comm-vol-08 |
+
+## ابرز النقاط
+
+1. **الحوكمة والادوات** - تمت الموافقة بالاجماع على سياسة intake المجتمعية في 2025-05-20; قالب الطلب المحدث مع حقول الدافع/المنطقة الزمنية موجود تحت `docs/examples/docs_preview_request_template.md`.
+2. **ادلة preflight** - تم تنفيذ تغيير وكيل Try it `OPS-TRYIT-188` في 2025-06-09، تم التقاط لوحات Grafana، وارشفة مخرجات descriptor/checksum/probe لـ `preview-2025-06-15` تحت `artifacts/docs_preview/W2/`.
+3. **موجة الدعوات** - تمت دعوة ثمانية مراجعين مجتمعيين في 2025-06-15، مع تسجيل الاقرارات في جدول الدعوات بالمتتبع; اكمل الجميع تحقق checksum قبل التصفح.
+4. **الملاحظات** - تم تسجيل `docs-preview/w2 #1` (صياغة tooltip) و `#2` (ترتيب الشريط الجانبي للترجمة) في 2025-06-18 وحلهما بحلول 2025-06-21 (Docs-core-04/05)؛ لم تقع حوادث خلال الموجة.
+
+## بنود العمل
+
+| المعرف | الوصف | المالك | الحالة |
+| --- | --- | --- | --- |
+| W2-A1 | معالجة `docs-preview/w2 #1` (صياغة tooltip). | Docs-core-04 | ✅ مكتمل (2025-06-21). |
+| W2-A2 | معالجة `docs-preview/w2 #2` (ترتيب الشريط الجانبي للترجمة). | Docs-core-05 | ✅ مكتمل (2025-06-21). |
+| W2-A3 | ارشفة ادلة الخروج + تحديث roadmap/status. | Docs/DevRel lead | ✅ مكتمل (2025-06-29). |
+
+## ملخص الخروج (2025-06-29)
+
+- اكد جميع المراجعين المجتمعيين الثمانية الاكتمال وتم سحب صلاحيات المعاينة; تم تسجيل الاقرارات في سجل الدعوات بالمتتبع.
+- بقيت لقطات القياس النهائية (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) خضراء; اللوجات ونصوص وكيل Try it مرفقة بـ `DOCS-SORA-Preview-W2`.
+- حزمة الادلة (descriptor, checksum log, probe output, link report, لقطات Grafana, اقرارات الدعوة) ارشفت تحت `artifacts/docs_preview/W2/preview-2025-06-15/`.
+- تم تحديث سجل نقاط التحقق W2 في المتتبع حتى الخروج، لضمان سجل قابل للتدقيق قبل بدء تخطيط W3.

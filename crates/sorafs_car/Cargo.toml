@@ -1,0 +1,106 @@
+[package]
+name = "sorafs_car"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Planning utilities for assembling CARv2 archives for SoraFS."
+
+[features]
+default = []
+manifest = [
+    "dep:sorafs_manifest",
+    "dep:iroha_data_model",
+    "dep:iroha_crypto",
+    "dep:ed25519-dalek",
+]
+da_harness = [
+    "manifest",
+    "dep:eyre",
+    "dep:clap",
+    "dep:iroha_crypto",
+    "dep:iroha_primitives",
+]
+cli = [
+    "manifest",
+    "dep:ed25519-dalek",
+    "dep:iroha_crypto",
+    "dep:iroha_data_model",
+    "dep:iroha_config",
+    "dep:ivm",
+    "dep:tokio",
+    "dep:eyre",
+    "dep:clap",
+]
+fetch_cli = ["cli"]
+[dependencies]
+sorafs_chunker = { path = "../sorafs_chunker" }
+blake3 = "1.8.2"
+thiserror = "2.0.17"
+norito = { workspace = true }
+futures = { version = "0.3.31", default-features = false, features = ["std", "executor"] }
+ed25519-dalek = { version = "2.2.0", optional = true, default-features = false, features = ["std"] }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false, optional = true }
+iroha_crypto = { workspace = true, optional = true }
+iroha_data_model = { workspace = true, optional = true }
+iroha_config = { workspace = true, optional = true }
+iroha_primitives = { workspace = true, optional = true, features = ["simd-accel"] }
+ivm = { workspace = true, optional = true }
+sha3 = { version = "0.10.8" }
+eyre = { workspace = true, optional = true }
+clap = { workspace = true, features = ["derive"], optional = true }
+hex = "0.4.3"
+reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
+base64 = { version = "0.22.1" }
+url = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true, optional = true, features = ["rt-multi-thread"] }
+flate2 = "1.1.5"
+zstd = { workspace = true }
+toml = { version = "0.8.19" }
+
+[dev-dependencies]
+assert_cmd = "2.1.1"
+tempfile = "3.23.0"
+httpmock = "0.8.2"
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+sorafs_orchestrator = { path = "../sorafs_orchestrator" }
+
+[[bin]]
+name = "sorafs_fetch"
+path = "src/bin/sorafs_fetch.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "sorafs_manifest_stub"
+path = "src/bin/sorafs_manifest_stub.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "sorafs_manifest_chunk_store"
+path = "src/bin/sorafs_manifest_chunk_store.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "sorafs_provider_advert_stub"
+path = "src/bin/sorafs_provider_advert_stub.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "provider_admission_fixtures"
+path = "src/bin/provider_admission_fixtures.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "taikai_car"
+path = "src/bin/taikai_car.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "da_reconstruct"
+path = "src/bin/da_reconstruct.rs"
+required-features = ["da_harness"]
+
+[[bin]]
+name = "soranet_trustless_verifier"
+path = "src/bin/soranet_trustless_verifier.rs"
+required-features = ["cli"]

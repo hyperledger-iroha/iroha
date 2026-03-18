@@ -1,0 +1,58 @@
+{
+  "pop_name": "sjc01",
+  "asn": 65110,
+  "router_id": "10.10.10.1",
+  "loopback_ipv4": "203.0.113.10",
+  "loopback_ipv6": "2001:db8:10::a",
+  "bfd_profiles": [
+    {
+      "name": "fast-default",
+      "transmit_ms": 300,
+      "receive_ms": 300,
+      "detect_multiplier": 3
+    }
+  ],
+  "rpki_caches": [
+    {
+      "address": "rpki1.sora.net",
+      "port": 3323,
+      "preference": 100,
+      "description": "primary cache"
+    },
+    {
+      "address": "rpki2.sora.net",
+      "port": 3323,
+      "preference": 90,
+      "description": "secondary cache"
+    }
+  ],
+  "prefixes": {
+    "ipv4": [
+      "203.0.113.0/24"
+    ],
+    "ipv6": [
+      "2001:db8:10::/48"
+    ]
+  },
+  "neighbors": [
+    {
+      "name": "ix-west",
+      "address": "198.51.100.1",
+      "peer_asn": 64512,
+      "description": "IX West upstream",
+      "bfd_profile": "fast-default",
+      "local_pref": 300,
+      "med": 20,
+      "import_rpki_deny_invalid": true,
+      "max_prefix": 250,
+      "send_community_both": true
+    },
+    {
+      "name": "edge-v6-core",
+      "address": "2001:db8:feed::1",
+      "peer_asn": 64520,
+      "bfd_profile": "fast-default",
+      "multihop_ttl": 2
+    }
+  ]
+}

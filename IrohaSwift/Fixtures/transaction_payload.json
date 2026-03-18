@@ -1,0 +1,13 @@
+{
+  "chain": "00000002",
+  "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+  "creation_time_ms": 1735000000123,
+  "executable": {
+    "Ivm": "cGF5bG9hZC1ieXRlcw=="
+  },
+  "time_to_live_ms": 5000,
+  "nonce": 42,
+  "metadata": {
+    "memo": "Hello from fixture"
+  }
+}

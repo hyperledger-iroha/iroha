@@ -1,0 +1,9 @@
+extends = ["sorafs_penalty_and_telemetry.toml"]
+
+[gov.sorafs_telemetry]
+require_submitter = true
+require_nonce = true
+max_window_gap_secs = 7200
+reject_zero_capacity = true
+submitters = ["6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"]
+unknown_submitter_field = "bogus"

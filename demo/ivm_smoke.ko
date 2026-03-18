@@ -1,0 +1,12 @@
+seiyaku SmokeTransfer {
+  meta { abi_version: 1 }
+
+  kotoage fn main() permission(Admin) {
+    transfer_asset(
+      account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+      account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
+      asset_definition!("xor#sora"),
+      1
+    );
+  }
+}

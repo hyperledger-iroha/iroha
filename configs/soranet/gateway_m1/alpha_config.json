@@ -1,0 +1,35 @@
+{
+  "billing": {
+    "allow_hard_cap": true,
+    "asset": "xor#wonderland",
+    "catalog": "../gateway_m0/meter_catalog.json",
+    "guardrails": "../gateway_m0/billing_guardrails.json",
+    "payer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "treasury": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "usage": "../gateway_m0/billing_usage_sample.json"
+  },
+  "image_tag": "soranet-gateway-m1-alpha",
+  "pops": [
+    {
+      "descriptor": "../../../fixtures/soranet_pop/lab_pop.json",
+      "edge_name": "soranet-sjc01-edge",
+      "name": "soranet-sjc01",
+      "skip_ds": true,
+      "skip_edns": true
+    },
+    {
+      "descriptor": "../../../fixtures/soranet_pop/lab_pop.json",
+      "edge_name": "soranet-iad01-edge",
+      "name": "soranet-iad01",
+      "skip_ds": true,
+      "skip_edns": true
+    },
+    {
+      "descriptor": "../../../fixtures/soranet_pop/lab_pop.json",
+      "edge_name": "soranet-fra01-edge",
+      "name": "soranet-fra01",
+      "skip_ds": true,
+      "skip_edns": true
+    }
+  ]
+}

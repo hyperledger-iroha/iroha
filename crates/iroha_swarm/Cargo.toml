@@ -16,15 +16,12 @@ iroha_primitives.workspace = true
 color-eyre.workspace = true
 path-absolutize.workspace = true
 owo-colors = { workspace = true, features = ["supports-colors"] }
-serde = { workspace = true, features = ["derive"] }
 clap = { workspace = true, features = ["derive"] }
-serde_with = { workspace = true, features = ["json", "macros", "hex"] }
 displaydoc.workspace = true
-serde_yaml = "0.9.34"
-pathdiff = "0.2.1"
+pathdiff = "0.2.3"
+norito = {workspace = true}
 
 [dev-dependencies]
-serde_json.workspace = true
 iroha_config.workspace = true
 expect-test.workspace = true
 nonzero_ext.workspace = true

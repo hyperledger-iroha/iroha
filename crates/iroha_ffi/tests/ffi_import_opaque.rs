@@ -1,4 +1,4 @@
-#![allow(missing_docs)]
+//! FFI import of opaque types tests.
 #![allow(unsafe_code)]
 
 use std::collections::BTreeMap;
@@ -9,17 +9,23 @@ iroha_ffi::handles! {OpaqueStruct, Value}
 
 decl_ffi_fns! {Drop, Clone, Eq}
 
-ffi! {
-    /// Opaque value
-    #[derive(Clone, PartialEq, Eq)]
-    // NOTE: struct's body is replaced by ffi!
-    pub struct Value;
+mod types {
+    //! Opaque FFI fixtures used by the import tests.
+    use super::*;
+    ffi! {
+        /// Opaque value
+        #[derive(Clone, PartialEq, Eq)]
+        // NOTE: struct's body is replaced by ffi!
+        pub struct Value;
 
-    /// Opaque structure
-    #[derive(Clone, PartialEq, Eq)]
-    // NOTE: struct's body is replaced by ffi!
-    pub struct OpaqueStruct;
+        /// Opaque structure
+        #[derive(Clone, PartialEq, Eq)]
+        // NOTE: struct's body is replaced by ffi!
+        pub struct OpaqueStruct;
+    }
 }
+
+pub use types::*;
 
 #[ffi_import]
 impl Value {
@@ -59,11 +65,13 @@ impl OpaqueStruct {
 }
 
 #[ffi_import]
+/// Pass-through of an opaque reference.
 pub fn freestanding_returns_opaque_item(input: &OpaqueStruct) -> &OpaqueStruct {
     unreachable!("replaced by ffi_import")
 }
 
 #[ffi_import]
+/// Accept a vector of opaque structs.
 pub fn some_fn(input: &Vec<OpaqueStruct>) {
     unreachable!("replaced by ffi_import")
 }
@@ -73,12 +81,11 @@ fn make_new_opaque(name: u8, params: BTreeMap<u8, Value>) -> OpaqueStruct {
     opaque.with_params(params.into_iter().collect())
 }
 
-fn make_opaque_ref(opaque_struct: &OpaqueStruct) -> RefOpaqueStruct {
+fn make_opaque_ref(opaque_struct: &OpaqueStruct) -> RefOpaqueStruct<'_> {
     RefOpaqueStruct(opaque_struct.as_extern_ptr(), core::marker::PhantomData)
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn constructor() {
     let name = 42_u8;
 
@@ -93,7 +100,6 @@ fn constructor() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn return_option_ref() {
     let name = 42_u8;
 
@@ -109,7 +115,6 @@ fn return_option_ref() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_opaque_ref() {
     let name = 42u8;
     let value: Value = Value::new("Dummy param value".to_owned());
@@ -124,11 +129,9 @@ fn take_and_return_opaque_ref() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn fallible_output() {
     assert_eq!(Ok(42), OpaqueStruct::fallible_int_output(true));
-    // TODO:
-    //assert!(OpaqueStruct::fallible_int_output(false).is_err());
+    assert_eq!(Err(""), OpaqueStruct::fallible_int_output(false));
 }
 
 #[allow(trivial_casts)]
@@ -142,10 +145,10 @@ fn compare_opaque_eq<T, U: PartialEq + core::fmt::Debug>(opaque1: &T, opaque2: &
 }
 
 mod ffi {
-    use std::{alloc, collections::BTreeMap};
+    use std::collections::BTreeMap;
 
     use iroha_ffi::{
-        def_ffi_fns, slice::RefMutSlice, FfiConvert, FfiOutPtr, FfiOutPtrWrite, FfiReturn, FfiType,
+        FfiConvert, FfiOutPtr, FfiOutPtrWrite, FfiReturn, FfiType, def_ffi_fns, slice::RefMutSlice,
     };
 
     iroha_ffi::handles! {ExternOpaqueStruct, ExternValue}
@@ -174,83 +177,85 @@ mod ffi {
         pub params: BTreeMap<u8, ExternValue>,
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn Value__new(
         input: RefMutSlice<u8>,
         output: *mut *mut ExternValue,
     ) -> FfiReturn {
-        let string = String::from_utf8(input.into_rust().expect("Defined").to_vec());
-        let opaque = Box::new(ExternValue(string.expect("Valid UTF8 string")));
-        output.write(Box::into_raw(opaque));
+        let string = unsafe { input.into_rust() }.expect("Defined").to_vec();
+        let string = String::from_utf8(string).expect("Valid UTF8 string");
+        let opaque = Box::new(ExternValue(string));
+        unsafe { output.write(Box::into_raw(opaque)) };
         FfiReturn::Ok
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn OpaqueStruct__new(
         name: <u8 as iroha_ffi::FfiType>::ReprC,
         output: *mut *mut ExternOpaqueStruct,
     ) -> FfiReturn {
         let opaque = Box::new(ExternOpaqueStruct {
-            name: Some(FfiConvert::try_from_ffi(name, &mut ()).expect("Valid num")),
+            name: Some(unsafe { FfiConvert::try_from_ffi(name, &mut ()) }.expect("Valid num")),
             tokens: vec![],
             params: BTreeMap::default(),
         });
-        output.write(Box::into_raw(opaque));
+        unsafe { output.write(Box::into_raw(opaque)) };
         FfiReturn::Ok
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn OpaqueStruct__with_params(
         handle: *mut ExternOpaqueStruct,
         params: <Vec<(u8, ExternValue)> as iroha_ffi::FfiType>::ReprC,
         output: *mut *mut ExternOpaqueStruct,
     ) -> iroha_ffi::FfiReturn {
-        let mut handle = *Box::from_raw(handle);
+        let mut handle = unsafe { *Box::from_raw(handle) };
         let mut store = Box::default();
         let params: Vec<(u8, ExternValue)> =
-            FfiConvert::try_from_ffi(params, &mut store).expect("Valid");
+            unsafe { FfiConvert::try_from_ffi(params, &mut store) }.expect("Valid");
         handle.params = params.into_iter().collect();
-        output.write(Box::into_raw(Box::new(handle)));
+        unsafe { output.write(Box::into_raw(Box::new(handle))) };
         FfiReturn::Ok
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn OpaqueStruct__get_param(
         handle: *const ExternOpaqueStruct,
         param_name: <&u8 as FfiType>::ReprC,
         output: *mut *const ExternValue,
     ) -> FfiReturn {
-        let handle = handle.as_ref().expect("Valid");
-        let param_name = param_name.as_ref().expect("Valid");
+        let handle = unsafe { handle.as_ref() }.expect("Valid");
+        let param_name = unsafe { param_name.as_ref() }.expect("Valid");
         let value = handle.params.get(param_name);
-        FfiOutPtrWrite::write_out(value, output);
+        unsafe { FfiOutPtrWrite::write_out(value, output) };
         FfiReturn::Ok
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn OpaqueStruct__params(
         handle: *const ExternOpaqueStruct,
         output: *mut <Vec<&ExternValue> as FfiOutPtr>::OutPtr,
     ) -> FfiReturn {
-        let handle = handle.as_ref().expect("Valid");
+        let handle = unsafe { handle.as_ref() }.expect("Valid");
         let params: Vec<_> = handle.params.values().collect();
-        FfiOutPtrWrite::write_out(params, output);
+        unsafe { FfiOutPtrWrite::write_out(params, output) };
         FfiReturn::Ok
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn OpaqueStruct__remove_param(
         handle: *mut ExternOpaqueStruct,
         param_name: <&u8 as FfiType>::ReprC,
         output: *mut *mut ExternValue,
     ) -> FfiReturn {
-        let handle = handle.as_mut().expect("Valid");
-        let param_name = param_name.as_ref().expect("Valid");
-        output.write(handle.params.remove(param_name).into_ffi(&mut ()));
+        let handle = unsafe { handle.as_mut() }.expect("Valid");
+        let param_name = unsafe { param_name.as_ref() }.expect("Valid");
+        let removed = handle.params.remove(param_name).into_ffi(&mut ());
+        unsafe { output.write(removed) };
         FfiReturn::Ok
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn OpaqueStruct__fallible_int_output(
         input: <bool as FfiType>::ReprC,
         output: *mut <u8 as FfiOutPtr>::OutPtr,
@@ -259,16 +264,16 @@ mod ffi {
             return FfiReturn::ExecutionFail;
         }
 
-        output.write(42);
+        unsafe { output.write(42) };
         FfiReturn::Ok
     }
 
-    #[no_mangle]
+    #[unsafe(no_mangle)]
     unsafe extern "C" fn __freestanding_returns_opaque_item(
         input: *const ExternOpaqueStruct,
         output: *mut *const ExternOpaqueStruct,
     ) -> FfiReturn {
-        output.write(input);
+        unsafe { output.write(input) };
         FfiReturn::Ok
     }
 }

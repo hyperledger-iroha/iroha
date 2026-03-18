@@ -1,0 +1,20 @@
+// Domain operations sample (Kotodama).
+// Demonstrates domain builtins using pointer constructors and CoreHost bridging.
+seiyaku DomainOps {
+  #[access(read="*", write="*")]
+  kotoage fn run() permission(Admin) {
+    // Register a new domain by id
+    let domain_id = domain!("wonder");
+    register_domain(domain_id);
+
+    // Transfer domain ownership from the current authority (demo no-op self transfer).
+    transfer_domain(
+      authority(),
+      domain_id,
+      authority()
+    );
+
+    // Optionally unregister the domain (for demo purposes)
+    unregister_domain(domain_id);
+  }
+}

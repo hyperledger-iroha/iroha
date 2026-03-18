@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "uaid": "uaid:1f5d100a379a842224a2021aa7e37e99781602a7bc492bb7b1b1e1c2354779cd",
+  "dataspace": 32,
+  "issued_ms": 1765238400000,
+  "activation_epoch": 5128,
+  "expiry_epoch": 6100,
+  "entries": [
+    {
+      "scope": {
+        "dataspace": 32,
+        "program": "compliance.audit",
+        "method": "stream_reports"
+      },
+      "effect": {
+        "Allow": {
+          "window": "PerDay"
+        }
+      },
+      "notes": "JFSA real-time feed for reporting obligations."
+    },
+    {
+      "scope": {
+        "dataspace": 32,
+        "program": "cbdc.supervision",
+        "method": "issue_stop_order",
+        "asset": "aid:550e8400e29b41d4a7164466554400ee",
+        "role": "Initiator"
+      },
+      "effect": {
+        "Allow": {
+          "max_amount": "100000000",
+          "window": "PerDay"
+        }
+      },
+      "notes": "Authorises capped stop orders per JFSA guidelines."
+    },
+    {
+      "scope": {
+        "dataspace": 32,
+        "program": "cbdc.supervision",
+        "method": "force_liquidation"
+      },
+      "effect": {
+        "Deny": {
+          "reason": "Requires dual controls inside the CBDC lane."
+        }
+      },
+      "notes": "Deny-wins entry guards destructive operations."
+    }
+  ]
+}

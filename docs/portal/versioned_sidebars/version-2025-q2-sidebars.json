@@ -1,0 +1,56 @@
+{
+  "docs": [
+    "intro",
+    {
+      "type": "category",
+      "label": "Norito",
+      "collapsed": false,
+      "items": [
+        "norito/overview",
+        "norito/getting-started"
+      ]
+    },
+    {
+      "type": "category",
+      "label": "SoraFS",
+      "collapsed": false,
+      "items": [
+        "sorafs/quickstart",
+        "sorafs/manifest-pipeline",
+        "sorafs/staging-manifest-playbook",
+        "sorafs/node-operations",
+        "sorafs/pin-registry-ops"
+      ]
+    },
+    {
+      "type": "category",
+      "label": "SDK guides",
+      "collapsed": false,
+      "items": [
+        "sdks/rust",
+        "sdks/python",
+        "sdks/javascript"
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Developer portal",
+      "collapsed": false,
+      "items": [
+        "devportal/try-it"
+      ]
+    },
+    {
+      "type": "category",
+      "label": "Reference",
+      "collapsed": false,
+      "items": [
+        "reference/README",
+        "reference/norito-codec",
+        "reference/publishing-checklist",
+        "reference/torii-swagger",
+        "reference/torii-rapidoc"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+rule_files:
+  - ../soranet_privacy_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'soranet_privacy_circuit_events_total{kind="downgrade"}'
+        values: '0 0 0 1 2 3 3 3 3'
+      - series: 'soranet_privacy_bucket_suppressed'
+        values: '0 0 0 1 1 1 1 1 1'
+      - series: 'soranet_privacy_last_poll_unixtime'
+        values: '0 60 120 180 180 180 180 180 180'
+      - series: 'soranet_privacy_collector_enabled'
+        values: '1 1 1 0 0 0 0 0 0'
+    alert_rule_test:
+      - alertname: SoranetPrivacyDowngradeSpike
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: SoranetPrivacyDowngradeSpike
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Downgrade rejection spike"
+      - alertname: SoranetPrivacySuppressedBuckets
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: SoranetPrivacySuppressedBuckets
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Privacy buckets suppressed"
+      - alertname: SoranetPrivacyCollectorIdle
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: SoranetPrivacyCollectorIdle
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Privacy collector idle"
+      - alertname: SoranetPrivacyCollectorDisabled
+        eval_time: 4m
+        exp_alerts: []
+      - alertname: SoranetPrivacyCollectorDisabled
+        eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Privacy collector disabled"

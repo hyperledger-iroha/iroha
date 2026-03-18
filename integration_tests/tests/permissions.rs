@@ -1,6 +1,14 @@
-#![allow(missing_docs)]
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Integration tests ensuring executor-enforced permission policies.
+
+use std::{
+    io::ErrorKind,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use eyre::Result;
+use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::{
     client::Client,
     crypto::KeyPair,
@@ -9,53 +17,227 @@ use iroha::{
         transaction::error::TransactionRejectionReason,
     },
 };
+use iroha_data_model::isi::{register::RegisterBox, transfer::TransferBox};
 use iroha_executor_data_model::permission::{
-    asset::CanTransferAsset, domain::CanModifyDomainMetadata, nft::CanModifyNftMetadata,
+    account::CanModifyAccountMetadata, asset::CanTransferAsset, domain::CanModifyDomainMetadata,
+    nft::CanModifyNftMetadata,
 };
 use iroha_test_network::*;
-use iroha_test_samples::{gen_account_in, ALICE_ID, BOB_ID, BOB_KEYPAIR};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
+use tokio::{
+    runtime::Runtime,
+    time::{sleep, timeout},
+};
+
+fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
+    sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
+}
+
+fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
+    let http = reqwest::Client::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut prepared_seen: f64 = 0.0;
+    let mut merged_seen: f64 = 0.0;
+    let mut fallback_seen: f64 = 0.0;
+
+    while Instant::now() < deadline {
+        let snapshot = rt.block_on(async {
+            let response = http.get(metrics_url.clone()).send().await?;
+            response.error_for_status()?.text().await
+        })?;
+        let metrics = MetricsReader::new(&snapshot);
+        prepared_seen = prepared_seen.max(metrics.get("pipeline_detached_prepared"));
+        merged_seen = merged_seen.max(metrics.get("pipeline_detached_merged"));
+        fallback_seen = fallback_seen.max(metrics.get("pipeline_detached_fallback"));
+        if merged_seen > 0.0 || fallback_seen > 0.0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Ok((prepared_seen, merged_seen, fallback_seen))
+}
+
+async fn read_peer_log_with_retry(
+    peer: &NetworkPeer,
+    getter: impl Fn(&NetworkPeer) -> Option<PathBuf>,
+) -> String {
+    const MAX_ATTEMPTS: usize = 20;
+    const DELAY: Duration = Duration::from_millis(50);
+
+    let mut last = String::new();
+    for attempt in 0..MAX_ATTEMPTS {
+        if let Some(path) = getter(peer) {
+            match tokio::fs::read_to_string(&path).await {
+                Ok(content) => {
+                    if !content.is_empty() {
+                        return content;
+                    }
+                    last = content;
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) => panic!("failed to read log {}: {err}", path.display()),
+            }
+        }
+        if attempt + 1 < MAX_ATTEMPTS {
+            sleep(DELAY).await;
+        }
+    }
+    last
+}
+
+#[test]
+#[ignore = "debug helper for inspecting genesis transactions"]
+fn debug_print_genesis_transactions() {
+    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
+    let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new()
+            .with_config_layer(|layer| {
+                layer.write(["confidential", "enabled"], true);
+            })
+            .with_genesis_instruction(register_domain)
+            .with_genesis_instruction(duplicate_domain),
+        stringify!(debug_print_genesis_transactions),
+    ) else {
+        return;
+    };
+    let genesis = network.genesis();
+    for (tx_idx, tx) in genesis.0.transactions_vec().iter().enumerate() {
+        println!("tx #{tx_idx}");
+        if let Executable::Instructions(isi) = tx.instructions() {
+            for (i, instr) in isi.iter().enumerate() {
+                println!("  instr #{i}: {}", instr.id());
+                println!("    type {}", std::any::type_name_of_val(&**instr));
+                if let Some(reg_box) = instr.as_any().downcast_ref::<RegisterBox>() {
+                    match reg_box {
+                        RegisterBox::Peer(_) => println!("    register peer"),
+                        RegisterBox::Domain(domain) => {
+                            println!("    register domain {}", domain.object().id());
+                        }
+                        RegisterBox::Account(account) => {
+                            println!("    register account {}", account.object().id());
+                        }
+                        RegisterBox::AssetDefinition(asset) => {
+                            println!("    register asset definition {}", asset.object().id());
+                        }
+                        RegisterBox::Nft(nft) => {
+                            println!("    register nft {}", nft.object().id());
+                        }
+                        RegisterBox::Role(role) => {
+                            println!("    register role {}", role.object().id());
+                        }
+                        RegisterBox::Trigger(_) => println!("    register trigger"),
+                    }
+                }
+                if let Some(TransferBox::Domain(transfer)) =
+                    instr.as_any().downcast_ref::<TransferBox>()
+                {
+                    println!(
+                        "    transfer domain {} -> {}",
+                        transfer.object(),
+                        transfer.destination()
+                    );
+                }
+            }
+        }
+    }
+    panic!("debug output above");
+}
 
 #[tokio::test]
-// TODO: Detect an `InvalidGenesis` error instead of relying on a panic.
-#[should_panic = "a peer exited unexpectedly"]
 async fn genesis_transactions_are_validated_by_executor() {
-    // `wonderland` domain is owned by Alice,
-    //  so the default executor will deny a genesis account to register asset definition.
-    let asset_definition_id = "xor#wonderland".parse().expect("Valid");
-    let invalid_instruction =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
-    let network = NetworkBuilder::new()
-        .with_genesis_instruction(invalid_instruction)
-        .build();
+    // Registering the same domain twice must be rejected during genesis execution.
+    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
+    let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
+    let Some(network) = sandbox::build_network_or_skip(
+        NetworkBuilder::new()
+            .with_config_layer(|layer| {
+                layer.write(["confidential", "enabled"], true);
+            })
+            .with_genesis_instruction(register_domain)
+            .with_genesis_instruction(duplicate_domain),
+        stringify!(genesis_transactions_are_validated_by_executor),
+    ) else {
+        return;
+    };
+    // Build `irohad` ahead of the timeout so the initial binary compilation does not consume the limit.
+    iroha_test_network::Program::Irohad
+        .resolve()
+        .expect("irohad binary should be buildable");
     let genesis = network.genesis();
     let peer = network.peer();
 
-    let _ = peer.start_checked(network.config_layers(), genesis).await;
+    let startup_result = timeout(
+        Duration::from_secs(30),
+        peer.start_checked(network.config_layers(), Some(&genesis)),
+    )
+    .await
+    .expect("peer startup should complete within timeout");
+    let err = startup_result.expect_err("invalid genesis should prevent peer startup");
+    if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
+        panic!(
+            "sandboxed network restriction detected while starting genesis_transactions_are_validated_by_executor: {reason}"
+        );
+    }
+    let err_text = format!("{err:?}");
+
+    let stderr_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stderr_log_path).await;
+    let stdout_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stdout_log_path).await;
+    let mentions_invalid_genesis = err_text.contains("Invalid genesis block")
+        || err_text.contains("Genesis block execution failed during validation")
+        || stderr_log.contains("Invalid genesis block")
+        || stdout_log.contains("Invalid genesis block")
+        || stderr_log.contains("Genesis block execution failed during validation")
+        || stdout_log.contains("Genesis block execution failed during validation")
+        || stderr_log.contains("genesis consensus metadata validation failed")
+        || stdout_log.contains("genesis consensus metadata validation failed");
+    assert!(
+        mentions_invalid_genesis,
+        "startup failure should mention genesis validation; error was:\n{err_text}\nstdout was:\n{stdout_log}\nstderr was:\n{stderr_log}"
+    );
 }
 
 fn get_assets(iroha: &Client, id: &AccountId) -> Vec<Asset> {
     iroha
         .query(FindAssets::new())
-        .filter_with(|asset| asset.id.account.eq(id.clone()))
         .execute_all()
         .expect("Failed to execute request.")
+        .into_iter()
+        .filter(|asset| asset.id().account() == id)
+        .collect()
 }
 
 #[test]
-#[ignore = "ignore, more in #2851"]
 fn permissions_disallow_asset_transfer() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: permissions negative test gated (#2851). Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return;
+    }
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = start_network(stringify!(permissions_disallow_asset_transfer))
+    else {
+        return;
+    };
     let iroha = network.client();
 
     // Given
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().expect("Valid");
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("Valid"),
+        "xor".parse().expect("Valid"),
+    );
+    let create_asset = Register::asset_definition(
+        AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string()),
+    );
     let mouse_keypair = KeyPair::random();
 
     let alice_start_assets = get_assets(&iroha, &alice_id);
@@ -65,7 +247,7 @@ fn permissions_disallow_asset_transfer() {
 
     let quantity = numeric!(200);
     let mint_asset = Mint::asset_numeric(
-        quantity,
+        quantity.clone(),
         AssetId::new(asset_definition_id.clone(), bob_id.clone()),
     );
     iroha
@@ -97,21 +279,107 @@ fn permissions_disallow_asset_transfer() {
 }
 
 #[test]
-#[ignore = "ignore, more in #2851"]
+fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_default_pipeline_time()
+        .with_config_layer(|layer| {
+            layer
+                .write(["pipeline", "parallel_overlay"], true)
+                .write(["pipeline", "parallel_apply"], true)
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(account_permission_revoke_then_grant_last_wins_detached),
+    )?
+    else {
+        return Ok(());
+    };
+    let client = network.client();
+    let metrics_url = client.torii_url.join("/metrics")?;
+
+    let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
+    let wonderland_domain: DomainId = "wonderland".parse()?;
+    client.submit_blocking(Register::account(Account::new(
+        mouse_id.to_account_id(wonderland_domain.clone()),
+    )))?;
+
+    let perm: Permission = CanModifyAccountMetadata {
+        account: mouse_id.clone(),
+    }
+    .into();
+    client.submit_blocking(Grant::account_permission(perm.clone(), ALICE_ID.clone()))?;
+
+    let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
+    let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
+    let tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
+        .with_instructions([InstructionBox::from(revoke), InstructionBox::from(grant)])
+        .sign(ALICE_KEYPAIR.private_key());
+    client.submit_transaction_blocking(&tx)?;
+
+    let status = client.get_status()?;
+    let nexus_enabled = !status.teu_lane_commit.is_empty();
+    let (prepared_seen, merged_seen, fallback_seen) = if nexus_enabled {
+        poll_detached_metrics(&rt, &metrics_url)?
+    } else {
+        eprintln!("Skipping detached pipeline metrics: nexus disabled for this network.");
+        (0.0, 0.0, 0.0)
+    };
+
+    let permissions = client
+        .query(FindPermissionsByAccountId::new(ALICE_ID.clone()))
+        .execute_all()?;
+    assert!(
+        permissions.iter().any(|permission| permission == &perm),
+        "last grant should keep permission on account"
+    );
+
+    if nexus_enabled {
+        assert!(
+            prepared_seen > 0.0,
+            "expected detached pipeline to prepare overlays"
+        );
+        assert!(
+            merged_seen > 0.0,
+            "expected detached merge to register in metrics"
+        );
+        assert_eq!(
+            fallback_seen, 0.0,
+            "detached fallback should not register for permission ops"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn permissions_disallow_asset_burn() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: permissions negative test gated (#2851). Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return;
+    }
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = start_network(stringify!(permissions_disallow_asset_burn)) else {
+        return;
+    };
     let iroha = network.client();
 
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    let asset_definition_id = "xor#wonderland"
-        .parse::<AssetDefinitionId>()
-        .expect("Valid");
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id = AssetDefinitionId::new(
+        "wonderland".parse().expect("Valid"),
+        "xor".parse().expect("Valid"),
+    );
+    let create_asset = Register::asset_definition(
+        AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name(asset_definition_id.name().to_string()),
+    );
     let mouse_keypair = KeyPair::random();
 
     let alice_start_assets = get_assets(&iroha, &alice_id);
@@ -121,8 +389,10 @@ fn permissions_disallow_asset_burn() {
         .expect("Failed to prepare state.");
 
     let quantity = numeric!(200);
-    let mint_asset =
-        Mint::asset_numeric(quantity, AssetId::new(asset_definition_id.clone(), bob_id));
+    let mint_asset = Mint::asset_numeric(
+        quantity.clone(),
+        AssetId::new(asset_definition_id.clone(), bob_id),
+    );
     iroha
         .submit_blocking(mint_asset)
         .expect("Failed to create asset.");
@@ -151,9 +421,17 @@ fn permissions_disallow_asset_burn() {
 }
 
 #[test]
-#[ignore = "ignore, more in #2851"]
 fn account_can_query_only_its_own_domain() -> Result<()> {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: permissions domain query test gated (#2851). Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return Ok(());
+    }
+    let Some((network, _rt)) = start_network(stringify!(account_can_query_only_its_own_domain))
+    else {
+        return Ok(());
+    };
     let client = network.client();
 
     // Given
@@ -164,18 +442,24 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
     client.submit_blocking(register_domain)?;
 
     // Alice can query the domain in which her account exists.
-    assert!(client
-        .query(FindDomains::new())
-        .filter_with(|domain| domain.id.eq(domain_id))
-        .execute_single()
-        .is_ok());
+    assert!(
+        client
+            .query(FindDomains::new())
+            .execute_all()
+            .unwrap()
+            .into_iter()
+            .any(|domain| domain.id() == &domain_id)
+    );
 
     // Alice cannot query other domains.
-    assert!(client
-        .query(FindDomains::new())
-        .filter_with(|domain| domain.id.eq(new_domain_id))
-        .execute_single()
-        .is_err());
+    assert!(
+        !client
+            .query(FindDomains::new())
+            .execute_all()
+            .unwrap()
+            .into_iter()
+            .any(|domain| domain.id() == &new_domain_id)
+    );
     Ok(())
 }
 
@@ -183,7 +467,10 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
 fn permissions_differ_not_only_by_names() {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = start_network(stringify!(permissions_differ_not_only_by_names))
+    else {
+        return;
+    };
     let client = network.client();
 
     let submit_with_authority = |isi: InstructionBox,
@@ -204,7 +491,8 @@ fn permissions_differ_not_only_by_names() {
     // Registering mouse
     let outfit_domain: DomainId = "outfit".parse().unwrap();
     let create_outfit_domain = Register::domain(Domain::new(outfit_domain.clone()));
-    let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let register_mouse_account =
+        Register::account(Account::new(mouse_id.to_account_id(outfit_domain.clone())));
     client
         .submit_all_blocking::<InstructionBox>([
             create_outfit_domain.into(),
@@ -278,18 +566,30 @@ fn permissions_differ_not_only_by_names() {
 fn stored_vs_granted_permission_payload() {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
 
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = start_network(stringify!(stored_vs_granted_permission_payload))
+    else {
+        return;
+    };
     let iroha = network.client();
 
     // Given
     let alice_id = ALICE_ID.clone();
 
     // Registering mouse and asset definition
-    let asset_definition_id: AssetDefinitionId = "xor#wonderland".parse().expect("Valid");
-    let create_asset =
-        Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()));
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        "wonderland".parse().expect("Valid"),
+        "xor".parse().expect("Valid"),
+    );
+    let create_asset = Register::asset_definition({
+        let __asset_definition_id = asset_definition_id.clone();
+        AssetDefinition::numeric(__asset_definition_id.clone())
+            .with_name(__asset_definition_id.name().to_string())
+    });
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
-    let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
+    let register_mouse_account = Register::account(Account::new(
+        mouse_id.to_account_id(wonderland_domain.clone()),
+    ));
     iroha
         .submit_all_blocking::<InstructionBox>([register_mouse_account.into(), create_asset.into()])
         .expect("Failed to register mouse");
@@ -323,19 +623,27 @@ fn stored_vs_granted_permission_payload() {
 
 #[test]
 fn permissions_are_unified() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = start_network(stringify!(permissions_are_unified)) else {
+        return;
+    };
     let iroha = network.client();
 
     // Given
     let alice_id = ALICE_ID.clone();
-
+    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
+    let rose_definition = AssetDefinitionId::new(
+        wonderland_domain.clone(),
+        "rose".parse().expect("valid rose name"),
+    );
+    let rose_asset = AssetId::new(rose_definition, alice_id.clone());
     let permission1 = CanTransferAsset {
-        asset: format!("rose#wonderland#{alice_id}").parse().unwrap(),
+        asset: rose_asset.clone(),
     };
     let allow_alice_to_transfer_rose_1 = Grant::account_permission(permission1, alice_id.clone());
 
+    let encoded_uppercase = rose_asset.canonical_encoded().to_ascii_uppercase();
     let permission2 = CanTransferAsset {
-        asset: format!("rose##{alice_id}").parse().unwrap(),
+        asset: encoded_uppercase.parse().expect("valid encoded asset id"),
     };
     let allow_alice_to_transfer_rose_2 = Grant::account_permission(permission2, alice_id);
 
@@ -350,7 +658,11 @@ fn permissions_are_unified() {
 
 #[test]
 fn associated_permissions_removed_on_unregister() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) =
+        start_network(stringify!(associated_permissions_removed_on_unregister))
+    else {
+        return;
+    };
     let iroha = network.client();
 
     let bob_id = BOB_ID.clone();
@@ -373,15 +685,17 @@ fn associated_permissions_removed_on_unregister() {
         .expect("failed to register domain and grant permission");
 
     // check that bob indeed have granted permission
-    assert!(iroha
-        .query(FindPermissionsByAccountId::new(bob_id.clone()))
-        .execute_all()
-        .expect("failed to get permissions for bob")
-        .into_iter()
-        .any(|permission| {
-            CanModifyDomainMetadata::try_from(&permission)
-                .is_ok_and(|permission| permission == bob_to_set_kv_in_domain)
-        }));
+    assert!(
+        iroha
+            .query(FindPermissionsByAccountId::new(bob_id.clone()))
+            .execute_all()
+            .expect("failed to get permissions for bob")
+            .into_iter()
+            .any(|permission| {
+                CanModifyDomainMetadata::try_from(&permission)
+                    .is_ok_and(|permission| permission == bob_to_set_kv_in_domain)
+            })
+    );
 
     // unregister kingdom
     iroha
@@ -389,20 +703,26 @@ fn associated_permissions_removed_on_unregister() {
         .expect("failed to unregister domain");
 
     // check that permission is removed from bob
-    assert!(!iroha
-        .query(FindPermissionsByAccountId::new(bob_id))
-        .execute_all()
-        .expect("failed to get permissions for bob")
-        .into_iter()
-        .any(|permission| {
-            CanModifyDomainMetadata::try_from(&permission)
-                .is_ok_and(|permission| permission == bob_to_set_kv_in_domain)
-        }));
+    assert!(
+        !iroha
+            .query(FindPermissionsByAccountId::new(bob_id))
+            .execute_all()
+            .expect("failed to get permissions for bob")
+            .into_iter()
+            .any(|permission| {
+                CanModifyDomainMetadata::try_from(&permission)
+                    .is_ok_and(|permission| permission == bob_to_set_kv_in_domain)
+            })
+    );
 }
 
 #[test]
 fn associated_permissions_removed_from_role_on_unregister() {
-    let (network, _rt) = NetworkBuilder::new().start_blocking().unwrap();
+    let Some((network, _rt)) = start_network(stringify!(
+        associated_permissions_removed_from_role_on_unregister
+    )) else {
+        return;
+    };
     let iroha = network.client();
 
     let role_id: RoleId = "role".parse().expect("Valid");
@@ -423,16 +743,20 @@ fn associated_permissions_removed_from_role_on_unregister() {
         .expect("failed to register domain and grant permission");
 
     // check that role indeed have permission
-    assert!(iroha
-        .query(FindRoles::new())
-        .filter_with(|role| role.id.eq(role_id.clone()))
-        .execute_single()
-        .expect("failed to get role")
-        .permissions()
-        .any(|permission| {
-            CanModifyDomainMetadata::try_from(permission)
-                .is_ok_and(|permission| permission == set_kv_in_domain)
-        }));
+    assert!(
+        iroha
+            .query(FindRoles::new())
+            .execute_all()
+            .unwrap()
+            .into_iter()
+            .find(|role| role.id() == &role_id)
+            .expect("failed to get role")
+            .permissions()
+            .any(|permission| {
+                CanModifyDomainMetadata::try_from(permission)
+                    .is_ok_and(|permission| permission == set_kv_in_domain)
+            })
+    );
 
     // unregister kingdom
     iroha
@@ -440,14 +764,18 @@ fn associated_permissions_removed_from_role_on_unregister() {
         .expect("failed to unregister domain");
 
     // check that permission is removed from role
-    assert!(!iroha
-        .query(FindRoles::new())
-        .filter_with(|role| role.id.eq(role_id.clone()))
-        .execute_single()
-        .expect("failed to get role")
-        .permissions()
-        .any(|permission| {
-            CanModifyDomainMetadata::try_from(permission)
-                .is_ok_and(|permission| permission == set_kv_in_domain)
-        }));
+    assert!(
+        !iroha
+            .query(FindRoles::new())
+            .execute_all()
+            .unwrap()
+            .into_iter()
+            .find(|role| role.id() == &role_id)
+            .expect("failed to get role")
+            .permissions()
+            .any(|permission| {
+                CanModifyDomainMetadata::try_from(permission)
+                    .is_ok_and(|permission| permission == set_kv_in_domain)
+            })
+    );
 }

@@ -1,0 +1,14 @@
+{
+  "schema_manifest_version": 1,
+  "norito_java_version": "0.1.0-SNAPSHOT",
+  "schemas": [
+    {
+      "name": "ConnectJournalRecordV1",
+      "hash_hex": "bcf2f58a15121190bcf2f58a15121190"
+    },
+    {
+      "name": "iroha.android.transaction.Payload.v1",
+      "hash_hex": "6ed8e247a89bb3f46ed8e247a89bb3f4"
+    }
+  ]
+}

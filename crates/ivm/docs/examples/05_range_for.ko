@@ -1,0 +1,10 @@
+// C-style for loop (no range sugar) within a contract.
+seiyaku RangeFor {
+  kotoage fn sum_to(n: int) -> int {
+    let acc = 0;
+    for let i = 0; i < n; i++ {
+      acc = acc + i;
+    }
+    return acc;
+  }
+}

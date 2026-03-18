@@ -1,0 +1,5 @@
+running 2 tests
+nexus::scheduler_teu::capacity_matches_manifest ... ok
+nexus::scheduler_teu::teu_allocation_balanced ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored

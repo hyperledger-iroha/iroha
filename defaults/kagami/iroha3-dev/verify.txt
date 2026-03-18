@@ -1,0 +1,7 @@
+profile: Iroha3Dev
+chain_id: iroha3-dev.local
+collectors: k=1 r=1
+vrf_seed: 4D5FC075E21E35B005F84FB9A3810B339776C77DC1027BEA6A14CB2D300C9AC9
+peers_with_pop: 1
+consensus_fingerprint: 0x6a5f187252f927e3d00eb0ea0defd132a2dfb6c5b216dd916d0e5aadff25cd25
+kagami_version: 2.0.0-rc.2.0

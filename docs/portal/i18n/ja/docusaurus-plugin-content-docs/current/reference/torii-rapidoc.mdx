@@ -1,0 +1,32 @@
+---
+lang: ja
+direction: ltr
+source: docs/portal/docs/reference/torii-rapidoc.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+「@site/src/components/RapiDocPanel.jsx」から RapiDocPanel をインポートします。
+
+# Torii API (RapiDoc)
+
+`RapiDoc` は、同じ Torii のコンパクトでドキュメント優先のレンダリングを提供します。
+OpenAPI ドキュメント。より詳細な概要や読み取り専用のレビューが必要な場合に使用してください。
+リクエスト/レスポンスモデル。
+
+## 使用上のヒント
+
+- インタラクティブな通話を有効にするには、ベアラー トークンを入力します。値は次のように転送されます。
+  `X-TryIt-Auth` ヘッダーであり、プロキシによって正規化されます。
+- ポータルをインタラクティブに提供する場合は、`TRYIT_PROXY_PUBLIC_URL` を構成します。
+  リクエストはステージング プロキシ経由でルーティングされます。ウィジェットは、プロキシが無効になったときに警告します。
+  URLがありません。
+- 「OpenAPI スナップショット」ドロップダウンを使用して、によって公開された過去の仕様をロードします。
+  `npm run sync-openapi`; `Latest (tracked)` オプションは常に次のように解決されます。
+  `/openapi/torii.json`。
+- 「[Try it](/api/overview#try-it-sandbox-docs-3)」コンソールと組み合わせると、
+  プロキシを必要とするステージングされたゲートウェイに対して動作します。
+
+<RapiDocPanel />

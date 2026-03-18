@@ -31,7 +31,76 @@
     },
     "queue_size": {
       "type": "integer"
+    },
+    "governance": {
+      "type": "object",
+      "properties": {
+        "proposals": {
+          "type": "object",
+          "properties": {
+            "proposed": { "type": "integer" },
+            "approved": { "type": "integer" },
+            "rejected": { "type": "integer" },
+            "enacted": { "type": "integer" }
+          },
+          "required": ["proposed", "approved", "rejected", "enacted"]
+        },
+        "protected_namespace": {
+          "type": "object",
+          "properties": {
+            "total_checks": { "type": "integer" },
+            "allowed": { "type": "integer" },
+            "rejected": { "type": "integer" }
+          },
+          "required": ["total_checks", "allowed", "rejected"]
+        },
+        "manifest_quorum": {
+          "type": "object",
+          "properties": {
+            "total_checks": { "type": "integer" },
+            "satisfied": { "type": "integer" },
+            "rejected": { "type": "integer" }
+          },
+          "required": ["total_checks", "satisfied", "rejected"]
+        },
+        "recent_manifest_activations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "namespace": { "type": "string" },
+              "contract_id": { "type": "string" },
+              "code_hash_hex": { "type": "string" },
+              "abi_hash_hex": { "type": ["string", "null"] },
+              "height": { "type": "integer" },
+              "activated_at_ms": { "type": "integer" }
+            },
+            "required": [
+              "namespace",
+              "contract_id",
+              "code_hash_hex",
+              "height",
+              "activated_at_ms"
+            ]
+          }
+        }
+      },
+      "required": [
+        "proposals",
+        "protected_namespace",
+        "manifest_quorum",
+        "recent_manifest_activations"
+      ]
     }
   },
-  "required": ["peers", "blocks", "txs_approved", "txs_rejected", "uptime", "view_changes", "queue_size"]
+  "required": [
+    "peers",
+    "blocks",
+    "txs_approved",
+    "txs_rejected",
+    "uptime",
+    "view_changes",
+    "queue_size",
+    "governance"
+  ]
 }

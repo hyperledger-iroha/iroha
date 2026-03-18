@@ -1,0 +1,26 @@
+{
+  "pop": "soranet-pop-m0",
+  "checks": [
+    {
+      "id": "bgp_flap_recovery",
+      "expr": "changes(soranet_bgp_session_up{pop=\"soranet-pop-m0\"}[10m]) <= 2",
+      "goal": "BgpSessionFlap clears after rollback; convergence within 10 minutes."
+    },
+    {
+      "id": "resolver_proof_age",
+      "expr": "max_over_time(soradns_rad_proof_age_seconds{pop=\"soranet-pop-m0\"}[15m]) < 900",
+      "goal": "Proofs refresh within 15 minutes after brownout recovery."
+    },
+    {
+      "id": "cache_hit_recovery",
+      "expr": "(sum(rate(sorafs_gateway_cache_hits_total{pop=\"soranet-pop-m0\"}[5m])) / sum(rate(sorafs_gateway_cache_requests_total{pop=\"soranet-pop-m0\"}[5m]))) >= 0.92",
+      "goal": "Cache hit rate returns to >=92% after verifier restart."
+    },
+    {
+      "id": "tail_sampling_clear",
+      "expr": "sum(rate(otel_tail_sample_dropped_spans{pop=\"soranet-pop-m0\"}[5m])) == 0",
+      "goal": "Tail sampling drops back to 0 once chaos run ends."
+    }
+  ],
+  "instructions": "Run the expressions against Prometheus or store a range query JSON next to the injector outputs for audit. Attach matching rows to chaos_report.{json,md}."
+}

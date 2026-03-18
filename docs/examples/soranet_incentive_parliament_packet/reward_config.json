@@ -1,0 +1,16 @@
+{
+  "policy": {
+    "minimum_exit_bond": "5000",
+    "bond_asset_id": "sora#xor",
+    "uptime_floor_per_mille": 930,
+    "slash_penalty_basis_points": 250,
+    "activation_grace_epochs": 6
+  },
+  "base_reward": "20",
+  "uptime_weight_per_mille": 650,
+  "bandwidth_weight_per_mille": 350,
+  "compliance_penalty_basis_points": 200,
+  "bandwidth_target_bytes": 900000000000,
+  "budget_approval_id": "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221",
+  "metrics_log_path": "telemetry/soranet/relay_metrics/2025-10-01_2025-11-29"
+}

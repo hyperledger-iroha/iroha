@@ -1,0 +1,54 @@
+[payload]
+checksum_sha256 = "430943A6D4E8BB34DE9A39879C39FAA5814B5D1FE3D13FE43DEFBA1F2C1741F2"
+generated_at = 1765012527
+generator_commit = "7fa1c4c20a921ae51e6a5fd575cfe8ee06d14877"
+version = 1
+
+[payload.body]
+bundle_width = 3
+seed = 0
+
+[[payload.body.groups]]
+cumulative = [
+    0,
+    542,
+    1655,
+    2666,
+    4096,
+]
+frequencies = [
+    542,
+    1113,
+    1011,
+    1430,
+]
+group_size = 4
+precision_bits = 12
+width_bits = 2
+
+[[payload.body.groups]]
+cumulative = [
+    0,
+    280,
+    542,
+    1214,
+    1655,
+    2473,
+    2666,
+    3358,
+    4096,
+]
+frequencies = [
+    280,
+    262,
+    672,
+    441,
+    818,
+    193,
+    692,
+    738,
+]
+group_size = 8
+precision_bits = 12
+width_bits = 3
+

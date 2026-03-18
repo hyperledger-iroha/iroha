@@ -1,0 +1,25 @@
+{
+  "lane": "zk",
+  "governance": "council",
+  "version": 1,
+  "validators": [
+    "sorauﾛ1Q2ﾜﾓ4bｳEDHﾏﾇｿSyFﾘk6bX74ﾙｦRﾙﾄM2GｻSｳｴpPヰｱ6HEY4T",
+    "sorauﾛ1Pﾑｺg4yﾁJ6ﾙﾀXZﾉSj3iｦﾚSﾖqFﾕdndｴ5ﾈﾓaｾSfﾋ9ｶ1TN5EN",
+    "sorauﾛ1PDeﾔ2ｾaﾐ6ﾑﾘjﾀgﾚﾄﾌ6ｾyｸC7ﾛppｸJﾐJヱLｺoｳﾚi7SR26GU2"
+  ],
+  "quorum": 2,
+  "protected_namespaces": [
+    "zk",
+    "confidential"
+  ],
+  "privacy_commitments": [
+    {
+      "id": 1,
+      "scheme": "merkle",
+      "merkle": {
+        "root": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "max_depth": 16
+      }
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+Subject: ACTION REQUIRED – SoraFS Gateway & DNS Design Kickoff (2025-03-03 @ 16:00 UTC)
+
+Hi team,
+
+Thanks for supporting the SF-4/SF-5 gateway and DNS hardening track. Please review the meeting details below and confirm your availability.
+
+Meeting details
+---------------
+- **Date:** Monday, 3 March 2025
+- **Time:** 16:00–17:00 UTC (60 minutes)
+- **Format:** Video conference (Zoom/Meet link to follow with calendar invite)
+- **Facilitator:** Networking TL (`networking.tl@soranet`)
+
+Objectives
+----------
+1. Finalise deterministic DNS scope (namespace rules, alias proof TTL, automation stack).
+2. Lock GAR enforcement integration plans for the trustless gateway service.
+3. Validate SF-5a conformance harness coverage, resourcing, and CI touchpoints.
+4. Align on downstream documentation and rollout deliverables (runbooks, Docusaurus portal).
+
+Pre-read package
+----------------
+Please review these documents before the session:
+1. `docs/source/sorafs_gateway_dns_design_pre_read.md`
+2. `docs/source/sorafs_gateway_dns_design_agenda.md`
+3. `docs/source/sorafs_gateway_profile.md`
+4. `docs/source/sorafs_gateway_conformance.md`
+5. `docs/source/sorafs_gateway_deployment_handbook.md`
+6. `docs/source/sorafs_gateway_tls_automation.md`
+
+Key attendees (one per group unless noted)
+-----------------------------------------
+- Networking TL (facilitator) — `networking.tl@soranet`
+- Ops Lead — `ops.lead@soranet`
+- Storage Team representative — `storage.rep@sorafs`
+- Tooling Working Group representative — `tooling.wg@sorafs`
+- Governance liaison — `governance@sora`
+- QA Guild lead — `qa.guild@sorafs`
+- Docs/DevRel observer — `docs.devrel@sora`
+- Torii Platform representative — `torii.platform@soranet`
+- Security Engineering observer — `security@soranet`
+
+Action items before 26 Feb 2025
+-------------------------------
+1. Reply to this thread confirming attendance (or provide an alternate delegate).
+2. Flag any agenda additions or required artefacts that should be prepared in advance.
+3. Start gathering current GAR telemetry (see `docs/source/sorafs_gateway_dns_design_pre_read.md` §Next Actions) so we can review trends live.
+
+Calendar invite
+---------------
+Once availability is confirmed, we will circulate a calendar invite with dial-in details and link the shared note-taking doc. Expect this by 27 Feb 2025.
+
+Questions?
+----------
+Direct any questions or prep requests to `networking.tl@soranet` and CC `ops.lead@soranet`.
+
+Thanks in advance for the prep—looking forward to locking scope and moving the rollout forward.
+
+– Networking TL

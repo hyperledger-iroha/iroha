@@ -1,0 +1,91 @@
+---
+lang: ja
+direction: ltr
+source: docs/portal/i18n/fr/docusaurus-plugin-content-docs/current/sdks/recipes/javascript-ledger-flow.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 62d73c47deef1957662304ce51f90b56ce0d758c42050a6b361f2893fd8c0ba9
+source_last_modified: "2026-01-30T14:57:12+00:00"
+translation_last_reviewed: 2026-01-30
+---
+
+---
+lang: fr
+direction: ltr
+source: docs/portal/docs/sdks/recipes/javascript-ledger-flow.md
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+slug: /sdks/recipes/javascript-ledger-flow
+title: Recette de flux du registre JavaScript
+description: Enregistrer un actif, frapper, transférer et interroger les soldes avec `@iroha2/torii-client`.
+---
+
+import SampleDownload from '@site/src/components/SampleDownload';
+
+Cette recette utilise les paquets Node.js `@iroha2/torii-client` et `@iroha2/crypto-target-node` pour reproduire le parcours du registre dans la CLI.
+
+<SampleDownload
+  href="/sdk-recipes/javascript/ledger-flow.mjs"
+  filename="ledger-flow.mjs"
+  description="Téléchargez le script JavaScript exact utilisé dans ce parcours du registre."
+/>
+
+## Prérequis
+
+```bash
+npm install @iroha2/torii-client @iroha2/crypto-target-node
+export ADMIN_ACCOUNT="i105..."
+export RECEIVER_ACCOUNT="i105..."
+export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+```
+
+## Script d'exemple
+
+```ts title="ledger-flow.mjs"
+import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
+import {createKeyPairFromHex} from '@iroha2/crypto-target-node';
+
+const adminAccount = process.env.ADMIN_ACCOUNT!;
+const receiverAccount = process.env.RECEIVER_ACCOUNT!;
+const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY!;
+
+const client = ToriiClient.create({
+  apiUrl: 'http://127.0.0.1:8080',
+});
+
+const {publicKey, privateKey} = createKeyPairFromHex(adminPrivateKey);
+
+const tx = buildTransaction({
+  chain: '00000000-0000-0000-0000-000000000000',
+  authority: adminAccount,
+  instructions: [
+    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
+    {Transfer: {
+      asset: {id: `norito:4e52543000000002`},
+      destination: receiverAccount,
+      value: {quantity: '50'},
+    }},
+  ],
+});
+
+tx.sign({publicKey, privateKey});
+const receipt = await client.submitTransaction(tx);
+const txHash = receipt?.payload?.tx_hash ?? "<pending>";
+console.log('Submitted tx', txHash);
+
+const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
+for (const asset of balances.items) {
+  if (asset.id.definition === 'coffee#wonderland') {
+    console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
+  }
+}
+```
+
+Exécutez `node --env-file=.env ledger-flow.mjs` (ou exportez les variables d’environnement manuellement). Le journal doit afficher le hash de transaction (depuis le payload du reçu) et le solde mis à jour du destinataire.
+
+## Vérifier la parité
+
+- Récupérez les détails de la transaction via `iroha --config defaults/client.toml transaction get --hash <hash>`.
+- Vérifiez les soldes avec `iroha --config defaults/client.toml asset list filter '{"id":"norito:4e52543000000002"}'`.
+- Comparez le hash émis avec les recettes Rust et Python pour garantir la parité des SDK.

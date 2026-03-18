@@ -1,0 +1,14 @@
+{
+  "info.welcome": "ברוכים הבאים ל - Hyperledger Iroha!",
+  "error.trace_config_setup": "לא ניתן להגדיר מעקב אחר תצורה",
+  "error.config": "שגיאה בהגדרות של CUPS",
+  "error.logger": "לא ניתן לאתחל את האוגר",
+  "error.start": "הפעלת Iroha נכשלה",
+  "error.run": "אירעה שגיאה בעת הפעלת Iroha",
+  "error.start_p2p": "לא ניתן להתחיל רשת עמית לעמית",
+  "error.init_kura": "לא ניתן לאתחל את Kura (אחסון בלוק)",
+  "error.start_dev_telemetry": "לא ניתן להפעיל את שירות הטלמטריה DEV",
+  "error.start_telemetry": "לא ניתן להפעיל את שירות הטלמטריה",
+  "error.listen_os_signal": "לא ניתן להגדיר האזנה לאותות מערכת ההפעלה",
+  "error.start_torii": "לא ניתן להפעיל את Torii (שער Iroha HTTP API)"
+}

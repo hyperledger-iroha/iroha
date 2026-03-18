@@ -1,0 +1,11 @@
+{
+  "method": "GET",
+  "path": "/car/{manifest_cid}?range=0-131071",
+  "headers": {
+    "Accept": "application/vnd.ipld.car",
+    "Range": "bytes=0-131071"
+  },
+  "notes": [
+    "Issue a ranged CAR request without the required `Sora-Dag-Scope` header to exercise the trustless header guardrails."
+  ]
+}

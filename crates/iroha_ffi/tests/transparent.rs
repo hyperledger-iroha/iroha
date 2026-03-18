@@ -1,16 +1,16 @@
-#![allow(missing_docs)]
+//! Transparent type FFI tests.
 #![allow(unsafe_code)]
 
-use std::{alloc, marker::PhantomData, mem::MaybeUninit};
+use std::{marker::PhantomData, mem::MaybeUninit};
 
 use iroha_ffi::{
-    ffi_export,
+    FfiConvert, FfiOutPtrRead, FfiReturn, FfiType, ffi_export,
     slice::{OutBoxedSlice, RefSlice},
-    FfiConvert, FfiOutPtrRead, FfiReturn, FfiType,
 };
 
 iroha_ffi::def_ffi_fns! { dealloc }
 
+/// Transparent wrapper over `u64` with a phantom parameter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FfiType)]
 #[ffi_type(unsafe{robust})]
 #[repr(transparent)]
@@ -22,6 +22,7 @@ impl<P> GenericTransparentStruct<P> {
     }
 }
 
+/// Transparent struct aggregating multiple ZSTs plus an inner payload.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FfiType)]
 #[ffi_type(unsafe{robust})]
 #[repr(transparent)]
@@ -34,6 +35,7 @@ pub struct TransparentStruct {
 
 type NonRobustTransparentInner = [u8; 4];
 
+/// Non-robust transparent newtype used for testing niche handling.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FfiType)]
 #[repr(transparent)]
 pub struct NonRobustTransparent(NonRobustTransparentInner);
@@ -61,6 +63,7 @@ pub fn transparent_with_niche(arr: Option<NonRobustTransparent>) -> Option<NonRo
 
 #[ffi_export]
 impl TransparentStruct {
+    /// Construct a new `TransparentStruct` with the given payload.
     pub fn new(payload: GenericTransparentStruct<()>) -> Self {
         Self {
             payload,
@@ -70,38 +73,43 @@ impl TransparentStruct {
         }
     }
 
+    /// Replace the payload, returning `self`.
     #[must_use]
     pub fn with_payload(mut self, payload: GenericTransparentStruct<()>) -> Self {
         self.payload = payload;
         self
     }
 
+    /// Get a reference to the payload.
     pub fn payload(&self) -> &GenericTransparentStruct<()> {
         &self.payload
     }
 
+    /// Get a mutable reference to the payload.
     pub fn payload_mut(&mut self) -> &mut GenericTransparentStruct<()> {
         &mut self.payload
     }
 }
 
 #[ffi_export]
+/// Identity function for a transparent struct.
 pub fn self_to_self(value: TransparentStruct) -> TransparentStruct {
     value
 }
 
 #[ffi_export]
+/// Identity for a vector of transparent structs.
 pub fn vec_to_vec(value: Vec<TransparentStruct>) -> Vec<TransparentStruct> {
     value
 }
 
 #[ffi_export]
+/// Return the same slice reference.
 pub fn slice_to_slice(value: &[TransparentStruct]) -> &[TransparentStruct] {
     value
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_transparent_array_ref() {
     let value = TransparentStruct::new(GenericTransparentStruct::new(42));
 
@@ -123,7 +131,6 @@ fn take_and_return_transparent_array_ref() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn take_and_return_option_of_transparent() {
     let value = Some(NonRobustTransparent([1; 4]));
     let mut output = MaybeUninit::new([0u8; 4]);
@@ -142,7 +149,6 @@ fn take_and_return_option_of_transparent() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn transparent_self_to_self() {
     let transparent_struct = TransparentStruct::new(GenericTransparentStruct::new(42));
     // NOTE: recursively traversing transparent structs
@@ -161,7 +167,6 @@ fn transparent_self_to_self() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn transparent_vec_to_vec() {
     let transparent_struct_vec = vec![
         TransparentStruct::new(GenericTransparentStruct::new(1)),
@@ -189,7 +194,6 @@ fn transparent_vec_to_vec() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 // False positive
 fn transparent_slice_to_slice() {
     let transparent_struct_slice = [
@@ -215,7 +219,6 @@ fn transparent_slice_to_slice() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn transparent_method_consume() {
     let mut transparent_struct = TransparentStruct::new(GenericTransparentStruct::new(42));
     let payload = GenericTransparentStruct::new(24);
@@ -239,7 +242,6 @@ fn transparent_method_consume() {
 }
 
 #[test]
-#[webassembly_test::webassembly_test]
 fn transparent_method_borrow() {
     let transparent_struct = TransparentStruct::new(GenericTransparentStruct::new(42));
     let mut output = MaybeUninit::new(core::ptr::null());

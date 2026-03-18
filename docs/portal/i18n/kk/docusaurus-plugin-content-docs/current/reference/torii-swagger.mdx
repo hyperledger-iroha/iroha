@@ -1,0 +1,33 @@
+---
+lang: kk
+direction: ltr
+source: docs/portal/docs/reference/torii-swagger.mdx
+status: complete
+generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
+---
+
+SwaggerUiPanel файлын '@site/src/components/SwaggerUiPanel.jsx' ішінен импорттау;
+
+# Torii API (Swagger UI)
+
+Бұл бет Torii OpenAPI құжатын `swagger-ui-react` арқылы ендіреді. Қашан пайдаланыңыз
+сізге таныс Swagger макетін, үлгілерді сұрауды және көру мүмкіндігін алғыңыз келеді
+сұрауларды тікелей шолғыш ішінде шығарады.
+
+## Пайдалану бойынша кеңестер
+
+- Әрбір сұрауға алдын ала рұқсат беру үшін панельде ұсынушы белгісін беріңіз. Токендер
+  `X-TryIt-Auth` тақырыбы арқылы проксиге жіберіледі және ешқашан сақталмайды.
+- Виджет болатындай порталға қызмет көрсету кезінде `TRYIT_PROXY_PUBLIC_URL` теңшеңіз
+  сұрауларды жинақталған прокси арқылы қайта жібереді. Ескерту баннері пайда болады
+  прокси өшірілген болса.
+- Соңғы сипаттамалар арасында ауысу үшін ашылмалы тізімнен OpenAPI суретін таңдаңыз.
+  және `npm run sync-openapi` арқылы жасалған мұрағатталған нұсқалар.
+- Прокси арқылы қолдау көрсетілетін «[Көріп көріңіз](/api/overview#try-it-sandbox-docs-3)» консолін қолданып көріңіз
+  CORS тікелей Torii қатынасын болдырмайтын кезеңді орталар үшін.
+- OpenAPI суретін `cargo xtask openapi` көмегімен жаңа күйде сақтаңыз (қараңыз.
+  `docs/portal/static/openapi/torii.json`).
+
+<SwaggerUiPanel />

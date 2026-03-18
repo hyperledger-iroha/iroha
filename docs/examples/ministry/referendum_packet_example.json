@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "proposal": {
+    "version": 1,
+    "proposal_id": "AC-2026-001",
+    "submitted_at_unix_ms": 1780000000000,
+    "language": "en",
+    "action": "add-to-denylist",
+    "summary": {
+      "title": "Remove malicious hash",
+      "motivation": "Repeated citizen reports",
+      "expected_impact": "Removes abusive payload."
+    },
+    "tags": ["csam"],
+    "targets": [
+      {
+        "label": "malicious-entry",
+        "hash_family": "blake3-256",
+        "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+        "reason": "Flagged by moderators"
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "url",
+        "uri": "https://evidence.example.org/ac-2026-001",
+        "digest_blake3_hex": null,
+        "description": "Incident report"
+      }
+    ],
+    "submitter": {
+      "name": "Citizen 42",
+      "contact": "citizen42@example.org",
+      "organization": null,
+      "pgp_fingerprint": null
+    },
+    "duplicates": []
+  },
+  "review_summary": {
+    "version": 1,
+    "proposal_id": "AC-2026-001",
+    "panel_round_id": "RP-2026-05",
+    "language": "en",
+    "generated_at_unix_ms": 1780000000000,
+    "overview": {
+      "title": "Review Panel Summary — AC-2026-001",
+      "neutral_summary": "Panel reviewed 2 volunteer briefs (support 1, oppose 1, context 0) covering 2 fact rows; AI manifest 11111111-2222-3333-4444-555555555555 (sorafs-ai-runner 0.5.0) enforced quarantine 7200/10_000 and escalate 3100/10_000.",
+      "decision_context": "Policy jury will evaluate 1 target(s) and 1 evidence attachment(s); highlights below summarise the balanced record reviewed by the panel."
+    },
+    "stance_distribution": [
+      {
+        "stance": "support",
+        "brief_count": 1,
+        "fact_row_count": 1
+      },
+      {
+        "stance": "oppose",
+        "brief_count": 1,
+        "fact_row_count": 1
+      }
+    ],
+    "highlights": [
+      {
+        "stance": "support",
+        "title": "Support brief — malicious hash removed",
+        "summary": "Telemetry shows zero traffic after restitution.",
+        "citations": [
+          {
+            "kind": "volunteer-fact",
+            "value": "support-1-F1"
+          },
+          {
+            "kind": "ai-manifest",
+            "value": "11111111-2222-3333-4444-555555555555"
+          }
+        ]
+      },
+      {
+        "stance": "oppose",
+        "title": "Oppose brief — require extended watch",
+        "summary": "Request 30-day hold before delisting.",
+        "citations": [
+          {
+            "kind": "volunteer-fact",
+            "value": "oppose-1-F1"
+          }
+        ]
+      }
+    ],
+    "ai_manifest": {
+      "manifest_id": "11111111-2222-3333-4444-555555555555",
+      "runtime_version": "sorafs-ai-runner 0.5.0",
+      "issued_at_unix": 1780000000,
+      "quarantine_threshold": 7200,
+      "escalate_threshold": 3100
+    },
+    "volunteer_references": [
+      {
+        "brief_id": "support-1",
+        "stance": "support",
+        "language": "en",
+        "fact_rows": 1,
+        "cited_rows": 1
+      },
+      {
+        "brief_id": "oppose-1",
+        "stance": "oppose",
+        "language": "en",
+        "fact_rows": 1,
+        "cited_rows": 1
+      }
+    ],
+    "warnings": []
+  },
+  "sortition": {
+    "algorithm": "agenda-sortition-blake3-v1",
+    "seed_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "merkle_root_hex": "c9c5d48ebf297d73195dd73cdca3b02283d47fac5beb8a2f0f4cf7d4cf5a3b77",
+    "roster_digest_blake3_hex": "7c6f6cbfbcb8eec595655ffb5f84355a84772b65d741f6a53fb966ab0c4b5858",
+    "roster_digest_sha256_hex": "1ecf1fd54548617b7329627221dfe9af0ef23e704cd9c4235d2ff8ce6f8c2cdf",
+    "slots": 2,
+    "eligible_members": 3
+  },
+  "panelists": [
+    {
+      "member_id": "citizen:ada",
+      "role": "citizen",
+      "organization": "Artemis Cooperative",
+      "contact": "ada@example.org",
+      "weight": 2,
+      "draw_position": 0,
+      "eligible_index": 0,
+      "original_index": 0,
+      "draw_entropy_hex": "a7e8ee16b74a6ed6c5043621f0ee82e9a2bd69882bff572b7fc608bec3e9a9ef",
+      "leaf_hash_hex": "4a807d728c14b2a0f1cb42a8e96ad0b7d5e2f7d37973062dbf8f5eeeed2d2aeb",
+      "merkle_proof": [
+        "ed7941cb505dbb09c059bdec9f2acefe8237b3356f5b10d2b3a5c51c88629875",
+        "d5850df94543f1ef9e2cb84660b1c3d93b5a2f8bd92afc6f7cc0260f2fa7089b"
+      ]
+    },
+    {
+      "member_id": "citizen:bea",
+      "role": "observer",
+      "organization": "Inspectorate",
+      "contact": null,
+      "weight": 1,
+      "draw_position": 1,
+      "eligible_index": 2,
+      "original_index": 2,
+      "draw_entropy_hex": "4c5e7a0f36de9974ee5d8b848b0f916d3c2a39b38a4a48dcdc2805326b0bd708",
+      "leaf_hash_hex": "a0ffca1a26d57fd65b746d4b97a2fc836df7c5e353788f62c7568b5c4b0a5d88",
+      "merkle_proof": [
+        "7eb0ec24bbce9215ea4ed6f0f9059ecb8ecde25d3672f7c002848631186c34b4",
+        "d5850df94543f1ef9e2cb84660b1c3d93b5a2f8bd92afc6f7cc0260f2fa7089b"
+      ]
+    }
+  ],
+  "impact_summary": {
+    "report_generated_at": "2026-03-31T12:00:00Z",
+    "total_targets": 1,
+    "registry_conflicts": 1,
+    "policy_conflicts": 0,
+    "hash_families": [
+      {
+        "hash_family": "blake3-256",
+        "targets": 1,
+        "registry_conflicts": 1,
+        "policy_conflicts": 0
+      }
+    ],
+    "conflicts": [
+      {
+        "source": "duplicate_registry",
+        "hash_family": "blake3-256",
+        "hash_hex": "0d714bed4b7c63c23a2cf8ee9ce6c3cde1007907c427b4a0754e8ad31c91338d",
+        "reference": "AC-2025-014",
+        "note": "Already quarantined"
+      }
+    ]
+  }
+}

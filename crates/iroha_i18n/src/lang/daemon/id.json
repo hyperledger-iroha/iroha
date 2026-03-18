@@ -1,0 +1,14 @@
+{
+  "info.welcome": "Selamat datang di Hyperledger Iroha!",
+  "error.trace_config_setup": "Tidak dapat mengatur pelacakan konfigurasi",
+  "error.config": "Konfigurasi Error",
+  "error.logger": "Tidak dapat menginisialisasi sistem pencatatan",
+  "error.start": "Gagal memulai Iroha",
+  "error.run": "Terjadi kesalahan saat menjalankan Iroha",
+  "error.start_p2p": "Tidak dapat memulai jaringan peer - to - peer",
+  "error.init_kura": "Tidak dapat menginisialisasi Kura (penyimpanan blok)",
+  "error.start_dev_telemetry": "Tidak dapat memulai layanan telemetri pengembang",
+  "error.start_telemetry": "Tidak dapat memulai layanan telemetri",
+  "error.listen_os_signal": "Tidak dapat mengatur mendengarkan sinyal OS",
+  "error.start_torii": "Tidak dapat memulai Torii (gateway Iroha HTTP API)"
+}

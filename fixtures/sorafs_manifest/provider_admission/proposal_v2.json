@@ -1,0 +1,10 @@
+{
+  "capability_count": 2,
+  "endpoint_count": 1,
+  "profile_id": "sorafs.sf1@1.0.0",
+  "proposal_digest_hex": "40cb4e30652fe5e07e3f7b5abcb9a30b41a9bee03d125b763744c2fa19c74571",
+  "proposal_len": 761,
+  "provider_id_hex": "11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff",
+  "stake_amount": "7000",
+  "version": 1
+}

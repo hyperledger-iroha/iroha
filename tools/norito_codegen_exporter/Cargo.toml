@@ -1,0 +1,17 @@
+[package]
+name = "norito_codegen_exporter"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.51", features = ["derive"] }
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "governance"] }
+iroha_schema = { path = "../../crates/iroha_schema" }
+norito = { path = "../../crates/norito", features = ["json"] }
+time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

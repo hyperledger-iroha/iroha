@@ -1,12 +1,11 @@
-#![allow(missing_docs)]
-extern crate alloc;
+//! Schema metadata test covering enums with implicit discriminants.
 
-use core::any::TypeId;
+use std::any::TypeId;
 
 use iroha_schema::prelude::*;
-use parity_scale_codec::{Decode, Encode};
+use norito::{Decode, Encode};
 
-#[derive(Decode, Encode, IntoSchema)]
+#[derive(IntoSchema, Encode, Decode)]
 enum Foo {
     Variant1(bool),
     Variant2(String),
@@ -18,25 +17,25 @@ enum Foo {
 
 #[test]
 fn default_discriminants() {
-    use alloc::collections::BTreeMap;
+    use std::collections::BTreeMap;
 
     use IntMode::*;
     use Metadata::*;
 
     let expected = vec![
         (
-            TypeId::of::<core::result::Result<bool, alloc::string::String>>(),
+            TypeId::of::<::std::result::Result<bool, ::std::string::String>>(),
             MetaMapEntry {
                 type_id: "Result<bool, String>".to_owned(),
                 type_name: "Result<bool, String>".to_owned(),
                 metadata: Result(ResultMeta {
                     ok: TypeId::of::<bool>(),
-                    err: TypeId::of::<alloc::string::String>(),
+                    err: TypeId::of::<::std::string::String>(),
                 }),
             },
         ),
         (
-            TypeId::of::<alloc::string::String>(),
+            TypeId::of::<::std::string::String>(),
             MetaMapEntry {
                 type_id: "String".to_owned(),
                 type_name: "String".to_owned(),
@@ -66,13 +65,13 @@ fn default_discriminants() {
                         EnumVariant {
                             tag: "Variant2".to_owned(),
                             discriminant: 1,
-                            ty: Some(TypeId::of::<alloc::string::String>()),
+                            ty: Some(TypeId::of::<::std::string::String>()),
                         },
                         EnumVariant {
                             tag: "Variant3".to_owned(),
                             discriminant: 2,
                             ty: Some(TypeId::of::<
-                                core::result::Result<bool, alloc::string::String>,
+                                ::std::result::Result<bool, ::std::string::String>,
                             >()),
                         },
                         EnumVariant {

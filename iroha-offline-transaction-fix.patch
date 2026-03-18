@@ -1,0 +1,478 @@
+diff --git a/crates/connect_norito_bridge/src/lib.rs b/crates/connect_norito_bridge/src/lib.rs
+index 1381ca6cd..ca6955640 100644
+--- a/crates/connect_norito_bridge/src/lib.rs
++++ b/crates/connect_norito_bridge/src/lib.rs
+@@ -59,9 +59,10 @@ use iroha_data_model::{
+         OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
+         OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN, OFFLINE_FASTPQ_SUM_NONCE_DOMAIN,
+         OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineFastpqCounterProof, OfflineFastpqReplayProof,
+-        OfflineFastpqSumProof, OfflineProofBlindingSeed, OfflineProofRequestCounter,
+-        OfflineProofRequestReplay, OfflineProofRequestSum, OfflineReceiptChallengePreimage,
+-        OfflineSpendReceipt, PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
++        OfflineFastpqSumProof, OfflinePlatformProof, OfflineProofBlindingSeed,
++        OfflineProofRequestCounter, OfflineProofRequestReplay, OfflineProofRequestSum,
++        OfflineReceiptChallengePreimage, OfflineSpendReceipt, OfflineSpendReceiptPayload,
++        OfflineWalletCertificate, PoseidonDigest, chain_bound_receipt_hash, compute_receipts_root,
+     },
+     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+     smart_contract::manifest::ContractManifest,
+@@ -945,6 +946,42 @@ fn compute_offline_receipt_challenge(
+     Ok((bytes, iroha_bytes, client_hash))
+ }
+ 
++fn encode_offline_spend_receipt_payload(
++    tx_id_hex: String,
++    from_raw: String,
++    to_raw: String,
++    asset_raw: String,
++    amount_raw: String,
++    issued_at_ms: u64,
++    invoice_id: String,
++    platform_proof_json: String,
++    certificate_json: String,
++) -> BridgeResult<Vec<u8>> {
++    let tx_id = Hash::from_str(&tx_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
++    let from = AccountId::from_str(&from_raw).map_err(|_| BridgeError::Authority)?;
++    let to = AccountId::from_str(&to_raw).map_err(|_| BridgeError::Destination)?;
++    let asset = AssetId::from_str(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
++    let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
++    let platform_proof: OfflinePlatformProof =
++        norito::json::from_str(&platform_proof_json).map_err(|_| BridgeError::OfflineSerialize)?;
++    let certificate: OfflineWalletCertificate =
++        norito::json::from_str(&certificate_json).map_err(|_| BridgeError::OfflineSerialize)?;
++
++    let payload = OfflineSpendReceiptPayload {
++        tx_id,
++        from,
++        to,
++        asset,
++        amount,
++        issued_at_ms,
++        invoice_id,
++        platform_proof,
++        sender_certificate: certificate,
++    };
++
++    to_bytes(&payload).map_err(|_| BridgeError::OfflineSerialize)
++}
++
+ fn aggregate_receipt_amounts(amounts: &[Numeric]) -> BridgeResult<Numeric> {
+     if amounts.is_empty() {
+         return Err(BridgeError::Quantity);
+@@ -9430,6 +9467,65 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
+     }
+ }
+ 
++#[cfg(any(
++    target_os = "android",
++    target_os = "linux",
++    target_os = "macos",
++    target_os = "windows"
++))]
++#[allow(clippy::missing_safety_doc)]
++#[unsafe(no_mangle)]
++pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineSpendReceiptPayloadEncoder_nativeEncode(
++    mut env: jni::JNIEnv<'_>,
++    _class: jni::objects::JClass<'_>,
++    tx_id_hex: jni::objects::JString<'_>,
++    from_account: jni::objects::JString<'_>,
++    to_account: jni::objects::JString<'_>,
++    asset_id: jni::objects::JString<'_>,
++    amount: jni::objects::JString<'_>,
++    issued_at_ms: jni::sys::jlong,
++    invoice_id: jni::objects::JString<'_>,
++    platform_proof_json: jni::objects::JString<'_>,
++    certificate_json: jni::objects::JString<'_>,
++) -> jni::sys::jbyteArray {
++    let result = (|| -> Result<jni::sys::jbyteArray, String> {
++        let tx_id_str = jstring_to_string(&mut env, tx_id_hex)?;
++        let from_str = jstring_to_string(&mut env, from_account)?;
++        let to_str = jstring_to_string(&mut env, to_account)?;
++        let asset_str = jstring_to_string(&mut env, asset_id)?;
++        let amount_str = jstring_to_string(&mut env, amount)?;
++        let invoice_str = jstring_to_string(&mut env, invoice_id)?;
++        let proof_json = jstring_to_string(&mut env, platform_proof_json)?;
++        let cert_json = jstring_to_string(&mut env, certificate_json)?;
++
++        let bytes = encode_offline_spend_receipt_payload(
++            tx_id_str,
++            from_str,
++            to_str,
++            asset_str,
++            amount_str,
++            issued_at_ms as u64,
++            invoice_str,
++            proof_json,
++            cert_json,
++        )
++        .map_err(|e| format!("encode error: {}", e.code()))?;
++
++        let array = env
++            .byte_array_from_slice(&bytes)
++            .map_err(|e| e.to_string())?;
++        Ok(array.into_raw())
++    })();
++
++    match result {
++        Ok(array) => array,
++        Err(msg) => {
++            throw_java_illegal_argument(&mut env, msg);
++            std::ptr::null_mut()
++        }
++    }
++}
++
+ #[cfg(any(
+     target_os = "android",
+     target_os = "linux",
+@@ -12038,4 +12134,104 @@ mod sorafs_tests {
+             connect_norito_free(out_report_ptr);
+         }
+     }
++
++    fn test_account_id(seed: u8) -> AccountId {
++        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
++        let (public_key, _) = keypair.into_parts();
++        let domain = DomainId::from_str("default").expect("domain");
++        AccountId::new(domain, public_key)
++    }
++
++    #[test]
++    fn encode_offline_spend_receipt_payload_matches_native() {
++        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
++        use base64::Engine as _;
++        use iroha_data_model::offline::{
++            AppleAppAttestProof, OfflineAllowanceCommitment, OfflinePlatformProof,
++            OfflineSpendReceipt, OfflineWalletCertificate, OfflineWalletPolicy,
++        };
++        use iroha_data_model::{Metadata, asset::id::AssetId};
++        use iroha_primitives::numeric::Numeric;
++
++        let sender = test_account_id(1);
++        let receiver = test_account_id(2);
++        let asset_def =
++            iroha_data_model::asset::id::AssetDefinitionId::from_str("xor#default").expect("asset def");
++        let asset = AssetId::new(asset_def, sender.clone());
++        let challenge_hash = Hash::new(vec![0x33; 32]);
++
++        let certificate = OfflineWalletCertificate {
++            controller: sender.clone(),
++            allowance: OfflineAllowanceCommitment {
++                asset: asset.clone(),
++                amount: Numeric::from(500_u32),
++                commitment: vec![0x42; 32],
++            },
++            spend_public_key: PublicKey::from_hex(
++                Algorithm::Ed25519,
++                "1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
++            )
++            .expect("public key"),
++            attestation_report: vec![0x01, 0x02, 0x03],
++            issued_at_ms: 1_700_000_000_000,
++            expires_at_ms: 1_800_000_000_000,
++            policy: OfflineWalletPolicy {
++                max_balance: Numeric::from(1_000_u32),
++                max_tx_value: Numeric::from(200_u32),
++                expires_at_ms: 1_800_000_000_000,
++            },
++            operator_signature: Signature::from_bytes(&[0xAB; 64]),
++            metadata: Metadata::default(),
++            verdict_id: None,
++            attestation_nonce: None,
++            refresh_at_ms: None,
++        };
++
++        let platform_proof = OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
++            key_id: BASE64_STANDARD.encode(b"TEST_KEY"),
++            counter: 42,
++            assertion: vec![0xCA, 0xFE],
++            challenge_hash,
++        });
++
++        let tx_id = Hash::new(vec![0x22; 32]);
++
++        let receipt = OfflineSpendReceipt {
++            tx_id,
++            from: sender.clone(),
++            to: receiver.clone(),
++            asset: asset.clone(),
++            amount: Numeric::from(75_u32),
++            issued_at_ms: 1_700_000_500_000,
++            invoice_id: "INV-42".into(),
++            platform_proof: platform_proof.clone(),
++            platform_snapshot: None,
++            sender_certificate: certificate.clone(),
++            sender_signature: Signature::from_bytes(&[0xCD; 64]),
++        };
++
++        let native_bytes = receipt.signing_bytes().expect("native signing bytes");
++
++        let platform_proof_json =
++            norito::json::to_json(&platform_proof).expect("platform proof json");
++        let certificate_json = norito::json::to_json(&certificate).expect("certificate json");
++
++        let jni_bytes = encode_offline_spend_receipt_payload(
++            hex::encode(tx_id.as_ref()),
++            sender.to_string(),
++            receiver.to_string(),
++            asset.to_string(),
++            "75".to_string(),
++            1_700_000_500_000,
++            "INV-42".to_string(),
++            platform_proof_json,
++            certificate_json,
++        )
++        .expect("JNI encoding");
++
++        assert_eq!(
++            native_bytes, jni_bytes,
++            "JNI encoding must match native signing_bytes"
++        );
++    }
+ }
+diff --git a/java/iroha_android/core/build.gradle.kts b/java/iroha_android/core/build.gradle.kts
+index 6df94421e..92d6d4490 100644
+--- a/java/iroha_android/core/build.gradle.kts
++++ b/java/iroha_android/core/build.gradle.kts
+@@ -34,6 +34,10 @@ tasks.withType<Test>().configureEach {
+     if (!harnessFilter.isNullOrBlank()) {
+         systemProperty("android.test.mains", harnessFilter)
+     }
++    val nativeLibPath = System.getenv("IROHA_NATIVE_LIBRARY_PATH")
++    if (!nativeLibPath.isNullOrBlank()) {
++        jvmArgs("-Djava.library.path=$nativeLibPath")
++    }
+ }
+ 
+ sourceSets {
+diff --git a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java
+index 0fbf33092..a93457f86 100644
+--- a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java
++++ b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/GradleHarnessTests.java
+@@ -81,6 +81,7 @@ public final class GradleHarnessTests {
+         "org.hyperledger.iroha.android.offline.OfflineJsonParserTest",
+         "org.hyperledger.iroha.android.offline.OfflineQueryEnvelopeTest",
+         "org.hyperledger.iroha.android.offline.OfflineReceiptChallengeTest",
++        "org.hyperledger.iroha.android.offline.OfflineSpendReceiptPayloadEncoderTest",
+         "org.hyperledger.iroha.android.offline.OfflineQrStreamTest",
+         "org.hyperledger.iroha.android.offline.OfflinePetalStreamTest",
+         "org.hyperledger.iroha.android.offline.OfflineTransferPayloadsTest",
+diff --git a/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineSpendReceiptPayloadEncoder.java b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineSpendReceiptPayloadEncoder.java
+new file mode 100644
+index 000000000..7ea5c1244
+--- /dev/null
++++ b/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineSpendReceiptPayloadEncoder.java
+@@ -0,0 +1,109 @@
++package org.hyperledger.iroha.android.offline;
++
++/**
++ * Encodes OfflineSpendReceiptPayload to Norito bytes for signing.
++ *
++ * <p>This encoder serializes the complete receipt payload structure using the Norito
++ * codec, producing bytes that can be signed by the sender's spend key.
++ */
++public final class OfflineSpendReceiptPayloadEncoder {
++  private static final boolean NATIVE_AVAILABLE;
++
++  static {
++    boolean available;
++    try {
++      System.loadLibrary("connect_norito_bridge");
++      available = true;
++    } catch (UnsatisfiedLinkError error) {
++      available = false;
++    }
++    NATIVE_AVAILABLE = available;
++  }
++
++  private OfflineSpendReceiptPayloadEncoder() {}
++
++  public static boolean isNativeAvailable() {
++    return NATIVE_AVAILABLE;
++  }
++
++  /**
++   * Encode OfflineSpendReceiptPayload to Norito bytes for signing.
++   *
++   * @param txIdHex 32-byte transaction ID as hex (64 chars)
++   * @param fromAccountId sender AccountId (e.g., "alice@domain")
++   * @param toAccountId receiver AccountId
++   * @param assetId full asset ID (e.g., "token#domain#alice@domain")
++   * @param amount decimal amount string
++   * @param issuedAtMs timestamp in milliseconds
++   * @param invoiceId invoice identifier
++   * @param platformProofJson JSON-serialized OfflinePlatformProof
++   * @param certificateJson JSON-serialized OfflineWalletCertificate
++   * @return Norito-encoded bytes
++   * @throws IllegalStateException if native library is not available
++   * @throws IllegalArgumentException if any parameter is invalid
++   */
++  public static byte[] encode(
++      final String txIdHex,
++      final String fromAccountId,
++      final String toAccountId,
++      final String assetId,
++      final String amount,
++      final long issuedAtMs,
++      final String invoiceId,
++      final String platformProofJson,
++      final String certificateJson) {
++    if (!NATIVE_AVAILABLE) {
++      throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
++    }
++    if (txIdHex == null || txIdHex.length() != 64) {
++      throw new IllegalArgumentException("txIdHex must be 64 hex characters");
++    }
++    if (fromAccountId == null || fromAccountId.isEmpty()) {
++      throw new IllegalArgumentException("fromAccountId must not be empty");
++    }
++    if (toAccountId == null || toAccountId.isEmpty()) {
++      throw new IllegalArgumentException("toAccountId must not be empty");
++    }
++    if (assetId == null || assetId.isEmpty()) {
++      throw new IllegalArgumentException("assetId must not be empty");
++    }
++    if (amount == null || amount.isEmpty()) {
++      throw new IllegalArgumentException("amount must not be empty");
++    }
++    if (invoiceId == null) {
++      throw new IllegalArgumentException("invoiceId must not be null");
++    }
++    if (platformProofJson == null || platformProofJson.isEmpty()) {
++      throw new IllegalArgumentException("platformProofJson must not be empty");
++    }
++    if (certificateJson == null || certificateJson.isEmpty()) {
++      throw new IllegalArgumentException("certificateJson must not be empty");
++    }
++    final byte[] result =
++        nativeEncode(
++            txIdHex,
++            fromAccountId,
++            toAccountId,
++            assetId,
++            amount,
++            issuedAtMs,
++            invoiceId,
++            platformProofJson,
++            certificateJson);
++    if (result == null) {
++      throw new IllegalStateException("nativeEncode returned null");
++    }
++    return result;
++  }
++
++  private static native byte[] nativeEncode(
++      String txIdHex,
++      String fromAccountId,
++      String toAccountId,
++      String assetId,
++      String amount,
++      long issuedAtMs,
++      String invoiceId,
++      String platformProofJson,
++      String certificateJson);
++}
+diff --git a/java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineSpendReceiptPayloadEncoderTest.java b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineSpendReceiptPayloadEncoderTest.java
+new file mode 100644
+index 000000000..5bf6678d6
+--- /dev/null
++++ b/java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineSpendReceiptPayloadEncoderTest.java
+@@ -0,0 +1,98 @@
++package org.hyperledger.iroha.android.offline;
++
++/**
++ * Tests for OfflineSpendReceiptPayloadEncoder JNI binding.
++ *
++ * <p>Set IROHA_NATIVE_REQUIRED=1 to make tests fail when native library is unavailable.
++ * This is useful in CI pipelines that have the native library built.
++ */
++public final class OfflineSpendReceiptPayloadEncoderTest {
++
++  private OfflineSpendReceiptPayloadEncoderTest() {}
++
++  public static void main(final String[] args) {
++    encodeReturnsNonEmptyBytes();
++    System.out.println("[IrohaAndroid] OfflineSpendReceiptPayloadEncoderTest passed.");
++  }
++
++  private static void encodeReturnsNonEmptyBytes() {
++    if (!OfflineSpendReceiptPayloadEncoder.isNativeAvailable()) {
++      boolean nativeRequired = "1".equals(System.getenv("IROHA_NATIVE_REQUIRED"));
++      if (nativeRequired) {
++        throw new AssertionError(
++            "IROHA_NATIVE_REQUIRED=1 but connect_norito_bridge native library is unavailable. "
++                + "This indicates the .so file was not rebuilt after adding "
++                + "OfflineSpendReceiptPayloadEncoder JNI function.");
++      }
++      System.out.println(
++          "[IrohaAndroid] OfflineSpendReceiptPayloadEncoderTest skipped (native unavailable). "
++              + "Set IROHA_NATIVE_REQUIRED=1 to fail instead.");
++      return;
++    }
++
++    // Test values derived from Rust unit test (encode_offline_spend_receipt_payload_matches_native)
++    // These use the compressed AccountAddress format
++    final String sender = "RnuaJGGDLA57fKeoK1TaFQWhYLxMXY9sEqWhSviYfXxDwTkLdBw3Khq2";
++    final String receiver = "RnuaJGGDL9ruds8g1c7AAz8cq1kS16u1LDptWe8FC3NLR4qs1RhLjNjk";
++    final String asset = "xor##" + sender;
++
++    // tx_id must have LSB=1 (this is the hash from Rust test)
++    final String txIdHex = "e2a94e18647fe0c6283a31e40c46ae1cc5f0867650f6834e4f01e34284adc9c7";
++    final String amount = "75";
++    final long issuedAtMs = 1700000500000L;
++    final String invoiceId = "INV-42";
++
++    // Platform proof JSON from Rust test (hash format is special: "hash:HEX#CHECKSUM")
++    final String platformProofJson =
++        "{\"platform\":\"AppleAppAttest\",\"proof\":{\"key_id\":\"VEVTVF9LRVk=\",\"counter\":42,"
++            + "\"assertion\":[202,254],"
++            + "\"challenge_hash\":\"hash:510C7466F2A90281DF576A765517ADFC6A4C8F89FEE3E14B8EAE3A574F442C37#7C0B\"}}";
++
++    // Certificate JSON from Rust test
++    final String certificateJson =
++        "{\"controller\":\"" + sender + "@default\","
++            + "\"allowance\":{\"asset\":\"" + asset + "@default\",\"amount\":\"500\","
++            + "\"commitment\":[66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,"
++            + "66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66]},"
++            + "\"spend_public_key\":\"ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4\","
++            + "\"attestation_report\":[1,2,3],"
++            + "\"issued_at_ms\":1700000000000,"
++            + "\"expires_at_ms\":1800000000000,"
++            + "\"policy\":{\"max_balance\":\"1000\",\"max_tx_value\":\"200\",\"expires_at_ms\":1800000000000},"
++            + "\"operator_signature\":\"ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
++            + "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB\","
++            + "\"metadata\":{},\"verdict_id\":null,\"attestation_nonce\":null,\"refresh_at_ms\":null}";
++
++    final byte[] encoded =
++        OfflineSpendReceiptPayloadEncoder.encode(
++            txIdHex,
++            sender,
++            receiver,
++            asset,
++            amount,
++            issuedAtMs,
++            invoiceId,
++            platformProofJson,
++            certificateJson);
++
++    if (encoded == null || encoded.length == 0) {
++      throw new AssertionError("encode() returned empty bytes");
++    }
++
++    // Verify Norito header (NRT0)
++    if (encoded[0] != 'N' || encoded[1] != 'R' || encoded[2] != 'T' || encoded[3] != '0') {
++      throw new AssertionError(
++          "encoded bytes missing Norito header (expected NRT0, got "
++              + (char) encoded[0]
++              + (char) encoded[1]
++              + (char) encoded[2]
++              + (char) encoded[3]
++              + ")");
++    }
++
++    System.out.println(
++        "[IrohaAndroid] OfflineSpendReceiptPayloadEncoder.encode() returned "
++            + encoded.length
++            + " bytes with valid Norito header");
++  }
++}

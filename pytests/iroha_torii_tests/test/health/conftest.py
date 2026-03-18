@@ -1,5 +1,3 @@
-from .. import GIVEN_api_up_and_running
-
 import allure
 import pytest
 import requests

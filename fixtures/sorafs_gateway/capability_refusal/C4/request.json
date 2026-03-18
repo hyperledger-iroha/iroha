@@ -1,0 +1,17 @@
+{
+  "method": "POST",
+  "path": "/token",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "provider_id": "00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff",
+    "capabilities": [
+      "vendor_reserved#0xff"
+    ],
+    "manifest_reference": "../1.0.0/manifest_v1.json"
+  },
+  "notes": [
+    "Request a stream token while advertising an unsupported vendor-reserved capability TLV."
+  ]
+}

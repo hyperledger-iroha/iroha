@@ -1,0 +1,42 @@
+{
+  "code_sha256": "b49052441706aea1cc04f7f448bcc1ceec0d743eeaef9f6a3b1c9a2649711e99",
+  "decoded": [
+    {
+      "inst": 16974082,
+      "inst_hex": "0x01030102",
+      "len": 4,
+      "pc": 0
+    },
+    {
+      "inst": 33948677,
+      "inst_hex": "0x02060405",
+      "len": 4,
+      "pc": 4
+    },
+    {
+      "inst": 84477704,
+      "inst_hex": "0x05090708",
+      "len": 4,
+      "pc": 8
+    },
+    {
+      "inst": 1073807618,
+      "inst_hex": "0x40010102",
+      "len": 4,
+      "pc": 12
+    },
+    {
+      "inst": 17764096,
+      "inst_hex": "0x010f0f00",
+      "len": 4,
+      "pc": 16
+    },
+    {
+      "inst": 1224736768,
+      "inst_hex": "0x49000000",
+      "len": 4,
+      "pc": 20
+    }
+  ],
+  "format": "ivm.predecoder.v1"
+}

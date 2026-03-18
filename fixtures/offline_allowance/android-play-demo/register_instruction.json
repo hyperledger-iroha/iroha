@@ -1,0 +1,45 @@
+{
+  "certificate": {
+    "allowance": {
+      "amount": "175.00",
+      "asset": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c000000000000000f0a3399fd6d749de00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230303446463542383130343644444343463139453245343531433435444642364635333735394434454233304641324546413830373238344431434333333031362f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000786f72",
+      "commitment_hex": "4C99F19069BA2F6419C2C7C40B21EB503ECA8A0DDB38EF930DAFFAC10EA5BE50"
+    },
+    "attestation_nonce_hex": null,
+    "attestation_report_b64": "3YjdiA==",
+    "controller": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+    "expires_at_ms": 1745900000000,
+    "issued_at_ms": 1730314876000,
+    "metadata": {
+      "android.integrity.policy": "play_integrity",
+      "android.play_integrity.allowed_app_verdicts": [
+        "play_recognized",
+        "licensed"
+      ],
+      "android.play_integrity.allowed_device_verdicts": [
+        "strong",
+        "device"
+      ],
+      "android.play_integrity.cloud_project_number": 4242424242,
+      "android.play_integrity.environment": "production",
+      "android.play_integrity.max_token_age_ms": 30000,
+      "android.play_integrity.package_names": [
+        "tech.iroha.retail.play"
+      ],
+      "android.play_integrity.signing_digests_sha256": [
+        "778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566"
+      ]
+    },
+    "operator": "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC",
+    "operator_signature_hex": "76F0BFC455177AD543DB9C4D88E9CCA07962D5D531573ACE78CA90840E2252BCB49CBBDC0B7D87DCEF720139044E6DD9B782FDD9A789833873EC4E2E0B919E03",
+    "policy": {
+      "expires_at_ms": 1745900000000,
+      "max_balance": "350.00",
+      "max_tx_value": "90.00"
+    },
+    "refresh_at_ms": null,
+    "spend_public_key": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016",
+    "verdict_id_hex": null
+  },
+  "instruction": "RegisterOfflineAllowance"
+}

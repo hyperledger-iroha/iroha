@@ -1,0 +1,178 @@
+#![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+//! Bridge finality endpoint pairs cleanly with the light-client verifier.
+
+use std::{num::NonZeroU64, sync::Arc};
+
+use axum::{
+    body::{Body, to_bytes},
+    http::Request,
+};
+use hyper::StatusCode;
+use iroha_config::parameters::actual::Queue as QueueConfig;
+use iroha_core::{
+    kiso::KisoHandle,
+    kura::Kura,
+    query::store::LiveQueryStore,
+    queue::Queue,
+    state::{State, World},
+    sumeragi::{
+        consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
+        status::{record_commit_qc, reset_commit_certs_for_tests},
+    },
+};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::{
+    ChainId,
+    block::BlockHeader,
+    bridge::{BridgeFinalityVerifier, BridgeFinalityVerifyError},
+    consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+    peer::PeerId,
+};
+use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
+use tower::ServiceExt as _;
+
+struct CommitCertHistoryGuard;
+
+impl CommitCertHistoryGuard {
+    fn new() -> Self {
+        reset_commit_certs_for_tests();
+        Self
+    }
+}
+
+impl Drop for CommitCertHistoryGuard {
+    fn drop(&mut self) {
+        reset_commit_certs_for_tests();
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn bridge_finality_endpoint_roundtrips_into_verifier() {
+    let _guard = CommitCertHistoryGuard::new();
+    let cfg = test_utils::mk_minimal_root_cfg();
+    let chain_id: ChainId = cfg.common.chain.clone();
+
+    let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let peer_id = PeerId::from(kp.public_key().clone());
+
+    let header = BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let block = iroha_data_model::block::builder::BlockBuilder::new(header)
+        .build_with_signature(0, kp.private_key());
+    let block_hash = block.hash();
+
+    let kura = Kura::blank_kura_for_testing();
+    kura.store_block(block).expect("store block");
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        kura.clone(),
+        query,
+    ));
+
+    let validator_set = vec![peer_id.clone()];
+    let validator_set_hash = HashOf::new(&validator_set);
+    let mode_tag = PERMISSIONED_TAG;
+    let vote = Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        height: 1,
+        view: 0,
+        epoch: 0,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let preimage = vote_preimage(&chain_id, mode_tag, &vote);
+    let signature = Signature::new(kp.private_key(), &preimage);
+    let cert = Qc {
+        phase: Phase::Commit,
+        height: 1,
+        subject_block_hash: block_hash,
+        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+        view: 0,
+        epoch: 0,
+        mode_tag: mode_tag.to_string(),
+        highest_qc: None,
+        validator_set_hash,
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![1],
+            bls_aggregate_signature: signature.payload().to_vec(),
+        },
+    };
+    record_commit_qc(cert);
+
+    let queue_cfg = QueueConfig::default();
+    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    drop(peers_tx);
+
+    let torii = Torii::new_with_handle(
+        cfg.common.chain.clone(),
+        KisoHandle::mock(&cfg),
+        cfg.torii.clone(),
+        queue,
+        tokio::sync::broadcast::channel(1).0,
+        LiveQueryStore::start_test(),
+        kura,
+        state,
+        cfg.common.key_pair.clone(),
+        OnlinePeersProvider::new(peers_rx),
+        None,
+        MaybeTelemetry::disabled(),
+    );
+    let app = torii.api_router_for_tests();
+
+    let req = Request::builder()
+        .uri("/v1/bridge/finality/1")
+        .body(Body::empty())
+        .expect("request");
+    let resp = app.oneshot(req).await.expect("response");
+    if !cfg!(feature = "telemetry") {
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        return;
+    }
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("body bytes");
+    let proof: iroha_data_model::bridge::BridgeFinalityProof =
+        norito::json::from_slice(&body).expect("decode proof");
+
+    let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
+        chain_id,
+        validator_set_hash,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        0,
+    );
+
+    if let Err(err) = verifier.verify(&proof) {
+        panic!("verifier should accept endpoint proof, got {err:?}");
+    }
+
+    let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
+        proof.chain_id.clone(),
+        proof.commit_qc.validator_set_hash,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        1,
+    );
+    let err = verifier.verify(&proof).unwrap_err();
+    assert!(matches!(
+        err,
+        BridgeFinalityVerifyError::UnexpectedEpoch { .. }
+    ));
+}

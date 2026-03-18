@@ -1,0 +1,48 @@
+---
+title: Local → Global Address Toolkit
+---
+
+This page mirrors [`docs/source/sns/local_to_global_toolkit.md`](../../../source/sns/local_to_global_toolkit.md)
+from the mono-repo. It packages the CLI helpers and runbooks required by roadmap item **ADDR-5c**.
+
+## Overview
+
+- `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
+  - `audit.json` — structured output from `iroha tools address audit --format json`.
+  - `normalized.txt` — converted preferred I105 literals for every Local-domain selector.
+- Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
+  and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
+  Local-12 cutover is safe. Watch the Local-8 and Local-12 collision panels plus the
+  `AddressLocal8Resurgence`, `AddressLocal12Collision`, and `AddressInvalidRatioSlo` alerts before
+  promoting manifest changes.
+- Reference the [Address Display Guidelines](address-display-guidelines.md) and the
+  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) for UX and incident-response context.
+
+## Usage
+
+```bash
+scripts/address_local_toolkit.sh \
+  --input fixtures/address/local_digest_examples.txt \
+  --output-dir artifacts/address_migration \
+  --network-prefix 753 \
+  --format i105
+```
+
+Options:
+
+- `--format i105` for `i105` output instead of I105.
+- `--audit-only` to skip the conversion step.
+- `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
+
+The script writes the artefact paths at the end of the run. Attach both files to
+your change-management ticket alongside the Grafana screenshot that proves zero
+Local-8 detections and zero Local-12 collisions for ≥30 days.
+
+## CI integration
+
+1. Run the script in a dedicated job and upload its outputs.
+2. Block merges when `audit.json` reports parse errors or Local selectors (`domain.kind = local12`).
+3. You can also run `ci/check_address_normalize.sh` as a lightweight guard: it normalizes fixture
+   rows and fails if audit still reports parse errors or `domain.kind = local12`.
+
+See the source document for more details, sample evidence checklists, and the release-note snippet you can reuse when announcing the cutover to customers.

@@ -1,0 +1,41 @@
+{
+  "auth_path_hex": [
+    "1111111111111111111111111111111111111111111111111111111111111111",
+    "2222222222222222222222222222222222222222222222222222222222222222",
+    "3333333333333333333333333333333333333333333333333333333333333333"
+  ],
+  "challenge_id_hex": "d845a72fd33216d1994265becc7de0bbeddd8555ad51b6f7bfa809e863fc42b8",
+  "manifest_digest_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "proof_digest_hex": "b0fa66e8df64a6ea922344919aeb5732b152618d5b4bc30cb8f0313b55f40025",
+  "provider_id_hex": "1010101010101010101010101010101010101010101010101010101010101010",
+  "samples": [
+    {
+      "chunk_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "chunk_offset": 0,
+      "chunk_size": 65536,
+      "leaf_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sample_index": 1
+    },
+    {
+      "chunk_digest_hex": "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac",
+      "chunk_offset": 134217728,
+      "chunk_size": 65536,
+      "leaf_digest_hex": "bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc",
+      "sample_index": 2048
+    },
+    {
+      "chunk_digest_hex": "adadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad",
+      "chunk_offset": 4294836224,
+      "chunk_size": 65536,
+      "leaf_digest_hex": "bdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd",
+      "sample_index": 65535
+    }
+  ],
+  "signature": {
+    "algorithm": "ed25519",
+    "public_key_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "signature_hex": "02020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202"
+  },
+  "submitted_at": 1700000540,
+  "version": 1
+}

@@ -1,0 +1,321 @@
+{
+  "cases": {
+    "negative": [
+      {
+        "case_id": "i105-checksum-mismatch",
+        "expected_error": {
+          "kind": "ChecksumMismatch"
+        },
+        "expected_prefix": 753,
+        "format": "i105",
+        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS1",
+        "note": "Checksum tampering on I105 alias for the default-domain vector."
+      },
+      {
+        "case_id": "i105-prefix-mismatch",
+        "expected_error": {
+          "expected": 753,
+          "found": 754,
+          "kind": "UnexpectedNetworkPrefix"
+        },
+        "expected_prefix": 753,
+        "format": "i105",
+        "input": "n754uﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
+      },
+      {
+        "case_id": "i105_default-invalid-character",
+        "expected_error": {
+          "kind": "ChecksumMismatch"
+        },
+        "format": "i105_default",
+        "input": "sorauﾛANﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "note": "Introduces ASCII 'A' outside the Sora I105-default alphabet."
+      },
+      {
+        "case_id": "i105_default-checksum-mismatch",
+        "expected_error": {
+          "kind": "ChecksumMismatch"
+        },
+        "format": "i105_default",
+        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS1",
+        "note": "Checksum nibble replaced to trigger Bech32m verification failure."
+      },
+      {
+        "case_id": "canonical-invalid-hex",
+        "expected_error": {
+          "kind": "UnsupportedAddressFormat"
+        },
+        "format": "canonical_hex",
+        "input": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2G",
+        "note": "Invalid hex digit injected into canonical representation."
+      },
+      {
+        "case_id": "canonical-trailing-bytes",
+        "expected_error": {
+          "kind": "UnsupportedAddressFormat"
+        },
+        "format": "canonical_hex",
+        "input": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da2900",
+        "note": "Extra zero byte appended past the canonical payload."
+      },
+      {
+        "case_id": "canonical-multisig-truncated",
+        "expected_error": {
+          "kind": "UnsupportedAddressFormat"
+        },
+        "format": "canonical_hex",
+        "input": "0x0A010100030003010001002068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F9601000100207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E4130100020020884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4",
+        "note": "Canonical multisig payload truncated after removing final member bytes."
+      }
+    ],
+    "positive": [
+      {
+        "case_id": "addr-single-default-ed25519",
+        "category": "single",
+        "controller": {
+          "curve": "ed25519",
+          "kind": "single",
+          "public_key_hex": "3B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+          "public_key_multihash": "ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+          "public_key_prefixed": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29"
+        },
+        "encodings": {
+          "canonical_hex": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
+          "i105": {
+            "prefix": 753,
+            "string": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+          },
+          "i105_default": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+          "i105_default_fullwidth": "ｓｏｒａuロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+        },
+        "input": {
+          "normalized_domain": "default",
+          "raw_domain": "default",
+          "seed_byte": 0
+        },
+        "note": "Implicit default-domain address using deterministic Ed25519 key derived from seed byte 0x00.",
+        "selector": {
+          "kind": "default"
+        }
+      },
+      {
+        "case_id": "addr-single-treasury-ed25519",
+        "category": "single",
+        "controller": {
+          "curve": "ed25519",
+          "kind": "single",
+          "public_key_hex": "8A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+          "public_key_multihash": "ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C",
+          "public_key_prefixed": "ed25519:ed01208A88E3DD7409F195FD52DB2D3CBA5D72CA6709BF1D94121BF3748801B40F6F5C"
+        },
+        "encodings": {
+          "canonical_hex": "0x020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+          "i105": {
+            "prefix": 753,
+            "string": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
+          },
+          "i105_default": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+          "i105_default_fullwidth": "ｓｏｒａuロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+        },
+        "input": {
+          "normalized_domain": "treasury",
+          "raw_domain": "treasury",
+          "seed_byte": 1
+        },
+        "note": "Non-default domain address (treasury) using deterministic Ed25519 key derived from seed byte 0x01.",
+        "selector": {
+          "kind": "default"
+        }
+      },
+      {
+        "case_id": "addr-multisig-council-threshold3",
+        "category": "multisig",
+        "controller": {
+          "ctap2_cbor_hex": "0xA3010102030383A30101020103582068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96A3010102010358207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413A301010202035820884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+          "digest_blake2b256_hex": "0x3CA0D464D52713DD60DDAA55B3B3F49A6EF114574864E2AADE63114C4DB06B9F",
+          "kind": "multisig",
+          "members": [
+            {
+              "curve": "ed25519",
+              "public_key_hex": "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+              "public_key_multihash": "ed012068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+              "public_key_prefixed": "ed25519:ed012068F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "7EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+              "public_key_multihash": "ed01207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+              "public_key_prefixed": "ed25519:ed01207EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+              "public_key_multihash": "ed0120884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+              "public_key_prefixed": "ed25519:ed0120884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B",
+              "weight": 2
+            }
+          ],
+          "threshold": 3,
+          "version": 1
+        },
+        "encodings": {
+          "canonical_hex": "0x0a010100030003010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
+          "i105": {
+            "prefix": 753,
+            "string": "soraﾁｷVMXfkAweDFﾃqSkhXｳrdUｲﾋﾆ4eYqｻｱYsﾐヰｦt4ｵｻｳｷHヰkNﾁｦﾒﾐwjQgmﾜdnｸ9h5BSkヱﾜﾙvｾ6ｻyWtSﾖﾛAｶaヱﾛﾚｻxﾄﾒｼMAyｽ8ｿjDZﾅｲｽMwﾁBﾓヰ9ﾎヰﾛRﾕQｺk3ｷﾆﾘｼmDﾗyiRGﾕfGｺHaﾏVY5phTKQ316"
+          },
+          "i105_default": "soraﾁｷVMXfkAweDFﾃqSkhXｳrdUｲﾋﾆ4eYqｻｱYsﾐヰｦt4ｵｻｳｷHヰkNﾁｦﾒﾐwjQgmﾜdnｸ9h5BSkヱﾜﾙvｾ6ｻyWtSﾖﾛAｶaヱﾛﾚｻxﾄﾒｼMAyｽ8ｿjDZﾅｲｽMwﾁBﾓヰ9ﾎヰﾛRﾕQｺk3ｷﾆﾘｼmDﾗyiRGﾕfGｺHaﾏVY5phTKQ316",
+          "i105_default_fullwidth": "ｓｏｒａチキVMXfkAweDFテqSkhXウrdUイヒニ4eYqサアYsミヰヲt4オサウキHヰkNチヲメミwjQgmワdnク9h5BSkヱワルvセ6サyWtSヨロAカaヱロレサxトメシMAyス8ソjDZナイスMwチBモヰ9ホヰロRユQコk3キニリシmDラyiRGユfGコHaマVY5phTKQ316"
+        },
+        "input": {
+          "member_keys_hex": [
+            "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
+            "7EA0E3BD52E207C9D3B0EBA65C0704E66FCA2D8E165A175218B174FC4160E413",
+            "884B8857F4EAA1613C61504DB34D4BEAF346517A0E31DE3CDDD4D9B4201D9D0B"
+          ],
+          "member_weights": [
+            1,
+            1,
+            2
+          ],
+          "normalized_domain": "council",
+          "raw_domain": "council",
+          "threshold": 3
+        },
+        "note": "Council domain multisig with three members (weights 2,1,1) requiring weight ≥3.",
+        "selector": {
+          "kind": "default"
+        }
+      },
+      {
+        "case_id": "addr-multisig-wonderland-threshold2",
+        "category": "multisig",
+        "controller": {
+          "ctap2_cbor_hex": "0xA3010102020382A3010102010358205C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84A301010202035820D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+          "digest_blake2b256_hex": "0xCDEFCDA0C30A91D0B2F2E4A9885A86A990D285B4E200AA0131E545C865C2E563",
+          "kind": "multisig",
+          "members": [
+            {
+              "curve": "ed25519",
+              "public_key_hex": "5C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
+              "public_key_multihash": "ed01205C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
+              "public_key_prefixed": "ed25519:ed01205C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+              "public_key_multihash": "ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+              "public_key_prefixed": "ed25519:ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737",
+              "weight": 2
+            }
+          ],
+          "threshold": 2,
+          "version": 1
+        },
+        "encodings": {
+          "canonical_hex": "0x0a01010002000201000100205c9c6df261c9cb840475776aaefcd944b405328fab28f9b3a95ef40490d3de840100020020d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
+          "i105": {
+            "prefix": 753,
+            "string": "soramYXkｿuDｦMﾆHJﾚｱkﾄ4ZﾃﾃYZZﾔヱ1ﾕｿNﾂnLmyﾅｽeﾈ3ｸﾁ1XｸhﾜVｾqﾗｦ1EyﾎﾛAﾕsﾄKﾛtgyﾎｾﾔ6ﾉ5rjtﾍieﾗnjﾕﾆ7zｽEﾅｲA1qﾏAﾍｿｶNR44XV"
+          },
+          "i105_default": "soramYXkｿuDｦMﾆHJﾚｱkﾄ4ZﾃﾃYZZﾔヱ1ﾕｿNﾂnLmyﾅｽeﾈ3ｸﾁ1XｸhﾜVｾqﾗｦ1EyﾎﾛAﾕsﾄKﾛtgyﾎｾﾔ6ﾉ5rjtﾍieﾗnjﾕﾆ7zｽEﾅｲA1qﾏAﾍｿｶNR44XV",
+          "i105_default_fullwidth": "ｓｏｒａmYXkソuDヲMニHJレアkト4ZテテYZZヤヱ1ユソNツnLmyナスeネ3クチ1XクhワVセqラヲ1EyホロAユsトKロtgyホセヤ6ノ5rjtヘieラnjユニ7zスEナイA1qマAヘソカNR44XV"
+        },
+        "input": {
+          "member_keys_hex": [
+            "5C9C6DF261C9CB840475776AAEFCD944B405328FAB28F9B3A95EF40490D3DE84",
+            "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737"
+          ],
+          "member_weights": [
+            1,
+            2
+          ],
+          "normalized_domain": "wonderland",
+          "raw_domain": "wonderland",
+          "threshold": 2
+        },
+        "note": "Two-member multisig policy with weights 1 and 2 requiring weight ≥2 on wonderland.",
+        "selector": {
+          "kind": "default"
+        }
+      },
+      {
+        "case_id": "addr-multisig-default-quorum3",
+        "category": "multisig",
+        "controller": {
+          "ctap2_cbor_hex": "0xA3010102030384A30101020103582065E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EECA301010201035820ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751A301010201035820B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3A301010201035820BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
+          "digest_blake2b256_hex": "0xB32B7CEA6AE24A0E6746B5450392814A6E0A00CF645CD2FB9D2ECF03D88C0C1D",
+          "kind": "multisig",
+          "members": [
+            {
+              "curve": "ed25519",
+              "public_key_hex": "65E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
+              "public_key_multihash": "ed012065E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
+              "public_key_prefixed": "ed25519:ed012065E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
+              "public_key_multihash": "ed0120ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
+              "public_key_prefixed": "ed25519:ed0120ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
+              "public_key_multihash": "ed0120B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
+              "public_key_prefixed": "ed25519:ed0120B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
+              "weight": 1
+            },
+            {
+              "curve": "ed25519",
+              "public_key_hex": "BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
+              "public_key_multihash": "ed0120BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
+              "public_key_prefixed": "ed25519:ed0120BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5",
+              "weight": 1
+            }
+          ],
+          "threshold": 3,
+          "version": 1
+        },
+        "encodings": {
+          "canonical_hex": "0x0a010100030004010001002065e8f9b0bc6eae124169f0576f97362d295a8cf5f770b45e14357ce647d33eec0100010020acf12b4acc1c660a8326aed34039efb728a5e496488240f50a932ab7aba517510100010020b533d8ad9fcfbdde0b481c1b334ddc3c53412fd614564e7e5afd020368d382c30100010020bc7cbcb5636375fa1d82434d466724d92377f53b980695dd49d26d0ce12205a5",
+          "i105": {
+            "prefix": 753,
+            "string": "soraﾐ7AﾃjFﾖﾋFヱEkﾒ8e5NﾎTﾑｸﾖｻtｿiPﾜﾀﾌah2ｿEﾌｦｴAJｦ8ヱﾀヰｻqｲxｵｱKeﾂｳkｷadJgXｴﾔBﾗｳG7ﾕtﾈｺjsrVﾜutｽRｽZFsｲﾁﾇqｦRﾍｼﾚﾄﾔX3ﾜFｾNkｼyﾅZﾕHgﾁﾗｦspHgEﾓcnﾄｿ3ｴ5wｦｷｺﾎeﾇk2ﾄQUag1ヱｼﾛﾆｹｷpXizxﾇﾁbｺMﾚヱRKCinoｦTﾁCTtﾔﾑoﾌjKﾉyKｲWﾚAGMQH2"
+          },
+          "i105_default": "soraﾐ7AﾃjFﾖﾋFヱEkﾒ8e5NﾎTﾑｸﾖｻtｿiPﾜﾀﾌah2ｿEﾌｦｴAJｦ8ヱﾀヰｻqｲxｵｱKeﾂｳkｷadJgXｴﾔBﾗｳG7ﾕtﾈｺjsrVﾜutｽRｽZFsｲﾁﾇqｦRﾍｼﾚﾄﾔX3ﾜFｾNkｼyﾅZﾕHgﾁﾗｦspHgEﾓcnﾄｿ3ｴ5wｦｷｺﾎeﾇk2ﾄQUag1ヱｼﾛﾆｹｷpXizxﾇﾁbｺMﾚヱRKCinoｦTﾁCTtﾔﾑoﾌjKﾉyKｲWﾚAGMQH2",
+          "i105_default_fullwidth": "ｓｏｒａミ7AテjFヨヒFヱEkメ8e5NホTムクヨサtソiPワタフah2ソEフヲエAJヲ8ヱタヰサqイxオアKeツウkキadJgXエヤBラウG7ユtネコjsrVワutスRスZFsイチヌqヲRヘシレトヤX3ワFセNkシyナZユHgチラヲspHgEモcnトソ3エ5wヲキコホeヌk2トQUag1ヱシロニケキpXizxヌチbコMレヱRKCinoヲTチCTtヤムoフjKノyKイWレAGMQH2"
+        },
+        "input": {
+          "member_keys_hex": [
+            "65E8F9B0BC6EAE124169F0576F97362D295A8CF5F770B45E14357CE647D33EEC",
+            "ACF12B4ACC1C660A8326AED34039EFB728A5E496488240F50A932AB7ABA51751",
+            "B533D8AD9FCFBDDE0B481C1B334DDC3C53412FD614564E7E5AFD020368D382C3",
+            "BC7CBCB5636375FA1D82434D466724D92377F53B980695DD49D26D0CE12205A5"
+          ],
+          "member_weights": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "normalized_domain": "default",
+          "raw_domain": "default",
+          "threshold": 3
+        },
+        "note": "Implicit-default domain multisig with four members (weight 1 each) requiring weight ≥3.",
+        "selector": {
+          "kind": "default"
+        }
+      }
+    ]
+  },
+  "default_network_prefix": 753,
+  "format_version": 1
+}

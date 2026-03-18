@@ -1,0 +1,24 @@
+{
+  "body": {
+    "feed_id": [
+      "price_xor_usd"
+    ],
+    "feed_config_version": [
+      1
+    ],
+    "slot": 10,
+    "provider_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+    "connector_id": "http-bin",
+    "connector_version": 2,
+    "request_hash": "hash:59CFEA4268FB255E2FDB550B37CB83DF836D62744F835F121E5731AB62679BDB#844C",
+    "outcome": {
+      "kind": "Value",
+      "value": {
+        "mantissa": "1002500",
+        "scale": 5
+      }
+    },
+    "timestamp_ms": 1700000000123
+  },
+  "signature": "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+}

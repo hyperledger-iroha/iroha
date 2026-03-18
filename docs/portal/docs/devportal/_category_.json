@@ -1,0 +1,8 @@
+{
+  "label": "Developer portal",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "Guides for the interactive API sandbox and portal tooling."
+  }
+}

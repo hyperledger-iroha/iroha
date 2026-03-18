@@ -1,0 +1,21 @@
+# Minimal snippet to run a node in sync-only (observer) mode.
+# Merge this with your standard node config (via `extends` or inline).
+
+[sumeragi]
+role = "observer"  # do not propose or vote; sync via BlockSync
+# Optional multi‑collector knobs (effective for validators; observers ignore):
+# [sumeragi.collectors]
+# k = 1                 # number of concurrent collectors per height
+# redundant_send_r = 1  # redundant fanout on timeout (validators)
+
+# Typical additional fields needed in a full config (examples):
+# [network]
+# address = "127.0.0.1:1337"
+# public_address = "127.0.0.1:1337"
+#
+# [torii]
+# address = "127.0.0.1:8080"
+#
+# chain = "00000000-0000-0000-0000-000000000000"
+# public_key = "..."
+# private_key = "..."

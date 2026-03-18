@@ -1,0 +1,31 @@
+{
+  "generated_unix_ms": 3513801751697071715,
+  "hash_algorithm": "blake2b-256",
+  "bundle": {
+    "backend": "halo2/pasta/ipa-v1/vote-bool-commit-merkle8-v1",
+    "circuit_id": "halo2/pasta/vote-bool-commit-merkle8-v1",
+    "commit_hex": "20574662a58708e02e0000000000000000000000000000000000000000000000",
+    "root_hex": "b63752ff429362c3a9b3cd5966c23567fdb757ce3b38af724b9303a5ea2f5817",
+    "public_inputs_schema_hash_hex": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
+    "vk_commitment_hex": "6f4749f5f75fee2a40880d4798123033b2b8036284225bad106b04daca5fb10e",
+    "vk_len": 66,
+    "proof_len": 2748
+  },
+  "artifacts": [
+    {
+      "file": "vote_tally_meta.json",
+      "len": 522,
+      "blake2b_256": "5d0030856f189033e5106415d885fbb2e10c96a49c6115becbbff8b7fd992b77"
+    },
+    {
+      "file": "vote_tally_proof.zk1",
+      "len": 2748,
+      "blake2b_256": "f9d4e85817866acbda37fb7908d89b0ae24b7e7029da9f5216a2670e76df1234"
+    },
+    {
+      "file": "vote_tally_vk.zk1",
+      "len": 66,
+      "blake2b_256": "2fd5859365f1d9576c5d6836694def7f63149e885c58e72f5c4dff34e5005d6b"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+---
+lang: ru
+direction: ltr
+source: docs/source/connect_architecture_followups.md
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: 476331772efe169a7a073b561fa9935e314ff89d6bfff440f7246606c1c02669
+source_last_modified: "2026-01-03T18:07:58.049266+00:00"
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
+---
+
+# Последующие действия по архитектуре подключения
+
+В этой заметке отражены инженерные решения, возникшие в результате кросс-SDK.
+Обзор архитектуры Connect. Каждая строка должна соответствовать проблеме (заявка Jira или PR).
+как только работа запланирована. Обновляйте таблицу по мере того, как владельцы создают заявки на отслеживание.| Товар | Описание | Владелец(и) | Отслеживание | Статус |
+|------|-------------|----------|----------|--------|
+| Общие константы отсрочки | Реализуйте помощники экспоненциального замедления + джиттера (`connect_retry::policy`) и предоставьте им доступ к Swift/Android/JS SDK. | Swift SDK, Android Networking TL, руководитель JS | [IOS-CONNECT-001](project_tracker/connect_architecture_followups_ios.md#ios-connect-001) | Завершено — `connect_retry::policy` получен с детерминированной выборкой Splitmix64; В состав SDK Swift (`ConnectRetryPolicy`), Android и JS входят зеркальные помощники и золотые тесты. |
+| Принуждение к пинг/понгу | Добавьте настраиваемое контроль пульса с согласованной частотой 30 секунд и минимальным ограничением браузера; метрики поверхности (`connect.ping_miss_total`). | Swift SDK, Android Networking TL, руководитель JS | [IOS-CONNECT-002](project_tracker/connect_architecture_followups_ios.md#ios-connect-002) | Завершено — Torii теперь обеспечивает настраиваемые интервалы контрольных сообщений (`ping_interval_ms`, `ping_miss_tolerance`, `ping_min_interval_ms`), предоставляет метрику `connect.ping_miss_total` и предоставляет регрессионные тесты, охватывающие обработку отключения контрольных сигналов. Снимки функций SDK демонстрируют новые возможности для клиентов. |
+| Сохранение очереди в автономном режиме | Внедрите средства записи/чтения журналов Norito `.to` для очередей Connect (Swift `FileManager`, зашифрованное хранилище Android, JS IndexedDB), используя общую схему. | Swift SDK, модель данных Android TL, руководитель JS | [IOS-CONNECT-003](project_tracker/connect_architecture_followups_ios.md#ios-connect-003) | Завершено — Swift, Android и JS теперь поставляют общие помощники диагностики `ConnectQueueJournal` + с тестами удержания/переполнения, поэтому пакеты доказательств остаются детерминированными во всех случаях. SDK.【IrohaSwift/Sources/IrohaSwift/ConnectQueueJournal.swift:1】【java/iroha_android/src/main/java/org/hype rledger/iroha/android/connect/ConnectQueueJournal.java:1】【javascript/iroha_js/src/connectQueueJournal.js:1】 |
+| Полезная нагрузка аттестации StrongBox | Пропустите `{platform,evidence_b64,statement_hash}` через утверждения кошелька и добавьте проверку в dApp SDK. | Android Crypto TL, руководитель JS | [IOS-CONNECT-004](project_tracker/connect_architecture_followups_ios.md#ios-connect-004) | В ожидании |
+| Рамка управления вращением | Внедрите `Control::RotateKeys` + `RotateKeysAck` и предоставьте `cancelRequest(hash)` / API ротации во всех SDK. | Swift SDK, Android Networking TL, руководитель JS | [IOS-CONNECT-005](project_tracker/connect_architecture_followups_ios.md#ios-connect-005) | В ожидании |
+| Экспортеры телеметрии | Выпускайте `connect.queue_depth`, `connect.reconnects_total`, `connect.latency_ms` и воспроизводите счетчики в существующие конвейеры телеметрии (OpenTelemetry). | РГ по телеметрии и владельцы SDK | [IOS-CONNECT-006](project_tracker/connect_architecture_followups_ios.md#ios-connect-006) | В ожидании |
+| Swift CI стробирование | Убедитесь, что конвейеры, связанные с Connect, вызывают `make swift-ci`, чтобы контроль четности, каналы информационной панели и метаданные Buildkite `ci/xcframework-smoke:<lane>:device_tag` оставались согласованными во всех SDK. | Swift SDK Lead, Build Infra | [IOS-CONNECT-007](project_tracker/connect_architecture_followups_ios.md#ios-connect-007) | В ожидании |
+| Резервное сообщение об инцидентах | Подключите инциденты с противодымной системой XCFramework (`xcframework_smoke_fallback`, `xcframework_smoke_strongbox_unavailable`) к панелям мониторинга Connect для обеспечения общей видимости. | Руководитель отдела контроля качества Swift, Build Infra | [IOS-CONNECT-008](project_tracker/connect_architecture_followups_ios.md#ios-connect-008) | В ожидании || Соответствие вложений сквозным | Убедитесь, что SDK принимают и пересылают необязательные поля `attachments[]` + `compliance_manifest_id` в полезные данные утверждения без потерь. | Swift SDK, модель данных Android TL, руководитель JS | [IOS-CONNECT-009](project_tracker/connect_architecture_followups_ios.md#ios-connect-009) | В ожидании |
+| Ошибка выравнивания таксономии | Сопоставьте общее перечисление (`Transport`, `Codec`, `Authorization`, `Timeout`, `QueueOverflow`, `Internal`) с ошибками, специфичными для платформы, с помощью документации/примеров. | Swift SDK, Android Networking TL, руководитель JS | [IOS-CONNECT-010](project_tracker/connect_architecture_followups_ios.md#ios-connect-010) | Завершено — SDK Swift, Android и JS поставляют общую оболочку `ConnectError` + помощники телеметрии с документами README/TypeScript/Java и регрессионными тестами, охватывающими TLS/timeout/HTTP/кодек/очередь. случаи.【docs/source/connect_error_taxonomy.md:1】【IrohaSwift/Sources/IrohaSwift/ConnectError.swift:1】【java/iroha_android/src /test/java/org/hyperledger/iroha/android/connect/ConnectErrorTests.java:1】【javascript/iroha_js/test/connectError.test.js:1】 |
+| Журнал решений мастерской | Опубликовать аннотированную колоду/заметки, обобщающие принятые решения, в архив совета. | Руководитель программы SDK | [IOS-CONNECT-011](project_tracker/connect_architecture_followups_ios.md#ios-connect-011) | В ожидании |
+
+> Идентификаторы отслеживания будут заполняться по мере открытия владельцами заявок; обновите столбец `Status` вместе с ходом выполнения проблемы.

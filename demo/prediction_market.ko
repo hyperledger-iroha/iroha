@@ -1,0 +1,56 @@
+seiyaku PredictionMarket {
+  meta {
+    abi_version: 1,
+    max_cycles: 200000,
+  }
+
+  // Fixed-size demo market: two bettors (Alice/Bob) and two oracle keys (YES/NO).
+  // Durable state guards prevent double-staking or double-resolution.
+  state bool alice_staked;
+  state bool bob_staked;
+  state bool resolved;
+
+  hajimari() {
+    alice_staked = false;
+    bob_staked = false;
+    resolved = false;
+  }
+  kotoage fn main() permission(MarketUser) {
+    let caller = authority();
+    let asset = asset_definition("xor#sora");
+    let pool = account_id("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw");
+    let alice = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let bob = account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    let oracle_yes = account_id("6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH");
+    let oracle_no = account_id("6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV");
+
+    if (caller == oracle_yes) {
+      if (!resolved && alice_staked && bob_staked) {
+        transfer_asset(pool, alice, asset, 20);
+        resolved = true;
+      }
+      return;
+    }
+    if (caller == oracle_no) {
+      if (!resolved && alice_staked && bob_staked) {
+        transfer_asset(pool, bob, asset, 20);
+        resolved = true;
+      }
+      return;
+    }
+    if (caller == alice) {
+      if (!resolved && !alice_staked) {
+        transfer_asset(caller, pool, asset, 10);
+        alice_staked = true;
+      }
+      return;
+    }
+    if (caller == bob) {
+      if (!resolved && !bob_staked) {
+        transfer_asset(caller, pool, asset, 10);
+        bob_staked = true;
+      }
+      return;
+    }
+  }
+}

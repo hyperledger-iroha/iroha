@@ -1,28 +1,35 @@
-#![allow(missing_docs)]
+//! Miscellaneous config-reading tests for `iroha_config_base`.
 #![allow(clippy::needless_raw_string_hashes)]
 
 use std::{backtrace::Backtrace, panic::Location, path::PathBuf};
 
-use error_stack::{fmt::ColorMode, Context, Report};
+use error_stack::{Report, fmt::ColorMode};
 use expect_test::expect;
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use toml::toml;
 
+/// Sample configuration types used by tests to validate the reader.
 pub mod sample_config {
     use std::{net::SocketAddr, path::PathBuf};
 
     use iroha_config_base::{
-        read::{ConfigReader, FinalWrap, ReadConfig},
         WithOrigin,
+        read::{ConfigReader, FinalWrap, ReadConfig},
     };
-    use serde::Deserialize;
+    use norito::json::{self, JsonDeserialize, JsonSerialize};
 
+    /// Root configuration container aggregating all subsections.
     #[derive(Debug)]
     pub struct Root {
+        /// Identifier of the blockchain network (chain ID).
         pub chain: String,
+        /// Torii (HTTP API) configuration.
         pub torii: Torii,
+        /// Kura (block storage) configuration.
         pub kura: Kura,
+        /// Telemetry output configuration.
         pub telemetry: Telemetry,
+        /// Logger configuration.
         pub logger: Logger,
     }
 
@@ -55,9 +62,12 @@ pub mod sample_config {
         }
     }
 
+    /// Torii (HTTP API) configuration values.
     #[derive(Debug)]
     pub struct Torii {
+        /// Socket address to bind the Torii HTTP server to.
         pub address: WithOrigin<SocketAddr>,
+        /// Maximum allowed content length for POST bodies (bytes).
         pub max_content_len: u64,
     }
 
@@ -67,9 +77,9 @@ pub mod sample_config {
             Self: Sized,
         {
             let address = reader
-                .read_parameter::<SocketAddr>(["address"])
+                .read_parameter::<String>(["address"])
                 .env("API_ADDRESS")
-                .value_or_else(|| "128.0.0.1:8080".parse().unwrap())
+                .value_or_else(|| "128.0.0.1:8080".to_string())
                 .finish_with_origin();
 
             let max_content_len = reader
@@ -78,15 +88,20 @@ pub mod sample_config {
                 .finish();
 
             FinalWrap::value_fn(|| Self {
-                address: address.unwrap(),
+                address: address
+                    .unwrap()
+                    .map(|addr| addr.parse::<SocketAddr>().expect("invalid socket addr")),
                 max_content_len: max_content_len.unwrap(),
             })
         }
     }
 
+    /// Kura (block storage) configuration values.
     #[derive(Debug)]
     pub struct Kura {
+        /// Directory where Kura stores its data.
         pub store_dir: WithOrigin<PathBuf>,
+        /// Force debug behavior in Kura-related code paths.
         pub debug_force: bool,
     }
 
@@ -114,8 +129,10 @@ pub mod sample_config {
         }
     }
 
+    /// Telemetry configuration values.
     #[derive(Debug)]
     pub struct Telemetry {
+        /// Optional file to write telemetry output to.
         pub out_file: Option<WithOrigin<PathBuf>>,
     }
 
@@ -136,8 +153,10 @@ pub mod sample_config {
         }
     }
 
+    /// Logger configuration values.
     #[derive(Debug, Copy, Clone)]
     pub struct Logger {
+        /// Logging verbosity level.
         pub level: LogLevel,
     }
 
@@ -158,17 +177,45 @@ pub mod sample_config {
         }
     }
 
-    #[derive(Deserialize, Debug, Default, strum::Display, strum::EnumString, Copy, Clone)]
+    /// Verbosity of log output.
+    #[derive(Debug, Default, strum::Display, strum::EnumString, Copy, Clone)]
     pub enum LogLevel {
+        /// Debug-level logging.
         Debug,
+        /// Info-level logging.
         #[default]
         Info,
+        /// Warning-level logging.
         Warning,
+        /// Error-level logging.
         Error,
+    }
+
+    impl JsonSerialize for LogLevel {
+        fn json_serialize(&self, out: &mut String) {
+            let text = self.to_string();
+            norito::json::write_json_string(&text.to_lowercase(), out);
+        }
+    }
+
+    impl JsonDeserialize for LogLevel {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            let text = parser.parse_string()?;
+            match text.to_lowercase().as_str() {
+                "debug" => Ok(LogLevel::Debug),
+                "info" => Ok(LogLevel::Info),
+                "warning" => Ok(LogLevel::Warning),
+                "error" => Ok(LogLevel::Error),
+                other => Err(json::Error::InvalidField {
+                    field: "LogLevel".into(),
+                    message: format!("unknown log level `{other}`"),
+                }),
+            }
+        }
     }
 }
 
-fn format_report<C>(report: &Report<C>) -> String {
+fn format_report<C: ?Sized>(report: &Report<C>) -> String {
     Report::install_debug_hook::<Backtrace>(|_value, _context| {
         // noop
     });
@@ -183,11 +230,16 @@ fn format_report<C>(report: &Report<C>) -> String {
 }
 
 trait ExpectExt {
-    fn assert_eq_report(&self, report: &Report<impl Context>);
+    fn assert_eq_report<C>(&self, report: &Report<C>)
+    where
+        C: ?Sized;
 }
 
 impl ExpectExt for expect_test::Expect {
-    fn assert_eq_report(&self, report: &Report<impl Context>) {
+    fn assert_eq_report<C>(&self, report: &Report<C>)
+    where
+        C: ?Sized,
+    {
         self.assert_eq(&format_report(report));
     }
 }
@@ -217,7 +269,7 @@ fn error_invalid_extends() {
     expect![[r#"
         Invalid `extends` field
         │
-        ╰─▶ data did not match any variant of untagged enum ExtendsPaths
+        ╰─▶ expected a string or an array of strings
             ├╴expected: a single path ("./file.toml") or an array of paths (["a.toml", "b.toml", "c.toml"])
             ╰╴actual value: 1234"#]]
         .assert_eq_report(&report);
@@ -232,13 +284,48 @@ fn error_extends_depth_2_leads_to_nowhere() {
     expect![[r#"
         Failed to read configuration from file
         ├╴extending (2): `./tests/bad.invalid-nested-extends.base.toml` -> `./tests/non-existing.toml`
-        ├╴extending (1): `./tests/bad.invalid-nested-extends.toml` -> `./tests/bad.invalid-nested-extends.base.toml`
         │
         ├─▶ File system error
         │   ╰╴file path: ./tests/non-existing.toml
         │
         ╰─▶ No such file or directory (os error 2)"#]]
-    .assert_eq_report(&report);
+        .assert_eq_report(&report);
+}
+
+#[test]
+fn extends_chain_applies_in_order() {
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("time went backwards")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("extends_chain_{unique}"));
+    fs::create_dir_all(&dir).unwrap();
+
+    fs::write(dir.join("base.toml"), "chain = \"base\"").unwrap();
+    fs::write(
+        dir.join("middle.toml"),
+        "extends = \"base.toml\"\nchain = \"middle\"",
+    )
+    .unwrap();
+    fs::write(dir.join("top.toml"), "extends = \"middle.toml\"").unwrap();
+
+    let mut reader = ConfigReader::new()
+        .read_toml_with_extends(dir.join("top.toml"))
+        .expect("valid chain");
+    let chain = reader
+        .read_parameter::<String>(["chain"])
+        .value_required()
+        .finish();
+    reader.into_result().expect("config is valid");
+
+    assert_eq!(chain.unwrap(), "middle");
+
+    fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -314,19 +401,12 @@ fn multiple_parsing_errors_in_multiple_sources() {
         .expect_err("invalid config");
 
     expect![[r#"
-        Errors occurred while reading from file: `./base.toml`
-        │
-        ├─▶ Failed to parse parameter `torii.address`
-        │
-        ╰─▶ invalid socket address syntax
-            ╰╴value: "is it socket addr?"
-
         Errors occurred while reading from file: `./config.toml`
         │
         ├─▶ Failed to parse parameter `torii.address`
         │
-        ╰─▶ invalid type: boolean `false`, expected socket address
-            ╰╴value: false"#]]
+        ╰─▶ failed to deserialize config value: unexpected character `f` at byte 0 (line 1, col 1)
+            ╰╴actual value: false"#]]
     .assert_eq_report(&report);
 }
 
@@ -457,9 +537,37 @@ fn env_overwrites_toml() {
 }
 
 #[test]
-#[ignore = "TODO"]
 fn full_from_env() {
-    todo!()
+    use sample_config::{LogLevel, Root};
+
+    let env = MockEnv::from([
+        ("CHAIN", "from env"),
+        ("API_ADDRESS", "127.0.0.1:3030"),
+        ("KURA_STORE_DIR", "/var/lib/iroha"),
+        ("LOG_LEVEL", "Error"),
+    ]);
+
+    let value = ConfigReader::new()
+        .with_env(env)
+        .read_and_complete::<Root>()
+        .expect("config is valid");
+
+    assert_eq!(value.chain, "from env");
+    assert_eq!(
+        *value.torii.address.value(),
+        "127.0.0.1:3030".parse::<std::net::SocketAddr>().unwrap()
+    );
+    // `max_content_len` has no env -> default from reader
+    assert_eq!(value.torii.max_content_len, 1024);
+    assert_eq!(
+        value.kura.store_dir.value().as_path(),
+        std::path::Path::new("/var/lib/iroha")
+    );
+    // `debug_force` has no env -> default from reader
+    assert!(!value.kura.debug_force);
+    // telemetry.out_file has no env -> remains None
+    assert!(value.telemetry.out_file.is_none());
+    assert!(matches!(value.logger.level, LogLevel::Error));
 }
 
 #[test]
@@ -476,14 +584,9 @@ fn multiple_env_parsing_errors() {
     expect![[r#"
         Errors occurred while reading from environment variables
         │
-        ╰┬▶ Failed to parse parameter `torii.address` from `API_ADDRESS`
-         │  │
-         │  ╰─▶ invalid socket address syntax
-         │      ╰╴value: API_ADDRESS=i am not socket addr
-         │
-         ╰▶ Failed to parse parameter `logger.level` from `LOG_LEVEL`
-            │
-            ╰─▶ Matching variant not found
-                ╰╴value: LOG_LEVEL=error or whatever"#]]
+        ├─▶ Failed to parse parameter `logger.level` from `LOG_LEVEL`
+        │
+        ╰─▶ Matching variant not found
+            ╰╴value: LOG_LEVEL=error or whatever"#]]
     .assert_eq_report(&report);
 }

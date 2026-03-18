@@ -1,0 +1,38 @@
+{
+  "feed_id": [
+    "price_xor_usd"
+  ],
+  "feed_config_version": [
+    1
+  ],
+  "slot": 10,
+  "outcome": {
+    "result": "Success",
+    "detail": {
+      "value": {
+        "mantissa": "1002000",
+        "scale": 5
+      },
+      "entries": [
+        {
+          "oracle_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+          "observation_hash": "hash:F90B1AD1213C1DFACA8556B9D6965C75808792A9F31580FCF99DE3647DDB12C9#C8AB",
+          "value": {
+            "mantissa": "1002500",
+            "scale": 5
+          },
+          "outlier": false
+        },
+        {
+          "oracle_id": "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV",
+          "observation_hash": "hash:E9662A1D5ED2EA3E12B6F51C7423AAB232787599C61AA7D4CDAAEFD3B3B21CE7#D253",
+          "value": {
+            "mantissa": "1001500",
+            "scale": 5
+          },
+          "outlier": false
+        }
+      ]
+    }
+  }
+}

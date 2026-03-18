@@ -1,10 +1,7 @@
 //! This file contains examples from the Rust tutorial.
 
 use eyre::{Error, WrapErr};
-use iroha::{
-    config::{Config, LoadPath},
-    data_model::prelude::Numeric,
-};
+use iroha::config::{Config, LoadPath};
 // #region rust_config_crates
 // #endregion rust_config_crates
 
@@ -17,7 +14,7 @@ fn main() {
 
     domain_registration_test(config.clone())
         .expect("Domain registration example is expected to work correctly");
-    account_definition_test().expect("Account definition example is expected to work correctly");
+    account_definition_test();
     account_registration_test(config.clone())
         .expect("Account registration example is expected to work correctly");
     asset_registration_test(config.clone())
@@ -74,26 +71,26 @@ fn domain_registration_test(config: Config) -> Result<(), Error> {
     Ok(())
 }
 
-fn account_definition_test() -> Result<(), Error> {
+fn account_definition_test() {
     // #region account_definition_comparison
     use iroha::{crypto::KeyPair, data_model::prelude::AccountId};
 
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by providing a DomainId instance and the public key
-    let longhand_account_id = AccountId::new("looking_glass".parse()?, public_key.clone());
-    // Create an AccountId instance by parsing the serialized format "signatory@domain"
-    let account_id: AccountId = format!("{public_key}@looking_glass")
-        .parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    // Materialize a scoped AccountId for `looking_glass` from the account subject's public key
+    let longhand_account_id = AccountId::new(public_key.clone());
+    // Create an AccountId instance by parsing the canonical I105 account address form
+    let canonical_account_id = longhand_account_id
+        .canonical_i105()
+        .expect("Single-key account IDs can be rendered as I105");
+    let account_id = AccountId::parse_encoded(&canonical_account_id)
+        .map(iroha::account_address::ParsedAccountId::into_account_id)
+        .expect("Valid, because the I105 payload was generated from a valid AccountId");
 
     // Check that two ways to define an account match
     assert_eq!(account_id, longhand_account_id);
 
     // #endregion account_definition_comparison
-
-    // Finish the test successfully
-    Ok(())
 }
 
 fn account_registration_test(config: Config) -> Result<(), Error> {
@@ -103,7 +100,7 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
         crypto::KeyPair,
         data_model::{
             metadata::Metadata,
-            prelude::{Account, AccountId, InstructionBox, Register},
+            prelude::{Account, AccountId, DomainId, InstructionBox, Register},
         },
     };
     // #endregion register_account_crates
@@ -114,15 +111,14 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // #region register_account_create
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by parsing the serialized format "signatory@domain"
-    let account_id: AccountId = format!("{public_key}@looking_glass")
-        .parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    // Materialize a scoped AccountId in the domain where this registration is performed
+    let account_id = AccountId::new(public_key);
     // #endregion register_account_create
 
     // #region register_account_generate
     // Generate a new account
-    let create_account = Register::account(Account::new(account_id));
+    let account_domain: DomainId = "wonderland".parse().expect("valid domain id");
+    let create_account = Register::account(Account::new(account_id.to_account_id(account_domain)));
     // #endregion register_account_generate
 
     // #region register_account_prepare_tx
@@ -148,7 +144,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
         client::Client,
         crypto::KeyPair,
         data_model::prelude::{
-            numeric, AccountId, AssetDefinition, AssetDefinitionId, AssetId, Mint, Register,
+            AccountId, AssetDefinition, AssetDefinitionId, AssetId, Mint, Register, numeric,
         },
     };
     // #endregion register_asset_crates
@@ -158,14 +154,19 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 
     // #region register_asset_create_asset
     // Create an asset
-    let asset_def_id = "time#looking_glass".parse::<AssetDefinitionId>()
-        .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
+    let asset_def_id = AssetDefinitionId::new(
+        "looking_glass".parse().expect("valid domain identifier"),
+        "time".parse().expect("valid asset identifier"),
+    );
     // #endregion register_asset_create_asset
 
     // #region register_asset_init_submit
     // Initialise the registration time
-    let register_time =
-        Register::asset_definition(AssetDefinition::numeric(asset_def_id.clone()).mintable_once());
+    let register_time = Register::asset_definition(
+        AssetDefinition::numeric(asset_def_id.clone())
+            .with_name("time".to_owned())
+            .mintable_once(),
+    );
 
     // Submit a registration time
     client.submit(register_time)?;
@@ -173,10 +174,8 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
 
     // Generate a new public key for a new account
     let (public_key, _) = KeyPair::random().into_parts();
-    // Create an AccountId instance by parsing the serialized format "signatory@domain"
-    let account_id: AccountId = format!("{public_key}@looking_glass")
-        .parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    // Materialize a scoped AccountId in the domain used for this minting example
+    let account_id = AccountId::new(public_key);
 
     // #region register_asset_mint_submit
     // Create a MintBox using a previous asset and account
@@ -194,7 +193,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     // #region mint_asset_crates
     use iroha::{
         client::Client,
-        data_model::prelude::{AccountId, AssetId, Mint},
+        data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Mint},
     };
     // #endregion mint_asset_crates
 
@@ -203,15 +202,20 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
-    let roses = "rose#wonderland".parse()
-        .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice: AccountId = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland".parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    let roses = AssetDefinitionId::new(
+        "wonderland".parse().expect("valid domain identifier"),
+        "rose".parse().expect("valid asset identifier"),
+    );
+    let alice = AccountId::new(
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("Valid, because this is a valid public key literal"),
+    );
     // #endregion mint_asset_define_asset_account
 
     // Mint the Asset instance
     // #region mint_asset_mint
-    let mint_roses = Mint::asset_numeric(42u32, AssetId::new(roses, alice));
+    let mint_roses = Mint::asset_numeric(42u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion mint_asset_mint
 
     // #region mint_asset_submit_tx
@@ -222,13 +226,9 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // #region mint_asset_mint_alt
     // Mint the Asset instance (alternate syntax).
-    // The syntax is `asset_name#asset_domain#account_signatory@account_domain`,
-    // or `roses.to_string() + "#" + alice.to_string()`.
-    // The `##` is a short-hand for the rose `which belongs to the same domain as the account
-    // to which it belongs to.
-    let alice_roses: AssetId =
-        "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()?;
+    // AssetId textual representation is the canonical encoded `norito:<hex>` form.
+    let alice_roses_literal = AssetId::new(roses, alice).canonical_encoded();
+    let alice_roses: AssetId = alice_roses_literal.parse()?;
     let mint_roses_alt = Mint::asset_numeric(10u32, alice_roses);
     // #endregion mint_asset_mint_alt
 
@@ -246,7 +246,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     // #region burn_asset_crates
     use iroha::{
         client::Client,
-        data_model::prelude::{AccountId, AssetId, Burn},
+        data_model::prelude::{AccountId, AssetDefinitionId, AssetId, Burn},
     };
     // #endregion burn_asset_crates
 
@@ -255,15 +255,20 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
-    let roses = "rose#wonderland".parse()
-        .expect("Valid, because the string contains no whitespace, has a single '#' character and is not empty after");
-    let alice: AccountId = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland".parse()
-        .expect("Valid, because before @ is a valid public key and after @ is a valid name i.e. a string with no spaces or forbidden chars");
+    let roses = AssetDefinitionId::new(
+        "wonderland".parse().expect("valid domain identifier"),
+        "rose".parse().expect("valid asset identifier"),
+    );
+    let alice = AccountId::new(
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            .parse()
+            .expect("Valid, because this is a valid public key literal"),
+    );
     // #endregion burn_asset_define_asset_account
 
     // #region burn_asset_burn
     // Burn the Asset instance
-    let burn_roses = Burn::asset_numeric(10u32, AssetId::new(roses, alice));
+    let burn_roses = Burn::asset_numeric(10u32, AssetId::new(roses.clone(), alice.clone()));
     // #endregion burn_asset_burn
 
     // #region burn_asset_submit_tx
@@ -274,13 +279,9 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_burn_alt
     // Burn the Asset instance (alternate syntax).
-    // The syntax is `asset_name#asset_domain#account_signatory@account_domain`,
-    // or `roses.to_string() + "#" + alice.to_string()`.
-    // The `##` is a short-hand for the rose `which belongs to the same domain as the account
-    // to which it belongs to.
-    let alice_roses: AssetId =
-        "rose##ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland"
-            .parse()?;
+    // AssetId textual representation is the canonical encoded `norito:<hex>` form.
+    let alice_roses_literal = AssetId::new(roses, alice).canonical_encoded();
+    let alice_roses: AssetId = alice_roses_literal.parse()?;
     let burn_roses_alt = Burn::asset_numeric(10u32, alice_roses);
     // #endregion burn_asset_burn_alt
 
