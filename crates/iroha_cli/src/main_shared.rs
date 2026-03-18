@@ -6801,6 +6801,30 @@ pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> 
     resolve_account_id_with(literal)
 }
 
+#[cfg(test)]
+fn resolve_scoped_account_for_subject(
+    parsed: &ScopedAccountId,
+    chain_scoped_accounts: std::collections::BTreeSet<ScopedAccountId>,
+) -> Result<ScopedAccountId> {
+    if chain_scoped_accounts.is_empty() {
+        return Ok(parsed.clone());
+    }
+    if chain_scoped_accounts.len() == 1 {
+        return Ok(chain_scoped_accounts
+            .iter()
+            .next()
+            .cloned()
+            .expect("set contains one element"));
+    }
+    if chain_scoped_accounts.contains(parsed) {
+        return Ok(parsed.clone());
+    }
+    eyre::bail!(
+        "subject `{}` resolves to multiple scoped accounts; specify an explicit scope",
+        parsed.subject_id()
+    )
+}
+
 fn parse_asset_id_literal_with(literal: &str, field: &str) -> Result<AssetId> {
     AssetId::parse_encoded(literal).map_err(|err| eyre!("{field}: {err}"))
 }
