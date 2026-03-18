@@ -1581,6 +1581,83 @@ async fn offline_allowances_issue_returns_certificate_id() {
 }
 
 #[tokio::test]
+async fn offline_allowances_list_returns_asset_definition_metadata() {
+    let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::GET)
+                .uri("/v1/offline/allowances?include_expired=true")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    let items = json_body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    let expected_asset_id = harness.fixtures.certificate.allowance.asset.to_string();
+    let expected_definition_id = harness
+        .fixtures
+        .certificate
+        .allowance
+        .asset
+        .definition()
+        .to_string();
+    assert_eq!(item["asset_id"].as_str(), Some(expected_asset_id.as_str()));
+    assert_eq!(
+        item["asset_definition_id"].as_str(),
+        Some(expected_definition_id.as_str())
+    );
+    assert_eq!(item["asset_definition_name"].as_str(), Some("OfflineAsset"));
+    assert!(item["asset_definition_alias"].is_null());
+}
+
+#[tokio::test]
+async fn offline_allowances_query_returns_nullable_asset_definition_alias() {
+    let harness = build_harness();
+    seed_allowance(&harness.state, harness.fixtures.certificate.clone());
+
+    let body = json::to_vec(&norito::json!({
+        "pagination": {
+            "offset": 0,
+            "limit": 10
+        }
+    }))
+    .expect("serialize query");
+    let resp = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(axum::http::Method::POST)
+                .uri("/v1/offline/allowances/query")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+    let json_body: Value = json::from_slice(&bytes).expect("json");
+
+    let items = json_body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 1);
+    let item = &items[0];
+    assert_eq!(item["asset_definition_name"].as_str(), Some("OfflineAsset"));
+    assert!(item["asset_definition_alias"].is_null());
+}
+
+#[tokio::test]
 async fn offline_build_claims_issue_returns_signed_claim_accepted_by_settlement() {
     let harness = build_harness();
     seed_allowance(&harness.state, harness.fixtures.certificate.clone());

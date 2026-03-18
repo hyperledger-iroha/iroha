@@ -39367,6 +39367,9 @@ struct OfflineAllowanceListItem {
     certificate_id_hex: String,
     controller: AccountId,
     asset_id: String,
+    asset_definition_id: String,
+    asset_definition_name: String,
+    asset_definition_alias: Option<String>,
     registered_at_ms: u64,
     expires_at_ms: u64,
     policy_expires_at_ms: u64,
@@ -39623,32 +39626,46 @@ impl From<OfflineCounterSummary> for OfflineCounterSummaryListItem {
 }
 
 #[cfg(feature = "app_api")]
-impl From<OfflineAllowanceRecord> for OfflineAllowanceListItem {
-    fn from(record: OfflineAllowanceRecord) -> Self {
-        let certificate_id_hex = hex::encode(record.certificate_id().as_ref());
-        let controller = record.certificate.controller.clone();
-        let asset_id = record.certificate.allowance.asset.to_string();
-        let registered_at_ms = record.registered_at_ms;
-        let expires_at_ms = record.certificate.expires_at_ms;
-        let policy_expires_at_ms = record.certificate.policy.expires_at_ms;
-        let refresh_at_ms = allowance_refresh_at_ms(&record);
-        let verdict_id_hex = allowance_verdict_hex(&record);
-        let attestation_nonce_hex = allowance_attestation_nonce_hex(&record);
-        let remaining_amount = record.remaining_amount.clone();
-        Self {
-            certificate_id_hex,
-            controller,
-            asset_id,
-            registered_at_ms,
-            expires_at_ms,
-            policy_expires_at_ms,
-            refresh_at_ms,
-            verdict_id_hex,
-            attestation_nonce_hex,
-            remaining_amount,
-            record,
-        }
-    }
+fn project_offline_allowance_item(
+    record: OfflineAllowanceRecord,
+    world: &impl WorldReadOnly,
+) -> Result<OfflineAllowanceListItem> {
+    let certificate_id_hex = hex::encode(record.certificate_id().as_ref());
+    let controller = record.certificate.controller.clone();
+    let asset_id = record.certificate.allowance.asset.to_string();
+    let definition_id = record.certificate.allowance.asset.definition().clone();
+    let asset_definition_id = definition_id.to_string();
+    let definition = world.asset_definition(&definition_id).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "offline allowance `{certificate_id_hex}` references missing asset definition `{asset_definition_id}`",
+        )))
+    })?;
+    let registered_at_ms = record.registered_at_ms;
+    let expires_at_ms = record.certificate.expires_at_ms;
+    let policy_expires_at_ms = record.certificate.policy.expires_at_ms;
+    let refresh_at_ms = allowance_refresh_at_ms(&record);
+    let verdict_id_hex = allowance_verdict_hex(&record);
+    let attestation_nonce_hex = allowance_attestation_nonce_hex(&record);
+    let remaining_amount = record.remaining_amount.clone();
+    Ok(OfflineAllowanceListItem {
+        certificate_id_hex,
+        controller,
+        asset_id,
+        asset_definition_id,
+        asset_definition_name: definition.name().clone(),
+        asset_definition_alias: definition
+            .alias()
+            .as_ref()
+            .map(|alias| alias.as_ref().to_owned()),
+        registered_at_ms,
+        expires_at_ms,
+        policy_expires_at_ms,
+        refresh_at_ms,
+        verdict_id_hex,
+        attestation_nonce_hex,
+        remaining_amount,
+        record,
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -40088,6 +40105,20 @@ fn offline_allowance_item_to_json(item: &OfflineAllowanceListItem, now_ms: u64) 
     );
     map.insert("asset_id".into(), Value::from(item.asset_id.clone()));
     map.insert(
+        "asset_definition_id".into(),
+        Value::from(item.asset_definition_id.clone()),
+    );
+    map.insert(
+        "asset_definition_name".into(),
+        Value::from(item.asset_definition_name.clone()),
+    );
+    map.insert(
+        "asset_definition_alias".into(),
+        item.asset_definition_alias
+            .clone()
+            .map_or(Value::Null, Value::from),
+    );
+    map.insert(
         "registered_at_ms".into(),
         Value::from(item.registered_at_ms),
     );
@@ -40458,30 +40489,31 @@ pub async fn handle_v1_offline_allowances(
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
-    let mapped_iter = records.into_iter().filter_map({
-        let selectors = selectors;
-        let extra_filters = extra_filters;
-        move |record| {
-            if let Some(expr) = filter_ref {
-                if !offline_allowance_filter_object(expr, &record) {
-                    return None;
-                }
-            }
-            if !extra_filters.matches(&record) {
-                return None;
-            }
-            let item = OfflineAllowanceListItem::from(record);
-            if let Some(expr) = projection_ref {
-                if !offline_allowance_filter_projection(expr, &item) {
-                    return None;
-                }
-            }
-            let key = offline_allowance_sort_key(&item.record, &selectors);
-            Some((key, item))
+    let mut projected = Vec::new();
+    for record in records {
+        if let Some(expr) = filter_ref
+            && !offline_allowance_filter_object(expr, &record)
+        {
+            continue;
         }
-    });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+        if !extra_filters.matches(&record) {
+            continue;
+        }
+        let item = project_offline_allowance_item(record, &world)?;
+        if let Some(expr) = projection_ref
+            && !offline_allowance_filter_projection(expr, &item)
+        {
+            continue;
+        }
+        let key = offline_allowance_sort_key(&item.record, &selectors);
+        projected.push((key, item));
+    }
+    let (items, total) = collect_page_streaming(
+        projected.into_iter(),
+        pagination.offset,
+        pagination.limit,
+        None,
+    );
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -40640,26 +40672,28 @@ pub async fn handle_v1_offline_allowances_query(
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
-    let mapped_iter = records.into_iter().filter_map({
-        let selectors = selectors;
-        move |record| {
-            if let Some(expr) = filter_ref {
-                if !offline_allowance_filter_object(expr, &record) {
-                    return None;
-                }
-            }
-            let item = OfflineAllowanceListItem::from(record);
-            if let Some(expr) = projection_ref {
-                if !offline_allowance_filter_projection(expr, &item) {
-                    return None;
-                }
-            }
-            let key = offline_allowance_sort_key(&item.record, &selectors);
-            Some((key, item))
+    let mut projected = Vec::new();
+    for record in records {
+        if let Some(expr) = filter_ref
+            && !offline_allowance_filter_object(expr, &record)
+        {
+            continue;
         }
-    });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+        let item = project_offline_allowance_item(record, &world)?;
+        if let Some(expr) = projection_ref
+            && !offline_allowance_filter_projection(expr, &item)
+        {
+            continue;
+        }
+        let key = offline_allowance_sort_key(&item.record, &selectors);
+        projected.push((key, item));
+    }
+    let (items, total) = collect_page_streaming(
+        projected.into_iter(),
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+    );
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -46898,6 +46932,8 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     use crate::filter::FieldPath;
     use crate::{json_array, json_object, json_value};
+    #[cfg(feature = "app_api")]
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
 
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         json_object(pairs)
@@ -47101,7 +47137,7 @@ mod adapter_filter_tests {
 
     #[cfg(all(test, feature = "app_api"))]
     fn sample_allowance_record() -> OfflineAllowanceRecord {
-        use iroha_crypto::{PublicKey, Signature};
+        use iroha_crypto::Signature;
         use iroha_test_samples::ALICE_ID;
 
         let controller = ALICE_ID.clone();
@@ -47117,10 +47153,10 @@ mod adapter_filter_tests {
                     amount: Numeric::new(1_000, 0),
                     commitment: vec![0xAA; 32],
                 },
-                spend_public_key: PublicKey::from_str(
-                    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-                )
-                .expect("public key"),
+                spend_public_key: controller
+                    .try_signatory()
+                    .expect("single-signature controller")
+                    .clone(),
                 attestation_report: Vec::new(),
                 issued_at_ms: 1_700_000_000_000,
                 expires_at_ms: 1_900_000_000_000,
@@ -47145,6 +47181,47 @@ mod adapter_filter_tests {
         }
     }
 
+    #[cfg(all(test, feature = "app_api"))]
+    fn sample_allowance_world(record: &OfflineAllowanceRecord) -> World {
+        let domain_id = record
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone();
+        let controller = record.certificate.controller.clone();
+        let domain = Domain {
+            id: domain_id.clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: controller.clone(),
+        };
+        let account = Account {
+            id: controller.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::from([domain_id]),
+        };
+        let asset_definition = AssetDefinition {
+            id: record.certificate.allowance.asset.definition().clone(),
+            name: "Allowance Points".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Default::default(),
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: Default::default(),
+            owned_by: controller,
+            total_quantity: Numeric::zero(),
+            confidential_policy: Default::default(),
+        };
+        World::with([domain], [account], [asset_definition])
+    }
+
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_allowance_filter_validator_accepts_verdict_hex() {
@@ -47159,6 +47236,12 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_filters_match_new_metadata_fields() {
         let record = sample_allowance_record();
+        let state = CoreState::new_for_testing(
+            sample_allowance_world(&record),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
         let verdict_hex = allowance_verdict_hex(&record).expect("verdict id");
         let refresh_at = allowance_refresh_at_ms(&record).expect("refresh timestamp");
 
@@ -47167,7 +47250,7 @@ mod adapter_filter_tests {
             Value::from(verdict_hex.clone()),
         );
         assert!(offline_allowance_filter_object(&verdict_expr, &record));
-        let item = OfflineAllowanceListItem::from(record.clone());
+        let item = project_offline_allowance_item(record.clone(), &world).expect("projection");
         assert!(offline_allowance_filter_projection(&verdict_expr, &item));
 
         let refresh_expr = FilterExpr::Lt(
@@ -47175,7 +47258,7 @@ mod adapter_filter_tests {
             Value::from(refresh_at + 1),
         );
         assert!(offline_allowance_filter_object(&refresh_expr, &record));
-        let item = OfflineAllowanceListItem::from(record.clone());
+        let item = project_offline_allowance_item(record.clone(), &world).expect("projection");
         assert!(offline_allowance_filter_projection(&refresh_expr, &item));
     }
 
@@ -47183,13 +47266,48 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_item_json_includes_verdict_metadata() {
         let record = sample_allowance_record();
+        let state = CoreState::new_for_testing(
+            sample_allowance_world(&record),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
         let verdict_hex = allowance_verdict_hex(&record).expect("verdict id");
         let nonce_hex = allowance_attestation_nonce_hex(&record).expect("nonce");
         let refresh_at = allowance_refresh_at_ms(&record).expect("refresh timestamp");
-        let item = OfflineAllowanceListItem::from(record);
+        let expected_asset_id = record.certificate.allowance.asset.to_string();
+        let expected_definition_id = record.certificate.allowance.asset.definition().to_string();
+        let item = project_offline_allowance_item(record, &world).expect("projection");
         let now_ms = refresh_at.saturating_sub(500);
         let value = offline_allowance_item_to_json(&item, now_ms).expect("json");
         let object = value.as_object().expect("json object");
+        assert_eq!(
+            object
+                .get("asset_id")
+                .and_then(Value::as_str)
+                .expect("asset id"),
+            expected_asset_id
+        );
+        assert_eq!(
+            object
+                .get("asset_definition_id")
+                .and_then(Value::as_str)
+                .expect("asset definition id"),
+            expected_definition_id
+        );
+        assert_eq!(
+            object
+                .get("asset_definition_name")
+                .and_then(Value::as_str)
+                .expect("asset definition name"),
+            "Allowance Points"
+        );
+        assert!(
+            object
+                .get("asset_definition_alias")
+                .is_some_and(Value::is_null),
+            "asset_definition_alias should be present and null"
+        );
         assert_eq!(
             object
                 .get("verdict_id_hex")
@@ -47246,6 +47364,53 @@ mod adapter_filter_tests {
                 .expect("deadline remaining"),
             500
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn offline_allowance_projection_missing_asset_definition_returns_internal_error() {
+        let record = sample_allowance_record();
+        let domain_id = record
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone();
+        let controller = record.certificate.controller.clone();
+        let world = World::with(
+            [Domain {
+                id: domain_id.clone(),
+                logo: None,
+                metadata: Metadata::default(),
+                owned_by: controller.clone(),
+            }],
+            [Account {
+                id: controller,
+                metadata: Metadata::default(),
+                label: None,
+                uaid: None,
+                opaque_ids: Vec::new(),
+                linked_domains: BTreeSet::from([domain_id]),
+            }],
+            Vec::<AssetDefinition>::new(),
+        );
+
+        let state = CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
+        let err = match project_offline_allowance_item(record.clone(), &world) {
+            Ok(_) => panic!("projection must fail"),
+            Err(err) => err,
+        };
+        let expected_definition_id = record.certificate.allowance.asset.definition().to_string();
+        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = err else {
+            panic!("expected internal error");
+        };
+        assert!(message.contains(expected_definition_id.as_str()));
     }
 
     #[cfg(feature = "app_api")]
@@ -49468,7 +49633,10 @@ mod tests {
 
     use http::StatusCode;
     use http_body_util::BodyExt;
-    use iroha_core::{sumeragi::status, telemetry::StateTelemetry};
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::status,
+        telemetry::StateTelemetry,
+    };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         block::BlockHeader,

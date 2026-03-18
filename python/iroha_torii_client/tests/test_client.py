@@ -2031,6 +2031,9 @@ def test_list_offline_allowances_parses_payload() -> None:
                         "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "asset_id": CANONICAL_ASSET_ID,
+                        "asset_definition_id": "usd#wonderland",
+                        "asset_definition_name": "USD",
+                        "asset_definition_alias": None,
                         "registered_at_ms": 10,
                         "expires_at_ms": 20,
                         "policy_expires_at_ms": 30,
@@ -2056,6 +2059,9 @@ def test_list_offline_allowances_parses_payload() -> None:
     assert len(page.items) == 1
     item = page.items[0]
     assert item.certificate_id_hex == "cafebabe"
+    assert item.asset_definition_id == "usd#wonderland"
+    assert item.asset_definition_name == "USD"
+    assert item.asset_definition_alias is None
     assert item.deadline is not None
     assert item.deadline.kind == "policy"
     assert item.deadline.ms_remaining == -5

@@ -28,6 +28,12 @@ public final class OfflineJsonParser {
               asString(entry.get("controller_id"), "items[" + i + "].controller_id"),
               asString(entry.get("controller_display"), "items[" + i + "].controller_display"),
               asString(entry.get("asset_id"), "items[" + i + "].asset_id"),
+              asString(
+                  entry.get("asset_definition_id"), "items[" + i + "].asset_definition_id"),
+              asString(
+                  entry.get("asset_definition_name"), "items[" + i + "].asset_definition_name"),
+              requireOptionalString(
+                  entry, "asset_definition_alias", "items[" + i + "].asset_definition_alias"),
               asLong(entry.get("registered_at_ms"), "items[" + i + "].registered_at_ms"),
               asLongOrDefault(entry.get("expires_at_ms"), "items[" + i + "].expires_at_ms", 0L),
               asLongOrDefault(
@@ -215,6 +221,14 @@ public final class OfflineJsonParser {
       return null;
     }
     return value instanceof String string ? string : String.valueOf(value);
+  }
+
+  private static String requireOptionalString(
+      final Map<String, Object> object, final String key, final String path) {
+    if (!object.containsKey(key)) {
+      throw new IllegalStateException(path + " is missing");
+    }
+    return asOptionalString(object.get(key));
   }
 
   private static String requireNonBlank(final String value, final String path) {
