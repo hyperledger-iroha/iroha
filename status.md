@@ -2,6 +2,95 @@
 
 Last updated: 2026-03-18
 
+## 2026-03-18 Follow-up: broader Swift and Android harness paths are green again
+- Unblocked the full Swift `ToriiClientTests` class in
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift` by relaxing Torii account-id
+  query normalization to preserve legacy IH58-style encoded literals when the
+  pure-Swift `AccountAddress` parser cannot canonicalize them, while still
+  rejecting path-dangerous `%`, `/`, `?`, and `#` characters.
+- Restored Android source compatibility in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`
+  by reintroducing the domainless `fromMultisigPolicy(policy)` overload as a
+  thin wrapper over the newer domain-aware constructor.
+- Validation:
+  - `swift test --filter ToriiClientTests` (pass; `210` executed, `1` skipped)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+
+## 2026-03-18 Follow-up: Swift and Android SDKs now cover the identifier-policy Torii surface
+- Extended the Swift SDK in `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`:
+  - added `ToriiIdentifierNormalization`,
+  - added `ToriiIdentifierPolicySummary`,
+    `ToriiIdentifierPolicyListResponse`, and
+    `ToriiIdentifierResolutionReceipt`,
+  - added `listIdentifierPolicies()`, `resolveIdentifier(...)`, and
+    `issueIdentifierClaimReceipt(...)` async + completion-handler APIs,
+  - added even-length ciphertext-hex validation for BFV
+    `encrypted_input` payloads instead of incorrectly reusing the fixed
+    32-byte hash validator.
+- Added focused Swift tests in
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` covering:
+  - identifier policy listing,
+  - resolve success + 404 handling,
+  - claim-receipt issuance, and
+  - client-side normalization parity for phone/email/account-number inputs.
+- Extended the Android SDK in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/`:
+  - added `IdentifierNormalization`,
+    `IdentifierPolicySummary`,
+    `IdentifierPolicyListResponse`,
+    `IdentifierResolutionReceipt`, and
+    `IdentifierJsonParser`,
+  - added `HttpClientTransport.listIdentifierPolicies()`,
+    `resolveIdentifier(...)`, and `issueIdentifierClaimReceipt(...)`,
+  - added JSON POST helpers and an allow-404 JSON fetch path for the new
+    identifier endpoints.
+- Added focused Android transport harness coverage in
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  for policy listing, resolve, 404 handling, claim-receipt path encoding, and
+  normalization parity.
+- Updated `docs/source/universal_accounts_guide.md` to reflect that JS, Swift,
+  and Android now all expose the identifier-policy client helpers.
+- Validation:
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `swift test --filter ToriiClientTests` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:compileJava` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) javac --release 21 -cp '/Users/takemiyamakoto/dev/iroha/java/iroha_android/core/build/classes/java/main:/Users/takemiyamakoto/dev/iroha/java/norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' -d /tmp/iroha-android-testclasses /Users/takemiyamakoto/dev/iroha/java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) java -ea -cp '/tmp/iroha-android-testclasses:/Users/takemiyamakoto/dev/iroha/java/iroha_android/core/build/classes/java/main:/Users/takemiyamakoto/dev/iroha/java/norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' org.hyperledger.iroha.android.client.HttpClientTransportTests` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+
+## 2026-03-18 Follow-up: identifier receipts now carry `receipt_hash` end to end, and the JS SDK can call the new Torii identifier routes
+- Extended the identifier receipt/claim path:
+  - `crates/iroha_data_model/src/identifier.rs` now stores `receipt_hash` on
+    `IdentifierClaimRecord`, `IdentifierResolutionReceipt`, and the canonical
+    signed receipt payload,
+  - `crates/iroha_torii/src/identifier_resolution.rs` now threads the
+    hidden-function `receipt_hash` from `iroha_crypto::ram_lfe::EvalResponse`
+    into signed receipts and claim records instead of dropping it,
+  - `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}` now expose
+    `receipt_hash` in the resolve/claim-receipt DTOs and OpenAPI schema,
+  - `crates/iroha_core/src/{smartcontracts/isi/identifier.rs,state.rs}` now
+    reject all-zero receipt hashes both at claim time and during world-state
+    invariant validation.
+- Added JS SDK coverage for the identifier Torii surface:
+  - `javascript/iroha_js/src/toriiClient.js` now exposes
+    `listIdentifierPolicies()`, `resolveIdentifier()`, and
+    `issueIdentifierClaimReceipt()`,
+  - `javascript/iroha_js/src/normalizers.js` now exposes
+    `normalizeIdentifierInput()` so clients can canonicalize
+    `phone_e164` / `email_address` / `account_number` inputs exactly the way
+    the Rust policy layer expects,
+  - `javascript/iroha_js/src/index.js` re-exports the new normalizer,
+  - focused JS tests now cover policy listing, resolve, claim-receipt, and
+    normalization behavior.
+- Updated `docs/source/universal_accounts_guide.md` to mention the
+  `receipt_hash` response field and the JS SDK helpers for identifier-policy
+  resolution flows.
+- Validation:
+  - `cargo test --locked -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test --locked -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test --locked -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `node --test javascript/iroha_js/test/normalizers.test.js javascript/iroha_js/test/toriiClient.identifier.test.js` (pass)
+
 ## 2026-03-18 Follow-up: BFV-encrypted identifier input is now wired through Torii
 - Extended `crates/iroha_crypto/src/fhe_bfv.rs` beyond the raw BFV primitive:
   - added `BfvIdentifierPublicParameters`,

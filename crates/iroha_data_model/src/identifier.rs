@@ -2,7 +2,7 @@
 
 use std::{fmt, str::FromStr, string::String, vec::Vec};
 
-use iroha_crypto::{PolicyCommitment, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Hash, PolicyCommitment, PublicKey, Signature, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -182,6 +182,8 @@ pub struct IdentifierClaimRecord {
     pub policy_id: IdentifierPolicyId,
     /// Bound opaque identifier.
     pub opaque_id: OpaqueAccountId,
+    /// Hidden-function receipt hash that produced the opaque identifier.
+    pub receipt_hash: Hash,
     /// UAID that owns the identifier claim.
     pub uaid: UniversalAccountId,
     /// Canonical account currently bound to the UAID.
@@ -205,6 +207,8 @@ pub struct IdentifierResolutionReceipt {
     pub policy_id: IdentifierPolicyId,
     /// Opaque identifier derived by the hidden-function resolver.
     pub opaque_id: OpaqueAccountId,
+    /// Hidden-function receipt hash covering the evaluation transcript.
+    pub receipt_hash: Hash,
     /// UAID reached by the opaque identifier.
     pub uaid: UniversalAccountId,
     /// Canonical account currently bound to the UAID.
@@ -230,6 +234,8 @@ pub struct IdentifierResolutionReceiptPayload {
     pub policy_id: IdentifierPolicyId,
     /// Opaque identifier derived by the hidden-function resolver.
     pub opaque_id: OpaqueAccountId,
+    /// Hidden-function receipt hash covering the evaluation transcript.
+    pub receipt_hash: Hash,
     /// UAID reached by the opaque identifier.
     pub uaid: UniversalAccountId,
     /// Canonical account currently bound to the UAID.
@@ -249,11 +255,20 @@ impl IdentifierResolutionReceipt {
         IdentifierResolutionReceiptPayload {
             policy_id: self.policy_id.clone(),
             opaque_id: self.opaque_id,
+            receipt_hash: self.receipt_hash,
             uaid: self.uaid,
             account_id: self.account_id.clone(),
             resolved_at_ms: self.resolved_at_ms,
             expires_at_ms: self.expires_at_ms,
         }
+    }
+
+    /// Encode the canonical signed payload bytes used by resolver signatures.
+    ///
+    /// # Errors
+    /// Returns the underlying Norito encoding error when the payload cannot be encoded.
+    pub fn payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
+        norito::to_bytes(&self.payload())
     }
 
     /// Verify the receipt signature against the provided public key.

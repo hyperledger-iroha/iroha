@@ -14,6 +14,7 @@ export {
   inspectAccountId,
   configureCurveSupport,
 } from "./address.js";
+export { normalizeIdentifierInput } from "./normalizers.js";
 export { MultisigSpecBuilder, MultisigSpec } from "./multisig.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {

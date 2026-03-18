@@ -4476,6 +4476,68 @@ fn derive_identifier_request_draft(
 }
 
 #[cfg(feature = "app_api")]
+fn identifier_policy_summary_dto(
+    policy: &iroha_data_model::identifier::IdentifierPolicy,
+) -> routing::IdentifierPolicySummaryDto {
+    let public_parameters = identifier_resolution::decode_bfv_public_parameters(policy).ok();
+    routing::IdentifierPolicySummaryDto {
+        policy_id: policy.id.to_string(),
+        owner: policy.owner.to_string(),
+        active: policy.active,
+        normalization: identifier_normalization_label(policy.normalization).to_owned(),
+        resolver_public_key: policy.resolver_public_key.to_string(),
+        backend: policy.commitment.backend.as_str().to_owned(),
+        input_encryption: public_parameters.as_ref().map(|_| "bfv-v1".to_owned()),
+        input_encryption_public_parameters: public_parameters
+            .as_ref()
+            .and_then(|value| norito::to_bytes(value).ok())
+            .map(hex::encode_upper),
+        input_encryption_public_parameters_decoded: public_parameters,
+        note: policy.note.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_receipt_response(
+    receipt: &iroha_data_model::identifier::IdentifierResolutionReceipt,
+    backend: &str,
+) -> Result<routing::IdentifierResolveResponseDto, Error> {
+    let signature_payload = receipt.payload();
+    let signature_payload_hex = receipt
+        .payload_bytes()
+        .map(hex::encode_upper)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
+    Ok(routing::IdentifierResolveResponseDto {
+        policy_id: receipt.policy_id.to_string(),
+        opaque_id: receipt.opaque_id.to_string(),
+        receipt_hash: receipt.receipt_hash.to_string(),
+        uaid: receipt.uaid.to_string(),
+        account_id: receipt.account_id.to_string(),
+        resolved_at_ms: receipt.resolved_at_ms,
+        expires_at_ms: receipt.expires_at_ms,
+        backend: backend.to_owned(),
+        signature: hex::encode_upper(receipt.signature.payload()),
+        signature_payload_hex,
+        signature_payload,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_claim_lookup_response(
+    claim: &iroha_data_model::identifier::IdentifierClaimRecord,
+) -> routing::IdentifierClaimLookupResponseDto {
+    routing::IdentifierClaimLookupResponseDto {
+        policy_id: claim.policy_id.to_string(),
+        opaque_id: claim.opaque_id.to_string(),
+        receipt_hash: claim.receipt_hash.to_string(),
+        uaid: claim.uaid.to_string(),
+        account_id: claim.account_id.to_string(),
+        verified_at_ms: claim.verified_at_ms,
+        expires_at_ms: claim.expires_at_ms,
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
     raw.parse::<DomainId>()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
@@ -13473,23 +13535,7 @@ async fn handler_identifier_policies(
     let world = app.state.world_view();
     let items = world
         .identifier_policies_iter()
-        .map(|policy| routing::IdentifierPolicySummaryDto {
-            policy_id: policy.id.to_string(),
-            owner: policy.owner.to_string(),
-            active: policy.active,
-            normalization: identifier_normalization_label(policy.normalization).to_owned(),
-            resolver_public_key: policy.resolver_public_key.to_string(),
-            backend: policy.commitment.backend.as_str().to_owned(),
-            input_encryption: identifier_resolution::decode_bfv_public_parameters(policy)
-                .ok()
-                .map(|_| "bfv-v1".to_owned()),
-            input_encryption_public_parameters:
-                identifier_resolution::decode_bfv_public_parameters(policy)
-                    .ok()
-                    .and_then(|public_parameters| norito::to_bytes(&public_parameters).ok())
-                    .map(hex::encode_upper),
-            note: policy.note.clone(),
-        })
+        .map(identifier_policy_summary_dto)
         .collect::<Vec<_>>();
     json_ok(routing::IdentifierPolicyListDto {
         total: u64::try_from(items.len()).unwrap_or(u64::MAX),
@@ -13539,17 +13585,7 @@ async fn handler_identifier_resolve(
                 err.to_string(),
             ))
         })?;
-
-    json_ok(routing::IdentifierResolveResponseDto {
-        policy_id: policy.id.to_string(),
-        opaque_id: receipt.opaque_id.to_string(),
-        uaid: receipt.uaid.to_string(),
-        account_id: receipt.account_id.to_string(),
-        resolved_at_ms: receipt.resolved_at_ms,
-        expires_at_ms: receipt.expires_at_ms,
-        backend: draft.backend.as_str().to_owned(),
-        signature: hex::encode_upper(receipt.signature.payload()),
-    })
+    json_ok(identifier_receipt_response(&receipt, draft.backend.as_str())?)
 }
 
 #[cfg(feature = "app_api")]
@@ -13602,17 +13638,30 @@ async fn handler_identifier_claim_receipt(
                 err.to_string(),
             ))
         })?;
+    json_ok(identifier_receipt_response(&receipt, draft.backend.as_str())?)
+}
 
-    json_ok(routing::IdentifierResolveResponseDto {
-        policy_id: policy.id.to_string(),
-        opaque_id: receipt.opaque_id.to_string(),
-        uaid: receipt.uaid.to_string(),
-        account_id: receipt.account_id.to_string(),
-        resolved_at_ms: receipt.resolved_at_ms,
-        expires_at_ms: receipt.expires_at_ms,
-        backend: draft.backend.as_str().to_owned(),
-        signature: hex::encode_upper(receipt.signature.payload()),
-    })
+#[cfg(feature = "app_api")]
+async fn handler_identifier_receipt_lookup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(receipt_hash_literal): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        None,
+        "v1/identifiers/receipts/{receipt_hash}",
+    )
+    .await?;
+    let receipt_hash = Hash::from_str(receipt_hash_literal.trim()).map_err(|err| {
+        identifier_conversion_error(format!("invalid identifier receipt hash: {err}"))
+    })?;
+    let world = app.state.world_view();
+    let Some(claim) = world.resolve_identifier_claim_by_receipt_hash(&receipt_hash) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    json_ok(identifier_claim_lookup_response(&claim))
 }
 
 fn normalise_alias(input: &str) -> String {
@@ -15254,6 +15303,10 @@ impl Torii {
                 .route(
                     "/v1/accounts/{account_id}/identifiers/claim-receipt",
                     post(handler_identifier_claim_receipt),
+                )
+                .route(
+                    "/v1/identifiers/receipts/{receipt_hash}",
+                    get(handler_identifier_receipt_lookup),
                 )
                 .route("/v1/identifiers/resolve", post(handler_identifier_resolve))
                 // Repo agreements listing
@@ -22722,6 +22775,7 @@ mod tests {
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.policy_id, policy_id.to_string());
         assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
         assert_eq!(dto.uaid, uaid.to_string());
         assert_eq!(dto.account_id, authority.to_string());
         assert_eq!(dto.backend, "bfv-affine-sha3-256-v1");
@@ -22729,6 +22783,15 @@ mod tests {
             !dto.signature.is_empty(),
             "resolve responses should carry a signed receipt"
         );
+        assert!(
+            !dto.signature_payload_hex.is_empty(),
+            "resolve responses should expose the signed payload bytes"
+        );
+        assert_eq!(dto.signature_payload.policy_id.to_string(), dto.policy_id);
+        assert_eq!(dto.signature_payload.opaque_id.to_string(), dto.opaque_id);
+        assert_eq!(dto.signature_payload.receipt_hash.to_string(), dto.receipt_hash);
+        assert_eq!(dto.signature_payload.uaid.to_string(), dto.uaid);
+        assert_eq!(dto.signature_payload.account_id.to_string(), dto.account_id);
     }
 
     #[cfg(feature = "app_api")]
@@ -22818,8 +22881,14 @@ mod tests {
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.policy_id, policy_id.to_string());
         assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
         assert_eq!(dto.uaid, uaid.to_string());
         assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.signature_payload.opaque_id.to_string(), dto.opaque_id);
+        assert_eq!(
+            dto.signature_payload.receipt_hash.to_string(),
+            dto.receipt_hash
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -22918,8 +22987,89 @@ mod tests {
             .derive(&policy, "+15551234567")
             .expect("normalized derive");
         assert_eq!(dto.opaque_id, expected_draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, expected_draft.receipt_hash.to_string());
         assert_eq!(dto.account_id, authority.to_string());
         assert_eq!(dto.uaid, uaid.to_string());
+        assert_eq!(dto.signature_payload.uaid.to_string(), dto.uaid);
+        assert_eq!(dto.signature_payload.account_id.to_string(), dto.account_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_receipt_lookup_returns_persisted_claim() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-receipt-lookup"));
+        let account = Account::new(authority.clone().to_account_id(domain_id.clone()))
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let policy = sample_identifier_policy(&authority, &signer, &policy_id);
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let draft = resolver
+            .derive(&policy, "+15551234567")
+            .expect("derive opaque id");
+        let receipt = resolver
+            .issue_claim_receipt(&policy, &draft, uaid, authority.clone())
+            .expect("claim receipt");
+        let receipt_hash = receipt.receipt_hash.to_string();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, receipt.resolved_at_ms, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        RegisterIdentifierPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&authority, &mut tx)
+        .expect("register policy");
+        ActivateIdentifierPolicy {
+            policy_id: policy_id.clone(),
+        }
+        .execute(&authority, &mut tx)
+        .expect("activate policy");
+        ClaimIdentifier {
+            account: authority.clone(),
+            receipt,
+        }
+        .execute(&authority, &mut tx)
+        .expect("claim identifier");
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_identifier_receipt_lookup(
+            State(app),
+            HeaderMap::new(),
+            AxPath(receipt_hash),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierClaimLookupResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.policy_id, policy_id.to_string());
+        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.uaid, uaid.to_string());
+        assert_eq!(dto.account_id, authority.to_string());
     }
 
     #[cfg(feature = "app_api")]

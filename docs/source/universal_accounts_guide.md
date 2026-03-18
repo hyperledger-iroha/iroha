@@ -60,7 +60,30 @@ Current Torii routes:
 |-------|---------|
 | `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters and the required `normalization` mode for encrypted client-side input. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint then derives the `opaque:` handle and returns a signed receipt that `ClaimIdentifier` can submit on-chain. |
-| `POST /v1/identifiers/resolve` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint resolves the identifier into `{ opaque_id, uaid, account_id, signature }` when an active claim exists. |
+| `POST /v1/identifiers/resolve` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint resolves the identifier into `{ opaque_id, receipt_hash, uaid, account_id, signature }` when an active claim exists. |
+
+Current SDK support:
+
+- `normalizeIdentifierInput(value, normalization)` matches the Rust
+  canonicalizers for `exact`, `lowercase_trimmed`, `phone_e164`,
+  `email_address`, and `account_number`.
+- `ToriiClient.listIdentifierPolicies()` lists policy metadata, including BFV
+  input-encryption metadata when the policy publishes it.
+- `ToriiClient.resolveIdentifier({ policyId, input | encryptedInput })`
+  resolves a hidden identifier and returns the signed receipt payload,
+  including `receipt_hash`.
+- `ToriiClient.issueIdentifierClaimReceipt(accountId, { policyId, input |
+  encryptedInput })` issues the signed receipt needed by `ClaimIdentifier`.
+- `IrohaSwift.ToriiClient` now exposes `listIdentifierPolicies()`,
+  `resolveIdentifier(policyId:input:encryptedInputHex:)`, and
+  `issueIdentifierClaimReceipt(accountId:policyId:input:encryptedInputHex:)`,
+  plus `ToriiIdentifierNormalization` for the same phone/email/account-number
+  canonicalization modes.
+- `HttpClientTransport` in the Android SDK now exposes
+  `listIdentifierPolicies()`, `resolveIdentifier(policyId, input,
+  encryptedInputHex)`, and `issueIdentifierClaimReceipt(accountId, policyId,
+  input, encryptedInputHex)`, plus `IdentifierNormalization` for the same
+  canonicalization rules.
 
 Current instruction set:
 

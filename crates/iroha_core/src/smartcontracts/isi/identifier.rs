@@ -172,6 +172,11 @@ pub mod isi {
                     .into(),
                 ));
             }
+            if receipt.receipt_hash == Hash::prehashed([0; Hash::LENGTH]) {
+                return Err(Error::InvariantViolation(
+                    "Identifier receipt hash must not be zero".to_owned().into(),
+                ));
+            }
 
             if let Some(existing_uaid) =
                 state_transaction.world.opaque_uaids.get(&receipt.opaque_id)
@@ -225,6 +230,7 @@ pub mod isi {
                 IdentifierClaimRecord {
                     policy_id: receipt.policy_id,
                     opaque_id: receipt.opaque_id,
+                    receipt_hash: receipt.receipt_hash,
                     uaid,
                     account_id: self.account,
                     verified_at_ms: receipt.resolved_at_ms,
@@ -394,6 +400,7 @@ mod tests {
         policy_id: &IdentifierPolicyId,
         resolver: &KeyPair,
         opaque_id: OpaqueAccountId,
+        receipt_hash: Hash,
         uaid: UniversalAccountId,
         account_id: &AccountId,
         resolved_at_ms: u64,
@@ -402,6 +409,7 @@ mod tests {
         let payload = IdentifierResolutionReceiptPayload {
             policy_id: policy_id.clone(),
             opaque_id,
+            receipt_hash,
             uaid,
             account_id: account_id.clone(),
             resolved_at_ms,
@@ -411,6 +419,7 @@ mod tests {
         IdentifierResolutionReceipt {
             policy_id: payload.policy_id,
             opaque_id: payload.opaque_id,
+            receipt_hash: payload.receipt_hash,
             uaid: payload.uaid,
             account_id: payload.account_id,
             resolved_at_ms: payload.resolved_at_ms,
@@ -457,6 +466,7 @@ mod tests {
             &policy_id,
             &resolver,
             opaque_id,
+            Hash::new(b"receipt-hash-owner"),
             uaid,
             &owner,
             0,
@@ -476,6 +486,7 @@ mod tests {
         assert_eq!(claim.policy_id, policy_id);
         assert_eq!(claim.uaid, uaid);
         assert_eq!(claim.account_id, owner);
+        assert_eq!(claim.receipt_hash, Hash::new(b"receipt-hash-owner"));
         assert_eq!(
             state.world.opaque_uaids.view().get(&opaque_id),
             Some(&uaid),
@@ -586,6 +597,7 @@ mod tests {
             &policy_id,
             &resolver,
             OpaqueAccountId::from(Hash::new(b"alice@example.com")),
+            Hash::new(b"receipt-hash-missing-uaid"),
             UniversalAccountId::from_hash(Hash::new(b"uaid-missing")),
             &owner,
             0,
@@ -643,6 +655,7 @@ mod tests {
                 &policy_id,
                 &wrong_resolver,
                 OpaqueAccountId::from(Hash::new(b"+15551234567")),
+                Hash::new(b"receipt-hash-invalid-signature"),
                 uaid,
                 &owner,
                 0,
@@ -654,6 +667,60 @@ mod tests {
 
         assert!(
             err.to_string().contains("signature is invalid"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn claim_identifier_rejects_zero_receipt_hash() {
+        let mut state = test_state();
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-zero-receipt-hash"));
+        seed_domain(&mut state, &domain_id, &owner);
+        seed_account_with_uaid(&mut state, &owner, &domain_id, uaid);
+
+        let resolver = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let policy = IdentifierPolicy::new(
+            policy_id.clone(),
+            owner.clone(),
+            IdentifierNormalization::PhoneE164,
+            policy_commitment(b"resolver-secret", policy_id.to_string().into_bytes())
+                .expect("commitment"),
+            resolver.public_key().clone(),
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        RegisterIdentifierPolicy { policy }
+            .execute(&owner, &mut tx)
+            .expect("register policy");
+        ActivateIdentifierPolicy {
+            policy_id: policy_id.clone(),
+        }
+        .execute(&owner, &mut tx)
+        .expect("activate policy");
+
+        let err = ClaimIdentifier {
+            account: owner.clone(),
+            receipt: claim_receipt(
+                &policy_id,
+                &resolver,
+                OpaqueAccountId::from(Hash::new(b"+15551234567")),
+                Hash::prehashed([0; Hash::LENGTH]),
+                uaid,
+                &owner,
+                0,
+                Some(60_000),
+            ),
+        }
+        .execute(&owner, &mut tx)
+        .expect_err("claim must reject a zero receipt hash");
+
+        assert!(
+            err.to_string().contains("receipt hash must not be zero"),
             "unexpected error: {err}"
         );
     }
@@ -696,6 +763,7 @@ mod tests {
                 &policy_id,
                 &resolver,
                 OpaqueAccountId::from(Hash::new(b"alice@example.com")),
+                Hash::new(b"receipt-hash-expired"),
                 uaid,
                 &owner,
                 5,

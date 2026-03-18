@@ -7454,6 +7454,50 @@ mod storage_migration_tests {
     }
 
     #[test]
+    fn account_alias_index_preserves_bound_aliases_from_storage() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let primary_label = AccountLabel::new(
+            domain_id.clone(),
+            "banking".parse::<Name>().expect("primary label name"),
+        );
+        let bound_label = AccountLabel::new(
+            domain_id.clone(),
+            "issuance".parse::<Name>().expect("bound label name"),
+        );
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let details = AccountDetails::new(
+            Metadata::default(),
+            Some(primary_label.clone()),
+            None,
+            Vec::new(),
+        );
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world
+            .account_aliases
+            .insert(bound_label.clone(), account_id.clone());
+
+        world
+            .rebuild_account_alias_index()
+            .expect("stored bound alias should survive rebuild");
+
+        assert_eq!(
+            world.account_aliases.view().get(&primary_label),
+            Some(&account_id),
+            "primary label should remain indexed"
+        );
+        assert_eq!(
+            world.account_aliases.view().get(&bound_label),
+            Some(&account_id),
+            "additional bound alias should survive rebuild"
+        );
+    }
+
+    #[test]
     fn opaque_id_index_rejects_missing_uaid() {
         let mut world = World::default();
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
@@ -9699,7 +9743,34 @@ impl World {
 
     fn rebuild_account_alias_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
+        let existing_bindings: Vec<_> = self
+            .account_aliases
+            .view()
+            .iter()
+            .map(|(label, account_id)| (label.clone(), account_id.clone()))
+            .collect();
         let view = self.accounts.view();
+        for (label, account_id) in existing_bindings {
+            if account_label_is_pii(&label) {
+                return Err(format!(
+                    "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
+                ));
+            }
+            if view.get(&account_id).is_none() {
+                return Err(format!(
+                    "Account alias {label:?} references missing account {account_id}"
+                ));
+            }
+            if let Some(existing) = index.get(&label) {
+                if existing != &account_id {
+                    return Err(format!(
+                        "Account alias {label:?} already bound to account {existing}"
+                    ));
+                }
+                continue;
+            }
+            index.insert(label, account_id);
+        }
         for (account_id, value) in view.iter() {
             let Some(label) = value.as_ref().label() else {
                 continue;
@@ -9829,6 +9900,11 @@ impl World {
                 return Err(format!(
                     "Identifier claim key {opaque_id} does not match embedded opaque id {}",
                     claim.opaque_id
+                ));
+            }
+            if claim.receipt_hash == Hash::prehashed([0; Hash::LENGTH]) {
+                return Err(format!(
+                    "Identifier claim {opaque_id} carries an all-zero receipt hash"
                 ));
             }
             let Some(bound_uaid) = opaque_uaids.get(opaque_id) else {
@@ -10133,6 +10209,16 @@ pub trait WorldReadOnly {
             .get(opaque_id)
             .filter(|claim| &claim.policy_id == policy_id)
             .cloned()
+    }
+
+    /// Resolve an identifier claim by the deterministic hidden-function receipt hash.
+    fn resolve_identifier_claim_by_receipt_hash(
+        &self,
+        receipt_hash: &Hash,
+    ) -> Option<IdentifierClaimRecord> {
+        self.identifier_claims()
+            .iter()
+            .find_map(|(_, claim)| (claim.receipt_hash == *receipt_hash).then(|| claim.clone()))
     }
     /// Account label/signatory registry (read-only).
     fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord>;
@@ -24527,6 +24613,7 @@ pub(crate) mod deserialize {
         let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
         let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
         let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
+        let account_aliases = take_optional_default(&mut map, "account_aliases")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
@@ -24619,7 +24706,7 @@ pub(crate) mod deserialize {
             account_subject_domains,
             domain_account_subjects,
             uaid_accounts: Storage::default(),
-            account_aliases: Storage::default(),
+            account_aliases,
             opaque_uaids: Storage::default(),
             identifier_policies,
             identifier_claims,

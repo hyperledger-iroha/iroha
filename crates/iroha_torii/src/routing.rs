@@ -1704,6 +1704,9 @@ pub struct IdentifierPolicySummaryDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub input_encryption_public_parameters: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption_public_parameters_decoded:
+        Option<iroha_crypto::BfvIdentifierPublicParameters>,
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
 
@@ -1748,6 +1751,7 @@ pub struct IdentifierResolveRequestDto {
 pub struct IdentifierResolveResponseDto {
     pub policy_id: String,
     pub opaque_id: String,
+    pub receipt_hash: String,
     pub uaid: String,
     pub account_id: String,
     pub resolved_at_ms: u64,
@@ -1755,6 +1759,29 @@ pub struct IdentifierResolveResponseDto {
     pub expires_at_ms: Option<u64>,
     pub backend: String,
     pub signature: String,
+    pub signature_payload_hex: String,
+    pub signature_payload: iroha_data_model::identifier::IdentifierResolutionReceiptPayload,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Persisted identifier-claim binding returned by receipt-hash lookup.
+pub struct IdentifierClaimLookupResponseDto {
+    pub policy_id: String,
+    pub opaque_id: String,
+    pub receipt_hash: String,
+    pub uaid: String,
+    pub account_id: String,
+    pub verified_at_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
 }
 
 impl<G> TelemetryGate for MaybeTelemetry<G>

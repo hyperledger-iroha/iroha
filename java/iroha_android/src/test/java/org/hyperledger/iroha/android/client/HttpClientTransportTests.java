@@ -75,6 +75,11 @@ public final class HttpClientTransportTests {
     uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
+    identifierPoliciesRequestParsesResponse();
+    identifierResolveRequestParsesResponse();
+    identifierResolveRequestAllowsNotFound();
+    identifierClaimReceiptUsesAccountPath();
+    identifierNormalizationCanonicalizesInputs();
     invalidateAndCancelDelegatesToExecutor();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
   }
@@ -941,6 +946,183 @@ public final class HttpClientTransportTests {
                 + hex
                 + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&address_format=ih58")
         : "Manifest URI must include encoded query parameters";
+  }
+
+  private static void identifierPoliciesRequestParsesResponse() {
+    final String json =
+        "{"
+            + "\"total\":1,"
+            + "\"items\":[{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"owner\":\"alice@wonderland\","
+            + "\"active\":true,"
+            + "\"normalization\":\"phone_e164\","
+            + "\"resolver_public_key\":\"ed25519:resolver-key\","
+            + "\"backend\":\"bfv-affine-sha3-256-v1\","
+            + "\"input_encryption\":\"bfv-v1\","
+            + "\"input_encryption_public_parameters\":\"ABCD\","
+            + "\"note\":\"retail phone policy\""
+            + "}]"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final IdentifierPolicyListResponse response = transport.listIdentifierPolicies().join();
+    assert response.total() == 1L : "Policy list total mismatch";
+    assert response.items().size() == 1 : "Expected one identifier policy";
+    final IdentifierPolicySummary item = response.items().get(0);
+    assert "phone#retail".equals(item.policyId()) : "Policy id mismatch";
+    assert "alice@wonderland".equals(item.owner()) : "Owner mismatch";
+    assert item.active() : "Policy should be active";
+    assert item.normalization() == IdentifierNormalization.PHONE_E164
+        : "Normalization mismatch";
+    assert "bfv-v1".equals(item.inputEncryption()) : "Input encryption mismatch";
+    assert "ABCD".equals(item.inputEncryptionPublicParameters())
+        : "Input encryption params mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Identifier policy request must be captured";
+    assert "GET".equals(request.method()) : "Identifier policy list must use GET";
+    assert request.uri().toString().equals("https://torii.example/v1/identifier-policies")
+        : "Identifier policy URI mismatch";
+    assert request.headers().getOrDefault("Accept", List.of()).contains("application/json")
+        : "Identifier policy request must accept JSON";
+  }
+
+  private static void identifierResolveRequestParsesResponse() {
+    final String accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    final String json =
+        "{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"opaque_id\":\"opaque:"
+            + "11".repeat(32)
+            + "\","
+            + "\"receipt_hash\":\""
+            + "22".repeat(32)
+            + "\","
+            + "\"uaid\":\"uaid:"
+            + "33".repeat(31)
+            + "35\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
+            + "\"resolved_at_ms\":42,"
+            + "\"expires_at_ms\":142,"
+            + "\"backend\":\"bfv-affine-sha3-256-v1\","
+            + "\"signature\":\""
+            + "aa".repeat(64)
+            + "\""
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<IdentifierResolutionReceipt> response =
+        transport.resolveIdentifier(" phone#retail ", " +1 (555) 123-4567 ", null).join();
+    assert response.isPresent() : "Expected identifier resolution receipt";
+    final IdentifierResolutionReceipt receipt = response.orElseThrow();
+    assert "phone#retail".equals(receipt.policyId()) : "Policy id mismatch";
+    assert ("opaque:" + "11".repeat(32)).equals(receipt.opaqueId()) : "Opaque id mismatch";
+    assert "22".repeat(32).equals(receipt.receiptHash()) : "Receipt hash mismatch";
+    assert ("uaid:" + "33".repeat(31) + "35").equals(receipt.uaid()) : "UAID mismatch";
+    assert accountId.equals(receipt.accountId()) : "Account id mismatch";
+    assert receipt.resolvedAtMs() == 42L : "Resolved timestamp mismatch";
+    assert Long.valueOf(142L).equals(receipt.expiresAtMs()) : "Expiry mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Identifier resolve request must be captured";
+    assert "POST".equals(request.method()) : "Identifier resolve must use POST";
+    assert request.uri().toString().equals("https://torii.example/v1/identifiers/resolve")
+        : "Identifier resolve URI mismatch";
+    assert request.headers().getOrDefault("Content-Type", List.of()).contains("application/json")
+        : "Identifier resolve must send JSON";
+    assert readBody(request)
+        .equals("{\"input\":\"+1 (555) 123-4567\",\"policy_id\":\"phone#retail\"}")
+        : "Identifier resolve payload mismatch";
+  }
+
+  private static void identifierResolveRequestAllowsNotFound() {
+    final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<IdentifierResolutionReceipt> response =
+        transport.resolveIdentifier("phone#retail", null, "0xABCD").join();
+    assert response.isEmpty() : "404 identifier resolution should return Optional.empty";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Identifier resolve request must be captured";
+    assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
+        : "Encrypted identifier resolve payload mismatch";
+  }
+
+  private static void identifierClaimReceiptUsesAccountPath() {
+    final String accountId = "alice@wonderland";
+    final String json =
+        "{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"opaque_id\":\"opaque:"
+            + "44".repeat(32)
+            + "\","
+            + "\"receipt_hash\":\""
+            + "55".repeat(32)
+            + "\","
+            + "\"uaid\":\"uaid:"
+            + "66".repeat(31)
+            + "67\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
+            + "\"resolved_at_ms\":7,"
+            + "\"backend\":\"bfv-affine-sha3-256-v1\","
+            + "\"signature\":\""
+            + "bb".repeat(64)
+            + "\""
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final Optional<IdentifierResolutionReceipt> response =
+        transport.issueIdentifierClaimReceipt(accountId, "phone#retail", null, "ABCD").join();
+    assert response.isPresent() : "Claim receipt should parse";
+    assert ("opaque:" + "44".repeat(32)).equals(response.orElseThrow().opaqueId())
+        : "Opaque id mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Identifier claim request must be captured";
+    assert request
+        .uri()
+        .toString()
+        .equals("https://torii.example/api/v1/accounts/alice%40wonderland/identifiers/claim-receipt")
+        : "Identifier claim receipt path must encode account id";
+    assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
+        : "Identifier claim payload mismatch";
+  }
+
+  private static void identifierNormalizationCanonicalizesInputs() {
+    assert "+15551234567".equals(
+            IdentifierNormalization.PHONE_E164.normalize(" +1 (555) 123-4567 ", "phone"))
+        : "Phone normalization mismatch";
+    assert "alice.example@example.com".equals(
+            IdentifierNormalization.EMAIL_ADDRESS.normalize(
+                " Alice.Example@Example.COM ", "email"))
+        : "Email normalization mismatch";
+    assert "GB82WEST1234".equals(
+            IdentifierNormalization.ACCOUNT_NUMBER.normalize(" gb82-west-1234 ", "account"))
+        : "Account normalization mismatch";
   }
 
   private static void invalidateAndCancelDelegatesToExecutor() {

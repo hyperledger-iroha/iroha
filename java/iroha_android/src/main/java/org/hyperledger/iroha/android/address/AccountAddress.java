@@ -265,6 +265,14 @@ public final class AccountAddress {
   /**
    * Constructs a multisig account address from the provided policy payload.
    */
+  public static AccountAddress fromMultisigPolicy(final MultisigPolicyPayload policy)
+      throws AccountAddressException {
+    return fromMultisigPolicy(DEFAULT_DOMAIN_NAME, policy);
+  }
+
+  /**
+   * Constructs a multisig account address from the provided policy payload.
+   */
   public static AccountAddress fromMultisigPolicy(
       final String domain,
       final MultisigPolicyPayload policy) throws AccountAddressException {

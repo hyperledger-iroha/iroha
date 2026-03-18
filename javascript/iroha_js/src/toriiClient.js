@@ -7,6 +7,7 @@ import {
   ensureCanonicalAccountId,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeOpaqueLiteral,
 } from "./normalizers.js";
 import { AccountAddressError } from "./address.js";
 import {
@@ -1836,6 +1837,109 @@ export class ToriiClient {
       throw new Error("alias resolve_index endpoint returned no payload");
     }
     return normalizeAliasResolutionResponse(body, "alias resolve_index response");
+  }
+
+  /**
+   * List globally registered identifier policies (`GET /v1/identifier-policies`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{total: number, items: Array<Record<string, unknown>>}>}
+   */
+  async listIdentifierPolicies(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listIdentifierPolicies",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "listIdentifierPolicies options");
+    const response = await this._request("GET", "/v1/identifier-policies", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("identifier policy list endpoint returned no payload");
+    }
+    return normalizeIdentifierPolicyListResponse(payload, "identifier policy list response");
+  }
+
+  /**
+   * Resolve an identifier through a hidden-function policy (`POST /v1/identifiers/resolve`).
+   * Returns null when the policy or identifier binding is missing (404).
+   * @param {{policyId: string, input?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async resolveIdentifier(options) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "resolveIdentifier",
+    );
+    const payload = buildIdentifierResolveRequest(rest, "resolveIdentifier");
+    const response = await this._request("POST", "/v1/identifiers/resolve", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    if (response.status === 409) {
+      throw new Error("Identifier policy is inactive or the target binding is unavailable");
+    }
+    if (response.status === 503) {
+      throw new Error("Identifier resolver runtime is disabled on the target node");
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("identifier resolve endpoint returned no payload");
+    }
+    return normalizeIdentifierResolveResponse(body, "identifier resolve response");
+  }
+
+  /**
+   * Issue a signed on-chain claim receipt for an account identifier binding.
+   * Returns null when the policy or account is missing (404).
+   * @param {string} accountId
+   * @param {{policyId: string, input?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async issueIdentifierClaimReceipt(accountId, options) {
+    const normalizedAccountId = ToriiClient._normalizeAccountId(accountId, "accountId");
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "issueIdentifierClaimReceipt",
+    );
+    const payload = buildIdentifierResolveRequest(rest, "issueIdentifierClaimReceipt");
+    const response = await this._request(
+      "POST",
+      `/v1/accounts/${encodeURIComponent(normalizedAccountId)}/identifiers/claim-receipt`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    if (response.status === 409) {
+      throw new Error("Identifier claim receipt cannot be issued for this account or policy");
+    }
+    if (response.status === 503) {
+      throw new Error("Identifier resolver runtime is disabled on the target node");
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("identifier claim-receipt endpoint returned no payload");
+    }
+    return normalizeIdentifierResolveResponse(body, "identifier claim receipt response");
   }
 
   /**
@@ -16871,6 +16975,117 @@ function normalizeAliasResolutionResponse(
     result.source = requireNonEmptyString(sourceValue, `${context}.source`);
   }
   return result;
+}
+
+function buildIdentifierResolveRequest(options, context) {
+  const record = ensureRecord(options, `${context} options`);
+  assertSupportedOptionKeys(
+    record,
+    new Set(["policyId", "input", "encryptedInput"]),
+    `${context} options`,
+  );
+  const policyId = requireNonEmptyString(record.policyId, `${context}.policyId`);
+  const hasInput = record.input !== undefined && record.input !== null;
+  const hasEncryptedInput = record.encryptedInput !== undefined && record.encryptedInput !== null;
+  if (hasInput === hasEncryptedInput) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options must supply exactly one of input or encryptedInput`,
+      `${context}.input`,
+    );
+  }
+  const payload = { policy_id: policyId };
+  if (hasInput) {
+    payload.input = requireNonEmptyString(record.input, `${context}.input`);
+  } else {
+    payload.encrypted_input = requireHexString(
+      record.encryptedInput,
+      `${context}.encryptedInput`,
+    );
+  }
+  return payload;
+}
+
+function normalizeIdentifierPolicyListResponse(
+  payload,
+  context = "identifier policy list response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const itemsValue = record.items;
+  if (!Array.isArray(itemsValue)) {
+    throw new Error(`${context}.items must be an array`);
+  }
+  return {
+    total: ToriiClient._normalizeUnsignedInteger(record.total ?? itemsValue.length, `${context}.total`, {
+      allowZero: true,
+    }),
+    items: itemsValue.map((item, index) =>
+      normalizeIdentifierPolicySummary(item, `${context}.items[${index}]`),
+    ),
+  };
+}
+
+function normalizeIdentifierPolicySummary(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const result = {
+    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    owner: ToriiClient._requireAccountId(record.owner, `${context}.owner`),
+    active: record.active === true,
+    normalization: requireNonEmptyString(record.normalization, `${context}.normalization`),
+    resolver_public_key: requireNonEmptyString(
+      record.resolver_public_key,
+      `${context}.resolver_public_key`,
+    ),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+  };
+  if (record.input_encryption !== undefined && record.input_encryption !== null) {
+    result.input_encryption = requireNonEmptyString(
+      record.input_encryption,
+      `${context}.input_encryption`,
+    );
+  }
+  if (
+    record.input_encryption_public_parameters !== undefined &&
+    record.input_encryption_public_parameters !== null
+  ) {
+    result.input_encryption_public_parameters = requireHexString(
+      record.input_encryption_public_parameters,
+      `${context}.input_encryption_public_parameters`,
+    );
+  }
+  if (record.note !== undefined && record.note !== null) {
+    result.note = requireNonEmptyString(record.note, `${context}.note`);
+  }
+  return result;
+}
+
+function normalizeIdentifierResolveResponse(
+  payload,
+  context = "identifier resolve response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
+    receipt_hash: normalizeHex32String(record.receipt_hash, `${context}.receipt_hash`),
+    uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
+    account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
+    resolved_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.resolved_at_ms,
+      `${context}.resolved_at_ms`,
+      { allowZero: true },
+    ),
+    expires_at_ms:
+      record.expires_at_ms === undefined || record.expires_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+          record.expires_at_ms,
+          `${context}.expires_at_ms`,
+          { allowZero: true },
+        ),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    signature: requireHexString(record.signature, `${context}.signature`).toUpperCase(),
+  };
 }
 
 function buildSorafsAliasListParams(options = {}) {

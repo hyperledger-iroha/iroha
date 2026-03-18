@@ -3668,6 +3668,22 @@ fn identifier_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/identifiers/receipts/{receipt_hash}".to_owned(),
+        Value::Object({
+            let params = vec![string_path_param(
+                "receipt_hash",
+                "Hidden-function receipt hash used to look up the persisted claim binding.",
+            )];
+            json_get_operation(
+                "Identifiers",
+                "Look up an identifier claim by receipt hash.",
+                "Resolve a persisted identifier claim by its deterministic receipt hash for audit and support tooling.",
+                "#/components/schemas/IdentifierClaimLookupResponse",
+                params,
+            )
+        }),
+    );
+    paths.insert(
         "/v1/accounts/{account_id}/identifiers/claim-receipt".to_owned(),
         Value::Object({
             let params = vec![string_path_param(
@@ -7802,6 +7818,119 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "BfvParameters".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["polynomial_degree", "plaintext_modulus", "ciphertext_modulus"],
+            "additionalProperties": false,
+            "properties": {
+                "polynomial_degree": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "description": "Ring degree used by the BFV input-encryption envelope."
+                },
+                "plaintext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Plaintext modulus `t` used by the BFV input-encryption envelope."
+                },
+                "ciphertext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Ciphertext modulus `q` used by the BFV input-encryption envelope."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvPublicKey".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["b", "a"],
+            "additionalProperties": false,
+            "properties": {
+                "b": {
+                    "type": "array",
+                    "items": {"type": "integer", "format": "uint64"},
+                    "description": "First BFV public-key polynomial."
+                },
+                "a": {
+                    "type": "array",
+                    "items": {"type": "integer", "format": "uint64"},
+                    "description": "Second BFV public-key polynomial."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvIdentifierPublicParameters".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["parameters", "public_key", "max_input_bytes"],
+            "additionalProperties": false,
+            "properties": {
+                "parameters": {
+                    "$ref": "#/components/schemas/BfvParameters"
+                },
+                "public_key": {
+                    "$ref": "#/components/schemas/BfvPublicKey"
+                },
+                "max_input_bytes": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "description": "Maximum number of UTF-8 bytes accepted by the BFV input envelope."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierResolutionReceiptPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "policy_id",
+                "opaque_id",
+                "receipt_hash",
+                "uaid",
+                "account_id",
+                "resolved_at_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace used for the resolution."
+                },
+                "opaque_id": {
+                    "type": "string",
+                    "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for this evaluation."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "UAID currently bound to the opaque identifier."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier currently bound to the UAID."
+                },
+                "resolved_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Resolution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "IdentifierPolicySummary".to_owned(),
         norito::json!({
             "type": "object",
@@ -7839,6 +7968,9 @@ fn openapi_schemas() -> Map {
                 "input_encryption_public_parameters": {
                     "type": "string",
                     "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters."
+                },
+                "input_encryption_public_parameters_decoded": {
+                    "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
                 },
                 "note": {
                     "type": "string",
@@ -7898,11 +8030,14 @@ fn openapi_schemas() -> Map {
             "required": [
                 "policy_id",
                 "opaque_id",
+                "receipt_hash",
                 "uaid",
                 "account_id",
                 "resolved_at_ms",
                 "backend",
-                "signature"
+                "signature",
+                "signature_payload_hex",
+                "signature_payload"
             ],
             "additionalProperties": false,
             "properties": {
@@ -7913,6 +8048,10 @@ fn openapi_schemas() -> Map {
                 "opaque_id": {
                     "type": "string",
                     "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for this evaluation."
                 },
                 "uaid": {
                     "type": "string",
@@ -7939,6 +8078,60 @@ fn openapi_schemas() -> Map {
                 "signature": {
                     "type": "string",
                     "description": "Hex-encoded resolver signature over the canonical receipt payload."
+                },
+                "signature_payload_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded Norito payload bytes that were signed by the resolver."
+                },
+                "signature_payload": {
+                    "$ref": "#/components/schemas/IdentifierResolutionReceiptPayload"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierClaimLookupResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "policy_id",
+                "opaque_id",
+                "receipt_hash",
+                "uaid",
+                "account_id",
+                "verified_at_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace bound to the claim."
+                },
+                "opaque_id": {
+                    "type": "string",
+                    "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for the original evaluation."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "UAID currently bound to the opaque identifier."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier currently bound to the UAID."
+                },
+                "verified_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Ledger timestamp in milliseconds when the identifier claim was accepted."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional identifier-claim expiry timestamp in milliseconds since Unix epoch."
                 }
             }
         }),

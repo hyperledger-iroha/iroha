@@ -40,6 +40,7 @@ pub struct IdentifierResolutionService {
 #[derive(Debug, Clone)]
 pub struct IdentifierResolutionDraft {
     pub opaque_id: OpaqueAccountId,
+    pub receipt_hash: Hash,
     pub resolved_at_ms: u64,
     pub expires_at_ms: Option<u64>,
     pub backend: RamLfeBackend,
@@ -120,7 +121,9 @@ impl IdentifierResolutionService {
             associated_data: policy_id_bytes(&policy.id),
         };
         let EvalResponse {
-            opaque_id, backend, ..
+            opaque_id,
+            receipt_hash,
+            backend,
         } = evaluate_commitment(&runtime.secret, &policy.commitment, &request)?;
         let resolved_at_ms = now_ms();
         let expires_at_ms = runtime
@@ -128,6 +131,7 @@ impl IdentifierResolutionService {
             .and_then(|ttl| resolved_at_ms.checked_add(ttl));
         Ok(IdentifierResolutionDraft {
             opaque_id: OpaqueAccountId::from_hash(opaque_id),
+            receipt_hash,
             resolved_at_ms,
             expires_at_ms,
             backend,
@@ -153,7 +157,9 @@ impl IdentifierResolutionService {
                     associated_data: policy_id_bytes(&policy.id),
                 };
                 let EvalResponse {
-                    opaque_id, backend, ..
+                    opaque_id,
+                    receipt_hash,
+                    backend,
                 } = evaluate_commitment(&runtime.secret, &policy.commitment, &request)?;
                 let resolved_at_ms = now_ms();
                 let expires_at_ms = runtime
@@ -161,6 +167,7 @@ impl IdentifierResolutionService {
                     .and_then(|ttl| resolved_at_ms.checked_add(ttl));
                 Ok(IdentifierResolutionDraft {
                     opaque_id: OpaqueAccountId::from_hash(opaque_id),
+                    receipt_hash,
                     resolved_at_ms,
                     expires_at_ms,
                     backend,
@@ -227,6 +234,7 @@ impl IdentifierResolutionService {
         let payload = IdentifierResolutionReceiptPayload {
             policy_id: policy.id.clone(),
             opaque_id: draft.opaque_id,
+            receipt_hash: draft.receipt_hash,
             uaid,
             account_id,
             resolved_at_ms: draft.resolved_at_ms,
@@ -237,6 +245,7 @@ impl IdentifierResolutionService {
         Ok(IdentifierResolutionReceipt {
             policy_id: payload.policy_id.clone(),
             opaque_id: payload.opaque_id,
+            receipt_hash: payload.receipt_hash,
             uaid: payload.uaid,
             account_id: payload.account_id.clone(),
             resolved_at_ms: payload.resolved_at_ms,
@@ -362,6 +371,7 @@ mod tests {
         let claim = IdentifierClaimRecord {
             policy_id: policy_id.clone(),
             opaque_id: draft.opaque_id,
+            receipt_hash: draft.receipt_hash,
             uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
             account_id: owner.clone(),
             verified_at_ms: draft.resolved_at_ms,
@@ -374,6 +384,7 @@ mod tests {
         let payload = IdentifierResolutionReceiptPayload {
             policy_id,
             opaque_id: draft.opaque_id,
+            receipt_hash: draft.receipt_hash,
             uaid: claim.uaid,
             account_id: owner,
             resolved_at_ms: draft.resolved_at_ms,
@@ -386,6 +397,7 @@ mod tests {
         .verify(&policy.resolver_public_key, &payload)
         .expect("receipt signature should verify");
         assert_eq!(receipt.opaque_id, draft.opaque_id);
+        assert_eq!(receipt.receipt_hash, draft.receipt_hash);
         assert_eq!(receipt.uaid, claim.uaid);
         assert_eq!(receipt.account_id, claim.account_id);
     }

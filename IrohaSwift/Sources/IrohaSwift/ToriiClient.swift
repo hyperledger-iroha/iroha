@@ -42,9 +42,23 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
             "\(field) must be an encoded account id (i105)."
         )
     }
-    let address = try AccountAddress.parseEncoded(trimmed)
-    return try address.toI105(networkPrefix: 0x02F1)
+    if trimmed.contains("%") || trimmed.contains("/") || trimmed.contains("?") || trimmed.contains("#") {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be an encoded account id (i105)."
+        )
+    }
+    if let address = try? AccountAddress.parseEncoded(trimmed) {
+        return try address.toI105(networkPrefix: 0x02F1)
+    }
+    if trimmed.unicodeScalars.allSatisfy(legacyIh58Alphabet.contains(_:)) {
+        return trimmed
+    }
+    throw ToriiClientError.invalidPayload(
+        "\(field) must be an encoded account id (i105)."
+    )
 }
+
+private let legacyIh58Alphabet = CharacterSet(charactersIn: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
 
 fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -155,12 +169,132 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
     }
 }
 
+public enum ToriiIdentifierNormalization: String, Codable, Sendable {
+    case exact
+    case lowercaseTrimmed = "lowercase_trimmed"
+    case phoneE164 = "phone_e164"
+    case emailAddress = "email_address"
+    case accountNumber = "account_number"
+
+    public func normalize(_ value: String, field: String = "identifier") throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        }
+        switch self {
+        case .exact:
+            return trimmed
+        case .lowercaseTrimmed:
+            return trimmed.lowercased()
+        case .phoneE164:
+            let compact = trimmed.filter { !" \t\n\r-().".contains($0) }
+            let withoutPrefix: Substring
+            if compact.hasPrefix("+") {
+                withoutPrefix = compact.dropFirst()
+            } else if compact.hasPrefix("00") {
+                withoutPrefix = compact.dropFirst(2)
+            } else {
+                withoutPrefix = Substring(compact)
+            }
+            guard !withoutPrefix.isEmpty, withoutPrefix.allSatisfy(\.isNumber) else {
+                throw ToriiClientError.invalidPayload("\(field) must contain digits with optional leading `+` or `00`.")
+            }
+            return "+\(withoutPrefix)"
+        case .emailAddress:
+            let lowered = trimmed.lowercased()
+            let components = lowered.split(separator: "@", omittingEmptySubsequences: false)
+            guard components.count == 2,
+                  !components[0].isEmpty,
+                  !components[1].isEmpty
+            else {
+                throw ToriiClientError.invalidPayload("\(field) must contain exactly one `@` with non-empty local and domain parts.")
+            }
+            return lowered
+        case .accountNumber:
+            let normalized = trimmed
+                .filter { !" \t\n\r-".contains($0) }
+                .uppercased()
+            guard !normalized.isEmpty,
+                  normalized.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "/" || $0 == ".") })
+            else {
+                throw ToriiClientError.invalidPayload("\(field) must contain ASCII alphanumeric characters, `_`, `/`, or `.`.")
+            }
+            return normalized
+        }
+    }
+}
+
+public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
+    public let policyId: String
+    public let owner: String
+    public let active: Bool
+    public let normalization: ToriiIdentifierNormalization
+    public let resolverPublicKey: String
+    public let backend: String
+    public let inputEncryption: String?
+    public let inputEncryptionPublicParameters: String?
+    public let note: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case owner
+        case active
+        case normalization
+        case resolverPublicKey = "resolver_public_key"
+        case backend
+        case inputEncryption = "input_encryption"
+        case inputEncryptionPublicParameters = "input_encryption_public_parameters"
+        case note
+    }
+}
+
+public struct ToriiIdentifierPolicyListResponse: Decodable, Sendable {
+    public let total: UInt64
+    public let items: [ToriiIdentifierPolicySummary]
+}
+
+public struct ToriiIdentifierResolutionReceipt: Decodable, Sendable {
+    public let policyId: String
+    public let opaqueId: String
+    public let receiptHash: String
+    public let uaid: String
+    public let accountId: String
+    public let resolvedAtMs: UInt64
+    public let expiresAtMs: UInt64?
+    public let backend: String
+    public let signature: String
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case opaqueId = "opaque_id"
+        case receiptHash = "receipt_hash"
+        case uaid
+        case accountId = "account_id"
+        case resolvedAtMs = "resolved_at_ms"
+        case expiresAtMs = "expires_at_ms"
+        case backend
+        case signature
+    }
+}
+
 private struct ToriiAssetAliasResolveRequest: Encodable {
     let alias: String
 }
 
 private struct ToriiAccountAliasResolveRequest: Encodable {
     let alias: String
+}
+
+private struct ToriiIdentifierResolveRequest: Encodable {
+    let policyId: String
+    let input: String?
+    let encryptedInput: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case input
+        case encryptedInput = "encrypted_input"
+    }
 }
 
 public enum PipelineEndpointMode: Sendable, Equatable {
@@ -5995,6 +6129,17 @@ fileprivate enum ToriiRequestValidation {
         return try normalized32ByteHex(value, field: field)
     }
 
+    static func normalizedEvenLengthHex(_ value: String, field: String) throws -> String {
+        var trimmed = try normalizedNonEmpty(value, field: field)
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard !trimmed.isEmpty, trimmed.count.isMultiple(of: 2), Data(hexString: trimmed) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be an even-length hex string.")
+        }
+        return trimmed.lowercased()
+    }
+
     static func normalizedBase64(_ value: String, field: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -8386,6 +8531,41 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func listIdentifierPolicies(completion: @escaping (Result<ToriiIdentifierPolicyListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listIdentifierPolicies() }
+    }
+
+    @discardableResult
+    public func resolveIdentifier(policyId: String,
+                                  input: String? = nil,
+                                  encryptedInputHex: String? = nil,
+                                  completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.resolveIdentifier(
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
+            )
+        }
+    }
+
+    @discardableResult
+    public func issueIdentifierClaimReceipt(accountId: String,
+                                            policyId: String,
+                                            input: String? = nil,
+                                            encryptedInputHex: String? = nil,
+                                            completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.issueIdentifierClaimReceipt(
+                accountId: accountId,
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
+            )
+        }
+    }
+
+    @discardableResult
     public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
                                                     accountIdOrAlias: String,
                                                     completion: @escaping (Result<String, Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -9394,6 +9574,71 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
         try ensureStatus(response, in: 200..<300, responseBody: data)
         return try decodeJSON(ToriiAccountAliasResolution.self, from: data)
+    }
+
+    public func listIdentifierPolicies() async throws -> ToriiIdentifierPolicyListResponse {
+        let request = try makeRequest(
+            path: "/v1/identifier-policies",
+            headers: ["Accept": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiIdentifierPolicyListResponse.self, from: data)
+    }
+
+    public func resolveIdentifier(policyId: String,
+                                  input: String? = nil,
+                                  encryptedInputHex: String? = nil) async throws -> ToriiIdentifierResolutionReceipt? {
+        let body = try JSONEncoder().encode(
+            buildIdentifierResolveRequest(
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
+            )
+        )
+        let request = try makeRequest(
+            path: "/v1/identifiers/resolve",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        return try decodeJSON(ToriiIdentifierResolutionReceipt.self, from: data)
+    }
+
+    public func issueIdentifierClaimReceipt(accountId: String,
+                                            policyId: String,
+                                            input: String? = nil,
+                                            encryptedInputHex: String? = nil) async throws -> ToriiIdentifierResolutionReceipt? {
+        let encodedAccountId = try encodeAccountIdPath(accountId)
+        let body = try JSONEncoder().encode(
+            buildIdentifierResolveRequest(
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
+            )
+        )
+        let request = try makeRequest(
+            path: "/v1/accounts/\(encodedAccountId)/identifiers/claim-receipt",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        return try decodeJSON(ToriiIdentifierResolutionReceipt.self, from: data)
     }
 
     public static func buildCanonicalAssetIdLiteralOffline(assetDefinitionId: String,
@@ -12129,6 +12374,24 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             throw ToriiClientError.invalidPayload("\(field) must be a 32-byte hex string")
         }
         return body.lowercased()
+    }
+
+    private func buildIdentifierResolveRequest(policyId: String,
+                                               input: String?,
+                                               encryptedInputHex: String?) throws -> ToriiIdentifierResolveRequest {
+        let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
+        let normalizedInput = try ToriiRequestValidation.normalizedOptionalNonEmpty(input, field: "input")
+        let normalizedEncryptedInput = try encryptedInputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "encryptedInputHex")
+        }
+        guard (normalizedInput == nil) != (normalizedEncryptedInput == nil) else {
+            throw ToriiClientError.invalidPayload("Exactly one of input or encryptedInputHex must be provided.")
+        }
+        return ToriiIdentifierResolveRequest(
+            policyId: normalizedPolicyId,
+            input: normalizedInput,
+            encryptedInput: normalizedEncryptedInput
+        )
     }
 
     private func makeRequest(path: String,

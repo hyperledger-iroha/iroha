@@ -740,6 +740,177 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testListIdentifierPoliciesAsync() async throws {
+        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifier-policies")
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "total": 1,
+              "items": [{
+                "policy_id":"phone#retail",
+                "owner":"\(owner)",
+                "active":true,
+                "normalization":"phone_e164",
+                "resolver_public_key":"ed25519:resolver-key",
+                "backend":"bfv-affine-sha3-256-v1",
+                "input_encryption":"bfv-v1",
+                "input_encryption_public_parameters":"ABCD",
+                "note":"retail phone policy"
+              }]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let response = try await makeClient().listIdentifierPolicies()
+        XCTAssertEqual(response.total, 1)
+        XCTAssertEqual(response.items.count, 1)
+        XCTAssertEqual(response.items.first?.policyId, "phone#retail")
+        XCTAssertEqual(response.items.first?.owner, owner)
+        XCTAssertEqual(response.items.first?.normalization, .phoneE164)
+        XCTAssertEqual(response.items.first?.inputEncryption, "bfv-v1")
+        XCTAssertEqual(response.items.first?.inputEncryptionPublicParameters, "ABCD")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveIdentifierAsync() async throws {
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let opaqueId = "opaque:\(String(repeating: "11", count: 32))"
+        let receiptHash = String(repeating: "22", count: 32)
+        let uaid = "uaid:\(String(repeating: "33", count: 31))35"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
+            XCTAssertEqual(payload["input"] as? String, "+1 (555) 123-4567")
+            XCTAssertNil(payload["encrypted_input"])
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "resolved_at_ms":42,
+              "expires_at_ms":142,
+              "backend":"bfv-affine-sha3-256-v1",
+              "signature":"\(String(repeating: "aa", count: 64))"
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let receipt = try await makeClient().resolveIdentifier(
+            policyId: " phone#retail ",
+            input: " +1 (555) 123-4567 "
+        )
+        XCTAssertEqual(receipt?.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.uaid, uaid)
+        XCTAssertEqual(receipt?.accountId, accountId)
+        XCTAssertEqual(receipt?.resolvedAtMs, 42)
+        XCTAssertEqual(receipt?.expiresAtMs, 142)
+        XCTAssertEqual(receipt?.backend, "bfv-affine-sha3-256-v1")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveIdentifierReturnsNilOnNotFound() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
+            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 404,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data())
+        }
+
+        let receipt = try await makeClient().resolveIdentifier(
+            policyId: "phone#retail",
+            encryptedInputHex: "0xABCD"
+        )
+        XCTAssertNil(receipt)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIssueIdentifierClaimReceiptAsync() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let opaqueId = "opaque:\(String(repeating: "44", count: 32))"
+        let receiptHash = String(repeating: "55", count: 32)
+        let uaid = "uaid:\(String(repeating: "66", count: 31))67"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/accounts/\(accountId)/identifiers/claim-receipt"
+            )
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
+            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "resolved_at_ms":7,
+              "backend":"bfv-affine-sha3-256-v1",
+              "signature":"\(String(repeating: "bb", count: 64))"
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let receipt = try await makeClient().issueIdentifierClaimReceipt(
+            accountId: accountId,
+            policyId: "phone#retail",
+            encryptedInputHex: "ABCD"
+        )
+        XCTAssertEqual(receipt?.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.uaid, uaid)
+        XCTAssertEqual(receipt?.accountId, accountId)
+    }
+
+    func testIdentifierNormalizationCanonicalizesPhoneAndEmail() throws {
+        XCTAssertEqual(
+            try ToriiIdentifierNormalization.phoneE164.normalize(" +1 (555) 123-4567 ", field: "phone"),
+            "+15551234567"
+        )
+        XCTAssertEqual(
+            try ToriiIdentifierNormalization.emailAddress.normalize(" Alice.Example@Example.COM ", field: "email"),
+            "alice.example@example.com"
+        )
+        XCTAssertEqual(
+            try ToriiIdentifierNormalization.accountNumber.normalize(" gb82-west-1234 ", field: "account"),
+            "GB82WEST1234"
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testBuildAssetIdLiteralResolvingAliases() async throws {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 3, count: 32))
         let accountAddress = try AccountAddress.fromAccount(publicKey: keypair.publicKey)

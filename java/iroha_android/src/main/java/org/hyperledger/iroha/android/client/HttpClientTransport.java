@@ -212,6 +212,47 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, UaidJsonParser::parseManifests, "UAID manifests");
   }
 
+  /** Fetches globally registered identifier policies from `/v1/identifier-policies`. */
+  public CompletableFuture<IdentifierPolicyListResponse> listIdentifierPolicies() {
+    final TransportRequest request = buildJsonGetRequest("/v1/identifier-policies", Map.of());
+    return fetchJson(request, IdentifierJsonParser::parsePolicyList, "identifier policy list");
+  }
+
+  /**
+   * Resolves a hidden identifier by posting either a plaintext input or BFV ciphertext hex to
+   * `/v1/identifiers/resolve`.
+   */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
+      final String policyId, final String input, final String encryptedInputHex) {
+    final byte[] body =
+        encodeJsonBody(buildIdentifierResolvePayload(policyId, input, encryptedInputHex));
+    final TransportRequest request = buildJsonPostRequest("/v1/identifiers/resolve", body);
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier resolve");
+  }
+
+  /**
+   * Issues a claim receipt for {@code accountId} by posting either a plaintext input or BFV
+   * ciphertext hex to `/v1/accounts/{account_id}/identifiers/claim-receipt`.
+   */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
+      final String accountId,
+      final String policyId,
+      final String input,
+      final String encryptedInputHex) {
+    final String normalizedAccountId = normalizeNonBlank(accountId, "accountId");
+    final byte[] body =
+        encodeJsonBody(buildIdentifierResolvePayload(policyId, input, encryptedInputHex));
+    final TransportRequest request =
+        buildJsonPostRequest(
+            "/v1/accounts/"
+                + encodePathSegment(normalizedAccountId)
+                + "/identifiers/claim-receipt",
+            body);
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt");
+  }
+
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
   public static HttpClientTransport createDefault(final ClientConfig config) {
     return new HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config);
@@ -901,6 +942,21 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
+  private TransportRequest buildJsonPostRequest(final String path, final byte[] body) {
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod("POST")
+            .setBody(Objects.requireNonNull(body, "body"))
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Accept", "application/json")
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    return builder.build();
+  }
+
   private URI resolvePath(final String path) {
     if (path == null || path.isBlank()) {
       return config.baseUri();
@@ -998,5 +1054,114 @@ public final class HttpClientTransport implements IrohaClient {
               }
             });
     return future;
+  }
+
+  private <T> CompletableFuture<Optional<T>> fetchJsonAllowingNotFound(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext) {
+    notifyRequest(request);
+    final CompletableFuture<Optional<T>> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                final RuntimeException error =
+                    new RuntimeException(errorContext + " request failed", cause);
+                notifyFailure(request, cause);
+                future.completeExceptionally(error);
+                return;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              if (response.statusCode() == 404) {
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.empty());
+                return;
+              }
+              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                final RuntimeException error =
+                    new RuntimeException(
+                        errorContext + " request failed with status " + response.statusCode());
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+                return;
+              }
+              try {
+                final T parsed = parser.apply(response.body());
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.of(parsed));
+              } catch (final RuntimeException ex) {
+                notifyFailure(request, ex);
+                future.completeExceptionally(ex);
+              }
+            });
+    return future;
+  }
+
+  private static byte[] encodeJsonBody(final Map<String, Object> payload) {
+    return JsonEncoder.encode(Objects.requireNonNull(payload, "payload"))
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static Map<String, Object> buildIdentifierResolvePayload(
+      final String policyId, final String input, final String encryptedInputHex) {
+    final String normalizedPolicyId = normalizeNonBlank(policyId, "policyId");
+    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null ? null : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of input or encryptedInputHex must be provided");
+    }
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("policy_id", normalizedPolicyId);
+    if (normalizedInput != null) {
+      payload.put("input", normalizedInput);
+    } else {
+      payload.put("encrypted_input", normalizedEncryptedInput);
+    }
+    return payload;
+  }
+
+  private static String normalizeOptionalNonBlank(final String value, final String field) {
+    return value == null ? null : normalizeNonBlank(value, field);
+  }
+
+  private static String normalizeNonBlank(final String value, final String field) {
+    final String trimmed = Objects.requireNonNull(value, field + " must not be null").trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    return trimmed;
+  }
+
+  private static String normalizeEvenLengthHex(final String value, final String field) {
+    String trimmed = normalizeNonBlank(value, field);
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      trimmed = trimmed.substring(2);
+    }
+    if ((trimmed.length() & 1) != 0 || trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must be an even-length hex string");
+    }
+    for (int i = 0; i < trimmed.length(); i++) {
+      final char c = trimmed.charAt(i);
+      final boolean isHex =
+          (c >= '0' && c <= '9')
+              || (c >= 'a' && c <= 'f')
+              || (c >= 'A' && c <= 'F');
+      if (!isHex) {
+        throw new IllegalArgumentException(field + " must be an even-length hex string");
+      }
+    }
+    return trimmed.toLowerCase();
   }
 }
