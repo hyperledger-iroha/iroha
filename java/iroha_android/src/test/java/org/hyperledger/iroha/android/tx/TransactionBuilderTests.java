@@ -48,7 +48,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
-            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .setAuthority("bob@wonderland")
             .setCreationTimeMs(1_735_000_001_234L)
             .setExecutable(Executable.ivm("payload-bytes".getBytes()))
             .setTimeToLiveMs(10_000L)
@@ -84,7 +84,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000003")
-            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .setAuthority("carol@wonderland")
             .setCreationTimeMs(1_735_000_111_000L)
             .setExecutable(Executable.ivm("alias-sign".getBytes()))
             .setTimeToLiveMs(null)
@@ -153,7 +153,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000004")
-            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .setAuthority("dave@wonderland")
             .setExecutable(Executable.ivm("attested".getBytes()))
             .build();
 
@@ -178,7 +178,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000005")
-            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .setAuthority("erin@wonderland")
             .setExecutable(Executable.ivm("software".getBytes()))
             .build();
 

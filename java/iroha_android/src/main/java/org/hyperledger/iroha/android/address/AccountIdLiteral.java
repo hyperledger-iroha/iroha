@@ -8,27 +8,27 @@ public final class AccountIdLiteral {
   private AccountIdLiteral() {}
 
   /**
-   * Normalizes an encoded account identifier.
-   *
-   * <p>Accepted format is canonical I105. Legacy account identifiers with an {@code @domain}
-   * suffix are rejected.
+   * Extracts the IH58 address portion from a {@code "<address>@<domain>"} account identifier.
    *
    * @param accountId account identifier string
-   * @return normalized encoded account identifier
+   * @return IH58 address portion without the domain suffix
    */
-  public static String extractI105Address(final String accountId) {
+  public static String extractIh58Address(final String accountId) {
     final String value = Objects.requireNonNull(accountId, "accountId").trim();
     if (value.isEmpty()) {
       throw new IllegalArgumentException("accountId must not be blank");
     }
-    if (value.indexOf('@') >= 0) {
-      throw new IllegalArgumentException("accountId must not include @domain suffix");
+    final int atIndex = value.lastIndexOf('@');
+    if (atIndex <= 0 || atIndex == value.length() - 1) {
+      throw new IllegalArgumentException("Invalid account ID format: " + value);
     }
-    try {
-      AccountAddress.parseEncoded(value, null);
-      return value;
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalArgumentException("accountId must be canonical I105 encoded", ex);
-    }
+    return value.substring(0, atIndex);
+  }
+
+  /**
+   * Backward-compatible alias for callers that still use the older I105 naming.
+   */
+  public static String extractI105Address(final String accountId) {
+    return extractIh58Address(accountId);
   }
 }

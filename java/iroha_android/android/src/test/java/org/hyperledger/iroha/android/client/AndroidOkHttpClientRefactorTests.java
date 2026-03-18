@@ -20,7 +20,6 @@ import okhttp3.WebSocketListener;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okio.ByteString;
-import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnector;
 import org.hyperledger.iroha.android.client.stream.ServerSentEvent;
@@ -260,7 +259,7 @@ public final class AndroidOkHttpClientRefactorTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority(sampleAuthority(seed))
+            .setAuthority("telemetry@wonderland")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)
@@ -279,17 +278,6 @@ public final class AndroidOkHttpClientRefactorTests {
     Arrays.fill(signature, (byte) (seed + 1));
     Arrays.fill(publicKey, (byte) (seed + 2));
     return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
-  }
-
-  private static String sampleAuthority(final byte seed) {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, seed);
-    try {
-      return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build sample authority", ex);
-    }
   }
 
   private static TelemetryOptions telemetryOptions() {

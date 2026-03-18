@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.model.InstructionBox;
 
 /** Typed builder for {@code RemoveKeyValue} instructions spanning all supported entity types. */
@@ -155,21 +154,13 @@ public final class RemoveKeyValueInstruction implements InstructionTemplate {
 
     Builder setTarget(final Target target, final String id) {
       Objects.requireNonNull(target, "target");
-      final String normalizedId = normalizeTargetId(target, id);
+      Objects.requireNonNull(id, "id");
       if (this.target != null && this.target != target) {
         throw new IllegalStateException("Instruction target already set to " + this.target);
       }
       this.target = target;
-      this.objectId = normalizedId;
+      this.objectId = id;
       return this;
-    }
-
-    private static String normalizeTargetId(final Target target, final String id) {
-      final String raw = Objects.requireNonNull(id, "id");
-      if (target == Target.ACCOUNT) {
-        return AccountIdLiteral.extractI105Address(raw);
-      }
-      return raw;
     }
 
     public Builder setKey(final String key) {
@@ -199,3 +190,4 @@ public final class RemoveKeyValueInstruction implements InstructionTemplate {
     }
   }
 }
+

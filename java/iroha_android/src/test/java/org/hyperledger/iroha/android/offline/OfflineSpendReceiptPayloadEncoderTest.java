@@ -2,6 +2,9 @@ package org.hyperledger.iroha.android.offline;
 
 /**
  * Tests for OfflineSpendReceiptPayloadEncoder JNI binding.
+ *
+ * <p>Set IROHA_NATIVE_REQUIRED=1 to make tests fail when native library is unavailable.
+ * This is useful in CI pipelines that have the native library built.
  */
 public final class OfflineSpendReceiptPayloadEncoderTest {
 
@@ -14,16 +17,24 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
 
   private static void encodeReturnsNonEmptyBytes() {
     if (!OfflineSpendReceiptPayloadEncoder.isNativeAvailable()) {
+      boolean nativeRequired = "1".equals(System.getenv("IROHA_NATIVE_REQUIRED"));
+      if (nativeRequired) {
+        throw new AssertionError(
+            "IROHA_NATIVE_REQUIRED=1 but connect_norito_bridge native library is unavailable. "
+                + "This indicates the .so file was not rebuilt after adding "
+                + "OfflineSpendReceiptPayloadEncoder JNI function.");
+      }
       System.out.println(
-          "[IrohaAndroid] OfflineSpendReceiptPayloadEncoderTest skipped (native unavailable).");
+          "[IrohaAndroid] OfflineSpendReceiptPayloadEncoderTest skipped (native unavailable). "
+              + "Set IROHA_NATIVE_REQUIRED=1 to fail instead.");
       return;
     }
 
-    // Valid fixtures from fixtures/offline_allowance/android-demo.
-    final String sender = "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan";
-    final String receiver = "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC";
-    final String asset =
-        "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c0000000000000005c0d942ec37b449c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e000000000000004600000000000000656430313230413938424146423036363343453038443735454244353036464543333841383445353736413743394230383937363933454434423034464439454632443138442f0000000000000014000000000000000c000000000000000400000000000000736f72610b000000000000000300000000000000757364";
+    // Test values derived from Rust unit test (encode_offline_spend_receipt_payload_matches_native)
+    // These use the compressed AccountAddress format
+    final String sender = "RnuaJGGDLA57fKeoK1TaFQWhYLxMXY9sEqWhSviYfXxDwTkLdBw3Khq2";
+    final String receiver = "RnuaJGGDL9ruds8g1c7AAz8cq1kS16u1LDptWe8FC3NLR4qs1RhLjNjk";
+    final String asset = "xor##" + sender;
 
     // tx_id must have LSB=1 (this is the hash from Rust test)
     final String txIdHex = "e2a94e18647fe0c6283a31e40c46ae1cc5f0867650f6834e4f01e34284adc9c7";

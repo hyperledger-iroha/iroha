@@ -13,7 +13,7 @@ public class MainActivity extends Activity {
     byte[] dummyKey = new byte[32];
     String message;
     try {
-      AccountAddress address = AccountAddress.fromAccount(dummyKey, "ed25519");
+      AccountAddress address = AccountAddress.fromAccount("wonderland", dummyKey, "ed25519");
       message =
           "Iroha sample app linked against the AAR.\n\n"
               + "Address (hex):\n"

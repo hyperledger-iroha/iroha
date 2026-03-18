@@ -5,13 +5,11 @@ import static org.junit.Assert.assertNotNull;
 
 import java.net.URI;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
-import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -57,7 +55,7 @@ public final class HttpClientRejectCodeOkHttpTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority(sampleAuthority(seed))
+            .setAuthority("reject@wonderland")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)
@@ -74,16 +72,5 @@ public final class HttpClientRejectCodeOkHttpTests {
     final byte[] signature = new byte[64];
     final byte[] publicKey = new byte[32];
     return new SignedTransaction(encoded, signature, publicKey, codec.schemaName());
-  }
-
-  private static String sampleAuthority(final byte seed) {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, seed);
-    try {
-      return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build sample authority", ex);
-    }
   }
 }

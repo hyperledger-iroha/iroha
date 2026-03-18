@@ -328,6 +328,44 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+    use tokio::runtime::Runtime;
+
+    #[test]
+    fn build_state_succeeds_without_executor_bytecode() {
+        let rt = Runtime::new().unwrap();
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(
+            "test_domain".parse().expect("valid domain"),
+            keypair.public_key().clone(),
+        );
+
+        build_state(rt.handle(), &account_id, keypair.private_key());
+    }
+
+    #[test]
+    fn build_state_records_init_transaction() {
+        let rt = Runtime::new().unwrap();
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(
+            "test_domain".parse().expect("valid domain"),
+            keypair.public_key().clone(),
+        );
+
+        let state = build_state(rt.handle(), &account_id, keypair.private_key());
+
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let tx = TransactionBuilder::new(chain_id, account_id.clone())
+            .with_instructions([Log::new(Level::INFO, "init".to_string())])
+            .sign(keypair.private_key());
+
+        assert!(state.transactions.view().get(&tx.hash()).is_some());
+    }
+}
+
 fn construct_asset_definition_id(i: usize, domain_id: DomainId) -> AssetDefinitionId {
     AssetDefinitionId::new(
         domain_id,

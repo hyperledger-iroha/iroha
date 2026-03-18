@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.address.AssetIdLiteral;
 
 /** Typed builder for the `MintAsset` instruction. */
 public final class MintAssetInstruction implements InstructionTemplate {
@@ -88,7 +87,7 @@ public final class MintAssetInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setAssetId(final String assetId) {
-      this.assetId = AssetIdLiteral.normalizeEncoded(assetId);
+      this.assetId = Objects.requireNonNull(assetId, "assetId");
       return this;
     }
 

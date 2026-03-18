@@ -7,6 +7,7 @@ public final class ExplorerAccountQrSnapshot {
 
   private final String canonicalId;
   private final String literal;
+  private final String addressFormat;
   private final int networkPrefix;
   private final int modules;
   private final int qrVersion;
@@ -16,6 +17,7 @@ public final class ExplorerAccountQrSnapshot {
   public ExplorerAccountQrSnapshot(
       final String canonicalId,
       final String literal,
+      final String addressFormat,
       final int networkPrefix,
       final int modules,
       final int qrVersion,
@@ -23,6 +25,7 @@ public final class ExplorerAccountQrSnapshot {
       final String svg) {
     this.canonicalId = requireNonEmpty(canonicalId, "canonicalId");
     this.literal = requireNonEmpty(literal, "literal");
+    this.addressFormat = requireNonEmpty(addressFormat, "addressFormat");
     this.networkPrefix = requirePositive(networkPrefix, "networkPrefix");
     this.modules = requirePositive(modules, "modules");
     this.qrVersion = requirePositive(qrVersion, "qrVersion");
@@ -36,6 +39,10 @@ public final class ExplorerAccountQrSnapshot {
 
   public String literal() {
     return literal;
+  }
+
+  public String addressFormat() {
+    return addressFormat;
   }
 
   public int networkPrefix() {

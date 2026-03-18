@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
@@ -14,12 +15,14 @@ public final class OfflineQueryEnvelope {
   private final Object sort;
   private final Long limit;
   private final Long offset;
+  private final String addressFormat;
 
   private OfflineQueryEnvelope(final Builder builder) {
     this.filter = builder.filter;
     this.sort = builder.sort;
     this.limit = builder.limit;
     this.offset = builder.offset;
+    this.addressFormat = builder.addressFormat;
   }
 
   public byte[] toJsonBytes() {
@@ -35,6 +38,9 @@ public final class OfflineQueryEnvelope {
     }
     if (offset != null) {
       json.put("offset", offset);
+    }
+    if (addressFormat != null && !addressFormat.isBlank()) {
+      json.put("address_format", addressFormat);
     }
     return JsonEncoder.encode(json).getBytes(StandardCharsets.UTF_8);
   }
@@ -52,6 +58,7 @@ public final class OfflineQueryEnvelope {
     params.sort().map(OfflineQueryEnvelope::parseJson).ifPresent(builder::setSortNode);
     params.limit().ifPresent(builder::setLimit);
     params.offset().ifPresent(builder::setOffset);
+    params.addressFormat().ifPresent(builder::setAddressFormat);
     return builder.build();
   }
 
@@ -68,6 +75,7 @@ public final class OfflineQueryEnvelope {
     private Object sort;
     private Long limit;
     private Long offset;
+    private String addressFormat;
 
     private Builder() {}
 
@@ -104,6 +112,11 @@ public final class OfflineQueryEnvelope {
         throw new IllegalArgumentException("offset must be positive");
       }
       this.offset = offset;
+      return this;
+    }
+
+    public Builder setAddressFormat(final String addressFormat) {
+      this.addressFormat = addressFormat;
       return this;
     }
 

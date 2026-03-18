@@ -33,6 +33,14 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .expect("Failed building the Runtime")
 });
 
+// Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
+static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime")
+});
+
 fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
     let domain_id: DomainId = "domain".parse().unwrap();
     let create_domain = Register::domain(Domain::new(domain_id.clone()));

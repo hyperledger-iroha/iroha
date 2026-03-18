@@ -10,11 +10,11 @@ public class SampleAddressTest {
   @Test
   public void buildsAddressFromAarSurface() throws AccountAddress.AccountAddressException {
     byte[] key = new byte[32];
-    AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
+    AccountAddress address = AccountAddress.fromAccount("wonderland", key, "ed25519");
 
     assertTrue(address.canonicalHex().startsWith("0x"));
     AccountAddress.DisplayFormats formats = address.displayFormats();
-    assertEquals(address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT), formats.i105);
-    assertTrue(formats.i105Default.startsWith("sora"));
+    assertEquals(address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX), formats.ih58);
+    assertTrue(formats.compressed.startsWith("sora"));
   }
 }

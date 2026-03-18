@@ -11,7 +11,7 @@ public final class MultisigSeedHelperTests {
 
   @Test
   public void derivedControllerIdIsRejected() throws Exception {
-    final String domain = AccountAddress.DEFAULT_DOMAIN_NAME;
+    final String domain = "derived";
     final String signer = accountIdForSeed(domain, (byte) 7);
     final MultisigSpec spec =
         MultisigSpec.builder()
@@ -40,7 +40,7 @@ public final class MultisigSeedHelperTests {
 
   @Test
   public void nonDerivedControllerIdIsAllowed() throws Exception {
-    final String domain = AccountAddress.DEFAULT_DOMAIN_NAME;
+    final String domain = "non-derived";
     final String signer = accountIdForSeed(domain, (byte) 8);
     final MultisigSpec spec =
         MultisigSpec.builder()
@@ -60,56 +60,36 @@ public final class MultisigSeedHelperTests {
   }
 
   @Test
-  public void deterministicControllerCheckRejectsPublicKeyMultihashLiteral() throws Exception {
-    final String domain = AccountAddress.DEFAULT_DOMAIN_NAME;
-    final String signer = accountIdForSeed(domain, (byte) 0x21);
+  public void derivedControllerIdIsRejectedForMultihashLiteral() {
+    final String domain = "derived-literal";
+    final byte[] signerKey = new byte[32];
+    java.util.Arrays.fill(signerKey, (byte) 0x21);
+    final String signerLiteral = publicKeyLiteral(signerKey);
+    final String signerId = signerLiteral + "@" + domain;
     final MultisigSpec spec =
         MultisigSpec.builder()
             .setQuorum(1)
             .setTransactionTtlMs(1)
-            .addSignatory(signer, 1)
+            .addSignatory(signerId, 1)
             .build();
 
     final Optional<byte[]> derivedKey = MultisigSeedHelper.deriveDeterministicPublicKey(domain, spec);
     assert derivedKey.isPresent() : "derived key must be computed";
 
     final String derivedLiteral = publicKeyLiteral(derivedKey.get());
-    assert !MultisigSeedHelper.isDeterministicDerivedControllerId(derivedLiteral, spec)
-        : "public key multihash literals must not pass encoded account-id checks";
-  }
+    final String multisigAccount = derivedLiteral + "@" + domain;
+    assert MultisigSeedHelper.isDeterministicDerivedControllerId(multisigAccount, spec)
+        : "derived controller literal must be rejected";
 
-  @Test
-  public void deterministicSeedDerivationRejectsCanonicalHexSignatory() throws Exception {
-    final String domain = AccountAddress.DEFAULT_DOMAIN_NAME;
-    final byte[] signerKey = new byte[32];
-    java.util.Arrays.fill(signerKey, (byte) 0x31);
-    final String canonical = AccountAddress.fromAccount(signerKey, "ed25519").canonicalHex();
     try {
-      MultisigSpec.builder()
-          .setQuorum(1)
-          .setTransactionTtlMs(1)
-          .addSignatory(canonical, 1)
+      MultisigRegisterInstruction.builder()
+          .setAccountId(multisigAccount)
+          .setSpec(spec)
           .build();
-      throw new AssertionError("canonical-hex signatories must be rejected");
+      throw new AssertionError("expected derived controller rejection");
     } catch (final IllegalArgumentException expected) {
       // expected
     }
-  }
-
-  @Test
-  public void deterministicControllerCheckRejectsNestedDomainIdentifier() throws Exception {
-    final String domain = AccountAddress.DEFAULT_DOMAIN_NAME;
-    final String signer = accountIdForSeed(domain, (byte) 7);
-    final MultisigSpec spec =
-        MultisigSpec.builder()
-            .setQuorum(1)
-            .setTransactionTtlMs(1)
-            .addSignatory(signer, 1)
-            .build();
-
-    final String nested = accountIdForSeed(domain, (byte) 8) + "@fallback";
-    assert !MultisigSeedHelper.isDeterministicDerivedControllerId(nested, spec)
-        : "nested-domain identifiers must be rejected";
   }
 
   private static String accountIdForSeed(final String domain, final byte seed) throws Exception {
@@ -122,8 +102,9 @@ public final class MultisigSeedHelperTests {
 
   private static String accountIdForPublicKey(final String domain, final byte[] publicKey)
       throws Exception {
-    final AccountAddress address = AccountAddress.fromAccount(publicKey, "ed25519");
-    return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final AccountAddress address = AccountAddress.fromAccount(domain, publicKey, "ed25519");
+    final String ih58 = address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+    return ih58 + "@" + domain;
   }
 
   private static String publicKeyLiteral(final byte[] publicKey) {

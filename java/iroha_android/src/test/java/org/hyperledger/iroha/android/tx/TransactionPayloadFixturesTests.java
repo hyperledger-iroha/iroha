@@ -21,7 +21,7 @@ public final class TransactionPayloadFixturesTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000002");
-    payload.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
+    payload.put("authority", "alice@wonderland");
     payload.put("creation_time_ms", 1_735_000_000_000L);
     payload.put("executable", executable);
     payload.put("metadata", new LinkedHashMap<>());
@@ -29,7 +29,7 @@ public final class TransactionPayloadFixturesTests {
     final Map<String, Object> fixture = new LinkedHashMap<>();
     fixture.put("name", "missing-wire-fields");
     fixture.put("chain", "00000002");
-    fixture.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
+    fixture.put("authority", "alice@wonderland");
     fixture.put("creation_time_ms", 1_735_000_000_000L);
     fixture.put("payload", payload);
 
