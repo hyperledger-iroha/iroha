@@ -1682,6 +1682,81 @@ pub struct AliasErrorResponseDto {
     pub error: String,
 }
 
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Summary information for a registered identifier policy.
+pub struct IdentifierPolicySummaryDto {
+    pub policy_id: String,
+    pub owner: String,
+    pub active: bool,
+    pub normalization: String,
+    pub resolver_public_key: String,
+    pub backend: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption_public_parameters: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// List response for identifier policies.
+pub struct IdentifierPolicyListDto {
+    pub total: u64,
+    pub items: Vec<IdentifierPolicySummaryDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+/// Resolve a raw identifier under one policy namespace.
+pub struct IdentifierResolveRequestDto {
+    pub policy_id: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub input: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub encrypted_input: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Successful response emitted by `/v1/identifiers/resolve`.
+pub struct IdentifierResolveResponseDto {
+    pub policy_id: String,
+    pub opaque_id: String,
+    pub uaid: String,
+    pub account_id: String,
+    pub resolved_at_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
+    pub backend: String,
+    pub signature: String,
+}
+
 impl<G> TelemetryGate for MaybeTelemetry<G>
 where
     G: TelemetryGate + Clone,

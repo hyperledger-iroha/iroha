@@ -215,6 +215,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
+            identifier_resolver: None,
             // minimal defaults
             query_rate_per_authority_per_sec: None,
             query_burst_per_authority: None,

@@ -5,7 +5,8 @@ use iroha_primitives::numeric::Numeric;
 use super::Visit;
 use crate::{
     isi::{
-        Instruction, Log, RegisterPeerWithPop,
+        ActivateIdentifierPolicy, ClaimIdentifier, Instruction, Log, RegisterIdentifierPolicy,
+        RegisterPeerWithPop, RevokeIdentifier,
         nexus::SetLaneRelayEmergencyValidators,
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
@@ -69,6 +70,14 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         .downcast_ref::<SetLaneRelayEmergencyValidators>()
     {
         visitor.visit_set_lane_relay_emergency_validators(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterIdentifierPolicy>() {
+        visitor.visit_register_identifier_policy(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<ActivateIdentifierPolicy>() {
+        visitor.visit_activate_identifier_policy(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<ClaimIdentifier>() {
+        visitor.visit_claim_identifier(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RevokeIdentifier>() {
+        visitor.visit_revoke_identifier(v);
     } else {
         unreachable!("Unknown instruction type");
     }
@@ -227,6 +236,10 @@ macro_rules! instruction_visitors {
             visit_activate_public_lane_validator(&ActivatePublicLaneValidator),
             visit_exit_public_lane_validator(&ExitPublicLaneValidator),
             visit_set_lane_relay_emergency_validators(&SetLaneRelayEmergencyValidators),
+            visit_register_identifier_policy(&RegisterIdentifierPolicy),
+            visit_activate_identifier_policy(&ActivateIdentifierPolicy),
+            visit_claim_identifier(&ClaimIdentifier),
+            visit_revoke_identifier(&RevokeIdentifier),
         }
     };
 }

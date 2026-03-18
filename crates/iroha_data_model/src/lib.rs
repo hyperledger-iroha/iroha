@@ -84,6 +84,8 @@ pub mod fraud;
 pub mod hijiri;
 /// Identifier newtypes and supporting helpers.
 pub mod id;
+/// Hidden-function-backed identifier policy and claim types.
+pub mod identifier;
 /// IPFS helper types used for off-chain references.
 pub mod ipfs;
 /// Instruction-set interface (ISI) data types.
@@ -340,6 +342,7 @@ pub mod prelude {
         events::prelude::*,
         executor::prelude::*,
         fastpq::*,
+        identifier::prelude::*,
         ipfs::IpfsPath,
         isi::prelude::*,
         kaigi::prelude::*,

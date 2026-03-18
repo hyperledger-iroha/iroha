@@ -1348,6 +1348,11 @@ pub mod torii {
             Vec::new()
         }
     }
+    /// Identifier resolver defaults (disabled unless explicitly configured).
+    pub mod identifier_resolver {
+        /// Master enable switch for identifier-resolution runtime wiring.
+        pub const ENABLED: bool = false;
+    }
     /// Operator request-signature defaults for Torii operator endpoints.
     pub mod operator_signatures {
         /// Master enable switch for operator signature authentication.

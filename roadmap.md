@@ -1,6 +1,108 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-17
+Last updated: 2026-03-18
+
+Latest sync (2026-03-18 BFV-encrypted identifier input through Torii):
+`crates/iroha_crypto/src/fhe_bfv.rs`,
+`crates/iroha_torii/src/identifier_resolution.rs`, and
+`crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}` now carry the first
+end-to-end encrypted-input slice for hidden identifier resolution:
+
+- policies can publish BFV public parameters in `PolicyCommitment.public_parameters`,
+- clients can fetch those parameters from `GET /v1/identifier-policies`,
+- `POST /v1/identifiers/resolve` and
+  `POST /v1/accounts/{account_id}/identifiers/claim-receipt` now accept either
+  plaintext `input` or BFV `encrypted_input` (exactly one),
+- Torii derives and verifies the matching BFV key material from the resolver
+  secret + policy id before decrypting the client envelope,
+- claim/receipt semantics and the on-chain `opaque_id -> uaid -> account`
+  binding remain unchanged.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_crypto bfv -- --nocapture`
+- `cargo test -p iroha_torii identifier_ --lib -- --nocapture`
+- `cargo test -p iroha_torii alias_resolve_scans_account_labels_when_alias_index_is_missing --lib -- --nocapture`
+- `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture`
+
+Open work for this slice remains:
+- move from “BFV-protected input transport + PRF derivation” to a truly
+  homomorphic/private-function evaluation path if that is still the target,
+- expose SDK helpers for building the BFV request envelope across JS/Swift/Android,
+- decide whether BFV policy parameters should become explicit first-class
+  on-chain identifier-policy fields instead of riding in opaque commitment bytes.
+
+Latest sync (2026-03-18 BFV baseline in `iroha_crypto`):
+`crates/iroha_crypto/src/fhe_bfv.rs` now provides a real scalar BFV baseline
+for deterministic prototyping and tests:
+
+- seeded BFV key generation,
+- public-key encryption / secret-key decryption,
+- ciphertext addition,
+- ciphertext-by-plaintext multiplication,
+- ciphertext-by-ciphertext multiplication with relinearization,
+- affine-circuit evaluation over scalar ciphertext inputs,
+- parameter validation that rejects scalar-overflow regimes for the current
+  schoolbook implementation.
+
+The broken ct-ct multiplication path was fixed by switching the multiply flow to
+use the full integer negacyclic product before the `t/q` rescale-and-round
+step, instead of reducing into `R_q` too early.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_crypto bfv -- --nocapture`
+
+Open work for the FHE slice remains:
+- wire encrypted-input request/response surfaces for identifier resolution or
+  other real protocol consumers instead of the current plaintext Torii path,
+- decide whether BFV is actually the right backend for identifier resolution
+  versus a different private-function construction,
+- add accelerated deterministic backends (NTT/SIMD/Metal/CUDA where
+  appropriate) behind feature flags once the API stabilizes.
+
+Latest sync (2026-03-18 UAID-integrated hidden identifier policies):
+`crates/iroha_crypto/src/ram_lfe.rs`,
+`crates/iroha_data_model/src/{identifier.rs,isi/identifier.rs}`,
+`crates/iroha_core/src/{state.rs,smartcontracts/isi/identifier.rs}`,
+and `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,openapi.rs}` now
+ship the first end-to-end slice of the generic hidden-identifier design, now
+with the most obvious protocol/runtime gaps closed:
+
+- reusable hidden-function commitment/request/response plumbing in `iroha_crypto`,
+- a global `IdentifierPolicyId` namespace (`<kind>#<business_rule>`),
+- on-chain `IdentifierPolicy` + `IdentifierClaimRecord` storage,
+- built-in policy normalization modes (`Exact`, `LowercaseTrimmed`,
+  `PhoneE164`, `EmailAddress`, `AccountNumber`),
+- ISIs for policy registration/activation and claim/revoke lifecycle, with
+  `ClaimIdentifier` now bound to a signed `IdentifierResolutionReceipt`,
+- Torii read surfaces for policy listing and identifier resolution with signed
+  receipts, plus `POST /v1/accounts/{account_id}/identifiers/claim-receipt`,
+- Torii access/rate checks on the identifier endpoints instead of a bespoke
+  bypass path,
+- config-driven resolver/runtime wiring through `torii.identifier_resolver`,
+- world-state invariants tying `opaque_id -> uaid -> account` back to the
+  account’s advertised opaque-id set.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_crypto ram_lfe -- --nocapture`
+- `cargo check -p iroha_data_model -p iroha_config -p iroha_core -p iroha_torii`
+- `cargo test -p iroha_data_model phone_normalization_strips_formatting -- --nocapture`
+- `cargo test -p iroha_data_model --lib email_normalization_lowercases_and_trims -- --nocapture`
+- `cargo test -p iroha_data_model --lib identifier_policy_id_roundtrip -- --nocapture`
+- `cargo test -p iroha_config torii_identifier_resolver_parses -- --nocapture`
+- `cargo test -p iroha_core identifier_ --lib -- --nocapture`
+- `cargo test -p iroha_torii identifier_ --lib -- --nocapture`
+- `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture`
+
+Open work for this slice remains:
+- stronger private-function backend beyond the committed `HKDF-SHA3-512` PRF
+  evaluator when the repo is ready to carry that complexity,
+- a final HTTP submit path for claim/revoke/onboarding orchestration and SDK
+  helpers around receipt acquisition + submission,
+- stronger policy-specific verification proofs and rate-limit/audit controls for
+  large-scale identifier lookup.
 
 Latest sync (2026-03-17 late contiguous-frontier sparse recovery):
 `crates/iroha_core/src/sumeragi/main_loop.rs`,

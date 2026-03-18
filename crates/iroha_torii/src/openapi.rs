@@ -3644,6 +3644,49 @@ fn account_paths() -> Map {
     paths
 }
 
+fn identifier_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/identifier-policies".to_owned(),
+        Value::Object(json_get_operation(
+            "Identifiers",
+            "List identifier policies.",
+            "List globally registered hidden-function identifier policies and their public metadata.",
+            "#/components/schemas/IdentifierPolicyListResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/identifiers/resolve".to_owned(),
+        Value::Object(json_post_operation(
+            "Identifiers",
+            "Resolve an identifier.",
+            "Resolve a normalized identifier input under a hidden-function policy and return the bound canonical account target when a live claim exists.",
+            "#/components/schemas/IdentifierResolveRequest",
+            "#/components/schemas/IdentifierResolveResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/{account_id}/identifiers/claim-receipt".to_owned(),
+        Value::Object({
+            let params = vec![string_path_param(
+                "account_id",
+                "Canonical target account identifier for the claim receipt.",
+            )];
+            json_post_operation(
+                "Identifiers",
+                "Issue an identifier claim receipt.",
+                "Normalize a raw identifier input under a hidden-function policy and return a signed receipt that can be embedded into `ClaimIdentifier`.",
+                "#/components/schemas/IdentifierResolveRequest",
+                "#/components/schemas/IdentifierResolveResponse",
+                params,
+            )
+        }),
+    );
+    paths
+}
+
 fn domain_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -6531,6 +6574,7 @@ fn paths_section() -> Map {
     paths.extend(governance_paths());
     paths.extend(runtime_paths());
     paths.extend(account_paths());
+    paths.extend(identifier_paths());
     paths.extend(domain_paths());
     paths.extend(asset_paths());
     paths.extend(nft_paths());
@@ -7753,6 +7797,148 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Backend source for the alias mapping."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierPolicySummary".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["policy_id", "owner", "active", "normalization", "resolver_public_key", "backend"],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace literal (`<kind>#<business_rule>`)."
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "Canonical account identifier that owns the policy."
+                },
+                "active": {
+                    "type": "boolean",
+                    "description": "Whether the policy is active for new claims and resolutions."
+                },
+                "normalization": {
+                    "type": "string",
+                    "description": "Client-side canonicalization mode required before encrypted input is produced."
+                },
+                "resolver_public_key": {
+                    "type": "string",
+                    "description": "Public key used to verify resolution receipts."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "Hidden-function backend advertised by the policy commitment."
+                },
+                "input_encryption": {
+                    "type": "string",
+                    "description": "Optional encrypted-input scheme published for this policy."
+                },
+                "input_encryption_public_parameters": {
+                    "type": "string",
+                    "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters."
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional human-readable note attached to the policy."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierPolicyListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["total", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "total": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Number of policies returned."
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/IdentifierPolicySummary"
+                    },
+                    "description": "Registered identifier policies."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierResolveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["policy_id"],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace literal (`<kind>#<business_rule>`)."
+                },
+                "input": {
+                    "type": "string",
+                    "description": "Plaintext identifier input. Supply exactly one of `input` or `encrypted_input`."
+                },
+                "encrypted_input": {
+                    "type": "string",
+                    "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input` or `encrypted_input`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierResolveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "policy_id",
+                "opaque_id",
+                "uaid",
+                "account_id",
+                "resolved_at_ms",
+                "backend",
+                "signature"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace used for resolution."
+                },
+                "opaque_id": {
+                    "type": "string",
+                    "description": "Derived opaque identifier literal."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "UAID currently bound to the opaque identifier."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier currently bound to the UAID."
+                },
+                "resolved_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Resolution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "Hidden-function backend that produced the opaque identifier."
+                },
+                "signature": {
+                    "type": "string",
+                    "description": "Hex-encoded resolver signature over the canonical receipt payload."
                 }
             }
         }),

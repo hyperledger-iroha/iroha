@@ -4,7 +4,8 @@ use iroha_primitives::numeric::Numeric;
 
 use crate::{
     isi::{
-        Log, RegisterPeerWithPop,
+        ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
+        RegisterPeerWithPop, RevokeIdentifier,
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
         },

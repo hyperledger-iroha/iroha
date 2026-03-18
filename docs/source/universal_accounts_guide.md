@@ -17,6 +17,10 @@ publish` run (roadmap reference: `roadmap.md:2209`).
   `crates/iroha_data_model/src/nexus/manifest.rs::UniversalAccountId`.
 - Account records (`Account` and `AccountDetails`) now carry an optional `uaid`
   field so applications can learn the identifier without bespoke hashing.
+- Hidden-function identifier policies can bind arbitrary normalized inputs
+  (phone numbers, emails, account numbers, partner strings) to `opaque:` IDs
+  under a UAID namespace. The on-chain pieces are `IdentifierPolicy`,
+  `IdentifierClaimRecord`, and the `opaque_id -> uaid` index.
 - Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
   to the dataspace accounts referenced by active manifests. Torii reuses that
   map for the `/portfolio` and `/uaids/*` APIs.
@@ -27,6 +31,54 @@ publish` run (roadmap reference: `roadmap.md:2209`).
   `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
   (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
   digest cannot drift across languages.
+
+## 1.1 Hidden identifier policies
+
+UAIDs are now the anchor for a second identity layer:
+
+- A global `IdentifierPolicyId` (`<kind>#<business_rule>`) defines the
+  namespace, public commitment metadata, resolver verification key, and the
+  canonical input normalisation mode (`Exact`, `LowercaseTrimmed`,
+  `PhoneE164`, `EmailAddress`, or `AccountNumber`).
+- A claim binds one derived `opaque:` identifier to exactly one UAID and one
+  canonical `AccountId` under that policy, but the chain only accepts the
+  claim when it is accompanied by a signed `IdentifierResolutionReceipt`.
+- Resolution remains a `resolve -> transfer` flow. Torii resolves the opaque
+  handle and returns the canonical `AccountId`; transfers still target the
+  canonical account, not `uaid:` or `opaque:` literals directly.
+- Policies can now publish BFV input-encryption parameters through
+  `PolicyCommitment.public_parameters`. When present, Torii advertises them on
+  `GET /v1/identifier-policies`, and clients may submit BFV-wrapped input
+  instead of plaintext.
+- The identifier routes go through the same Torii access-token and rate-limit
+  checks as other app-facing endpoints. They are not a bypass around normal
+  API policy.
+
+Current Torii routes:
+
+| Route | Purpose |
+|-------|---------|
+| `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters and the required `normalization` mode for encrypted client-side input. |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint then derives the `opaque:` handle and returns a signed receipt that `ClaimIdentifier` can submit on-chain. |
+| `POST /v1/identifiers/resolve` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint resolves the identifier into `{ opaque_id, uaid, account_id, signature }` when an active claim exists. |
+
+Current instruction set:
+
+- `RegisterIdentifierPolicy`
+- `ActivateIdentifierPolicy`
+- `ClaimIdentifier` (receipt-bound; raw `opaque_id` claims are rejected)
+- `RevokeIdentifier`
+
+Two backends now exist in `iroha_crypto::ram_lfe`:
+
+- the historical commitment-bound `HKDF-SHA3-512` PRF, and
+- a BFV-backed secret affine evaluator that consumes BFV-encrypted identifier
+  slots directly.
+
+Torii uses the backend published by the policy commitment. When the BFV backend
+is active, plaintext requests are normalized then encrypted server-side before
+evaluation, while BFV `encrypted_input` requests are evaluated directly and must
+already be normalized client-side.
 
 ## 2. Deriving and verifying UAIDs
 

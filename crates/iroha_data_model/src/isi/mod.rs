@@ -1335,6 +1335,8 @@ pub mod confidential;
 pub mod content;
 /// Account subject and domain link instructions.
 pub mod domain_link;
+/// Hidden-function-backed identifier policy instructions.
+pub mod identifier;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
@@ -1378,6 +1380,7 @@ pub mod zk;
 pub use asset_alias::*;
 pub use confidential::*;
 pub use domain_link::*;
+pub use identifier::*;
 pub use kaigi::*;
 pub use mint_burn::*;
 pub use nexus::*;
@@ -2158,6 +2161,9 @@ pub mod prelude {
         domain_link::{BindAccountAlias, LinkAccountDomain, SetAccountLabel, UnlinkAccountDomain},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
+        },
+        identifier::{
+            ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
         nexus::SetLaneRelayEmergencyValidators,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},

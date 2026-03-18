@@ -1,6 +1,105 @@
 # Status
 
-Last updated: 2026-03-17
+Last updated: 2026-03-18
+
+## 2026-03-18 Follow-up: BFV-encrypted identifier input is now wired through Torii
+- Extended `crates/iroha_crypto/src/fhe_bfv.rs` beyond the raw BFV primitive:
+  - added `BfvIdentifierPublicParameters`,
+  - deterministic per-policy BFV key derivation for client input encryption,
+  - identifier-envelope encrypt/decrypt helpers with length-prefix validation.
+- Updated `crates/iroha_torii/src/identifier_resolution.rs`:
+  - policy commitments can now publish BFV public parameters in `public_parameters`,
+  - the resolver derives/verifies the matching BFV key material from the policy secret + policy id,
+  - encrypted BFV request payloads are decrypted before policy normalization and receipt issuance.
+- Updated `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`:
+  - `GET /v1/identifier-policies` now advertises optional `input_encryption=bfv-v1` metadata plus hex-encoded public parameters,
+  - `POST /v1/identifiers/resolve` and `POST /v1/accounts/{account_id}/identifiers/claim-receipt` now accept exactly one of plaintext `input` or BFV `encrypted_input`,
+  - added handler coverage for BFV-encrypted identifier resolution.
+- Updated `docs/source/universal_accounts_guide.md` to describe the BFV-encrypted request path and to clarify that identifier derivation is still the committed PRF while input transport can now be BFV-wrapped.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_crypto bfv -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii alias_resolve_scans_account_labels_when_alias_index_is_missing --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
+
+## 2026-03-18 Follow-up: `iroha_crypto` now ships a real BFV baseline instead of calling the HKDF path "FHE"
+- Added `crates/iroha_crypto/src/fhe_bfv.rs` and exported it from `crates/iroha_crypto/src/lib.rs`:
+  - deterministic BFV key generation, encryption, decryption,
+  - ciphertext addition,
+  - ciphertext-by-plaintext multiplication,
+  - ciphertext-by-ciphertext multiplication with relinearization,
+  - affine-circuit evaluation over scalar ciphertext slots.
+- Fixed the BFV multiply path to use the integer negacyclic product before the `t/q` rescale-and-round step instead of reducing modulo `q` too early, which was the source of the broken ct-ct multiplication path.
+- Added scalar-overflow validation bounds for the baseline implementation so unsupported parameter sets fail closed instead of silently overflowing the `i128` accumulation path.
+- Clarified `crates/iroha_crypto/src/ram_lfe.rs` docs:
+  - the currently wired identifier resolver is still a committed `HKDF-SHA3-512` PRF backend,
+  - it is not a homomorphic evaluator,
+  - real BFV primitives now live in `iroha_crypto::fhe_bfv`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_crypto bfv -- --nocapture` (pass)
+
+## 2026-03-18 Follow-up: identifier claims are now receipt-bound, normalized, access-checked, and config-wired
+- Tightened identifier claims in `crates/iroha_core/src/smartcontracts/isi/identifier.rs`:
+  - `ClaimIdentifier` now verifies a signed `IdentifierResolutionReceipt` against the policy resolver key,
+  - rejects claim/account/UAID mismatches,
+  - rejects future-issued or expired receipts,
+  - added regressions for invalid signatures and expired receipts.
+- Extended the identifier data model in `crates/iroha_data_model/src/identifier.rs`:
+  - added `IdentifierNormalization` with built-in canonicalisers for phone, email, account-number, trimmed, and exact modes,
+  - stored the normalization mode on `IdentifierPolicy`,
+  - shared the canonical signed receipt payload between Torii and core.
+- Updated Torii identifier surfaces in `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,openapi.rs}`:
+  - `GET /v1/identifier-policies`, `POST /v1/identifiers/resolve`, and
+    `POST /v1/accounts/{account_id}/identifiers/claim-receipt` now run through `check_access`,
+  - resolve/claim-receipt now normalize inputs through the active policy before deriving the opaque id,
+  - added the claim-receipt route to OpenAPI,
+  - added tests covering token enforcement, normalization, and config-driven resolver wiring.
+- Wired the in-process resolver through `iroha_config`:
+  - new `torii.identifier_resolver` config surface in `crates/iroha_config/src/parameters/{user.rs,actual.rs,defaults.rs}`,
+  - `Torii::new_with_handle` now instantiates resolver runtimes from config instead of leaving production `identifier_resolver` unset.
+- Updated `docs/source/universal_accounts_guide.md` to document normalization modes, receipt-bound claims, the claim-receipt route, and the fact that identifier endpoints honor Torii access/rate policy.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_config -p iroha_core -p iroha_torii` (pass)
+  - `cargo test -p iroha_data_model phone_normalization_strips_formatting -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model --lib email_normalization_lowercases_and_trims -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model --lib identifier_policy_id_roundtrip -- --nocapture` (pass)
+  - `cargo test -p iroha_config torii_identifier_resolver_parses -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
+
+## 2026-03-18 Follow-up: UAID-integrated hidden identifier policies landed across crypto, data model, core state, and Torii
+- Added reusable hidden-function plumbing in `crates/iroha_crypto/src/ram_lfe.rs`:
+  - `RamLfeBackend`, `PolicyCommitment`, `ClientRequest`, `EvalResponse`, and a committed `HKDF-SHA3-512` PRF evaluator/signing path suitable for higher-layer integration.
+- Added generic identifier-policy data model and ISIs:
+  - `IdentifierPolicyId`, `IdentifierPolicy`, `IdentifierClaimRecord`, `IdentifierResolutionReceipt`,
+  - `RegisterIdentifierPolicy`, `ActivateIdentifierPolicy`, `ClaimIdentifier`, `RevokeIdentifier`,
+  - instruction registry + visitor wiring.
+- Extended world state and invariants in `crates/iroha_core/src/state.rs`:
+  - new `identifier_policies` and `identifier_claims` storages,
+  - snapshot/JSON persistence support,
+  - invariant validation tying `opaque_id -> uaid -> account` back to account-held opaque ids.
+- Added core execution handlers in `crates/iroha_core/src/smartcontracts/isi/identifier.rs`:
+  - policy registration/activation,
+  - claim/revoke lifecycle,
+  - account-delete cleanup for identifier claims.
+- Added Torii identifier-resolution surface:
+  - `GET /v1/identifier-policies`,
+  - `POST /v1/identifiers/resolve`,
+  - in-process `IdentifierResolutionService` with signed receipts,
+  - OpenAPI documentation for the new request/response payloads.
+- Updated UAID docs in `docs/source/universal_accounts_guide.md` to describe policy namespaces, claims, and the resolve-then-transfer flow.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii` (pass)
+  - `cargo test -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model identifier_policy_id_roundtrip -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
 
 ## 2026-03-17 Follow-up: Android transfer encoder now validates Norito AssetId payloads and normalizes COMPACT_LEN inputs
 - Updated `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoder.java`:

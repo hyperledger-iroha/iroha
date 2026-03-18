@@ -63,6 +63,7 @@ use iroha_data_model::{
     executor::ExecutorDataModel,
     fastpq::{TransferDeltaTranscript, TransferTranscript},
     governance::types::ParliamentBody,
+    identifier::{IdentifierClaimRecord, IdentifierPolicy, IdentifierPolicyId},
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         settlement::{SettlementId, SettlementLedger},
@@ -343,6 +344,8 @@ macro_rules! build_world_block {
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
+            identifier_policies: $state.identifier_policies.$method(),
+            identifier_claims: $state.identifier_claims.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
             asset_definitions: $state.asset_definitions.$method(),
             asset_definition_aliases: $state.asset_definition_aliases.$method(),
@@ -471,6 +474,8 @@ macro_rules! build_world_transaction {
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
+            identifier_policies: $state.identifier_policies.transaction(),
+            identifier_claims: $state.identifier_claims.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
             asset_definitions: $state.asset_definitions.transaction(),
             asset_definition_aliases: $state.asset_definition_aliases.transaction(),
@@ -1276,6 +1281,10 @@ pub struct World {
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
+    /// Global identifier policy registry keyed by `(kind, business_rule)`.
+    pub(crate) identifier_policies: Storage<IdentifierPolicyId, IdentifierPolicy>,
+    /// Active identifier claims keyed by opaque identifier.
+    pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: Storage<AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
@@ -1605,6 +1614,10 @@ pub struct WorldBlock<'world> {
     pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global identifier policy registry.
+    pub(crate) identifier_policies: StorageBlock<'world, IdentifierPolicyId, IdentifierPolicy>,
+    /// Active identifier claims keyed by opaque identifier.
+    pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageBlock<'world, AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
@@ -2045,6 +2058,12 @@ pub struct WorldTransaction<'block, 'world> {
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global identifier policy registry.
+    pub(crate) identifier_policies:
+        StorageTransaction<'block, 'world, IdentifierPolicyId, IdentifierPolicy>,
+    /// Active identifier claims keyed by opaque identifier.
+    pub(crate) identifier_claims:
+        StorageTransaction<'block, 'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records:
         StorageTransaction<'block, 'world, AccountLabel, AccountRekeyRecord>,
@@ -2592,6 +2611,10 @@ pub struct WorldView<'world> {
     pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global identifier policy registry.
+    pub(crate) identifier_policies: StorageView<'world, IdentifierPolicyId, IdentifierPolicy>,
+    /// Active identifier claims keyed by opaque identifier.
+    pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageView<'world, AccountLabel, AccountRekeyRecord>,
     /// Registered asset definitions.
@@ -9544,6 +9567,9 @@ impl World {
             .rebuild_opaque_uaid_index()
             .expect("duplicate opaque id in world constructor");
         world
+            .validate_identifier_claims()
+            .expect("identifier claims must match account bindings in world constructor");
+        world
     }
 
     /// Creates a [`World`] populated with assets and pre-defined roles.
@@ -9792,6 +9818,58 @@ impl World {
         Ok(())
     }
 
+    fn validate_identifier_claims(&self) -> Result<(), String> {
+        let identifier_claims = self.identifier_claims.view();
+        let opaque_uaids = self.opaque_uaids.view();
+        let uaid_accounts = self.uaid_accounts.view();
+        let accounts = self.accounts.view();
+
+        for (opaque_id, claim) in identifier_claims.iter() {
+            if &claim.opaque_id != opaque_id {
+                return Err(format!(
+                    "Identifier claim key {opaque_id} does not match embedded opaque id {}",
+                    claim.opaque_id
+                ));
+            }
+            let Some(bound_uaid) = opaque_uaids.get(opaque_id) else {
+                return Err(format!(
+                    "Identifier claim {opaque_id} is missing from the opaque UAID index"
+                ));
+            };
+            if bound_uaid != &claim.uaid {
+                return Err(format!(
+                    "Identifier claim {opaque_id} binds UAID {} but opaque index points to {bound_uaid}",
+                    claim.uaid
+                ));
+            }
+            let Some(bound_account) = uaid_accounts.get(&claim.uaid) else {
+                return Err(format!(
+                    "Identifier claim {opaque_id} references missing UAID {}",
+                    claim.uaid
+                ));
+            };
+            if bound_account != &claim.account_id {
+                return Err(format!(
+                    "Identifier claim {opaque_id} binds account {} but UAID index points to {bound_account}",
+                    claim.account_id
+                ));
+            }
+            let Some(account) = accounts.get(&claim.account_id) else {
+                return Err(format!(
+                    "Identifier claim {opaque_id} references missing account {}",
+                    claim.account_id
+                ));
+            };
+            if !account.opaque_ids().contains(opaque_id) {
+                return Err(format!(
+                    "Identifier claim {opaque_id} is not present on account {}",
+                    claim.account_id
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn rebuild_offline_transfer_indexes(&mut self) {
         let mut sender_index = BTreeMap::new();
         let mut receiver_index = BTreeMap::new();
@@ -9883,6 +9961,8 @@ impl World {
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             opaque_uaids: self.opaque_uaids.view(),
+            identifier_policies: self.identifier_policies.view(),
+            identifier_claims: self.identifier_claims.view(),
             account_rekey_records: self.account_rekey_records.view(),
             asset_definitions: self.asset_definitions.view(),
             asset_definition_aliases: self.asset_definition_aliases.view(),
@@ -10032,6 +10112,28 @@ pub trait WorldReadOnly {
     fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
+    /// Global identifier policy registry (read-only).
+    fn identifier_policies(&self) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy>;
+    /// Active identifier claims keyed by opaque identifier (read-only).
+    fn identifier_claims(&self) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord>;
+
+    /// Iterate registered identifier policies.
+    #[inline]
+    fn identifier_policies_iter(&self) -> impl Iterator<Item = &IdentifierPolicy> {
+        self.identifier_policies().iter().map(|(_, policy)| policy)
+    }
+
+    /// Resolve an opaque identifier within a specific policy namespace.
+    fn resolve_identifier_claim(
+        &self,
+        policy_id: &IdentifierPolicyId,
+        opaque_id: &OpaqueAccountId,
+    ) -> Option<IdentifierClaimRecord> {
+        self.identifier_claims()
+            .get(opaque_id)
+            .filter(|claim| &claim.policy_id == policy_id)
+            .cloned()
+    }
     /// Account label/signatory registry (read-only).
     fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord>;
     /// Asset definition storage (read-only).
@@ -10764,6 +10866,16 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
                 &self.opaque_uaids
             }
+            fn identifier_policies(
+                &self,
+            ) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy> {
+                &self.identifier_policies
+            }
+            fn identifier_claims(
+                &self,
+            ) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord> {
+                &self.identifier_claims
+            }
             fn account_rekey_records(
                 &self,
             ) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord> {
@@ -11318,6 +11430,8 @@ impl<'world> WorldBlock<'world> {
             uaid_accounts,
             account_aliases,
             opaque_uaids,
+            identifier_policies,
+            identifier_claims,
             account_rekey_records,
             asset_definitions,
             asset_definition_aliases,
@@ -11527,6 +11641,8 @@ impl<'world> WorldBlock<'world> {
         roles.commit();
         nfts.commit();
         assets.commit();
+        identifier_claims.commit();
+        identifier_policies.commit();
         account_rekey_records.commit();
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
@@ -12302,6 +12418,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             uaid_accounts,
             account_aliases,
             opaque_uaids,
+            identifier_policies,
+            identifier_claims,
             account_rekey_records,
             asset_definitions,
             asset_definition_aliases,
@@ -12486,6 +12604,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_permissions.apply();
         roles.apply();
         nfts.apply();
+        identifier_claims.apply();
+        identifier_policies.apply();
         account_rekey_records.apply();
         asset_metadata.apply();
         assets.apply();
@@ -24407,6 +24527,8 @@ pub(crate) mod deserialize {
         let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
         let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
         let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
+        let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
+        let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
             take_required(&mut map, "asset_definitions")?;
         let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
@@ -24499,6 +24621,8 @@ pub(crate) mod deserialize {
             uaid_accounts: Storage::default(),
             account_aliases: Storage::default(),
             opaque_uaids: Storage::default(),
+            identifier_policies,
+            identifier_claims,
             account_rekey_records,
             asset_definitions,
             asset_definition_aliases: Storage::default(),
@@ -24639,6 +24763,12 @@ pub(crate) mod deserialize {
             .rebuild_opaque_uaid_index()
             .map_err(|message| json::Error::InvalidField {
                 field: "opaque_uaids".into(),
+                message,
+            })?;
+        world
+            .validate_identifier_claims()
+            .map_err(|message| json::Error::InvalidField {
+                field: "identifier_claims".into(),
                 message,
             })?;
         world.rebuild_offline_transfer_indexes();
