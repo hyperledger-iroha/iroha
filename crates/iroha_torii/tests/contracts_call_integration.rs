@@ -268,7 +268,7 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::json_entry("namespace", "apps"),
         iroha_torii::json_entry("contract_id", "calc.v1"),
         iroha_torii::json_entry("entrypoint", "main"),
-        iroha_torii::json_entry("payload", draft_payload),
+        iroha_torii::json_entry("payload", draft_payload.clone()),
         iroha_torii::json_entry("gas_limit", 5_000u64),
     ]);
     let draft_body = json::to_json(&draft_body).expect("serialize draft call request");
