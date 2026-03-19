@@ -10,7 +10,7 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering as StdOrdering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use iroha_config::parameters::actual::ConsensusMode;
@@ -352,6 +352,8 @@ static LAST_COLLECT_PRECOMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_AGG_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static COMMIT_PIPELINE_STATUS: OnceLock<Mutex<CommitPipelineStatusState>> = OnceLock::new();
+static ROUND_GAP_STATUS: OnceLock<Mutex<RoundGapStatusState>> = OnceLock::new();
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QUORUM_STALL_AGE_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -586,6 +588,8 @@ static MODE_TAGS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 static GOSSIP_FALLBACK_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static WORKER_QUEUE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static COMMIT_TIMING_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 
@@ -3243,6 +3247,139 @@ pub struct QcSnapshot {
     pub signatures_total: u64,
 }
 
+/// Snapshot of the latest hidden commit-pipeline budget.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitPipelineSnapshot {
+    /// End-to-end time spent in the most recent commit-pipeline run.
+    pub last_total_ms: u64,
+    /// Time spent validating/finalizing candidate blocks before gating.
+    pub last_validation_ms: u64,
+    /// Time spent rebuilding cached QCs from votes.
+    pub last_qc_rebuild_ms: u64,
+    /// Time spent in the validation/availability gate checks.
+    pub last_gate_ms: u64,
+    /// Time spent finalizing pending blocks into the commit worker.
+    pub last_finalize_ms: u64,
+    /// Time spent draining finished commit results.
+    pub last_drain_results_ms: u64,
+    /// Sum of QC verification subtotals across drained commit results.
+    pub last_drain_qc_verify_ms: u64,
+    /// Sum of persistence subtotals across drained commit results.
+    pub last_drain_persist_ms: u64,
+    /// Sum of Kura store subtotals across drained commit results.
+    pub last_drain_kura_store_ms: u64,
+    /// Sum of state-apply subtotals across drained commit results.
+    pub last_drain_state_apply_ms: u64,
+    /// Sum of state-commit subtotals across drained commit results.
+    pub last_drain_state_commit_ms: u64,
+    /// EMA of end-to-end commit-pipeline time.
+    pub ema_total_ms: u64,
+    /// EMA of validation time.
+    pub ema_validation_ms: u64,
+    /// EMA of gate time.
+    pub ema_gate_ms: u64,
+    /// EMA of finalize time.
+    pub ema_finalize_ms: u64,
+}
+
+/// Snapshot of the hidden DELIVER-to-next-proposal gap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoundGapSnapshot {
+    /// Most recent elapsed time from first accepted DELIVER to local state commit.
+    pub last_deliver_to_state_commit_ms: u64,
+    /// Most recent elapsed time from local state commit to pacemaker unblock.
+    pub last_state_commit_to_next_propose_ms: u64,
+    /// Most recent elapsed time from first accepted DELIVER to pacemaker unblock.
+    pub last_deliver_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-state-commit.
+    pub ema_deliver_to_state_commit_ms: u64,
+    /// EMA of state-commit-to-next-propose.
+    pub ema_state_commit_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-next-propose.
+    pub ema_deliver_to_next_propose_ms: u64,
+}
+
+/// Commit-pipeline sample published by the runtime.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitPipelineSample {
+    /// End-to-end time spent in the most recent commit-pipeline run.
+    pub total_ms: u64,
+    /// Time spent validating/finalizing candidate blocks before gating.
+    pub validation_ms: u64,
+    /// Time spent rebuilding cached QCs from votes.
+    pub qc_rebuild_ms: u64,
+    /// Time spent in the validation/availability gate checks.
+    pub gate_ms: u64,
+    /// Time spent finalizing pending blocks into the commit worker.
+    pub finalize_ms: u64,
+    /// Time spent draining finished commit results.
+    pub drain_results_ms: u64,
+    /// Sum of QC verification subtotals across drained commit results.
+    pub drain_qc_verify_ms: u64,
+    /// Sum of persistence subtotals across drained commit results.
+    pub drain_persist_ms: u64,
+    /// Sum of Kura store subtotals across drained commit results.
+    pub drain_kura_store_ms: u64,
+    /// Sum of state-apply subtotals across drained commit results.
+    pub drain_state_apply_ms: u64,
+    /// Sum of state-commit subtotals across drained commit results.
+    pub drain_state_commit_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TimingEma {
+    value_ms: f64,
+    initialized: bool,
+}
+
+impl TimingEma {
+    const ALPHA: f64 = 0.2;
+
+    fn update(&mut self, sample_ms: u64) -> u64 {
+        #[allow(clippy::cast_precision_loss)]
+        let sample = sample_ms as f64;
+        if self.initialized {
+            self.value_ms = Self::ALPHA.mul_add(sample, (1.0 - Self::ALPHA) * self.value_ms);
+        } else {
+            self.value_ms = sample;
+            self.initialized = true;
+        }
+        round_ema_ms(self.value_ms)
+    }
+}
+
+#[derive(Debug, Default)]
+struct CommitPipelineStatusState {
+    snapshot: CommitPipelineSnapshot,
+    total_ema: TimingEma,
+    validation_ema: TimingEma,
+    gate_ema: TimingEma,
+    finalize_ema: TimingEma,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct RoundGapKey {
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RoundGapMarkers {
+    deliver_at: Option<std::time::Instant>,
+    state_commit_at: Option<std::time::Instant>,
+    unblocked_at: Option<std::time::Instant>,
+}
+
+#[derive(Debug, Default)]
+struct RoundGapStatusState {
+    snapshot: RoundGapSnapshot,
+    deliver_to_state_commit_ema: TimingEma,
+    state_commit_to_next_propose_ema: TimingEma,
+    deliver_to_next_propose_ema: TimingEma,
+    markers: BTreeMap<RoundGapKey, RoundGapMarkers>,
+}
+
 /// Snapshot of dedup cache evictions for inbound consensus traffic.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DedupEvictionSnapshot {
@@ -3556,6 +3693,10 @@ pub struct StatusSnapshot {
     pub worker_loop: WorkerLoopSnapshot,
     /// Commit inflight status for stall detection.
     pub commit_inflight: CommitInflightSnapshot,
+    /// Latest hidden commit-pipeline budget sample.
+    pub commit_pipeline: CommitPipelineSnapshot,
+    /// Latest DELIVER-to-next-proposal gap sample.
+    pub round_gap: RoundGapSnapshot,
     /// Transaction gossip telemetry snapshot.
     pub tx_gossip: TxGossipSnapshot,
     /// Total inbound gossip entries skipped because the transaction hash was already known.
@@ -3675,6 +3816,24 @@ impl StatusSnapshot {
         self.nexus_staking = NexusStakingSnapshot::default();
         self.npos_election = None;
         self
+    }
+}
+
+fn commit_pipeline_status_slot() -> &'static Mutex<CommitPipelineStatusState> {
+    COMMIT_PIPELINE_STATUS.get_or_init(|| Mutex::new(CommitPipelineStatusState::default()))
+}
+
+fn round_gap_status_slot() -> &'static Mutex<RoundGapStatusState> {
+    ROUND_GAP_STATUS.get_or_init(|| Mutex::new(RoundGapStatusState::default()))
+}
+
+fn round_ema_ms(value_ms: f64) -> u64 {
+    if !value_ms.is_finite() || value_ms <= 0.0 {
+        return 0;
+    }
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    {
+        value_ms.round().min(u64::MAX as f64) as u64
     }
 }
 
@@ -4290,6 +4449,8 @@ pub fn snapshot() -> StatusSnapshot {
     let validation_rejects = validation_reject_snapshot();
     let peer_key_policy = peer_key_policy_snapshot();
     let consensus_caps = consensus_caps();
+    let commit_pipeline = commit_pipeline_snapshot();
+    let round_gap = round_gap_snapshot();
     let mode_flip_kill_switch = MODE_FLIP_KILL_SWITCH.load(Ordering::Relaxed);
     let mode_flip_blocked = MODE_FLIP_BLOCKED.load(Ordering::Relaxed);
     let last_flip_timestamp_ms = MODE_LAST_FLIP_TS_SET
@@ -4508,6 +4669,8 @@ pub fn snapshot() -> StatusSnapshot {
         tx_queue_saturated,
         worker_loop,
         commit_inflight,
+        commit_pipeline,
+        round_gap,
         tx_gossip: TxGossipSnapshot::default(),
         gossip_duplicate_known_skipped_total: GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL
             .load(Ordering::Relaxed),
@@ -6595,6 +6758,175 @@ pub fn note_commit_pipeline_tick(_mode: ConsensusMode, has_pending: bool) {
     }
 }
 
+fn commit_pipeline_snapshot() -> CommitPipelineSnapshot {
+    commit_pipeline_status_slot()
+        .lock()
+        .map(|guard| guard.snapshot)
+        .unwrap_or_default()
+}
+
+fn round_gap_snapshot() -> RoundGapSnapshot {
+    round_gap_status_slot()
+        .lock()
+        .map(|guard| guard.snapshot)
+        .unwrap_or_default()
+}
+
+/// Publish the most recent commit-pipeline budget sample.
+pub fn record_commit_pipeline_sample(sample: CommitPipelineSample) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK) else {
+        return;
+    };
+    if let Ok(mut guard) = commit_pipeline_status_slot().lock() {
+        guard.snapshot.last_total_ms = sample.total_ms;
+        guard.snapshot.last_validation_ms = sample.validation_ms;
+        guard.snapshot.last_qc_rebuild_ms = sample.qc_rebuild_ms;
+        guard.snapshot.last_gate_ms = sample.gate_ms;
+        guard.snapshot.last_finalize_ms = sample.finalize_ms;
+        guard.snapshot.last_drain_results_ms = sample.drain_results_ms;
+        guard.snapshot.last_drain_qc_verify_ms = sample.drain_qc_verify_ms;
+        guard.snapshot.last_drain_persist_ms = sample.drain_persist_ms;
+        guard.snapshot.last_drain_kura_store_ms = sample.drain_kura_store_ms;
+        guard.snapshot.last_drain_state_apply_ms = sample.drain_state_apply_ms;
+        guard.snapshot.last_drain_state_commit_ms = sample.drain_state_commit_ms;
+        guard.snapshot.ema_total_ms = guard.total_ema.update(sample.total_ms);
+        guard.snapshot.ema_validation_ms = guard.validation_ema.update(sample.validation_ms);
+        guard.snapshot.ema_gate_ms = guard.gate_ema.update(sample.gate_ms);
+        guard.snapshot.ema_finalize_ms = guard.finalize_ema.update(sample.finalize_ms);
+    }
+}
+
+fn update_round_gap_snapshot(
+    state: &mut RoundGapStatusState,
+    deliver_to_state_commit_ms: u64,
+    state_commit_to_next_propose_ms: u64,
+    deliver_to_next_propose_ms: u64,
+) {
+    state.snapshot.last_deliver_to_state_commit_ms = deliver_to_state_commit_ms;
+    state.snapshot.last_state_commit_to_next_propose_ms = state_commit_to_next_propose_ms;
+    state.snapshot.last_deliver_to_next_propose_ms = deliver_to_next_propose_ms;
+    state.snapshot.ema_deliver_to_state_commit_ms = state
+        .deliver_to_state_commit_ema
+        .update(deliver_to_state_commit_ms);
+    state.snapshot.ema_state_commit_to_next_propose_ms = state
+        .state_commit_to_next_propose_ema
+        .update(state_commit_to_next_propose_ms);
+    state.snapshot.ema_deliver_to_next_propose_ms = state
+        .deliver_to_next_propose_ema
+        .update(deliver_to_next_propose_ms);
+}
+
+fn prune_round_gap_markers(markers: &mut BTreeMap<RoundGapKey, RoundGapMarkers>) {
+    const ROUND_GAP_MARKER_CAP: usize = 64;
+    while markers.len() > ROUND_GAP_MARKER_CAP {
+        let Some(first) = markers.keys().next().copied() else {
+            break;
+        };
+        let _ = markers.remove(&first);
+    }
+}
+
+fn note_round_gap_marker(
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+    update: impl FnOnce(&mut RoundGapMarkers, Instant),
+) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK) else {
+        return;
+    };
+    let Ok(mut guard) = round_gap_status_slot().lock() else {
+        return;
+    };
+    let key = RoundGapKey {
+        height,
+        view,
+        block_hash,
+    };
+    let (deliver_at, state_commit_at, unblocked_at) = {
+        let entry = guard.markers.entry(key).or_default();
+        update(entry, Instant::now());
+        (entry.deliver_at, entry.state_commit_at, entry.unblocked_at)
+    };
+
+    let deliver_to_state_commit_ms =
+        deliver_at
+            .zip(state_commit_at)
+            .map(|(deliver_at, state_commit_at)| {
+                u64::try_from(
+                    state_commit_at
+                        .saturating_duration_since(deliver_at)
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX)
+            });
+    let state_commit_to_next_propose_ms =
+        state_commit_at
+            .zip(unblocked_at)
+            .map(|(state_commit_at, unblocked_at)| {
+                u64::try_from(
+                    unblocked_at
+                        .saturating_duration_since(state_commit_at)
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX)
+            });
+    let deliver_to_next_propose_ms =
+        deliver_at
+            .zip(unblocked_at)
+            .map(|(deliver_at, unblocked_at)| {
+                u64::try_from(
+                    unblocked_at
+                        .saturating_duration_since(deliver_at)
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX)
+            });
+
+    if let (
+        Some(deliver_to_state_commit_ms),
+        Some(state_commit_to_next_propose_ms),
+        Some(deliver_to_next_propose_ms),
+    ) = (
+        deliver_to_state_commit_ms,
+        state_commit_to_next_propose_ms,
+        deliver_to_next_propose_ms,
+    ) {
+        update_round_gap_snapshot(
+            &mut guard,
+            deliver_to_state_commit_ms,
+            state_commit_to_next_propose_ms,
+            deliver_to_next_propose_ms,
+        );
+        let _ = guard.markers.remove(&key);
+    }
+
+    prune_round_gap_markers(&mut guard.markers);
+}
+
+/// Record the first accepted RBC DELIVER for a round.
+pub fn record_round_gap_deliver(height: u64, view: u64, block_hash: HashOf<BlockHeader>) {
+    note_round_gap_marker(height, view, block_hash, |markers, now| {
+        markers.deliver_at.get_or_insert(now);
+    });
+}
+
+/// Record a successful local state commit for a round.
+pub fn record_round_gap_state_commit(height: u64, view: u64, block_hash: HashOf<BlockHeader>) {
+    note_round_gap_marker(height, view, block_hash, |markers, now| {
+        markers.state_commit_at.get_or_insert(now);
+    });
+}
+
+/// Record the point where a committed block stops blocking the pacemaker.
+pub fn record_round_gap_unblocked(height: u64, view: u64, block_hash: HashOf<BlockHeader>) {
+    note_round_gap_marker(height, view, block_hash, |markers, now| {
+        markers.unblocked_at.get_or_insert(now);
+    });
+}
+
 fn now_timestamp_ms() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -7154,6 +7486,22 @@ pub(crate) fn reset_commit_inflight_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn reset_commit_pipeline_status_for_tests() {
+    let _guard = commit_timing_test_guard();
+    if let Ok(mut guard) = commit_pipeline_status_slot().lock() {
+        *guard = CommitPipelineStatusState::default();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_round_gap_status_for_tests() {
+    let _guard = commit_timing_test_guard();
+    if let Ok(mut guard) = round_gap_status_slot().lock() {
+        *guard = RoundGapStatusState::default();
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn reset_availability_stats_for_tests() {
     let mut stats = availability_slot().lock().unwrap();
     stats.total_votes = 0;
@@ -7454,6 +7802,12 @@ pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {
 #[allow(private_interfaces)]
 pub(crate) fn local_removed_test_guard() -> TestLockGuard {
     reentrant_test_guard(&LOCAL_REMOVED_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
+pub(crate) fn commit_timing_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK)
 }
 
 #[cfg(test)]
@@ -9146,6 +9500,99 @@ mod tests {
         assert!(!snapshot.commit_inflight.active);
         assert_eq!(snapshot.commit_inflight.resume_total, 1);
         assert_eq!(snapshot.commit_inflight.block_hash, None);
+    }
+
+    #[test]
+    fn commit_pipeline_snapshot_tracks_last_and_ema_fields() {
+        let _guard = super::commit_timing_test_guard();
+        super::reset_commit_pipeline_status_for_tests();
+        super::record_commit_pipeline_sample(super::CommitPipelineSample {
+            total_ms: 120,
+            validation_ms: 30,
+            qc_rebuild_ms: 11,
+            gate_ms: 7,
+            finalize_ms: 19,
+            drain_results_ms: 13,
+            drain_qc_verify_ms: 2,
+            drain_persist_ms: 3,
+            drain_kura_store_ms: 4,
+            drain_state_apply_ms: 5,
+            drain_state_commit_ms: 6,
+        });
+        super::record_commit_pipeline_sample(super::CommitPipelineSample {
+            total_ms: 80,
+            validation_ms: 10,
+            qc_rebuild_ms: 9,
+            gate_ms: 5,
+            finalize_ms: 11,
+            drain_results_ms: 12,
+            drain_qc_verify_ms: 8,
+            drain_persist_ms: 7,
+            drain_kura_store_ms: 6,
+            drain_state_apply_ms: 5,
+            drain_state_commit_ms: 4,
+        });
+
+        let snapshot = super::snapshot().commit_pipeline;
+        assert_eq!(snapshot.last_total_ms, 80);
+        assert_eq!(snapshot.last_validation_ms, 10);
+        assert_eq!(snapshot.last_qc_rebuild_ms, 9);
+        assert_eq!(snapshot.last_gate_ms, 5);
+        assert_eq!(snapshot.last_finalize_ms, 11);
+        assert_eq!(snapshot.last_drain_results_ms, 12);
+        assert_eq!(snapshot.last_drain_qc_verify_ms, 8);
+        assert_eq!(snapshot.last_drain_persist_ms, 7);
+        assert_eq!(snapshot.last_drain_kura_store_ms, 6);
+        assert_eq!(snapshot.last_drain_state_apply_ms, 5);
+        assert_eq!(snapshot.last_drain_state_commit_ms, 4);
+        assert_eq!(snapshot.ema_total_ms, 112);
+        assert_eq!(snapshot.ema_validation_ms, 26);
+        assert_eq!(snapshot.ema_gate_ms, 7);
+        assert_eq!(snapshot.ema_finalize_ms, 17);
+    }
+
+    #[test]
+    fn round_gap_snapshot_records_markers_in_order() {
+        let _guard = super::commit_timing_test_guard();
+        super::reset_round_gap_status_for_tests();
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xCC; UntypedHash::LENGTH],
+        ));
+
+        super::record_round_gap_deliver(9, 3, hash);
+        std::thread::sleep(Duration::from_millis(2));
+        super::record_round_gap_state_commit(9, 3, hash);
+        std::thread::sleep(Duration::from_millis(2));
+        super::record_round_gap_unblocked(9, 3, hash);
+
+        let snapshot = super::snapshot().round_gap;
+        assert!(snapshot.last_deliver_to_state_commit_ms >= 2);
+        assert!(snapshot.last_state_commit_to_next_propose_ms >= 2);
+        assert!(
+            snapshot.last_deliver_to_next_propose_ms >= snapshot.last_deliver_to_state_commit_ms
+        );
+        assert_eq!(
+            snapshot.ema_deliver_to_state_commit_ms,
+            snapshot.last_deliver_to_state_commit_ms
+        );
+        assert_eq!(
+            snapshot.ema_state_commit_to_next_propose_ms,
+            snapshot.last_state_commit_to_next_propose_ms
+        );
+        assert_eq!(
+            snapshot.ema_deliver_to_next_propose_ms,
+            snapshot.last_deliver_to_next_propose_ms
+        );
+
+        let next_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xDD; UntypedHash::LENGTH],
+        ));
+        super::record_round_gap_deliver(10, 0, next_hash);
+        let second = super::snapshot().round_gap;
+        assert_eq!(
+            second.last_deliver_to_next_propose_ms,
+            snapshot.last_deliver_to_next_propose_ms
+        );
     }
 
     #[test]

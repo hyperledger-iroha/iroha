@@ -2,6 +2,22 @@
 
 Last updated: 2026-03-19
 
+## 2026-03-19 Follow-up: merge conflicts are resolved and the workspace compile gate is green
+- Resolved the remaining merge conflicts across the Rust workspace, SDKs,
+  docs, and build/config files, with manual reconciliation in:
+  - `.gitignore`,
+  - `Cargo.toml`,
+  - `Dockerfile.cross`, and
+  - `crates/iroha_torii/src/routing.rs`.
+- Preserved the newer branch-side Torii/OpenAPI/API changes while restoring the
+  Sumeragi status wire fields for `commit_pipeline` and `round_gap` in the
+  Torii routing path so the consensus status response stays coherent with the
+  merged data model.
+- Validation so far:
+  - `git diff --name-only --diff-filter=U` (clean)
+  - `git diff --check` (clean)
+  - `cargo check --workspace` (pass)
+
 ## 2026-03-19 Follow-up: generic hidden-program RAM-LFE program-policy foundations now exist in `iroha_crypto`, `iroha_data_model`, `iroha_core`, and the identifier Torii path
 - Extended `crates/iroha_crypto/src/ram_lfe.rs` from an identifier-only
   programmed BFV path into a program-aware hidden RAM-LFE substrate:

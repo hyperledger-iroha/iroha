@@ -162,6 +162,26 @@ async fn sumeragi_status_endpoint_shape() {
             .and_then(norito::json::Value::as_u64),
         Some(750)
     );
+    let commit_pipeline = v
+        .get("commit_pipeline")
+        .and_then(norito::json::Value::as_object)
+        .expect("commit_pipeline object");
+    assert_eq!(
+        commit_pipeline
+            .get("last_total_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
+    );
+    let round_gap = v
+        .get("round_gap")
+        .and_then(norito::json::Value::as_object)
+        .expect("round_gap object");
+    assert_eq!(
+        round_gap
+            .get("last_deliver_to_next_propose_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
+    );
     assert_eq!(
         v.get("effective_collectors_k")
             .and_then(norito::json::Value::as_u64),
@@ -704,6 +724,8 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     assert!(wire.validation_rejects.last_reason.is_none());
     assert!(!wire.commit_inflight.active);
     assert_eq!(wire.commit_inflight.timeout_total, 0);
+    assert_eq!(wire.commit_pipeline.last_total_ms, 0);
+    assert_eq!(wire.round_gap.last_deliver_to_next_propose_ms, 0);
     assert_eq!(wire.worker_loop.queue_diagnostics.blocked_total.vote_rx, 0);
     assert_eq!(wire.da_gate.reason, SumeragiDaGateReason::MissingLocalData);
     assert_eq!(

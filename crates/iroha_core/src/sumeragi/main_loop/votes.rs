@@ -631,6 +631,41 @@ impl Actor {
                     &context.topology,
                 );
                 if matches!(vote.phase, Phase::Commit) {
+                    let qc_key = (
+                        crate::sumeragi::consensus::Phase::Commit,
+                        vote.block_hash,
+                        vote.height,
+                        vote.view,
+                        vote.epoch,
+                    );
+                    if let Some(tally) = self.qc_signer_tally.get(&qc_key) {
+                        let proxy_tail_idx = context.signature_topology.proxy_tail_index();
+                        let set_b_signatures = tally
+                            .voting_signers
+                            .iter()
+                            .filter_map(|signer| usize::try_from(*signer).ok())
+                            .filter(|idx| *idx > proxy_tail_idx)
+                            .count();
+                        crate::sumeragi::status::record_commit_quorum_snapshot(
+                            vote.height,
+                            vote.view,
+                            vote.block_hash,
+                            tally.present_signers as u64,
+                            tally.voting_len() as u64,
+                            set_b_signatures as u64,
+                            context.signature_topology.min_votes_for_commit() as u64,
+                        );
+                        debug!(
+                            height = vote.height,
+                            view = vote.view,
+                            block = %vote.block_hash,
+                            signer = vote.signer,
+                            signatures_present = tally.present_signers,
+                            signatures_counted = tally.voting_len(),
+                            signatures_required = context.signature_topology.min_votes_for_commit(),
+                            "accepted inbound precommit vote"
+                        );
+                    }
                     if let Some(pending) = self.pending.pending_blocks.get(&vote.block_hash) {
                         if pending.aborted {
                             debug!(

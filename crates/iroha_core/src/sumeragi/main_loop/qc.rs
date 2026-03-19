@@ -206,9 +206,6 @@ impl Actor {
         {
             return false;
         }
-        if self.subsystems.validation.inflight.contains_key(&hash) {
-            return false;
-        }
         let needs_validation = match self.pending.pending_blocks.get(&hash) {
             Some(pending)
                 if !pending.aborted && pending.validation_status == ValidationStatus::Pending =>
@@ -227,6 +224,15 @@ impl Actor {
         };
         if !needs_validation {
             return false;
+        }
+        if let Some(inflight) = self.supersede_validation_inflight(hash) {
+            info!(
+                height = qc.height,
+                view = qc.view,
+                block = %hash,
+                inflight_elapsed_ms = inflight.started_at.elapsed().as_millis(),
+                "commit QC superseded background validation; forcing inline pre-vote validation"
+            );
         }
         let outcome = self.validate_pending_block_for_voting_inline(hash, commit_topology);
         match outcome {
@@ -2012,13 +2018,38 @@ impl Actor {
                     let frontier_window_owned = height == frontier_height
                         && height == self.active_consensus_round_height()
                         && self.frontier_recovery_owns_height_window(height, now);
+                    let fresh_same_slot_fetch = height == frontier_height
+                        && height == self.active_consensus_round_height()
+                        && self
+                            .pending
+                            .missing_block_requests
+                            .get(&block_hash)
+                            .is_some_and(|stats| {
+                                stats.height == height
+                                    && stats.view == view
+                                    && now.saturating_duration_since(stats.last_requested)
+                                        < stats.retry_window.max(Duration::from_millis(1))
+                            });
                     let first_seen = self
                         .pending
                         .missing_block_requests
                         .get(&block_hash)
                         .map(|stats| stats.first_seen)
                         .unwrap_or(now);
-                    if frontier_window_owned {
+                    if fresh_same_slot_fetch {
+                        let seeded =
+                            self.seed_frontier_recovery_for_missing_payload(height, view, now);
+                        debug!(
+                            height,
+                            view,
+                            block = ?block_hash,
+                            dwell_ms,
+                            since_last_ms,
+                            attempts,
+                            seeded_frontier_owner = seeded,
+                            "missing block dwell exceeded view-change window; suppressing frontier recovery while same-slot fetch remains fresh"
+                        );
+                    } else if frontier_window_owned {
                         debug!(
                             height,
                             view,
@@ -2771,6 +2802,17 @@ impl Actor {
             required,
             "aggregated QC from votes"
         );
+        if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+            iroha_logger::info!(
+                height,
+                view,
+                block = %block_hash,
+                voting_signers = snapshot.voting_signers,
+                total_signers = snapshot.total_signers,
+                required,
+                "commit quorum completed"
+            );
+        }
         if let Err(err) = self.handle_qc_with_aggregate(qc.clone(), Some(true)) {
             warn!(
                 ?err,
@@ -2985,6 +3027,11 @@ impl Actor {
             }
 
             let now = Instant::now();
+            let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
+                && height == self.active_consensus_round_height();
+            if contiguous_frontier {
+                let _ = self.seed_frontier_recovery_for_missing_payload(height, view, now);
+            }
             let cooldown = self.rebroadcast_cooldown();
             if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
                 let local_peer = self.common_config.peer.id();
