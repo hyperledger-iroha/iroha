@@ -251,8 +251,7 @@ class _MockState:
                 "last_sweep_height": 0,
             }
             self.node_capabilities = {
-                "supported_abi_versions": [1],
-                "default_compile_target": 0,
+                "abi_version": 1,
                 "data_model_version": 1,
             }
             self._seed_reports()

@@ -3656,8 +3656,7 @@ export interface ToriiNetworkTimeStatus {
 }
 
 export interface ToriiNodeCapabilities {
-  supportedAbiVersions: ReadonlyArray<number>;
-  defaultCompileTarget: number;
+  abiVersion: number;
   dataModelVersion: number;
   crypto: {
     sm: ToriiNodeSmCapabilities;
@@ -3713,8 +3712,7 @@ export interface ToriiConfigurationSnapshot {
 }
 
 export interface ToriiRuntimeAbiActiveResponse {
-  activeVersions: ReadonlyArray<number>;
-  defaultCompileTarget: number;
+  abiVersion: number;
 }
 
 export interface ToriiRuntimeAbiHashResponse {
@@ -3723,7 +3721,7 @@ export interface ToriiRuntimeAbiHashResponse {
 }
 
 export interface ToriiRuntimeMetrics {
-  activeAbiVersionsCount: number;
+  abiVersion: number;
   upgradeEventsTotal: ToriiRuntimeMetricsCounters;
 }
 

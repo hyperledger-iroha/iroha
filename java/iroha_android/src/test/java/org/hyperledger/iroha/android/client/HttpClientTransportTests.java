@@ -4,9 +4,11 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -15,13 +17,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
-import org.hyperledger.iroha.android.address.AccountAddress;
-import org.hyperledger.iroha.android.address.AssetIdLiteral;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
+import org.hyperledger.iroha.android.address.PublicKeyCodec;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
+import org.hyperledger.iroha.android.nexus.AddressFormatOption;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
@@ -77,10 +80,15 @@ public final class HttpClientTransportTests {
     uaidRequestsRespectBasePath();
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
-    resolveAccountAliasParsesResponse();
-    resolveAssetAliasParsesResponse();
-    buildAssetIdLiteralResolvesAliases();
-    buildAssetIdLiteralFallsBackToAssetAliasResolutionForInvalidDefinition();
+    identifierPoliciesRequestParsesResponse();
+    identifierResolveRequestParsesResponse();
+    identifierResolveRequestAllowsNotFound();
+    identifierClaimLookupAllowsNotFound();
+    identifierClaimReceiptUsesAccountPath();
+    identifierNormalizationCanonicalizesInputs();
+    identifierResolveRequestBuilderCanonicalizesPolicyInput();
+    identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
+    identifierReceiptVerifierAcceptsEd25519Receipt();
     invalidateAndCancelDelegatesToExecutor();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
   }
@@ -712,7 +720,6 @@ public final class HttpClientTransportTests {
   private static void uaidPortfolioRequestParsesResponse() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    final String accountId = sampleI105(0x31);
     final String json =
         ("{"
             + "\"uaid\":\"uaid:"
@@ -723,12 +730,10 @@ public final class HttpClientTransportTests {
             + "\"dataspace_id\":42,"
             + "\"dataspace_alias\":\"sandbox\","
             + "\"accounts\":[{"
-            + "\"account_id\":\""
-            + accountId
-            + "\","
+            + "\"account_id\":\"alice@wonderland\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
-            + "\"asset_id\":\"norito:00\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
+            + "\"asset_id\":\"xor#wonderland\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
             + "}]"
             + "}]"
             + "}]"
@@ -756,12 +761,12 @@ public final class HttpClientTransportTests {
     assert dataspace.accounts().size() == 1 : "Expected single account entry";
     final UaidPortfolioResponse.UaidPortfolioAccount account =
         dataspace.accounts().get(0);
-    assert accountId.equals(account.accountId())
+    assert "alice@wonderland".equals(account.accountId())
         : "Account ID mismatch";
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert "norito:00".equals(asset.assetId()) : "Asset ID mismatch";
+    assert "xor#wonderland".equals(asset.assetId()) : "Asset ID mismatch";
     assert "xor#nexus".equals(asset.assetDefinitionId()) : "Asset definition mismatch";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
@@ -798,7 +803,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioQuery query =
-        UaidPortfolioQuery.builder().setAssetId("norito:00").build();
+        UaidPortfolioQuery.builder().setAssetId("xor#wonderland").build();
     transport.getUaidPortfolio("uaid:" + hex.toUpperCase(), query).join();
 
     final TransportRequest request = executor.lastRequest();
@@ -809,7 +814,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/accounts/uaid%3A"
                 + hex
-                + "/portfolio?asset_id=norito%3A00")
+                + "/portfolio?asset_id=xor%23wonderland")
         : "UAID portfolio query must include asset_id filter";
   }
 
@@ -839,8 +844,6 @@ public final class HttpClientTransportTests {
   private static void uaidBindingsRequestParsesResponse() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    final String accountA = sampleI105(0x32);
-    final String accountB = sampleI105(0x33);
     final String json =
         "{"
             + "\"uaid\":\"uaid:"
@@ -849,11 +852,7 @@ public final class HttpClientTransportTests {
             + "\"dataspaces\":[{"
             + "\"dataspace_id\":7,"
             + "\"dataspace_alias\":null,"
-            + "\"accounts\":[\""
-            + accountA
-            + "\",\""
-            + accountB
-            + "\"]"
+            + "\"accounts\":[\"alice@wonderland\",\"bob@sora\"]"
             + "}]"
             + "}";
     final StubResponseExecutor executor =
@@ -862,7 +861,8 @@ public final class HttpClientTransportTests {
         ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
-    final UaidBindingsQuery query = UaidBindingsQuery.builder().build();
+    final UaidBindingsQuery query =
+        UaidBindingsQuery.builder().setAddressFormat(AddressFormatOption.COMPRESSED).build();
     final UaidBindingsResponse response =
         transport.getUaidBindings("uaid:" + hex.toUpperCase(), query).join();
     assert response.dataspaces().size() == 1 : "Expected bindings entry";
@@ -875,14 +875,14 @@ public final class HttpClientTransportTests {
         .toString()
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
-                + hex)
+                + hex
+                + "?address_format=compressed")
         : "Bindings URI must encode UAID literal and query";
   }
 
   private static void uaidManifestsRequestSupportsQuery() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    final String accountId = sampleI105(0x34);
     final String json =
         "{"
             + "\"uaid\":\"uaid:"
@@ -899,9 +899,7 @@ public final class HttpClientTransportTests {
             + "\"expired_epoch\":null,"
             + "\"revocation\":{\"epoch\":15,\"reason\":\"policy\"}"
             + "},"
-            + "\"accounts\":[\""
-            + accountId
-            + "\"],"
+            + "\"accounts\":[\"alice@wonderland\"],"
             + "\"manifest\":{"
             + "\"version\":\"1\","
             + "\"uaid\":\"uaid:"
@@ -923,6 +921,7 @@ public final class HttpClientTransportTests {
             .setStatus(UaidManifestStatusFilter.INACTIVE)
             .setLimit(25L)
             .setOffset(5L)
+            .setAddressFormat(AddressFormatOption.IH58)
             .build();
 
     final UaidManifestsResponse response =
@@ -939,7 +938,7 @@ public final class HttpClientTransportTests {
     assert record.lifecycle().revocation() != null : "Revocation should be present";
     assert record.lifecycle().revocation().epoch() == 15L : "Revocation epoch mismatch";
     assert "policy".equals(record.lifecycle().revocation().reason()) : "Revocation reason mismatch";
-    assert record.accounts().contains(accountId) : "Accounts must surface";
+    assert record.accounts().contains("alice@wonderland") : "Accounts must surface";
     assert record.manifestJson().contains("\"version\":\"1\"") : "Manifest JSON should be stored";
     final Map<String, Object> manifestMap = record.manifestAsMap();
     assert "1".equals(manifestMap.get("version")) : "Manifest map mismatch";
@@ -954,146 +953,382 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
                 + hex
-                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5")
+                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&address_format=ih58")
         : "Manifest URI must include encoded query parameters";
   }
 
-  private static void resolveAccountAliasParsesResponse() {
-    final String accountId = sampleI105(0x41);
+  private static void identifierPoliciesRequestParsesResponse() {
     final String json =
-        "{\"alias\":\"alice\",\"account_id\":\""
+        "{"
+            + "\"total\":1,"
+            + "\"items\":[{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"owner\":\"alice@wonderland\","
+            + "\"active\":true,"
+            + "\"normalization\":\"phone_e164\","
+            + "\"resolver_public_key\":\"ed25519:resolver-key\","
+            + "\"backend\":\"bfv-affine-sha3-256-v1\","
+            + "\"input_encryption\":\"bfv-v1\","
+            + "\"input_encryption_public_parameters\":\"ABCD\","
+            + "\"input_encryption_public_parameters_decoded\":{"
+            + "\"parameters\":{\"polynomial_degree\":64,\"plaintext_modulus\":257,\"ciphertext_modulus\":1099511627776,\"decomposition_base_log\":12},"
+            + "\"public_key\":{\"b\":[1,2,3],\"a\":[4,5,6]},"
+            + "\"max_input_bytes\":32"
+            + "},"
+            + "\"note\":\"retail phone policy\""
+            + "}]"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final IdentifierPolicyListResponse response = transport.listIdentifierPolicies().join();
+    assert response.total() == 1L : "Policy list total mismatch";
+    assert response.items().size() == 1 : "Expected one identifier policy";
+    final IdentifierPolicySummary item = response.items().get(0);
+    assert "phone#retail".equals(item.policyId()) : "Policy id mismatch";
+    assert "alice@wonderland".equals(item.owner()) : "Owner mismatch";
+    assert item.active() : "Policy should be active";
+    assert item.normalization() == IdentifierNormalization.PHONE_E164
+        : "Normalization mismatch";
+    assert "bfv-v1".equals(item.inputEncryption()) : "Input encryption mismatch";
+    assert "ABCD".equals(item.inputEncryptionPublicParameters())
+        : "Input encryption params mismatch";
+    assert item.inputEncryptionPublicParametersDecoded() != null
+        : "Decoded BFV parameters should be present";
+    assert item.inputEncryptionPublicParametersDecoded().parameters().polynomialDegree() == 64L
+        : "Decoded BFV polynomial degree mismatch";
+    assert item.inputEncryptionPublicParametersDecoded().parameters().decompositionBaseLog() == 12
+        : "Decoded BFV decomposition-base-log mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Identifier policy request must be captured";
+    assert "GET".equals(request.method()) : "Identifier policy list must use GET";
+    assert request.uri().toString().equals("https://torii.example/v1/identifier-policies")
+        : "Identifier policy URI mismatch";
+    assert request.headers().getOrDefault("Accept", List.of()).contains("application/json")
+        : "Identifier policy request must accept JSON";
+  }
+
+  private static IdentifierReceiptFixture signedIdentifierReceiptFixture(
+      final long resolvedAtMs, final Long expiresAtMs) {
+    try {
+      final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
+      final KeyPair keyPair = generator.generateKeyPair();
+      final byte[] publicKeyBytes = keyPair.getPublic().getEncoded();
+      final byte[] rawPublicKey =
+          java.util.Arrays.copyOfRange(
+              publicKeyBytes, publicKeyBytes.length - 32, publicKeyBytes.length);
+      final byte[] payloadBytes = new byte[] {0x01, 0x02, 0x03, 0x04, (byte) 0xA0};
+      final byte[] message = IrohaHash.prehash(payloadBytes);
+      final Signature signer = Signature.getInstance("Ed25519");
+      signer.initSign(keyPair.getPrivate());
+      signer.update(message);
+      final byte[] signature = signer.sign();
+      return new IdentifierReceiptFixture(
+          "ed25519:" + PublicKeyCodec.encodePublicKeyMultihash(0x01, rawPublicKey),
+          hex(payloadBytes),
+          hex(signature),
+          resolvedAtMs,
+          expiresAtMs);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to build signed identifier receipt fixture", ex);
+    }
+  }
+
+  private static void identifierResolveRequestParsesResponse() {
+    final String accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
+    final String json =
+        "{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"opaque_id\":\"opaque:"
+            + "11".repeat(32)
+            + "\","
+            + "\"receipt_hash\":\""
+            + "22".repeat(32)
+            + "\","
+            + "\"uaid\":\"uaid:"
+            + "33".repeat(31)
+            + "35\","
+            + "\"account_id\":\""
             + accountId
-            + "\",\"index\":7,\"source\":\"world_state\"}";
+            + "\","
+            + "\"resolved_at_ms\":42,"
+            + "\"expires_at_ms\":142,"
+            + "\"backend\":\"bfv-affine-sha3-256-v1\","
+            + "\"signature\":\""
+            + signed.signatureHex()
+            + "\","
+            + "\"signature_payload_hex\":\""
+            + signed.signaturePayloadHex()
+            + "\","
+            + "\"signature_payload\":{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"opaque_id\":\"opaque:"
+            + "11".repeat(32)
+            + "\","
+            + "\"receipt_hash\":\""
+            + "22".repeat(32)
+            + "\","
+            + "\"uaid\":\"uaid:"
+            + "33".repeat(31)
+            + "35\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
+            + "\"resolved_at_ms\":42,"
+            + "\"expires_at_ms\":142"
+            + "}"
+            + "}";
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
-    final ClientConfig config =
-        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
-    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
 
-    final AccountAliasResolution resolution = transport.resolveAccountAlias("alice").join();
-    assert resolution != null : "Account alias resolution should parse";
-    assert "alice".equals(resolution.alias()) : "Alias mismatch";
-    assert accountId.equals(resolution.accountId())
-        : "Account ID mismatch";
-    assert resolution.index() != null && resolution.index() == 7L : "Index mismatch";
-    assert "world_state".equals(resolution.source()) : "Source mismatch";
+    final Optional<IdentifierResolutionReceipt> response =
+        transport.resolveIdentifier(" phone#retail ", " +1 (555) 123-4567 ", null).join();
+    assert response.isPresent() : "Expected identifier resolution receipt";
+    final IdentifierResolutionReceipt receipt = response.orElseThrow();
+    assert "phone#retail".equals(receipt.policyId()) : "Policy id mismatch";
+    assert ("opaque:" + "11".repeat(32)).equals(receipt.opaqueId()) : "Opaque id mismatch";
+    assert "22".repeat(32).equals(receipt.receiptHash()) : "Receipt hash mismatch";
+    assert ("uaid:" + "33".repeat(31) + "35").equals(receipt.uaid()) : "UAID mismatch";
+    assert accountId.equals(receipt.accountId()) : "Account id mismatch";
+    assert receipt.resolvedAtMs() == 42L : "Resolved timestamp mismatch";
+    assert Long.valueOf(142L).equals(receipt.expiresAtMs()) : "Expiry mismatch";
+    final IdentifierPolicySummary policy =
+        new IdentifierPolicySummary(
+            "phone#retail",
+            accountId,
+            true,
+            IdentifierNormalization.PHONE_E164,
+            signed.resolverPublicKey(),
+            "bfv-affine-sha3-256-v1",
+            "bfv-v1",
+            null,
+            null,
+            null);
+    assert receipt.verifySignature(policy) : "Receipt signature verification must succeed";
 
     final TransportRequest request = executor.lastRequest();
-    assert request != null : "Alias request should be captured";
-    assert "POST".equals(request.method()) : "Alias resolve must use POST";
-    assert request.uri().toString().equals("https://torii.example/v1/aliases/resolve")
-        : "Alias resolve URI mismatch";
-    assert readBody(request).contains("\"alias\":\"alice\"")
-        : "Alias resolve request payload must include alias";
+    assert request != null : "Identifier resolve request must be captured";
+    assert "POST".equals(request.method()) : "Identifier resolve must use POST";
+    assert request.uri().toString().equals("https://torii.example/v1/identifiers/resolve")
+        : "Identifier resolve URI mismatch";
+    assert request.headers().getOrDefault("Content-Type", List.of()).contains("application/json")
+        : "Identifier resolve must send JSON";
+    assert readBody(request)
+        .equals("{\"input\":\"+1 (555) 123-4567\",\"policy_id\":\"phone#retail\"}")
+        : "Identifier resolve payload mismatch";
   }
 
-  private static void resolveAssetAliasParsesResponse() {
+  private static void identifierResolveRequestAllowsNotFound() {
+    final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<IdentifierResolutionReceipt> response =
+        transport.resolveIdentifier("phone#retail", null, "0xABCD").join();
+    assert response.isEmpty() : "404 identifier resolution should return Optional.empty";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Identifier resolve request must be captured";
+    assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
+        : "Encrypted identifier resolve payload mismatch";
+  }
+
+  private static void identifierClaimLookupAllowsNotFound() {
+    final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<IdentifierClaimRecord> response =
+        transport.getIdentifierClaimByReceiptHash("55".repeat(32)).join();
+    assert response.isEmpty() : "404 identifier claim lookup should return Optional.empty";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Identifier claim lookup request must be captured";
+    assert request.uri().toString().equals("https://torii.example/v1/identifiers/receipts/" + "55".repeat(32))
+        : "Identifier claim lookup URI mismatch";
+  }
+
+  private static void identifierClaimReceiptUsesAccountPath() {
+    final String accountId = "alice@wonderland";
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(7L, null);
     final String json =
-        "{\"alias\":\"usd#issuer@main\",\"asset_definition_id\":\"usd#wonderland\",\"asset_name\":\"USD\",\"source\":\"world_state\"}";
+        "{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"opaque_id\":\"opaque:"
+            + "44".repeat(32)
+            + "\","
+            + "\"receipt_hash\":\""
+            + "55".repeat(32)
+            + "\","
+            + "\"uaid\":\"uaid:"
+            + "66".repeat(31)
+            + "67\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
+            + "\"resolved_at_ms\":7,"
+            + "\"backend\":\"bfv-affine-sha3-256-v1\","
+            + "\"signature\":\""
+            + signed.signatureHex()
+            + "\","
+            + "\"signature_payload_hex\":\""
+            + signed.signaturePayloadHex()
+            + "\","
+            + "\"signature_payload\":{"
+            + "\"policy_id\":\"phone#retail\","
+            + "\"opaque_id\":\"opaque:"
+            + "44".repeat(32)
+            + "\","
+            + "\"receipt_hash\":\""
+            + "55".repeat(32)
+            + "\","
+            + "\"uaid\":\"uaid:"
+            + "66".repeat(31)
+            + "67\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
+            + "\"resolved_at_ms\":7"
+            + "}"
+            + "}";
     final StubResponseExecutor executor =
         new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
-    final ClientConfig config =
-        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
-    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
 
-    final AssetAliasResolution resolution = transport.resolveAssetAlias("usd#issuer@main").join();
-    assert resolution != null : "Asset alias resolution should parse";
-    assert "usd#issuer@main".equals(resolution.alias()) : "Alias mismatch";
-    assert "usd#wonderland".equals(resolution.assetDefinitionId())
-        : "Asset definition mismatch";
-    assert "USD".equals(resolution.assetName()) : "Asset name mismatch";
+    final Optional<IdentifierResolutionReceipt> response =
+        transport.issueIdentifierClaimReceipt(accountId, "phone#retail", null, "ABCD").join();
+    assert response.isPresent() : "Claim receipt should parse";
+    assert ("opaque:" + "44".repeat(32)).equals(response.orElseThrow().opaqueId())
+        : "Opaque id mismatch";
 
     final TransportRequest request = executor.lastRequest();
-    assert request != null : "Alias request should be captured";
-    assert "POST".equals(request.method()) : "Asset alias resolve must use POST";
-    assert request.uri().toString().equals("https://torii.example/v1/assets/aliases/resolve")
-        : "Asset alias resolve URI mismatch";
-    assert readBody(request).contains("\"alias\":\"usd#issuer@main\"")
-        : "Asset alias request payload must include alias";
+    assert request != null : "Identifier claim request must be captured";
+    assert request
+        .uri()
+        .toString()
+        .equals("https://torii.example/api/v1/accounts/alice%40wonderland/identifiers/claim-receipt")
+        : "Identifier claim receipt path must encode account id";
+    assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
+        : "Identifier claim payload mismatch";
   }
 
-  private static void buildAssetIdLiteralResolvesAliases() {
-    if (!AssetIdLiteral.isNativeAvailable()) {
-      System.out.println(
-          "[IrohaAndroid] buildAssetIdLiteral alias flow skipped (native unavailable).");
-      return;
-    }
-    final String accountId = sampleI105(0x42);
-    final List<TransportRequest> requests = new ArrayList<>();
-    final HttpTransportExecutor executor =
-        new HttpTransportExecutor() {
-          @Override
-          public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
-            requests.add(request);
-            final String path = request.uri().getPath();
-            if (path.endsWith("/v1/aliases/resolve")) {
-              final String body =
-                  "{\"alias\":\"alice\",\"account_id\":\"" + accountId + "\",\"index\":1}";
-              return CompletableFuture.completedFuture(
-                  new TransportResponse(200, body.getBytes(StandardCharsets.UTF_8), "ok", Map.of()));
-            }
-            if (path.endsWith("/v1/assets/aliases/resolve")) {
-              final String body =
-                  "{\"alias\":\"usd#issuer@main\",\"asset_definition_id\":\"usd#wonderland\",\"asset_name\":\"USD\"}";
-              return CompletableFuture.completedFuture(
-                  new TransportResponse(200, body.getBytes(StandardCharsets.UTF_8), "ok", Map.of()));
-            }
-            return CompletableFuture.completedFuture(
-                new TransportResponse(404, new byte[0], "not found", Map.of()));
-          }
-        };
-    final ClientConfig config =
-        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
-    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
-
-    final String literal =
-        transport.buildAssetIdLiteralResolvingAliases("usd#issuer@main", "alice").join();
-    assert literal.startsWith("norito:") : "Resolved asset literal must be encoded";
-    assert requests.stream()
-        .anyMatch(request -> request.uri().toString().endsWith("/v1/aliases/resolve"))
-        : "Account alias endpoint must be called";
-    assert requests.stream()
-        .anyMatch(request -> request.uri().toString().endsWith("/v1/assets/aliases/resolve"))
-        : "Asset alias endpoint must be called";
+  private static void identifierNormalizationCanonicalizesInputs() {
+    assert "+15551234567".equals(
+            IdentifierNormalization.PHONE_E164.normalize(" +1 (555) 123-4567 ", "phone"))
+        : "Phone normalization mismatch";
+    assert "alice.example@example.com".equals(
+            IdentifierNormalization.EMAIL_ADDRESS.normalize(
+                " Alice.Example@Example.COM ", "email"))
+        : "Email normalization mismatch";
+    assert "GB82WEST1234".equals(
+            IdentifierNormalization.ACCOUNT_NUMBER.normalize(" gb82-west-1234 ", "account"))
+        : "Account normalization mismatch";
   }
 
-  private static void buildAssetIdLiteralFallsBackToAssetAliasResolutionForInvalidDefinition() {
-    if (!AssetIdLiteral.isNativeAvailable()) {
-      System.out.println(
-          "[IrohaAndroid] buildAssetIdLiteral fallback flow skipped (native unavailable).");
-      return;
-    }
-    final String accountId = sampleI105(0x52);
-    final List<TransportRequest> requests = new ArrayList<>();
-    final HttpTransportExecutor executor =
-        new HttpTransportExecutor() {
-          @Override
-          public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
-            requests.add(request);
-            final String path = request.uri().getPath();
-            if (path.endsWith("/v1/assets/aliases/resolve")) {
-              final String body =
-                  "{\"alias\":\"symbol-without-domain\",\"asset_definition_id\":\"usd#wonderland\",\"asset_name\":\"USD\"}";
-              return CompletableFuture.completedFuture(
-                  new TransportResponse(200, body.getBytes(StandardCharsets.UTF_8), "ok", Map.of()));
-            }
-            return CompletableFuture.completedFuture(
-                new TransportResponse(404, new byte[0], "not found", Map.of()));
-          }
-        };
-    final ClientConfig config =
-        ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
-    final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
+  private static void identifierResolveRequestBuilderCanonicalizesPolicyInput() {
+    final IdentifierPolicySummary policy =
+        new IdentifierPolicySummary(
+            "phone#retail",
+            "alice@wonderland",
+            true,
+            IdentifierNormalization.PHONE_E164,
+            "ed25519:ed0120" + "11".repeat(32),
+            "bfv-affine-sha3-256-v1",
+            "bfv-v1",
+            null,
+            null,
+            null);
+    final IdentifierResolveRequest request = policy.plaintextRequest(" +1 (555) 123-4567 ");
+    assert "phone#retail".equals(request.policyId()) : "Identifier request policy id mismatch";
+    assert "+15551234567".equals(request.input()) : "Identifier request input mismatch";
+    assert request.encryptedInputHex() == null : "Encrypted input must be absent";
+  }
 
-    final String literal =
-        transport.buildAssetIdLiteralResolvingAliases("symbol-without-domain", accountId).join();
-    assert literal.startsWith("norito:") : "Fallback-resolved asset literal must be encoded";
-    assert requests.stream()
-        .anyMatch(request -> request.uri().toString().endsWith("/v1/assets/aliases/resolve"))
-        : "Asset alias endpoint must be called on fallback";
-    assert requests.stream()
-        .noneMatch(request -> request.uri().toString().endsWith("/v1/aliases/resolve"))
-        : "Account alias endpoint should not be called for canonical account ids";
+  private static void identifierBfvEnvelopeBuilderProducesDeterministicCiphertext() {
+    final IdentifierPolicySummary policy =
+        new IdentifierPolicySummary(
+            "string#retail",
+            "alice@wonderland",
+            true,
+            IdentifierNormalization.EXACT,
+            "ed25519:ed0120" + "11".repeat(32),
+            "bfv-affine-sha3-256-v1",
+            "bfv-v1",
+            null,
+            new IdentifierBfvPublicParameters(
+                new IdentifierBfvPublicParameters.Parameters(8L, 256L, 16_777_216L, 12),
+                new IdentifierBfvPublicParameters.PublicKey(
+                    List.of(11_472_226L, 15_791_131L, 10_301_391L, 6_321_610L, 502_045L, 1_948_157L, 5_332_249L, 12_641_494L),
+                    List.of(3_503_246L, 2_379_264L, 12_091_019L, 30_169L, 15_804_162L, 8_155_629L, 2_418_997L, 3_003_107L)),
+                3),
+            null);
+    final byte[] seed = hexToBytes("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF");
+    final String expected =
+        "4e525430000035a9bf76d68dbb0c35a9bf76d68dbb0c00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000";
+
+    assert expected.equals(policy.encryptInput("ab", seed))
+        : "Deterministic BFV ciphertext mismatch";
+    final IdentifierResolveRequest request = policy.encryptedRequestFromInput("ab", seed);
+    assert "string#retail".equals(request.policyId()) : "Encrypted request policy id mismatch";
+    assert request.input() == null : "Encrypted request plaintext must be absent";
+    assert expected.equals(request.encryptedInputHex())
+        : "Encrypted request ciphertext mismatch";
+  }
+
+  private static void identifierReceiptVerifierAcceptsEd25519Receipt() {
+    final String accountId = "alice@wonderland";
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
+    final IdentifierResolutionReceipt receipt =
+        new IdentifierResolutionReceipt(
+            "phone#retail",
+            "opaque:" + "11".repeat(32),
+            "22".repeat(32),
+            "uaid:" + "33".repeat(31) + "35",
+            accountId,
+            42L,
+            142L,
+            "bfv-affine-sha3-256-v1",
+            signed.signatureHex(),
+            signed.signaturePayloadHex(),
+            new IdentifierResolutionPayload(
+                "phone#retail",
+                "opaque:" + "11".repeat(32),
+                "22".repeat(32),
+                "uaid:" + "33".repeat(31) + "35",
+                accountId,
+                42L,
+                142L));
+    final IdentifierPolicySummary policy =
+        new IdentifierPolicySummary(
+            "phone#retail",
+            accountId,
+            true,
+            IdentifierNormalization.PHONE_E164,
+            signed.resolverPublicKey(),
+            "bfv-affine-sha3-256-v1",
+            "bfv-v1",
+            null,
+            null,
+            null);
+    assert IdentifierReceiptVerifier.verify(receipt, policy)
+        : "Identifier receipt verification must succeed";
   }
 
   private static void invalidateAndCancelDelegatesToExecutor() {
@@ -1105,20 +1340,33 @@ public final class HttpClientTransportTests {
     assert executor.invalidated : "invalidateAndCancel should reach the executor";
   }
 
+  private static String hex(final byte[] bytes) {
+    final StringBuilder builder = new StringBuilder(bytes.length * 2);
+    for (final byte b : bytes) {
+      builder.append(String.format("%02X", b & 0xFF));
+    }
+    return builder.toString();
+  }
+
+  private static byte[] hexToBytes(final String hex) {
+    final byte[] bytes = new byte[hex.length() / 2];
+    for (int index = 0; index < bytes.length; index++) {
+      final int offset = index * 2;
+      bytes[index] = (byte) Integer.parseInt(hex.substring(offset, offset + 2), 16);
+    }
+    return bytes;
+  }
+
   private static String readBody(final TransportRequest request) {
     return new String(request.body(), StandardCharsets.UTF_8);
   }
 
-  private static String sampleI105(final int fill) {
-    try {
-      final byte[] publicKey = new byte[32];
-      Arrays.fill(publicKey, (byte) fill);
-      return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final Exception ex) {
-      throw new AssertionError("failed to generate sample I105 account id", ex);
-    }
-  }
+  private record IdentifierReceiptFixture(
+      String resolverPublicKey,
+      String signaturePayloadHex,
+      String signatureHex,
+      long resolvedAtMs,
+      Long expiresAtMs) {}
 
   private static final class CapturingExecutor implements HttpTransportExecutor {
     private TransportRequest lastRequest;
@@ -1337,7 +1585,7 @@ public final class HttpClientTransportTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", fillValue))
-            .setAuthority(sampleI105(fillValue & 0xFF))
+            .setAuthority("alice@wonderland")
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)

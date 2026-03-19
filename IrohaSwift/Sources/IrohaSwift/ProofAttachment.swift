@@ -249,9 +249,3 @@ public struct ProofAttachment: Sendable, Equatable {
         return writer.data
     }
 }
-
-private extension Data {
-    func hexEncodedString() -> String {
-        map { String(format: "%02x", $0) }.joined()
-    }
-}

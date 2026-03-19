@@ -5622,8 +5622,7 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
       return createResponse({
         status: 200,
         jsonData: {
-          supported_abi_versions: [1],
-          default_compile_target: 1,
+          abi_version: 1,
           data_model_version: 1,
           crypto: {
             sm: {
@@ -5688,8 +5687,7 @@ test("submitTransaction retries transient failures via pipeline profile", async 
       return createResponse({
         status: 200,
         jsonData: {
-          supported_abi_versions: [1],
-          default_compile_target: 1,
+          abi_version: 1,
           data_model_version: 1,
           crypto: {
             sm: {
@@ -5768,8 +5766,7 @@ test("submitTransaction rejects mismatched data model version", async () => {
       return createResponse({
         status: 200,
         jsonData: {
-          supported_abi_versions: [1],
-          default_compile_target: 1,
+          abi_version: 1,
           data_model_version: 9,
           crypto: {
             sm: {
@@ -8275,8 +8272,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
     createResponse({
       status: 200,
       jsonData: {
-        supported_abi_versions: [1, 4],
-        default_compile_target: 4,
+        abi_version: 1,
         data_model_version: 1,
         crypto: {
           sm: {
@@ -8304,8 +8300,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getNodeCapabilities();
   assert.deepEqual(result, {
-    supportedAbiVersions: [1, 4],
-    defaultCompileTarget: 4,
+    abiVersion: 1,
     dataModelVersion: 1,
     crypto: {
       sm: {
@@ -8330,13 +8325,12 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
   });
 });
 
-test("getNodeCapabilities rejects non-integer capability lists", async () => {
+test("getNodeCapabilities rejects non-integer ABI version", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
       jsonData: {
-        supported_abi_versions: [1, 1.5],
-        default_compile_target: 4,
+        abi_version: 1.5,
         data_model_version: 1,
         crypto: {
           sm: {
@@ -8365,8 +8359,7 @@ test("getNodeCapabilities rejects non-integer capability lists", async () => {
   await assert.rejects(
     () => client.getNodeCapabilities(),
     (error) => {
-      assert(error instanceof RangeError);
-      assert.match(error.message, /supported_abi_versions/);
+      assert.match(error.message, /abi_version/);
       return true;
     },
   );
@@ -8383,18 +8376,17 @@ test("getNodeCapabilities rejects unsupported option fields", async () => {
   );
 });
 
-test("getRuntimeAbiActive normalizes versions", async () => {
+test("getRuntimeAbiActive normalizes ABI version", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: { active_versions: [1, 5], default_compile_target: 5 },
+      jsonData: { abi_version: 1 },
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getRuntimeAbiActive();
   assert.deepEqual(result, {
-    activeVersions: [1, 5],
-    defaultCompileTarget: 5,
+    abiVersion: 1,
   });
 });
 
@@ -8446,7 +8438,7 @@ test("getRuntimeMetrics normalizes counters", async () => {
     createResponse({
       status: 200,
       jsonData: {
-        active_abi_versions_count: 2,
+        abi_version: 1,
         upgrade_events_total: { proposed: 3, activated: 1, canceled: 1 },
       },
       headers: { "content-type": "application/json" },
@@ -8454,7 +8446,7 @@ test("getRuntimeMetrics normalizes counters", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getRuntimeMetrics();
   assert.deepEqual(result, {
-    activeAbiVersionsCount: 2,
+    abiVersion: 1,
     upgradeEventsTotal: { proposed: 3, activated: 1, canceled: 1 },
   });
 });
@@ -8469,12 +8461,12 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
             id_hex: "aa".repeat(32),
             record: {
               manifest: {
-                name: "ABI v3",
-                description: "roll forward",
-                abi_version: 3,
+                name: "ABI v1 refresh",
+                description: "scheduled rollout",
+                abi_version: 1,
                 abi_hash: "11".repeat(32),
-                added_syscalls: [512],
-                added_pointer_types: [900],
+                added_syscalls: [],
+                added_pointer_types: [],
                 start_height: 10,
                 end_height: 20,
               },
@@ -8487,9 +8479,9 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
             id_hex: "bb".repeat(32),
             record: {
               manifest: {
-                name: "ABI v4",
-                description: "new syscalls",
-                abi_version: 4,
+                name: "ABI v1 maintenance",
+                description: "next window",
+                abi_version: 1,
                 abi_hash: "22".repeat(32),
                 added_syscalls: [],
                 added_pointer_types: [],
@@ -8512,12 +8504,12 @@ test("listRuntimeUpgrades normalizes manifest and status payloads", async () => 
     idHex: "aa".repeat(32),
     record: {
       manifest: {
-        name: "ABI v3",
-        description: "roll forward",
-        abiVersion: 3,
+        name: "ABI v1 refresh",
+        description: "scheduled rollout",
+        abiVersion: 1,
         abiHashHex: "11".repeat(32),
-        addedSyscalls: [512],
-        addedPointerTypes: [900],
+        addedSyscalls: [],
+        addedPointerTypes: [],
         startHeight: 10,
         endHeight: 20,
       },
@@ -8544,26 +8536,82 @@ test("proposeRuntimeUpgrade posts manifest and normalizes response", async () =>
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const manifest = {
-    name: "ABI v5",
-    description: "new opcodes",
-    abiVersion: 5,
+    name: "ABI v1 maintenance",
+    description: "roll out refreshed binaries",
+    abiVersion: 1,
     abiHash: "11".repeat(32),
     startHeight: 100,
     endHeight: 200,
-    addedSyscalls: [600],
-    addedPointerTypes: [9000],
+    addedSyscalls: [],
+    addedPointerTypes: [],
   };
   const result = await client.proposeRuntimeUpgrade(manifest);
   assert.equal(captured.url, `${BASE_URL}/v1/runtime/upgrades/propose`);
   assert.equal(captured.init.method, "POST");
   const body = JSON.parse(captured.init.body);
-  assert.equal(body.name, "ABI v5");
-  assert.equal(body.abi_version, 5);
-  assert.deepEqual(body.added_syscalls, [600]);
+  assert.equal(body.name, "ABI v1 maintenance");
+  assert.equal(body.abi_version, 1);
+  assert.deepEqual(body.added_syscalls, []);
   assert.deepEqual(result, {
     ok: true,
     tx_instructions: [{ wire_id: "ProposeRuntimeUpgrade", payload_hex: "aa".repeat(32) }],
   });
+});
+
+test("listRuntimeUpgrades rejects non-v1 manifest ABI", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            id_hex: "aa".repeat(32),
+            record: {
+              manifest: {
+                name: "invalid",
+                description: "bad abi",
+                abi_version: 2,
+                abi_hash: "11".repeat(32),
+                added_syscalls: [],
+                added_pointer_types: [],
+                start_height: 10,
+                end_height: 20,
+              },
+              status: { Proposed: null },
+              proposer: FIXTURE_ALICE_ID,
+              created_height: 8,
+            },
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.listRuntimeUpgrades(),
+    /abi_version must be 1 in the first release/,
+  );
+});
+
+test("proposeRuntimeUpgrade rejects added syscall deltas in the first release", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.proposeRuntimeUpgrade({
+        name: "invalid",
+        description: "bad delta",
+        abiVersion: 1,
+        abiHash: "11".repeat(32),
+        startHeight: 100,
+        endHeight: 200,
+        addedSyscalls: [600],
+      }),
+    /added_syscalls must be empty in the first release/,
+  );
 });
 
 test("activateRuntimeUpgrade posts id and normalizes response", async () => {
@@ -14856,6 +14904,201 @@ test("callContract rejects unsupported option fields", async () => {
   );
 });
 
+test("proposeMultisigContractCall posts alias selector and normalizes response", async () => {
+  let captured;
+  const responsePayload = {
+    ok: true,
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    submitted: false,
+    proposal_id: "a".repeat(64),
+    instructions_hash: "a".repeat(64),
+    creation_time_ms: 123456,
+    signing_message_b64: "AQ==",
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.proposeMultisigContractCall({
+    multisigAccountAlias: "cbdc@hbl",
+    signerAccountId: FIXTURE_ALICE_ID,
+    namespace: "apps",
+    contractId: "mint",
+    entrypoint: "execute",
+    payload: { amount: "10" },
+    gasAssetId: FIXTURE_ASSET_ID_D,
+    feeSponsor: FIXTURE_BOB_ID,
+    gasLimit: 5,
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body, {
+    multisig_account_alias: "cbdc@hbl",
+    signer_account_id: FIXTURE_ALICE_ID,
+    namespace: "apps",
+    contract_id: "mint",
+    entrypoint: "execute",
+    payload: { amount: "10" },
+    gas_asset_id: FIXTURE_ASSET_ID_D,
+      fee_sponsor: FIXTURE_BOB_ID,
+      gas_limit: 5,
+  });
+  assert.deepEqual(result, {
+    ...responsePayload,
+    executed_tx_hash_hex: null,
+  });
+});
+
+test("approveMultisigContractCall posts concrete selector and normalizes response", async () => {
+  let captured;
+  const responsePayload = {
+    ok: true,
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    submitted: true,
+    proposal_id: "b".repeat(64),
+    instructions_hash: "b".repeat(64),
+    executed_tx_hash_hex: "c".repeat(64),
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.approveMultisigContractCall({
+    multisigAccountId: FIXTURE_ALICE_ID,
+    signerAccountId: FIXTURE_BOB_ID,
+    proposalId: "b".repeat(64),
+    signatureB64: "AQ==",
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/approve`);
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body, {
+    multisig_account_id: FIXTURE_ALICE_ID,
+    signer_account_id: FIXTURE_BOB_ID,
+      proposal_id: "b".repeat(64),
+      signature_b64: "AQ==",
+  });
+  assert.deepEqual(result, {
+    ...responsePayload,
+    creation_time_ms: null,
+    signing_message_b64: null,
+  });
+});
+
+test("getMultisigSpec posts selector and returns raw spec payload", async () => {
+  let captured;
+  const responsePayload = {
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    spec: {
+      signatories: [FIXTURE_ALICE_ID, FIXTURE_BOB_ID],
+      quorum: 2,
+      transaction_ttl_ms: 60000,
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getMultisigSpec({
+    multisig_account_alias: "cbdc@ubl",
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/spec`);
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    multisig_account_alias: "cbdc@ubl",
+  });
+  assert.deepEqual(result, responsePayload);
+});
+
+test("listMultisigProposals decodes proposal entries", async () => {
+  const responsePayload = {
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    proposals: [
+      {
+        proposal_id: "d".repeat(64),
+        instructions_hash: "d".repeat(64),
+        proposal: {
+          approvals: [FIXTURE_ALICE_ID],
+          proposed_at_ms: 42,
+        },
+      },
+    ],
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: responsePayload,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const result = await client.listMultisigProposals({
+    multisigAccountAlias: "cbdc@hbl",
+  });
+  assert.deepEqual(result, responsePayload);
+});
+
+test("getMultisigProposal resolves by instructions hash", async () => {
+  let captured;
+  const responsePayload = {
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    proposal_id: "e".repeat(64),
+    instructions_hash: "e".repeat(64),
+    proposal: {
+      approvals: [FIXTURE_ALICE_ID, FIXTURE_BOB_ID],
+      proposed_at_ms: 43,
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getMultisigProposal({
+    multisigAccountAlias: "cbdc@hbl",
+    instructionsHash: "e".repeat(64),
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    multisig_account_alias: "cbdc@hbl",
+    instructions_hash: "e".repeat(64),
+  });
+  assert.deepEqual(result, responsePayload);
+});
+
+test("getMultisigSpec rejects selectors that set both account id and alias", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.getMultisigSpec({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        multisigAccountAlias: "cbdc@hbl",
+      }),
+    /requires exactly one of multisig_account_id or multisig_account_alias/,
+  );
+});
+
 test("getContractManifest returns normalized payload", async () => {
   const fetchImpl = async () =>
     createResponse({
@@ -18476,8 +18719,7 @@ test("http errors surface reject header codes", async () => {
       return createResponse({
         status: 200,
         jsonData: {
-          supported_abi_versions: [1],
-          default_compile_target: 1,
+          abi_version: 1,
           data_model_version: 1,
           crypto: {
             sm: {

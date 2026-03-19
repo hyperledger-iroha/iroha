@@ -26,7 +26,7 @@ Goals
 
 Non‑Goals (Initial Phase)
 - Defining token economics or validator incentives; scheduling and staking policies are pluggable.
-- Introducing a new ABI version; changes target ABI v1 with explicit syscall and pointer‑ABI extensions per IVM policy.
+- Changing `abi_version` away from `1` or expanding syscall/pointer‑ABI surfaces is out of scope; changes stay within ABI v1 only.
 
 Terminology
 - Nexus Ledger: The global logical ledger formed by composing Data Space (DS) blocks into a single, ordered history and state commitment.

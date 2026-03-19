@@ -1,6 +1,7 @@
 //! CoreHost JSON encode/decode and schema encode/decode helpers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_primitives::numeric::Numeric;
 use ivm::{CoreHost, IVM, PointerType, encoding, instruction::wide, syscalls};
 mod common;
 
@@ -238,4 +239,36 @@ fn schema_decode_unknown_schema_exposes_metadata() {
         .and_then(norito::json::Value::as_array)
         .expect("known versions array");
     assert!(versions.is_empty());
+}
+
+#[test]
+fn json_get_numeric_reads_decimal_strings() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+    let json = br#"{"amount":"0.00001"}"#;
+    let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
+    let p_key = vm
+        .alloc_input_tlv(&tlv(PointerType::Name, b"amount"))
+        .unwrap();
+
+    let prog = common::assemble(
+        &[
+            encoding::wide::encode_sys(
+                wide::system::SCALL,
+                syscalls::SYSCALL_JSON_GET_NUMERIC as u8,
+            )
+            .to_le_bytes(),
+            encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat(),
+    );
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&prog).unwrap();
+    vm.run().unwrap();
+
+    let tlv = vm.memory.validate_tlv(vm.register(10)).unwrap();
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode numeric");
+    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
 }

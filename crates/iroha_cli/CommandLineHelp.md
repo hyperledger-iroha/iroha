@@ -3095,15 +3095,15 @@ Runtime ABI helpers
 
 ###### **Subcommands:**
 
-* `active` — Fetch active ABI versions from the node
-* `active-query` — Fetch active ABI versions via signed Norito query (core /query)
+* `active` — Fetch the active ABI version from the node
+* `active-query` — Fetch the active ABI version via signed Norito query (core /query)
 * `hash` — Fetch the node's canonical ABI hash for the active policy
 
 
 
 ## `iroha ops runtime abi active`
 
-Fetch active ABI versions from the node
+Fetch the active ABI version from the node
 
 **Usage:** `iroha ops runtime abi active`
 
@@ -3111,7 +3111,7 @@ Fetch active ABI versions from the node
 
 ## `iroha ops runtime abi active-query`
 
-Fetch active ABI versions via signed Norito query (core /query)
+Fetch the active ABI version via signed Norito query (core /query)
 
 **Usage:** `iroha ops runtime abi active-query`
 
@@ -10188,4 +10188,3 @@ Show versions and git SHA of client and server
     This document was generated automatically by
     <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
 </i></small>
-

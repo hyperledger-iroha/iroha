@@ -43,8 +43,8 @@ runtime upgrades без остановки сети и без hardfork. Узлы
   - `description: String` — короткое описание для операторов.
   - `abi_version: u16` — целевая версия ABI для активации (должна быть 1 в первом релизе).
   - `abi_hash: [u8; 32]` — канонический ABI hash целевой политики.
-  - `added_syscalls: Vec<u16>` — номера syscalls, которые становятся допустимыми в этой версии.
-  - `added_pointer_types: Vec<u16>` — идентификаторы pointer-типов, добавленных апгрейдом.
+  - `added_syscalls: Vec<u16>` — резервный список дельт; в первом релизе должен быть пустым.
+  - `added_pointer_types: Vec<u16>` — резервный список дельт; в первом релизе должен быть пустым.
   - `start_height: u64` — первая высота блока, где разрешена активация.
   - `end_height: u64` — эксклюзивный верхний предел окна активации.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — SBOM digests для артефактов апгрейда.
@@ -118,7 +118,7 @@ Operator rollout (без простоя)
 
 Torii и CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (implemented)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
   - `GET /v1/runtime/upgrades` -> список records (implemented).
   - `POST /v1/runtime/upgrades/propose` -> оборачивает `ProposeRuntimeUpgrade` (возвращает instruction skeleton; implemented).
@@ -134,7 +134,7 @@ Torii и CLI
 
 Core Query API
 - Norito одиночный запрос (подписанный):
-  - `FindActiveAbiVersions` возвращает Norito-структуру `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` возвращает Norito-структуру `{ abi_version: u16 }`.
   - См. пример: `docs/source/samples/find_active_abi_versions.md` (тип/поля и JSON пример).
 
 Примечания по реализации (только v1)
@@ -154,7 +154,7 @@ Core Query API
   - Эмитить `abi_version = 1` и встраивать canonical v1 `abi_hash` в `.to` manifests.
 
 Telemetry
-- Добавить gauge `runtime.active_abi_versions` и counter `runtime.upgrade_events_total{kind}`.
+- Добавить gauge `runtime.abi_version` и counter `runtime.upgrade_events_total{kind}`.
 
 Security considerations
 - Только root/sudo могут propose/activate/cancel; manifests должны быть корректно подписаны.

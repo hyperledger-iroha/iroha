@@ -16,8 +16,7 @@ translator: manual
 レスポンス（初回リリース・単一 ABI ポリシー V1）
 ```json
 {
-  "supported_abi_versions": [1],
-  "default_compile_target": 1,
+  "abi_version": 1,
   "data_model_version": 1,
   "crypto": {
     "sm": {
@@ -42,8 +41,8 @@ translator: manual
 ```
 
 備考
-- `supported_abi_versions` には、ノードが入場時に受け付ける ABI バージョンの一覧が含まれます。
-- `default_compile_target` はアクティブな最大 ABI バージョンであり、Kotodama コンパイラの既定値として使用します。
+- `abi_version` には、ノードが入場時に受け付ける ABI バージョンの一覧が含まれます。
+- `abi_version` はノードが受け付ける唯一の ABI バージョンであり、Kotodama コンパイラもこの値を使います。
 - `data_model_version` はデータモデルの互換バージョンであり、SDK は組み込み値と異なる場合に送信を拒否する必要があります。
 - `crypto.curves.allowed_curve_ids` は `iroha_config.crypto.curves.allowed_curve_ids` で設定された [`address_curve_registry`](../references/address_curve_registry.md) 上のカーブ ID を表します。ML‑DSA や GOST、SM コントローラを投入する前に、このリストに必要な ID が含まれているか確認してください。
 

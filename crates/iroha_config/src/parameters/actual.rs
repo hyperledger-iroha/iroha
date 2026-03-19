@@ -54,6 +54,7 @@ use iroha_data_model::{
     },
     domain::DomainId,
     hijiri::HijiriFeePolicy as ModelHijiriFeePolicy,
+    identifier::IdentifierPolicyId,
     jurisdiction::JdgSignatureScheme,
     name::Name,
     nexus::{
@@ -2723,6 +2724,10 @@ impl LaneConfigEntry {
     /// across all lanes.
     #[must_use]
     pub fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
+        debug_assert!(
+            !self.merge_segment.is_empty(),
+            "lane config entries always carry a stable merge segment label",
+        );
         root.as_ref().join("merge_ledger").join("universal.log")
     }
 }
@@ -4791,6 +4796,8 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional offline certificate issuer configuration.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
+    /// Optional hidden-identifier resolver runtime configuration.
+    pub identifier_resolver: Option<ToriiIdentifierResolver>,
     /// App-facing query/backpressure limits.
     pub app_api: AppApi,
     /// Webhook delivery/backpressure configuration.
@@ -5300,6 +5307,26 @@ pub struct ToriiOfflineIssuer {
     pub legacy_operator_private_keys: Vec<ExposedPrivateKey>,
     /// Allowed controller allow-list (empty => allow all).
     pub allowed_controllers: Vec<AccountId>,
+}
+
+/// Hidden-identifier resolver configuration exposed to Torii.
+#[derive(Debug, Clone)]
+pub struct ToriiIdentifierResolver {
+    /// Policy runtimes keyed by on-chain policy id.
+    pub policies: Vec<ToriiIdentifierResolverPolicy>,
+}
+
+/// Per-policy secret/signer material for the Torii identifier resolver.
+#[derive(Debug, Clone)]
+pub struct ToriiIdentifierResolverPolicy {
+    /// On-chain policy namespace handled by this runtime entry.
+    pub policy_id: IdentifierPolicyId,
+    /// Hidden derivation secret committed by the on-chain policy.
+    pub secret: Vec<u8>,
+    /// Private key used to sign receipts for this policy.
+    pub signer_private_key: ExposedPrivateKey,
+    /// Optional receipt TTL enforced by the resolver.
+    pub receipt_ttl: Option<Duration>,
 }
 
 /// Per-scheme cap applied by the Torii pre-auth gate.

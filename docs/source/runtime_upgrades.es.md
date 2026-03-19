@@ -43,8 +43,8 @@ Objetos de estado (Modelo de datos)
   - `description: String` - descripcion corta para operadores.
   - `abi_version: u16` - version ABI objetivo a activar (debe ser 1 en la primera version).
   - `abi_hash: [u8; 32]` - hash ABI canonico para la politica objetivo.
-  - `added_syscalls: Vec<u16>` - numeros de syscalls que se vuelven validos con esta version.
-  - `added_pointer_types: Vec<u16>` - identificadores de tipos de puntero agregados por la actualizacion.
+  - `added_syscalls: Vec<u16>` - lista delta reservada; debe quedar vacia en la primera version.
+  - `added_pointer_types: Vec<u16>` - lista delta reservada; debe quedar vacia en la primera version.
   - `start_height: u64` - primera altura de bloque donde se permite la activacion.
   - `end_height: u64` - limite superior exclusivo de la ventana de activacion.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` - digests SBOM para artefactos de actualizacion.
@@ -118,7 +118,7 @@ Despliegue del operador (sin downtime)
 
 Torii y CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implementado)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (implementado)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implementado)
   - `GET /v1/runtime/upgrades` -> lista de registros (implementado).
   - `POST /v1/runtime/upgrades/propose` -> envuelve `ProposeRuntimeUpgrade` (devuelve esqueleto de instruccion; implementado).
@@ -134,7 +134,7 @@ Torii y CLI
 
 API de consultas core
 - Consulta Norito singular (firmada):
-  - `FindActiveAbiVersions` devuelve una estructura Norito `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` devuelve una estructura Norito `{ abi_version: u16 }`.
   - Ver ejemplo: `docs/source/samples/find_active_abi_versions.md` (tipo/campos y ejemplo JSON).
 
 Notas de implementacion (solo v1)
@@ -154,7 +154,7 @@ Notas de implementacion (solo v1)
   - Emite `abi_version = 1` e incrusta el `abi_hash` canonico v1 en manifests `.to`.
 
 Telemetria
-- Agregar gauge `runtime.active_abi_versions` y counter `runtime.upgrade_events_total{kind}`.
+- Agregar gauge `runtime.abi_version` y counter `runtime.upgrade_events_total{kind}`.
 
 Consideraciones de seguridad
 - Solo root/sudo puede proponer/activar/cancelar; los manifests deben estar firmados adecuadamente.

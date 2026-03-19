@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Typed builder for the `GrantRole` instruction. */
 public final class GrantRoleInstruction implements InstructionTemplate {
@@ -90,8 +89,7 @@ public final class GrantRoleInstruction implements InstructionTemplate {
 
     public Builder setDestinationAccountId(final String destinationAccountId) {
       this.destinationAccountId =
-          AccountIdLiteral.extractI105Address(
-              Objects.requireNonNull(destinationAccountId, "destinationAccountId"));
+          Objects.requireNonNull(destinationAccountId, "destinationAccountId");
       return this;
     }
 

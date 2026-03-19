@@ -152,6 +152,15 @@ fn tags_section() -> Value {
         Value::String("Contract deployment, instances, and execution helpers.".to_owned()),
     );
 
+    let mut multisig = Map::new();
+    multisig.insert("name".into(), Value::String("Multisig".to_owned()));
+    multisig.insert(
+        "description".into(),
+        Value::String(
+            "Alias-aware multisig propose, approve, spec, and proposal lookup helpers.".to_owned(),
+        ),
+    );
+
     let mut zk = Map::new();
     zk.insert("name".into(), Value::String("ZK".to_owned()));
     zk.insert(
@@ -329,6 +338,7 @@ fn tags_section() -> Value {
         Value::Object(queries),
         Value::Object(streams),
         Value::Object(contracts),
+        Value::Object(multisig),
         Value::Object(zk),
         Value::Object(proofs),
         Value::Object(governance),
@@ -2962,6 +2972,97 @@ fn contracts_paths() -> Map {
     paths
 }
 
+fn multisig_post_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    not_found_description: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Multisig".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(request_schema_ref)),
+    );
+    let mut responses = single_json_response(response_schema_ref);
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Invalid multisig selector or payload.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(not_found_description, error_schema_reference()),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn multisig_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/contracts/call/multisig/propose".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Propose a multisig contract call.",
+            "Resolve a multisig selector, wrap a contract call in a multisig proposal envelope, and optionally submit it.",
+            "#/components/schemas/MultisigContractCallProposeRequest",
+            "#/components/schemas/MultisigContractCallResponse",
+            "Multisig alias or referenced contract instance not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/call/multisig/approve".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Approve a multisig contract call proposal.",
+            "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
+            "#/components/schemas/MultisigContractCallApproveRequest",
+            "#/components/schemas/MultisigContractCallResponse",
+            "Multisig alias or referenced proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/spec".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch the active multisig spec.",
+            "Resolve a multisig selector and return the current active concrete authority plus its multisig specification.",
+            "#/components/schemas/MultisigSpecRequest",
+            "#/components/schemas/MultisigSpecResponse",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/proposals/list".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List active multisig proposals.",
+            "Resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
+            "#/components/schemas/MultisigProposalsListRequest",
+            "#/components/schemas/MultisigProposalsListResponse",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/proposals/get".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a multisig proposal.",
+            "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+            "#/components/schemas/MultisigProposalsGetRequest",
+            "#/components/schemas/MultisigProposalGetResponse",
+            "Multisig alias or proposal not found.",
+        )),
+    );
+    paths
+}
+
 fn zk_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -3458,8 +3559,8 @@ fn runtime_paths() -> Map {
         "/v1/runtime/abi/active".to_owned(),
         Value::Object(json_get_operation(
             "Runtime",
-            "Fetch active ABI versions.",
-            "Return active ABI version list.",
+            "Fetch the active ABI version.",
+            "Return the fixed runtime ABI version.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -3637,6 +3738,65 @@ fn account_paths() -> Map {
                 "Fetch account portfolio.",
                 "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
                 "#/components/schemas/JsonValue",
+                params,
+            )
+        }),
+    );
+    paths
+}
+
+fn identifier_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/identifier-policies".to_owned(),
+        Value::Object(json_get_operation(
+            "Identifiers",
+            "List identifier policies.",
+            "List globally registered hidden-function identifier policies and their public metadata.",
+            "#/components/schemas/IdentifierPolicyListResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/identifiers/resolve".to_owned(),
+        Value::Object(json_post_operation(
+            "Identifiers",
+            "Resolve an identifier.",
+            "Resolve a normalized identifier input under a hidden-function policy and return the bound canonical account target when a live claim exists.",
+            "#/components/schemas/IdentifierResolveRequest",
+            "#/components/schemas/IdentifierResolveResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/identifiers/receipts/{receipt_hash}".to_owned(),
+        Value::Object({
+            let params = vec![string_path_param(
+                "receipt_hash",
+                "Hidden-function receipt hash used to look up the persisted claim binding.",
+            )];
+            json_get_operation(
+                "Identifiers",
+                "Look up an identifier claim by receipt hash.",
+                "Resolve a persisted identifier claim by its deterministic receipt hash for audit and support tooling.",
+                "#/components/schemas/IdentifierClaimLookupResponse",
+                params,
+            )
+        }),
+    );
+    paths.insert(
+        "/v1/accounts/{account_id}/identifiers/claim-receipt".to_owned(),
+        Value::Object({
+            let params = vec![string_path_param(
+                "account_id",
+                "Canonical target account identifier for the claim receipt.",
+            )];
+            json_post_operation(
+                "Identifiers",
+                "Issue an identifier claim receipt.",
+                "Normalize a raw identifier input under a hidden-function policy and return a signed receipt that can be embedded into `ClaimIdentifier`.",
+                "#/components/schemas/IdentifierResolveRequest",
+                "#/components/schemas/IdentifierResolveResponse",
                 params,
             )
         }),
@@ -6527,10 +6687,12 @@ fn paths_section() -> Map {
     paths.extend(mcp_paths());
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
+    paths.extend(multisig_paths());
     paths.extend(zk_paths());
     paths.extend(governance_paths());
     paths.extend(runtime_paths());
     paths.extend(account_paths());
+    paths.extend(identifier_paths());
     paths.extend(domain_paths());
     paths.extend(asset_paths());
     paths.extend(nft_paths());
@@ -7753,6 +7915,381 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Backend source for the alias mapping."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvParameters".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["polynomial_degree", "plaintext_modulus", "ciphertext_modulus"],
+            "additionalProperties": false,
+            "properties": {
+                "polynomial_degree": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "description": "Ring degree used by the BFV input-encryption envelope."
+                },
+                "plaintext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Plaintext modulus `t` used by the BFV input-encryption envelope."
+                },
+                "ciphertext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Ciphertext modulus `q` used by the BFV input-encryption envelope."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvPublicKey".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["b", "a"],
+            "additionalProperties": false,
+            "properties": {
+                "b": {
+                    "type": "array",
+                    "items": {"type": "integer", "format": "uint64"},
+                    "description": "First BFV public-key polynomial."
+                },
+                "a": {
+                    "type": "array",
+                    "items": {"type": "integer", "format": "uint64"},
+                    "description": "Second BFV public-key polynomial."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvIdentifierPublicParameters".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["parameters", "public_key", "max_input_bytes"],
+            "additionalProperties": false,
+            "properties": {
+                "parameters": {
+                    "$ref": "#/components/schemas/BfvParameters"
+                },
+                "public_key": {
+                    "$ref": "#/components/schemas/BfvPublicKey"
+                },
+                "max_input_bytes": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "description": "Maximum number of UTF-8 bytes accepted by the BFV input envelope."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvRamEncryptedInputMode".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": ["resolver_canonicalized_envelope_v1"],
+            "description": "Canonicalization mode applied before the programmed RAM-FHE backend executes."
+        }),
+    );
+    schemas.insert(
+        "BfvRamProgramProfile".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "profile_version",
+                "register_count",
+                "memory_lane_count",
+                "ciphertext_mul_per_step",
+                "encrypted_input_mode",
+                "min_ciphertext_modulus"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "profile_version": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "description": "Stable programmed RAM-FHE profile version."
+                },
+                "register_count": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "description": "Number of ciphertext registers in the hidden execution machine."
+                },
+                "memory_lane_count": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "description": "Number of ciphertext memory lanes persisted across program steps."
+                },
+                "ciphertext_mul_per_step": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "description": "Maximum ciphertext-ciphertext multiplications per programmed step."
+                },
+                "encrypted_input_mode": {
+                    "$ref": "#/components/schemas/BfvRamEncryptedInputMode"
+                },
+                "min_ciphertext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Minimum supported BFV ciphertext modulus for the programmed profile."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierResolutionReceiptPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "policy_id",
+                "opaque_id",
+                "receipt_hash",
+                "uaid",
+                "account_id",
+                "resolved_at_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace used for the resolution."
+                },
+                "opaque_id": {
+                    "type": "string",
+                    "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for this evaluation."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "UAID currently bound to the opaque identifier."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier currently bound to the UAID."
+                },
+                "resolved_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Resolution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierPolicySummary".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["policy_id", "owner", "active", "normalization", "resolver_public_key", "backend"],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace literal (`<kind>#<business_rule>`)."
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "Canonical account identifier that owns the policy."
+                },
+                "active": {
+                    "type": "boolean",
+                    "description": "Whether the policy is active for new claims and resolutions."
+                },
+                "normalization": {
+                    "type": "string",
+                    "description": "Client-side canonicalization mode required before encrypted input is produced."
+                },
+                "resolver_public_key": {
+                    "type": "string",
+                    "description": "Public key used to verify resolution receipts."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "Hidden-function backend advertised by the policy commitment."
+                },
+                "input_encryption": {
+                    "type": "string",
+                    "description": "Optional encrypted-input scheme published for this policy."
+                },
+                "input_encryption_public_parameters": {
+                    "type": "string",
+                    "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters."
+                },
+                "input_encryption_public_parameters_decoded": {
+                    "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
+                },
+                "ram_fhe_profile": {
+                    "$ref": "#/components/schemas/BfvRamProgramProfile"
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional human-readable note attached to the policy."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierPolicyListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["total", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "total": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Number of policies returned."
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/IdentifierPolicySummary"
+                    },
+                    "description": "Registered identifier policies."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierResolveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["policy_id"],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace literal (`<kind>#<business_rule>`)."
+                },
+                "input": {
+                    "type": "string",
+                    "description": "Plaintext identifier input. Supply exactly one of `input` or `encrypted_input`."
+                },
+                "encrypted_input": {
+                    "type": "string",
+                    "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input` or `encrypted_input`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierResolveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "policy_id",
+                "opaque_id",
+                "receipt_hash",
+                "uaid",
+                "account_id",
+                "resolved_at_ms",
+                "backend",
+                "signature",
+                "signature_payload_hex",
+                "signature_payload"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace used for resolution."
+                },
+                "opaque_id": {
+                    "type": "string",
+                    "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for this evaluation."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "UAID currently bound to the opaque identifier."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier currently bound to the UAID."
+                },
+                "resolved_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Resolution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "Hidden-function backend that produced the opaque identifier."
+                },
+                "signature": {
+                    "type": "string",
+                    "description": "Hex-encoded resolver signature over the canonical receipt payload."
+                },
+                "signature_payload_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded Norito payload bytes that were signed by the resolver."
+                },
+                "signature_payload": {
+                    "$ref": "#/components/schemas/IdentifierResolutionReceiptPayload"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierClaimLookupResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "policy_id",
+                "opaque_id",
+                "receipt_hash",
+                "uaid",
+                "account_id",
+                "verified_at_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace bound to the claim."
+                },
+                "opaque_id": {
+                    "type": "string",
+                    "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for the original evaluation."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "UAID currently bound to the opaque identifier."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier currently bound to the UAID."
+                },
+                "verified_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Ledger timestamp in milliseconds when the identifier claim was accepted."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional identifier-claim expiry timestamp in milliseconds since Unix epoch."
                 }
             }
         }),
@@ -10303,6 +10840,238 @@ fn openapi_schemas() -> Map {
             }
         }),
     );
+    schemas.insert(
+        "MultisigAccountSelector".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "multisig_account_id": {
+                    "type": "string",
+                    "description": "Active concrete multisig account id."
+                },
+                "multisig_account_alias": {
+                    "type": "string",
+                    "description": "Stable multisig alias in `label@domain` format."
+                }
+            },
+            "oneOf": [
+                { "required": ["multisig_account_id"] },
+                { "required": ["multisig_account_alias"] }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigSpecPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["signatories", "quorum", "transaction_ttl_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "signatories": {
+                    "type": "object",
+                    "description": "Map of signer account ids to weight.",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "uint8"
+                    }
+                },
+                "quorum": {
+                    "type": "integer",
+                    "format": "uint16"
+                },
+                "transaction_ttl_ms": {
+                    "type": "integer",
+                    "format": "uint64"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["instructions", "proposed_at_ms", "expires_at_ms", "approvals"],
+            "additionalProperties": false,
+            "properties": {
+                "instructions": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                },
+                "proposed_at_ms": {
+                    "type": "integer",
+                    "format": "uint64"
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64"
+                },
+                "approvals": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "is_relayed": {
+                    "anyOf": [
+                        { "type": "boolean" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigContractCallProposeRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id", "namespace", "contract_id", "entrypoint"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "private_key": { "type": "object" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "namespace": { "type": "string" },
+                        "contract_id": { "type": "string" },
+                        "entrypoint": { "type": "string" },
+                        "payload": { "type": "object" },
+                        "gas_asset_id": { "type": "string" },
+                        "fee_sponsor": { "type": "string" },
+                        "gas_limit": { "type": "integer", "format": "uint64" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigContractCallApproveRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "private_key": { "type": "object" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigContractCallResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "resolved_multisig_account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "resolved_multisig_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "executed_tx_hash_hex": { "type": "string" },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "signing_message_b64": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigSpecRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigSpecResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved_multisig_account_id", "spec"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved_multisig_account_id": { "type": "string" },
+                "spec": { "$ref": "#/components/schemas/MultisigSpecPayload" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalsListRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalEntry".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proposal_id", "instructions_hash", "proposal"],
+            "additionalProperties": false,
+            "properties": {
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalsListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved_multisig_account_id", "proposals"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved_multisig_account_id": { "type": "string" },
+                "proposals": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/MultisigProposalEntry" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalsGetRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalGetResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved_multisig_account_id", "proposal_id", "instructions_hash", "proposal"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved_multisig_account_id": { "type": "string" },
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" }
+            }
+        }),
+    );
     schemas
 }
 
@@ -10427,6 +11196,11 @@ mod tests {
         assert!(paths.contains_key("/v1/connect/session"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
+        assert!(paths.contains_key("/v1/contracts/call/multisig/propose"));
+        assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
+        assert!(paths.contains_key("/v1/multisig/spec"));
+        assert!(paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(paths.contains_key("/v1/multisig/proposals/get"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
@@ -10441,6 +11215,53 @@ mod tests {
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
+    }
+
+    #[test]
+    fn identifier_policy_schema_exposes_ram_fhe_profile() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        let summary = schemas
+            .get("IdentifierPolicySummary")
+            .and_then(Value::as_object)
+            .expect("IdentifierPolicySummary schema");
+        let summary_properties = summary
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("IdentifierPolicySummary properties");
+        assert_eq!(
+            summary_properties
+                .get("ram_fhe_profile")
+                .and_then(Value::as_object)
+                .and_then(|field| field.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/BfvRamProgramProfile")
+        );
+
+        let profile = schemas
+            .get("BfvRamProgramProfile")
+            .and_then(Value::as_object)
+            .expect("BfvRamProgramProfile schema");
+        let required = profile
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("BfvRamProgramProfile required fields");
+        assert!(
+            required
+                .iter()
+                .any(|value| value.as_str() == Some("profile_version"))
+        );
+        assert!(
+            required
+                .iter()
+                .any(|value| value.as_str() == Some("encrypted_input_mode"))
+        );
+        assert!(schemas.contains_key("BfvRamEncryptedInputMode"));
     }
 
     #[test]

@@ -88,6 +88,8 @@ pub struct LocalnetOptions {
 pub struct AssetSpec {
     /// Canonical asset definition ID (`aid:<32-lower-hex>`).
     pub id: String,
+    /// Human-readable display name for the asset definition.
+    pub name: String,
     /// Account that should receive the minted supply.
     pub mint_to: ScopedAccountId,
     /// Quantity to mint for this asset definition.
@@ -406,7 +408,7 @@ const LOCALNET_NEXUS_DOMAIN: &str = "nexus";
 const LOCALNET_IVM_DOMAIN: &str = "ivm";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland";
-const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
+pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
@@ -561,6 +563,7 @@ impl<T: Write> RunArgs<T> for Args {
             assets: if self.sample_asset {
                 vec![AssetSpec {
                     id: localnet_sample_asset_literal(),
+                    name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
                     mint_to: ALICE_ID
                         .clone()
                         .to_account_id("wonderland".parse().expect("valid domain")),
@@ -1657,7 +1660,7 @@ fn extend_genesis(
     for asset in assets {
         let asset_def: AssetDefinitionId = asset.id.parse().wrap_err("invalid asset id")?;
         let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
-            .with_name(asset_def.to_string())
+            .with_name(asset.name.clone())
             .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
         if asset.quantity > 0 {
@@ -2383,6 +2386,7 @@ mod tests {
             extra_accounts: 0,
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
+                name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
                 mint_to: ALICE_ID
                     .clone()
                     .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),
@@ -3124,6 +3128,7 @@ mod tests {
             extra_accounts: 0,
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
+                name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
                 mint_to: ALICE_ID
                     .clone()
                     .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),

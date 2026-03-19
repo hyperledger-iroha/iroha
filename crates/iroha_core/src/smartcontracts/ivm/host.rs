@@ -5637,6 +5637,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID
             | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | ivm::syscalls::SYSCALL_JSON_GET_NUMERIC
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_POINTER_TO_NORITO
@@ -10465,9 +10466,8 @@ mod tests {
     #[test]
     fn decode_tlv_typed_respects_pointer_policy_guard() {
         crate::test_alias::ensure();
-        // Install a restrictive pointer policy so even valid types are rejected.
-        let _guard =
-            ivm::pointer_abi::PointerPolicyGuard::install(ivm::SyscallPolicy::Experimental(3), 9);
+        // Install a non-v1 ABI annotation so pointer validation fails closed.
+        let _guard = ivm::pointer_abi::PointerPolicyGuard::install(ivm::SyscallPolicy::AbiV1, 9);
 
         let mut vm = ivm::IVM::new(1_000_000);
         let did: DomainId = "wonder".parse().unwrap();

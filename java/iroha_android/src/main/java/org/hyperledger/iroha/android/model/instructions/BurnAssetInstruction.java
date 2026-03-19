@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.address.AssetIdLiteral;
 
 /** Typed builder for the `BurnAsset` instruction. */
 public final class BurnAssetInstruction implements InstructionTemplate {
@@ -88,7 +87,7 @@ public final class BurnAssetInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setAssetId(final String assetId) {
-      this.assetId = AssetIdLiteral.normalizeEncoded(assetId);
+      this.assetId = Objects.requireNonNull(assetId, "assetId");
       return this;
     }
 

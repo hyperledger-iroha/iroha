@@ -96,9 +96,9 @@ pub mod uri {
     pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
     /// Governance: list active contract instances for a namespace
     pub const GOV_INSTANCES_BY_NS: &str = "/v1/gov/instances/{ns}";
-    /// Node: capabilities advert (supported ABI versions, etc.)
+    /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
-    /// Runtime: get active ABI versions
+    /// Runtime: get the active ABI version
     pub const RUNTIME_ABI_ACTIVE: &str = "/v1/runtime/abi/active";
     /// Runtime: get canonical ABI hash for the node's active policy
     pub const RUNTIME_ABI_HASH: &str = "/v1/runtime/abi/hash";

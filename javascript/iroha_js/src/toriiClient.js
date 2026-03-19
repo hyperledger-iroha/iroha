@@ -1,12 +1,17 @@
+import { createHash, randomBytes } from "node:crypto";
+
 import {
   resolveToriiClientConfig,
   extractConfidentialGasConfig,
 } from "./config.js";
 import { getNativeBinding } from "./native.js";
 import {
+  canonicalizeMultihashHex,
   ensureCanonicalAccountId,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeIdentifierInput,
+  normalizeOpaqueLiteral,
 } from "./normalizers.js";
 import { AccountAddressError } from "./address.js";
 import {
@@ -24,6 +29,8 @@ import {
   ValidationError,
 } from "./validationError.js";
 import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
+import { blake2b256 } from "./blake2b.js";
+import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -39,6 +46,31 @@ const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
+const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
+const BFV_IDENTIFIER_SCHEMA_NAME =
+  "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
+const BFV_IDENTIFIER_SEED_BYTES = 32;
+const BFV_IDENTIFIER_SHA512_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.prg.v1",
+  "utf8",
+);
+const BFV_IDENTIFIER_SLOT_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.slot.v1",
+  "utf8",
+);
+const BFV_IDENTIFIER_U_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.u.v1",
+  "utf8",
+);
+const BFV_IDENTIFIER_E1_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.e1.v1",
+  "utf8",
+);
+const BFV_IDENTIFIER_E2_DOMAIN = Buffer.from(
+  "iroha.sdk.identifier.bfv.e2.v1",
+  "utf8",
+);
+const CRC64_REFLECTED_POLY = 0xc96c5795d7870f42n;
 const DA_FETCH_ARTIFACT_PREFIX = "artifacts/da/fetch_";
 const DA_PROVE_ARTIFACT_PREFIX = "artifacts/da/prove_availability_";
 const TX_STATUS_POLL_OPTION_KEYS = new Set([
@@ -139,6 +171,22 @@ const SUBSCRIPTION_LIST_OPTION_KEYS = new Set([
   "offset",
   "signal",
 ]);
+
+const CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      if ((crc & 1n) !== 0n) {
+        crc = (crc >> 1n) ^ CRC64_REFLECTED_POLY;
+      } else {
+        crc >>= 1n;
+      }
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
 
 function isSecureProtocol(protocol) {
   return protocol === "https:" || protocol === "wss:";
@@ -1836,6 +1884,152 @@ export class ToriiClient {
       throw new Error("alias resolve_index endpoint returned no payload");
     }
     return normalizeAliasResolutionResponse(body, "alias resolve_index response");
+  }
+
+  /**
+   * List globally registered identifier policies (`GET /v1/identifier-policies`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{total: number, items: Array<Record<string, unknown>>}>}
+   */
+  async listIdentifierPolicies(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listIdentifierPolicies",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "listIdentifierPolicies options");
+    const response = await this._request("GET", "/v1/identifier-policies", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("identifier policy list endpoint returned no payload");
+    }
+    return normalizeIdentifierPolicyListResponse(payload, "identifier policy list response");
+  }
+
+  /**
+   * Resolve an identifier through a hidden-function policy (`POST /v1/identifiers/resolve`).
+   * Returns null when the policy or identifier binding is missing (404).
+   * @param {{policyId: string, input?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async resolveIdentifier(options) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "resolveIdentifier",
+    );
+    const payload = buildIdentifierResolveRequest(rest, "resolveIdentifier");
+    const response = await this._request("POST", "/v1/identifiers/resolve", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    if (response.status === 409) {
+      throw new Error("Identifier policy is inactive or the target binding is unavailable");
+    }
+    if (response.status === 503) {
+      throw new Error("Identifier resolver runtime is disabled on the target node");
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("identifier resolve endpoint returned no payload");
+    }
+    return normalizeIdentifierResolveResponse(body, "identifier resolve response");
+  }
+
+  /**
+   * Look up a persisted identifier claim by its receipt hash (`GET /v1/identifiers/receipts/{receipt_hash}`).
+   * Returns null when the receipt hash is unknown (404).
+   * @param {string} receiptHash
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async getIdentifierClaimByReceiptHash(receiptHash, options = {}) {
+    const normalizedReceiptHash = normalizeHex32String(
+      receiptHash,
+      "getIdentifierClaimByReceiptHash.receiptHash",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getIdentifierClaimByReceiptHash",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      new Set([]),
+      "getIdentifierClaimByReceiptHash options",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/identifiers/receipts/${encodeURIComponent(normalizedReceiptHash)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("identifier receipt lookup endpoint returned no payload");
+    }
+    return normalizeIdentifierClaimLookupResponse(
+      body,
+      "identifier claim lookup response",
+    );
+  }
+
+  /**
+   * Issue a signed on-chain claim receipt for an account identifier binding.
+   * Returns null when the policy or account is missing (404).
+   * @param {string} accountId
+   * @param {{policyId: string, input?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async issueIdentifierClaimReceipt(accountId, options) {
+    const normalizedAccountId = ToriiClient._normalizeAccountId(accountId, "accountId");
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "issueIdentifierClaimReceipt",
+    );
+    const payload = buildIdentifierResolveRequest(rest, "issueIdentifierClaimReceipt");
+    const response = await this._request(
+      "POST",
+      `/v1/accounts/${encodeURIComponent(normalizedAccountId)}/identifiers/claim-receipt`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    if (response.status === 409) {
+      throw new Error("Identifier claim receipt cannot be issued for this account or policy");
+    }
+    if (response.status === 503) {
+      throw new Error("Identifier resolver runtime is disabled on the target node");
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("identifier claim-receipt endpoint returned no payload");
+    }
+    return normalizeIdentifierResolveResponse(body, "identifier claim receipt response");
   }
 
   /**
@@ -3539,7 +3733,7 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch active ABI versions (`GET /v1/runtime/abi/active`).
+   * Fetch the active ABI version (`GET /v1/runtime/abi/active`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiRuntimeAbiActiveResponse>}
    */
@@ -5858,6 +6052,140 @@ export class ToriiClient {
       throw new Error("contract call endpoint returned no payload");
     }
     return normalizeContractCallResponse(body);
+  }
+
+  /**
+   * Propose a contract call through a multisig authority (`POST /v1/contracts/call/multisig/propose`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async proposeMultisigContractCall(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "proposeMultisigContractCall");
+    const payload = normalizeMultisigContractCallProposeRequest(request);
+    const response = await this._request("POST", "/v1/contracts/call/multisig/propose", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig contract propose endpoint returned no payload");
+    }
+    return normalizeMultisigContractCallResponse(
+      body,
+      "multisig contract propose response",
+    );
+  }
+
+  /**
+   * Approve a multisig contract call proposal (`POST /v1/contracts/call/multisig/approve`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async approveMultisigContractCall(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "approveMultisigContractCall");
+    const payload = normalizeMultisigContractCallApproveRequest(request);
+    const response = await this._request("POST", "/v1/contracts/call/multisig/approve", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig contract approve endpoint returned no payload");
+    }
+    return normalizeMultisigContractCallResponse(
+      body,
+      "multisig contract approve response",
+    );
+  }
+
+  /**
+   * Resolve the current multisig spec through an alias-aware selector (`POST /v1/multisig/spec`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getMultisigSpec(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getMultisigSpec");
+    const payload = normalizeMultisigSelectorOnlyRequest(request, "getMultisigSpec request");
+    const response = await this._request("POST", "/v1/multisig/spec", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig spec endpoint returned no payload");
+    }
+    return normalizeMultisigSpecResponse(body);
+  }
+
+  /**
+   * List nonterminal multisig proposals for a selector (`POST /v1/multisig/proposals/list`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async listMultisigProposals(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "listMultisigProposals");
+    const payload = normalizeMultisigSelectorOnlyRequest(
+      request,
+      "listMultisigProposals request",
+    );
+    const response = await this._request("POST", "/v1/multisig/proposals/list", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig proposals list endpoint returned no payload");
+    }
+    return normalizeMultisigProposalsListResponse(body);
+  }
+
+  /**
+   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/get`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getMultisigProposal(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
+    const payload = normalizeMultisigProposalLookupRequest(request);
+    const response = await this._request("POST", "/v1/multisig/proposals/get", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig proposal get endpoint returned no payload");
+    }
+    return normalizeMultisigProposalGetResponse(body);
   }
 
   /**
@@ -12317,13 +12645,9 @@ function normalizeNodeCapabilitiesResponse(payload) {
   const cryptoRecord = ensureRecord(record.crypto ?? {}, "node capabilities response.crypto");
   const curvesRecord = cryptoRecord.curves ?? {};
   return {
-    supportedAbiVersions: parseIntegerArray(
-      record.supported_abi_versions,
-      "node capabilities response.supported_abi_versions",
-    ),
-    defaultCompileTarget: ToriiClient._normalizeUnsignedInteger(
-      record.default_compile_target,
-      "node capabilities response.default_compile_target",
+    abiVersion: ToriiClient._normalizeUnsignedInteger(
+      record.abi_version,
+      "node capabilities response.abi_version",
       { allowZero: false },
     ),
     dataModelVersion: ToriiClient._normalizeUnsignedInteger(
@@ -12633,13 +12957,9 @@ function normalizeConfigurationNexusAxt(value, context) {
 function normalizeRuntimeAbiActiveResponse(payload) {
   const record = ensureRecord(payload, "runtime abi active response");
   return {
-    activeVersions: parseIntegerArray(
-      record.active_versions,
-      "runtime abi active response.active_versions",
-    ),
-    defaultCompileTarget: ToriiClient._normalizeUnsignedInteger(
-      record.default_compile_target,
-      "runtime abi active response.default_compile_target",
+    abiVersion: ToriiClient._normalizeUnsignedInteger(
+      record.abi_version,
+      "runtime abi active response.abi_version",
       { allowZero: false },
     ),
   };
@@ -12660,10 +12980,10 @@ function normalizeRuntimeMetricsResponse(payload) {
     "runtime metrics response.upgrade_events_total",
   );
   return {
-    activeAbiVersionsCount: ToriiClient._normalizeUnsignedInteger(
-      record.active_abi_versions_count ?? 0,
-      "runtime metrics response.active_abi_versions_count",
-      { allowZero: true },
+    abiVersion: ToriiClient._normalizeUnsignedInteger(
+      record.abi_version,
+      "runtime metrics response.abi_version",
+      { allowZero: false },
     ),
     upgradeEventsTotal: {
       proposed: ToriiClient._normalizeUnsignedInteger(
@@ -13978,26 +14298,35 @@ function normalizeRuntimeUpgradeRecord(value, context) {
 
 function normalizeRuntimeUpgradeManifest(value, context) {
   const record = ensureRecord(value, context);
+  const abiVersion = ToriiClient._normalizeUnsignedInteger(
+    record.abi_version,
+    `${context}.abi_version`,
+    { allowZero: false },
+  );
+  const addedSyscalls = parseIntegerArray(
+    record.added_syscalls,
+    `${context}.added_syscalls`,
+  );
+  const addedPointerTypes = parseIntegerArray(
+    record.added_pointer_types,
+    `${context}.added_pointer_types`,
+  );
+  assertFirstReleaseRuntimeUpgradeManifest({
+    abiVersion,
+    addedSyscalls,
+    addedPointerTypes,
+    context,
+  });
   return {
     name: requireNonEmptyString(record.name, `${context}.name`),
     description: requireNonEmptyString(record.description, `${context}.description`),
-    abiVersion: ToriiClient._normalizeUnsignedInteger(
-      record.abi_version,
-      `${context}.abi_version`,
-      { allowZero: false },
-    ),
+    abiVersion,
     abiHashHex: requireHexString(
       record.abi_hash ?? "",
       `${context}.abi_hash`,
     ),
-    addedSyscalls: parseIntegerArray(
-      record.added_syscalls,
-      `${context}.added_syscalls`,
-    ),
-    addedPointerTypes: parseIntegerArray(
-      record.added_pointer_types,
-      `${context}.added_pointer_types`,
-    ),
+    addedSyscalls,
+    addedPointerTypes,
     startHeight: ToriiClient._normalizeUnsignedInteger(
       record.start_height,
       `${context}.start_height`,
@@ -14059,29 +14388,55 @@ function normalizeRuntimeUpgradeManifestPayload(value, context) {
   if (endHeight <= startHeight) {
     throw new TypeError(`${context}.end_height must be greater than start_height`);
   }
+  const normalizedAbiVersion = ToriiClient._normalizeUnsignedInteger(
+    abiVersion,
+    `${context}.abi_version`,
+    { allowZero: false },
+  );
+  const addedSyscalls = parseIntegerArray(
+    record.added_syscalls ?? record.addedSyscalls ?? [],
+    `${context}.added_syscalls`,
+  );
+  const addedPointerTypes = parseIntegerArray(
+    record.added_pointer_types ?? record.addedPointerTypes ?? [],
+    `${context}.added_pointer_types`,
+  );
+  assertFirstReleaseRuntimeUpgradeManifest({
+    abiVersion: normalizedAbiVersion,
+    addedSyscalls,
+    addedPointerTypes,
+    context,
+  });
   return {
     name: requireNonEmptyString(record.name, `${context}.name`),
     description: requireNonEmptyString(
       record.description,
       `${context}.description`,
     ),
-    abi_version: ToriiClient._normalizeUnsignedInteger(
-      abiVersion,
-      `${context}.abi_version`,
-      { allowZero: false },
-    ),
+    abi_version: normalizedAbiVersion,
     abi_hash: normalizeHex32String(abiHashValue, `${context}.abi_hash`),
-    added_syscalls: parseIntegerArray(
-      record.added_syscalls ?? record.addedSyscalls ?? [],
-      `${context}.added_syscalls`,
-    ),
-    added_pointer_types: parseIntegerArray(
-      record.added_pointer_types ?? record.addedPointerTypes ?? [],
-      `${context}.added_pointer_types`,
-    ),
+    added_syscalls: addedSyscalls,
+    added_pointer_types: addedPointerTypes,
     start_height: startHeight,
     end_height: endHeight,
   };
+}
+
+function assertFirstReleaseRuntimeUpgradeManifest({
+  abiVersion,
+  addedSyscalls,
+  addedPointerTypes,
+  context,
+}) {
+  if (abiVersion !== 1) {
+    throw new TypeError(`${context}.abi_version must be 1 in the first release`);
+  }
+  if (addedSyscalls.length > 0) {
+    throw new TypeError(`${context}.added_syscalls must be empty in the first release`);
+  }
+  if (addedPointerTypes.length > 0) {
+    throw new TypeError(`${context}.added_pointer_types must be empty in the first release`);
+  }
 }
 
 function normalizeRuntimeUpgradeTxResponse(payload, context) {
@@ -14283,6 +14638,17 @@ function requireStringArray(value, context) {
     }
     return entry;
   });
+}
+
+function requireUnsignedIntegerArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) =>
+    ToriiClient._normalizeUnsignedInteger(entry, `${context}[${index}]`, {
+      allowZero: true,
+    }),
+  );
 }
 
 function normalizeUaidLiteral(value, context = "uaid") {
@@ -16619,6 +16985,370 @@ function normalizeContractCallResponse(payload) {
   };
 }
 
+function normalizeMultisigAccountSelector(input, context) {
+  const record = ensureRecord(input, context);
+  const multisigAccountId = pickOverride(
+    record,
+    "multisig_account_id",
+    "multisigAccountId",
+  );
+  const multisigAccountAlias = pickOverride(
+    record,
+    "multisig_account_alias",
+    "multisigAccountAlias",
+  );
+  const hasAccountId = multisigAccountId !== undefined && multisigAccountId !== null;
+  const hasAlias = multisigAccountAlias !== undefined && multisigAccountAlias !== null;
+  if (hasAccountId === hasAlias) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires exactly one of multisig_account_id or multisig_account_alias`,
+      normalizeErrorPath(context),
+    );
+  }
+  if (hasAccountId) {
+    return {
+      multisig_account_id: ToriiClient._normalizeAccountId(
+        multisigAccountId,
+        `${context}.multisig_account_id`,
+      ),
+    };
+  }
+  return {
+    multisig_account_alias: normalizeMultisigAccountAliasLiteral(
+      multisigAccountAlias,
+      `${context}.multisig_account_alias`,
+    ),
+  };
+}
+
+function normalizeMultisigAccountAliasLiteral(value, context) {
+  const alias = requireNonEmptyString(value, context).trim();
+  const parts = alias.split("@");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must use label@domain form`,
+      normalizeErrorPath(context),
+    );
+  }
+  if (/\s/.test(alias)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not contain whitespace`,
+      normalizeErrorPath(context),
+    );
+  }
+  return alias;
+}
+
+function hasDetachedPrivateKeyInput(record) {
+  return (
+    pickOverride(record, "private_key", "privateKey") !== undefined ||
+    pickOverride(record, "private_key_multihash", "privateKeyMultihash") !== undefined ||
+    pickOverride(record, "private_key_hex", "privateKeyHex") !== undefined ||
+    pickOverride(record, "private_key_bytes", "privateKeyBytes") !== undefined
+  );
+}
+
+function normalizeOptionalDetachedPrivateKey(record, context) {
+  if (!hasDetachedPrivateKeyInput(record)) {
+    return null;
+  }
+  return resolveAuthorityPrivateKey(record, context);
+}
+
+function normalizeMultisigSelectorOnlyRequest(input, context) {
+  return normalizeMultisigAccountSelector(input, context);
+}
+
+function normalizeMultisigContractCallProposeRequest(input) {
+  const record = ensureRecord(input, "proposeMultisigContractCall request");
+  const selector = normalizeMultisigAccountSelector(
+    record,
+    "proposeMultisigContractCall request",
+  );
+  const payload = {
+    ...selector,
+    signer_account_id: ToriiClient._normalizeAccountId(
+      record.signer_account_id ?? record.signerAccountId,
+      "proposeMultisigContractCall request.signer_account_id",
+    ),
+    namespace: requireNonEmptyString(
+      record.namespace,
+      "proposeMultisigContractCall request.namespace",
+    ),
+    contract_id: requireNonEmptyString(
+      record.contract_id ?? record.contractId,
+      "proposeMultisigContractCall request.contract_id",
+    ),
+    entrypoint: requireNonEmptyString(
+      record.entrypoint,
+      "proposeMultisigContractCall request.entrypoint",
+    ),
+  };
+  const privateKey = normalizeOptionalDetachedPrivateKey(
+    record,
+    "proposeMultisigContractCall request",
+  );
+  if (privateKey !== null) {
+    payload.private_key = privateKey;
+  }
+  const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeHex32String(
+      publicKeyHex,
+      "proposeMultisigContractCall request.public_key_hex",
+    );
+  }
+  const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeRequiredBase64Payload(
+      signatureB64,
+      "proposeMultisigContractCall request.signature_b64",
+    );
+  }
+  const creationTimeMs = pickOverride(record, "creation_time_ms", "creationTimeMs");
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
+      creationTimeMs,
+      "proposeMultisigContractCall request.creation_time_ms",
+      { allowZero: true },
+    );
+  }
+  if (record.payload !== undefined) {
+    payload.payload = cloneJsonValue(
+      record.payload,
+      "proposeMultisigContractCall request.payload",
+    );
+  }
+  const gasAssetId = pickOverride(record, "gas_asset_id", "gasAssetId");
+  if (gasAssetId !== undefined && gasAssetId !== null) {
+    payload.gas_asset_id = ToriiClient._normalizeAssetId(
+      gasAssetId,
+      "proposeMultisigContractCall request.gas_asset_id",
+    );
+  }
+  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    payload.fee_sponsor = ToriiClient._normalizeAccountId(
+      feeSponsor,
+      "proposeMultisigContractCall request.fee_sponsor",
+    );
+  }
+  const gasLimit = pickOverride(record, "gas_limit", "gasLimit");
+  if (gasLimit !== undefined && gasLimit !== null) {
+    payload.gas_limit = ToriiClient._normalizeUnsignedInteger(
+      gasLimit,
+      "proposeMultisigContractCall request.gas_limit",
+      { allowZero: false },
+    );
+  }
+  return payload;
+}
+
+function normalizeMultisigContractCallApproveRequest(input) {
+  const record = ensureRecord(input, "approveMultisigContractCall request");
+  const selector = normalizeMultisigAccountSelector(
+    record,
+    "approveMultisigContractCall request",
+  );
+  const payload = {
+    ...selector,
+    signer_account_id: ToriiClient._normalizeAccountId(
+      record.signer_account_id ?? record.signerAccountId,
+      "approveMultisigContractCall request.signer_account_id",
+    ),
+  };
+  const privateKey = normalizeOptionalDetachedPrivateKey(
+    record,
+    "approveMultisigContractCall request",
+  );
+  if (privateKey !== null) {
+    payload.private_key = privateKey;
+  }
+  const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeHex32String(
+      publicKeyHex,
+      "approveMultisigContractCall request.public_key_hex",
+    );
+  }
+  const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeRequiredBase64Payload(
+      signatureB64,
+      "approveMultisigContractCall request.signature_b64",
+    );
+  }
+  const creationTimeMs = pickOverride(record, "creation_time_ms", "creationTimeMs");
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
+      creationTimeMs,
+      "approveMultisigContractCall request.creation_time_ms",
+      { allowZero: true },
+    );
+  }
+  const proposalId = pickOverride(record, "proposal_id", "proposalId");
+  if (proposalId !== undefined && proposalId !== null) {
+    payload.proposal_id = requireNonEmptyString(
+      proposalId,
+      "approveMultisigContractCall request.proposal_id",
+    );
+  }
+  const instructionsHash = pickOverride(
+    record,
+    "instructions_hash",
+    "instructionsHash",
+  );
+  if (instructionsHash !== undefined && instructionsHash !== null) {
+    payload.instructions_hash = normalizeHex32String(
+      instructionsHash,
+      "approveMultisigContractCall request.instructions_hash",
+    );
+  }
+  if (!payload.proposal_id && !payload.instructions_hash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "approveMultisigContractCall request requires proposal_id or instructions_hash",
+      "approveMultisigContractCall.request",
+    );
+  }
+  return payload;
+}
+
+function normalizeMultisigContractCallResponse(
+  payload,
+  context = "multisig contract call response",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    ok: Boolean(record.ok),
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    submitted: optionalBoolean(record.submitted, `${context}.submitted`),
+    proposal_id: optionalString(record.proposal_id, `${context}.proposal_id`),
+    instructions_hash:
+      record.instructions_hash === undefined || record.instructions_hash === null
+        ? null
+        : normalizeHex32String(record.instructions_hash, `${context}.instructions_hash`),
+    executed_tx_hash_hex:
+      record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
+        ? null
+        : normalizeHex32String(
+            record.executed_tx_hash_hex,
+            `${context}.executed_tx_hash_hex`,
+          ),
+    creation_time_ms:
+      record.creation_time_ms === undefined || record.creation_time_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            record.creation_time_ms,
+            `${context}.creation_time_ms`,
+            { allowZero: true },
+          ),
+    signing_message_b64: normalizeOptionalBase64Payload(
+      record.signing_message_b64,
+      `${context}.signing_message_b64`,
+    ),
+  };
+}
+
+function normalizeMultisigSpecResponse(payload, context = "multisig spec response") {
+  const record = ensureRecord(payload, context);
+  return {
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    spec: cloneJsonValue(record.spec, `${context}.spec`),
+  };
+}
+
+function normalizeMultisigProposalEntry(payload, context) {
+  const record = ensureRecord(payload, context);
+  return {
+    proposal_id: requireNonEmptyString(record.proposal_id, `${context}.proposal_id`),
+    instructions_hash: normalizeHex32String(
+      record.instructions_hash,
+      `${context}.instructions_hash`,
+    ),
+    proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+  };
+}
+
+function normalizeMultisigProposalsListResponse(
+  payload,
+  context = "multisig proposals list response",
+) {
+  const record = ensureRecord(payload, context);
+  const proposalsValue = record.proposals;
+  if (!Array.isArray(proposalsValue)) {
+    throw new TypeError(`${context}.proposals must be an array`);
+  }
+  return {
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    proposals: proposalsValue.map((entry, index) =>
+      normalizeMultisigProposalEntry(entry, `${context}.proposals[${index}]`),
+    ),
+  };
+}
+
+function normalizeMultisigProposalLookupRequest(input) {
+  const record = ensureRecord(input, "getMultisigProposal request");
+  const payload = normalizeMultisigAccountSelector(record, "getMultisigProposal request");
+  const proposalId = pickOverride(record, "proposal_id", "proposalId");
+  if (proposalId !== undefined && proposalId !== null) {
+    payload.proposal_id = requireNonEmptyString(
+      proposalId,
+      "getMultisigProposal request.proposal_id",
+    );
+  }
+  const instructionsHash = pickOverride(
+    record,
+    "instructions_hash",
+    "instructionsHash",
+  );
+  if (instructionsHash !== undefined && instructionsHash !== null) {
+    payload.instructions_hash = normalizeHex32String(
+      instructionsHash,
+      "getMultisigProposal request.instructions_hash",
+    );
+  }
+  if (!payload.proposal_id && !payload.instructions_hash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "getMultisigProposal request requires proposal_id or instructions_hash",
+      "getMultisigProposal.request",
+    );
+  }
+  return payload;
+}
+
+function normalizeMultisigProposalGetResponse(
+  payload,
+  context = "multisig proposal get response",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    proposal_id: requireNonEmptyString(record.proposal_id, `${context}.proposal_id`),
+    instructions_hash: normalizeHex32String(
+      record.instructions_hash,
+      `${context}.instructions_hash`,
+    ),
+    proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+  };
+}
+
 function normalizeContractManifestResponse(payload) {
   const record = ensureRecord(payload, "contract manifest response");
   const manifestRecord = ensureRecord(
@@ -16844,6 +17574,644 @@ function normalizeAliasResolutionResponse(
     result.source = requireNonEmptyString(sourceValue, `${context}.source`);
   }
   return result;
+}
+
+function buildIdentifierResolveRequest(options, context) {
+  const record = ensureRecord(options, `${context} options`);
+  assertSupportedOptionKeys(
+    record,
+    new Set(["policyId", "input", "encryptedInput"]),
+    `${context} options`,
+  );
+  const policyId = requireNonEmptyString(record.policyId, `${context}.policyId`);
+  const hasInput = record.input !== undefined && record.input !== null;
+  const hasEncryptedInput = record.encryptedInput !== undefined && record.encryptedInput !== null;
+  if (hasInput === hasEncryptedInput) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options must supply exactly one of input or encryptedInput`,
+      `${context}.input`,
+    );
+  }
+  const payload = { policy_id: policyId };
+  if (hasInput) {
+    payload.input = requireNonEmptyString(record.input, `${context}.input`);
+  } else {
+    payload.encrypted_input = requireHexString(
+      record.encryptedInput,
+      `${context}.encryptedInput`,
+    );
+  }
+  return payload;
+}
+
+function normalizeIdentifierBfvParameters(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    polynomial_degree: ToriiClient._normalizeUnsignedInteger(
+      record.polynomial_degree,
+      `${context}.polynomial_degree`,
+      { allowZero: false },
+    ),
+    plaintext_modulus: ToriiClient._normalizeUnsignedInteger(
+      record.plaintext_modulus,
+      `${context}.plaintext_modulus`,
+      { allowZero: false },
+    ),
+    ciphertext_modulus: ToriiClient._normalizeUnsignedInteger(
+      record.ciphertext_modulus,
+      `${context}.ciphertext_modulus`,
+      { allowZero: false },
+    ),
+    decomposition_base_log: ToriiClient._normalizeUnsignedInteger(
+      record.decomposition_base_log,
+      `${context}.decomposition_base_log`,
+      { allowZero: false },
+    ),
+  };
+}
+
+function normalizeIdentifierBfvPublicKey(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    b: requireUnsignedIntegerArray(record.b, `${context}.b`),
+    a: requireUnsignedIntegerArray(record.a, `${context}.a`),
+  };
+}
+
+function normalizeIdentifierBfvPublicParameters(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    parameters: normalizeIdentifierBfvParameters(
+      record.parameters,
+      `${context}.parameters`,
+    ),
+    public_key: normalizeIdentifierBfvPublicKey(
+      record.public_key,
+      `${context}.public_key`,
+    ),
+    max_input_bytes: ToriiClient._normalizeUnsignedInteger(
+      record.max_input_bytes,
+      `${context}.max_input_bytes`,
+      { allowZero: false },
+    ),
+  };
+}
+
+function u64ToLittleEndianBuffer(value) {
+  const normalized = BigInt.asUintN(64, BigInt(value));
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64LE(normalized);
+  return buffer;
+}
+
+function createSha512Digest(parts) {
+  const hash = createHash("sha512");
+  for (const part of parts) {
+    hash.update(part);
+  }
+  return hash.digest();
+}
+
+function deriveIdentifierBfvSeed(record, context) {
+  const hasSeedHex = record.seedHex !== undefined && record.seedHex !== null;
+  const hasSeedBytes = record.seed !== undefined && record.seed !== null;
+  if (hasSeedHex && hasSeedBytes) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must not supply both seed and seedHex`,
+      `${context}.seed`,
+    );
+  }
+  if (hasSeedHex) {
+    return Buffer.from(requireHexString(record.seedHex, `${context}.seedHex`), "hex");
+  }
+  if (hasSeedBytes) {
+    return toBuffer(record.seed);
+  }
+  return randomBytes(BFV_IDENTIFIER_SEED_BYTES);
+}
+
+class IdentifierBfvDeterministicStream {
+  constructor(seed, domain) {
+    this.seed = Buffer.from(seed);
+    this.domain = Buffer.from(domain);
+    this.counter = 0n;
+    this.buffer = Buffer.alloc(0);
+    this.offset = 0;
+  }
+
+  nextBytes(length) {
+    let remaining = length;
+    const chunks = [];
+    while (remaining > 0) {
+      if (this.offset >= this.buffer.length) {
+        this.buffer = createSha512Digest([
+          BFV_IDENTIFIER_SHA512_DOMAIN,
+          this.domain,
+          this.seed,
+          u64ToLittleEndianBuffer(this.counter),
+        ]);
+        this.counter += 1n;
+        this.offset = 0;
+      }
+      const available = Math.min(remaining, this.buffer.length - this.offset);
+      chunks.push(this.buffer.subarray(this.offset, this.offset + available));
+      this.offset += available;
+      remaining -= available;
+    }
+    return Buffer.concat(chunks, length);
+  }
+
+  nextU64() {
+    return this.nextBytes(8).readBigUInt64LE(0);
+  }
+}
+
+function crc64Ecma(payload) {
+  let crc = UINT64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ UINT64_MASK);
+}
+
+function noritoSchemaHash(typeName) {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of Buffer.from(typeName, "utf8")) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  const part = u64ToLittleEndianBuffer(hash);
+  return Buffer.concat([part, part]);
+}
+
+function frameNoritoPayload(typeName, payload, flags = 0) {
+  const header = Buffer.concat([
+    Buffer.from("NRT0", "ascii"),
+    Buffer.from([0, 0]),
+    noritoSchemaHash(typeName),
+    Buffer.from([0]),
+    u64ToLittleEndianBuffer(payload.length),
+    u64ToLittleEndianBuffer(crc64Ecma(payload)),
+    Buffer.from([flags & 0xff]),
+  ]);
+  return Buffer.concat([header, payload]);
+}
+
+function encodeNoritoField(payload) {
+  return Buffer.concat([u64ToLittleEndianBuffer(payload.length), payload]);
+}
+
+function encodeNoritoU64(value) {
+  return u64ToLittleEndianBuffer(value);
+}
+
+function encodeNoritoVec(values, encode) {
+  const parts = [u64ToLittleEndianBuffer(values.length)];
+  for (const value of values) {
+    const payload = encode(value);
+    parts.push(u64ToLittleEndianBuffer(payload.length), payload);
+  }
+  return Buffer.concat(parts);
+}
+
+function encodeNoritoBfvCiphertext(ciphertext) {
+  return Buffer.concat([
+    encodeNoritoField(encodeNoritoVec(ciphertext.c0, encodeNoritoU64)),
+    encodeNoritoField(encodeNoritoVec(ciphertext.c1, encodeNoritoU64)),
+  ]);
+}
+
+function encodeNoritoBfvIdentifierCiphertext(ciphertext) {
+  return frameNoritoPayload(
+    BFV_IDENTIFIER_SCHEMA_NAME,
+    encodeNoritoField(encodeNoritoVec(ciphertext.slots, encodeNoritoBfvCiphertext)),
+  );
+}
+
+function requireSafeBfvUint(value, name) {
+  if (typeof value === "bigint") {
+    return value;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be a non-negative safe integer`,
+      name,
+    );
+  }
+  return BigInt(value);
+}
+
+function normalizeIdentifierBfvEncryptionInputs(policySummary, input, options = {}) {
+  const normalizedPolicy = normalizeIdentifierPolicySummary(
+    policySummary,
+    "encryptIdentifierInputForPolicy.policy",
+  );
+  if (normalizedPolicy.input_encryption !== "bfv-v1") {
+    throw new Error(
+      `encryptIdentifierInputForPolicy: policy ${normalizedPolicy.policy_id} does not publish BFV encrypted-input support`,
+    );
+  }
+  const publicParameters = getIdentifierBfvPublicParameters(normalizedPolicy);
+  if (!publicParameters) {
+    throw new Error(
+      `encryptIdentifierInputForPolicy: policy ${normalizedPolicy.policy_id} is missing decoded BFV public parameters`,
+    );
+  }
+  const normalizedInput = normalizeIdentifierInput(
+    input,
+    normalizedPolicy.normalization,
+    "encryptIdentifierInputForPolicy.input",
+  );
+  const record = ensureRecord(options, "encryptIdentifierInputForPolicy options");
+  assertSupportedOptionKeys(
+    record,
+    new Set(["seed", "seedHex"]),
+    "encryptIdentifierInputForPolicy options",
+  );
+  return {
+    policy: normalizedPolicy,
+    publicParameters,
+    inputBytes: Buffer.from(normalizedInput, "utf8"),
+    seed: deriveIdentifierBfvSeed(record, "encryptIdentifierInputForPolicy options"),
+  };
+}
+
+function validateIdentifierBfvPublicParameters(publicParameters, context) {
+  const params = publicParameters.parameters;
+  const polynomialDegree = Number(
+    requireSafeBfvUint(params.polynomial_degree, `${context}.parameters.polynomial_degree`),
+  );
+  const plaintextModulus = requireSafeBfvUint(
+    params.plaintext_modulus,
+    `${context}.parameters.plaintext_modulus`,
+  );
+  const ciphertextModulus = requireSafeBfvUint(
+    params.ciphertext_modulus,
+    `${context}.parameters.ciphertext_modulus`,
+  );
+  const decompositionBaseLog = Number(
+    requireSafeBfvUint(
+      params.decomposition_base_log,
+      `${context}.parameters.decomposition_base_log`,
+    ),
+  );
+  const maxInputBytes = Number(
+    requireSafeBfvUint(publicParameters.max_input_bytes, `${context}.max_input_bytes`),
+  );
+  if (polynomialDegree < 2 || (polynomialDegree & (polynomialDegree - 1)) !== 0) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.parameters.polynomial_degree must be a power of two and at least 2`,
+      `${context}.parameters.polynomial_degree`,
+    );
+  }
+  if (decompositionBaseLog < 1 || decompositionBaseLog > 16) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.parameters.decomposition_base_log must be within 1..=16`,
+      `${context}.parameters.decomposition_base_log`,
+    );
+  }
+  if (plaintextModulus < 2n) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.parameters.plaintext_modulus must be at least 2`,
+      `${context}.parameters.plaintext_modulus`,
+    );
+  }
+  if (ciphertextModulus <= plaintextModulus) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.parameters.ciphertext_modulus must be greater than plaintext_modulus`,
+      `${context}.parameters.ciphertext_modulus`,
+    );
+  }
+  if (ciphertextModulus % plaintextModulus !== 0n) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.parameters.ciphertext_modulus must be divisible by plaintext_modulus`,
+      `${context}.parameters.ciphertext_modulus`,
+    );
+  }
+  if (maxInputBytes < 1) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.max_input_bytes must be at least 1`,
+      `${context}.max_input_bytes`,
+    );
+  }
+  if (BigInt(maxInputBytes) >= plaintextModulus) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.max_input_bytes must fit into one plaintext slot`,
+      `${context}.max_input_bytes`,
+    );
+  }
+  const publicKey = publicParameters.public_key;
+  const b = publicKey.b.map((value, index) =>
+    requireSafeBfvUint(value, `${context}.public_key.b[${index}]`),
+  );
+  const a = publicKey.a.map((value, index) =>
+    requireSafeBfvUint(value, `${context}.public_key.a[${index}]`),
+  );
+  if (a.length !== polynomialDegree || b.length !== polynomialDegree) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.public_key polynomials must match polynomial_degree`,
+      `${context}.public_key`,
+    );
+  }
+  for (const [arrayName, coefficients] of [
+    ["a", a],
+    ["b", b],
+  ]) {
+    for (let index = 0; index < coefficients.length; index += 1) {
+      if (coefficients[index] >= ciphertextModulus) {
+        throw createValidationError(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${context}.public_key.${arrayName}[${index}] exceeds ciphertext_modulus`,
+          `${context}.public_key.${arrayName}[${index}]`,
+        );
+      }
+    }
+  }
+  return {
+    polynomialDegree,
+    plaintextModulus,
+    ciphertextModulus,
+    maxInputBytes,
+    delta: ciphertextModulus / plaintextModulus,
+    publicKey: { a, b },
+  };
+}
+
+function addModBigInt(lhs, rhs, modulus) {
+  return (lhs + rhs) % modulus;
+}
+
+function subModBigInt(lhs, rhs, modulus) {
+  return lhs >= rhs ? lhs - rhs : modulus - ((rhs - lhs) % modulus);
+}
+
+function mulModBigInt(lhs, rhs, modulus) {
+  return (lhs * rhs) % modulus;
+}
+
+function polyAddMod(params, lhs, rhs) {
+  return lhs.map((value, index) =>
+    addModBigInt(value, rhs[index], params.ciphertextModulus),
+  );
+}
+
+function polySubMod(params, lhs, rhs) {
+  return lhs.map((value, index) =>
+    subModBigInt(value, rhs[index], params.ciphertextModulus),
+  );
+}
+
+function polyMulMod(params, lhs, rhs) {
+  const out = Array.from({ length: params.polynomialDegree }, () => 0n);
+  for (let i = 0; i < params.polynomialDegree; i += 1) {
+    for (let j = 0; j < params.polynomialDegree; j += 1) {
+      const term = mulModBigInt(lhs[i], rhs[j], params.ciphertextModulus);
+      const target = i + j;
+      if (target < params.polynomialDegree) {
+        out[target] = addModBigInt(out[target], term, params.ciphertextModulus);
+      } else {
+        out[target - params.polynomialDegree] = subModBigInt(
+          out[target - params.polynomialDegree],
+          term,
+          params.ciphertextModulus,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+function encodeIdentifierSlots(params, inputBytes) {
+  if (inputBytes.length > params.maxInputBytes) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `encryptIdentifierInputForPolicy.input exceeds max_input_bytes ${params.maxInputBytes}`,
+      "encryptIdentifierInputForPolicy.input",
+    );
+  }
+  const slots = Array.from({ length: params.maxInputBytes + 1 }, () => 0n);
+  slots[0] = BigInt(inputBytes.length);
+  for (let index = 0; index < inputBytes.length; index += 1) {
+    slots[index + 1] = BigInt(inputBytes[index]);
+  }
+  return slots;
+}
+
+function sampleSmallPoly(params, stream) {
+  return Array.from({ length: params.polynomialDegree }, () => {
+    const sample = Number(stream.nextBytes(1)[0] % 3);
+    if (sample === 0) {
+      return 0n;
+    }
+    if (sample === 1) {
+      return 1n;
+    }
+    return params.ciphertextModulus - 1n;
+  });
+}
+
+function sampleUniformPoly(params, stream) {
+  const bound = 1n << 64n;
+  const threshold = bound - (bound % params.ciphertextModulus);
+  return Array.from({ length: params.polynomialDegree }, () => {
+    let candidate = stream.nextU64();
+    while (candidate >= threshold) {
+      candidate = stream.nextU64();
+    }
+    return candidate % params.ciphertextModulus;
+  });
+}
+
+function encryptIdentifierScalar(params, scalar, seed) {
+  const u = sampleSmallPoly(
+    params,
+    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_U_DOMAIN),
+  );
+  const e1 = sampleSmallPoly(
+    params,
+    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E1_DOMAIN),
+  );
+  const e2 = sampleSmallPoly(
+    params,
+    new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_E2_DOMAIN),
+  );
+  const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
+  encoded[0] = mulModBigInt(scalar, params.delta, params.ciphertextModulus);
+  return {
+    c0: polyAddMod(
+      params,
+      polyAddMod(params, polyMulMod(params, params.publicKey.b, u), e1),
+      encoded,
+    ),
+    c1: polyAddMod(params, polyMulMod(params, params.publicKey.a, u), e2),
+  };
+}
+
+function normalizeIdentifierPolicyListResponse(
+  payload,
+  context = "identifier policy list response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const itemsValue = record.items;
+  if (!Array.isArray(itemsValue)) {
+    throw new Error(`${context}.items must be an array`);
+  }
+  return {
+    total: ToriiClient._normalizeUnsignedInteger(record.total ?? itemsValue.length, `${context}.total`, {
+      allowZero: true,
+    }),
+    items: itemsValue.map((item, index) =>
+      normalizeIdentifierPolicySummary(item, `${context}.items[${index}]`),
+    ),
+  };
+}
+
+function normalizeIdentifierPolicySummary(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const result = {
+    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    owner: ToriiClient._requireAccountId(record.owner, `${context}.owner`),
+    active: record.active === true,
+    normalization: requireNonEmptyString(record.normalization, `${context}.normalization`),
+    resolver_public_key: requireNonEmptyString(
+      record.resolver_public_key,
+      `${context}.resolver_public_key`,
+    ),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+  };
+  if (record.input_encryption !== undefined && record.input_encryption !== null) {
+    result.input_encryption = requireNonEmptyString(
+      record.input_encryption,
+      `${context}.input_encryption`,
+    );
+  }
+  if (
+    record.input_encryption_public_parameters !== undefined &&
+    record.input_encryption_public_parameters !== null
+  ) {
+    result.input_encryption_public_parameters = requireHexString(
+      record.input_encryption_public_parameters,
+      `${context}.input_encryption_public_parameters`,
+    );
+  }
+  if (
+    record.input_encryption_public_parameters_decoded !== undefined &&
+    record.input_encryption_public_parameters_decoded !== null
+  ) {
+    result.input_encryption_public_parameters_decoded =
+      normalizeIdentifierBfvPublicParameters(
+        record.input_encryption_public_parameters_decoded,
+        `${context}.input_encryption_public_parameters_decoded`,
+      );
+  }
+  if (record.note !== undefined && record.note !== null) {
+    result.note = requireNonEmptyString(record.note, `${context}.note`);
+  }
+  return result;
+}
+
+function normalizeIdentifierResolutionPayload(
+  payload,
+  context = "identifier resolution payload",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
+    receipt_hash: normalizeHex32String(record.receipt_hash, `${context}.receipt_hash`),
+    uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
+    account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
+    resolved_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.resolved_at_ms,
+      `${context}.resolved_at_ms`,
+      { allowZero: true },
+    ),
+    expires_at_ms:
+      record.expires_at_ms === undefined || record.expires_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+          record.expires_at_ms,
+          `${context}.expires_at_ms`,
+          { allowZero: true },
+        ),
+  };
+}
+
+function normalizeIdentifierResolveResponse(
+  payload,
+  context = "identifier resolve response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const result = {
+    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
+    receipt_hash: normalizeHex32String(record.receipt_hash, `${context}.receipt_hash`),
+    uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
+    account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
+    resolved_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.resolved_at_ms,
+      `${context}.resolved_at_ms`,
+      { allowZero: true },
+    ),
+    expires_at_ms:
+      record.expires_at_ms === undefined || record.expires_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+          record.expires_at_ms,
+          `${context}.expires_at_ms`,
+          { allowZero: true },
+        ),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    signature: requireHexString(record.signature, `${context}.signature`).toUpperCase(),
+    signature_payload_hex: requireHexString(
+      record.signature_payload_hex,
+      `${context}.signature_payload_hex`,
+    ).toUpperCase(),
+    signature_payload: normalizeIdentifierResolutionPayload(
+      record.signature_payload,
+      `${context}.signature_payload`,
+    ),
+  };
+  return result;
+}
+
+function normalizeIdentifierClaimLookupResponse(
+  payload,
+  context = "identifier claim lookup response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    policy_id: requireNonEmptyString(record.policy_id, `${context}.policy_id`),
+    opaque_id: normalizeOpaqueLiteral(record.opaque_id, `${context}.opaque_id`),
+    receipt_hash: normalizeHex32String(record.receipt_hash, `${context}.receipt_hash`),
+    uaid: normalizeUaidLiteral(record.uaid, `${context}.uaid`),
+    account_id: ToriiClient._requireAccountId(record.account_id, `${context}.account_id`),
+    verified_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.verified_at_ms,
+      `${context}.verified_at_ms`,
+      { allowZero: true },
+    ),
+    expires_at_ms:
+      record.expires_at_ms === undefined || record.expires_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+          record.expires_at_ms,
+          `${context}.expires_at_ms`,
+          { allowZero: true },
+        ),
+  };
 }
 
 function buildSorafsAliasListParams(options = {}) {
@@ -22866,6 +24234,246 @@ function buildRbcSampleRequestInternal(session, overrides, context) {
     request.apiToken = String(opts.apiToken);
   }
   return request;
+}
+
+function decodeVarintBuffer(buffer, startIndex, context) {
+  let value = 0n;
+  let shift = 0n;
+  let index = startIndex;
+  while (index < buffer.length) {
+    const byte = BigInt(buffer[index]);
+    value |= (byte & 0x7fn) << shift;
+    index += 1;
+    if ((byte & 0x80n) === 0n) {
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(`${context} contains an oversized multihash varint`);
+      }
+      return { value: Number(value), nextIndex: index };
+    }
+    shift += 7n;
+    if (shift > 63n) {
+      throw new Error(`${context} contains an invalid multihash varint`);
+    }
+  }
+  throw new Error(`${context} contains a truncated multihash varint`);
+}
+
+function decodeIdentifierReceiptPublicKey(value, context) {
+  const literal = requireNonEmptyString(value, context).trim();
+  let prefixedAlgorithm = null;
+  let multihashLiteral = literal;
+  const separator = literal.indexOf(":");
+  if (separator > 0) {
+    prefixedAlgorithm = literal.slice(0, separator).trim().toLowerCase();
+    multihashLiteral = literal.slice(separator + 1);
+  }
+  const canonical = canonicalizeMultihashHex(multihashLiteral, context);
+  const bytes = Buffer.from(canonical, "hex");
+  const functionCode = decodeVarintBuffer(bytes, 0, context);
+  const digestLength = decodeVarintBuffer(bytes, functionCode.nextIndex, context);
+  const payload = bytes.subarray(digestLength.nextIndex);
+  if (payload.length !== digestLength.value) {
+    throw new Error(`${context} multihash payload length does not match its digest header`);
+  }
+  let algorithm;
+  switch (functionCode.value) {
+    case 0xed:
+      algorithm = "ed25519";
+      break;
+    case 0x1306:
+      algorithm = "sm2";
+      break;
+    case 0xe7:
+      algorithm = "secp256k1";
+      break;
+    case 0xee:
+      algorithm = "ml-dsa";
+      break;
+    default:
+      throw new Error(
+        `${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
+      );
+  }
+  if (
+    prefixedAlgorithm &&
+    prefixedAlgorithm !== algorithm &&
+    !(prefixedAlgorithm === "mldsa" && algorithm === "ml-dsa")
+  ) {
+    throw new Error(`${context} algorithm prefix does not match the multihash payload`);
+  }
+  return { algorithm, publicKey: payload };
+}
+
+function irohaPrehash(messageBytes) {
+  const digest = Buffer.from(blake2b256(messageBytes));
+  digest[digest.length - 1] |= 1;
+  return digest;
+}
+
+function assertIdentifierReceiptPayloadMatchesTopLevel(receipt, context) {
+  const payload = receipt.signature_payload;
+  const mismatches = [
+    ["policy_id", payload.policy_id, receipt.policy_id],
+    ["opaque_id", payload.opaque_id, receipt.opaque_id],
+    ["receipt_hash", payload.receipt_hash, receipt.receipt_hash],
+    ["uaid", payload.uaid, receipt.uaid],
+    ["account_id", payload.account_id, receipt.account_id],
+    ["resolved_at_ms", payload.resolved_at_ms, receipt.resolved_at_ms],
+    ["expires_at_ms", payload.expires_at_ms, receipt.expires_at_ms],
+  ].filter(([, payloadValue, topLevelValue]) => payloadValue !== topLevelValue);
+  if (mismatches.length > 0) {
+    const [field] = mismatches[0];
+    throw new Error(`${context} top-level receipt fields do not match signature_payload.${field}`);
+  }
+}
+
+export function getIdentifierBfvPublicParameters(policySummary) {
+  const normalizedPolicy = normalizeIdentifierPolicySummary(
+    policySummary,
+    "getIdentifierBfvPublicParameters.policy",
+  );
+  if (normalizedPolicy.input_encryption !== "bfv-v1") {
+    return null;
+  }
+  return normalizedPolicy.input_encryption_public_parameters_decoded ?? null;
+}
+
+export function encryptIdentifierInputForPolicy(policySummary, input, options = {}) {
+  const { publicParameters, inputBytes, seed } = normalizeIdentifierBfvEncryptionInputs(
+    policySummary,
+    input,
+    options,
+  );
+  const params = validateIdentifierBfvPublicParameters(
+    publicParameters,
+    "encryptIdentifierInputForPolicy.policy.input_encryption_public_parameters_decoded",
+  );
+  const slots = encodeIdentifierSlots(params, inputBytes).map((scalar, index) => {
+    const slotSeed = createSha512Digest([
+      BFV_IDENTIFIER_SLOT_DOMAIN,
+      seed,
+      u64ToLittleEndianBuffer(index),
+    ]);
+    return encryptIdentifierScalar(params, scalar, slotSeed);
+  });
+  const ciphertext = {
+    slots: slots.map((slot) => ({
+      c0: slot.c0.map((value) => Number(value)),
+      c1: slot.c1.map((value) => Number(value)),
+    })),
+  };
+  return encodeNoritoBfvIdentifierCiphertext(ciphertext).toString("hex");
+}
+
+export function buildIdentifierRequestForPolicy(policySummary, options = {}) {
+  const normalizedPolicy = normalizeIdentifierPolicySummary(
+    policySummary,
+    "buildIdentifierRequestForPolicy.policy",
+  );
+  const record = ensureRecord(options, "buildIdentifierRequestForPolicy options");
+  assertSupportedOptionKeys(
+    record,
+    new Set(["input", "encryptedInput", "encrypt", "seed", "seedHex"]),
+    "buildIdentifierRequestForPolicy options",
+  );
+  const hasInput = record.input !== undefined && record.input !== null;
+  const hasEncryptedInput =
+    record.encryptedInput !== undefined && record.encryptedInput !== null;
+  const encrypt = record.encrypt === true;
+  if (hasInput === hasEncryptedInput) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "buildIdentifierRequestForPolicy options must supply exactly one of input or encryptedInput",
+      "buildIdentifierRequestForPolicy.input",
+    );
+  }
+  if ((record.seed !== undefined && record.seed !== null) || (record.seedHex !== undefined && record.seedHex !== null)) {
+    if (!hasInput || !encrypt) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "buildIdentifierRequestForPolicy options may only supply seed/seedHex when encrypting plaintext input",
+        "buildIdentifierRequestForPolicy.seed",
+      );
+    }
+  }
+  if (hasInput) {
+    if (encrypt) {
+      return {
+        policyId: normalizedPolicy.policy_id,
+        encryptedInput: encryptIdentifierInputForPolicy(normalizedPolicy, record.input, {
+          seed: record.seed,
+          seedHex: record.seedHex,
+        }),
+      };
+    }
+    return {
+      policyId: normalizedPolicy.policy_id,
+      input: normalizeIdentifierInput(
+        record.input,
+        normalizedPolicy.normalization,
+        "buildIdentifierRequestForPolicy.input",
+      ),
+    };
+  }
+  if (normalizedPolicy.input_encryption !== "bfv-v1") {
+    throw new Error(
+      `buildIdentifierRequestForPolicy: policy ${normalizedPolicy.policy_id} does not publish BFV encrypted-input support`,
+    );
+  }
+  return {
+    policyId: normalizedPolicy.policy_id,
+    encryptedInput: requireHexString(
+      record.encryptedInput,
+      "buildIdentifierRequestForPolicy.encryptedInput",
+    ),
+  };
+}
+
+export function verifyIdentifierResolutionReceipt(receipt, policySummary) {
+  const normalizedReceipt = normalizeIdentifierResolveResponse(
+    receipt,
+    "verifyIdentifierResolutionReceipt.receipt",
+  );
+  const normalizedPolicy = normalizeIdentifierPolicySummary(
+    policySummary,
+    "verifyIdentifierResolutionReceipt.policy",
+  );
+  if (normalizedReceipt.policy_id !== normalizedPolicy.policy_id) {
+    throw new Error(
+      `verifyIdentifierResolutionReceipt: receipt policy ${normalizedReceipt.policy_id} does not match policy ${normalizedPolicy.policy_id}`,
+    );
+  }
+  assertIdentifierReceiptPayloadMatchesTopLevel(
+    normalizedReceipt,
+    "verifyIdentifierResolutionReceipt.receipt",
+  );
+  const signedPayload = Buffer.from(normalizedReceipt.signature_payload_hex, "hex");
+  const prehash = irohaPrehash(signedPayload);
+  const signature = Buffer.from(normalizedReceipt.signature, "hex");
+  const verifyingKey = decodeIdentifierReceiptPublicKey(
+    normalizedPolicy.resolver_public_key,
+    "verifyIdentifierResolutionReceipt.policy.resolver_public_key",
+  );
+  switch (verifyingKey.algorithm) {
+    case "ed25519":
+      return verifyEd25519(prehash, signature, verifyingKey.publicKey);
+    case "sm2":
+      return verifySm2(
+        prehash,
+        signature,
+        verifyingKey.publicKey,
+        SM2_DEFAULT_DISTINGUISHED_ID,
+      );
+    case "secp256k1":
+    case "ml-dsa":
+      throw new Error(
+        `verifyIdentifierResolutionReceipt: ${verifyingKey.algorithm} verification is not available in the JS SDK without additional native support`,
+      );
+    default:
+      throw new Error(
+        `verifyIdentifierResolutionReceipt: unsupported algorithm ${verifyingKey.algorithm}`,
+      );
+  }
 }
 
 export function buildRbcSampleRequest(session, overrides = {}) {

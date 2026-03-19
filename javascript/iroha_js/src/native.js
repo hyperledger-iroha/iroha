@@ -10,10 +10,6 @@ const VERIFICATION_CACHE = new Map();
 const CHECKSUM_CACHE = new Map();
 const VERIFICATION_WARNINGS = new Set();
 
-function allowUnverifiedNative() {
-  return parseEnvFlag(process.env.IROHA_JS_ALLOW_UNVERIFIED_NATIVE);
-}
-
 function isNativeDisabled() {
   return parseEnvFlag(process.env.IROHA_JS_DISABLE_NATIVE);
 }
@@ -223,19 +219,6 @@ export function verifyNativeBinding(
   }
 
   if (expectedEntry.sha256 !== hash.sha256) {
-    if (allowUnverifiedNative()) {
-      const result = {
-        ok: true,
-        status: "hash_mismatch_allowed",
-        path: bindingPath,
-        manifestPath,
-        platform,
-        sha256: hash.sha256,
-        expectedSha256: expectedEntry.sha256,
-      };
-      VERIFICATION_CACHE.set(cacheKey, result);
-      return result;
-    }
     const result = {
       ok: false,
       status: "hash_mismatch",
@@ -353,7 +336,7 @@ function logVerificationFailure(verification, paths) {
       break;
     case "hash_mismatch":
       console.warn(
-        `[iroha-js] Native binding checksum mismatch for ${paths.bindingPath}; expected ${verification.expectedSha256}, found ${verification.sha256}. Rebuild with 'npm run build:native' or set IROHA_JS_ALLOW_UNVERIFIED_NATIVE=1 to accept current binary for local runs.`,
+        `[iroha-js] Native binding checksum mismatch for ${paths.bindingPath}; expected ${verification.expectedSha256}, found ${verification.sha256}. Rebuild with 'npm run build:native' to accept the current binary for local runs.`,
       );
       break;
     case "hash_error":

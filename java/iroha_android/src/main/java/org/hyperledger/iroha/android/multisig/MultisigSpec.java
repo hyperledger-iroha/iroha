@@ -6,7 +6,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
-import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Builder and helpers for multisig specifications and TTL preview/enforcement. */
 public final class MultisigSpec {
@@ -126,7 +125,10 @@ public final class MultisigSpec {
   }
 
   private static String normalizeAccountId(final String accountId) {
-    return AccountIdLiteral.extractI105Address(accountId);
+    if (accountId == null || accountId.isBlank()) {
+      throw new IllegalArgumentException("accountId must be a non-empty string");
+    }
+    return accountId.trim();
   }
 
   private static long safeExpiry(final long nowMs, final long ttlMs) {

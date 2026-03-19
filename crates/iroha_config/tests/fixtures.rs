@@ -29,7 +29,7 @@ use iroha_config::parameters::{
 };
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
 use iroha_crypto::{Algorithm, PublicKey};
-use iroha_data_model::{account::AccountId, name::Name};
+use iroha_data_model::{account::AccountId, identifier::IdentifierPolicyId, name::Name};
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
 use url::Url;
@@ -518,6 +518,7 @@ fn minimal_config_snapshot() {
                 ),
                 data_dir: "./storage/torii",
                 receipt_signer: None,
+                identifier_resolver: None,
                 query_rate_per_authority_per_sec: Some(
                     25,
                 ),
@@ -2236,6 +2237,27 @@ fn torii_receipt_signer_parses() {
     .expect("receipt public key");
     assert_eq!(signer.public_key(), &expected);
     assert_eq!(signer.public_key().algorithm(), Algorithm::Ed25519);
+}
+
+#[test]
+fn torii_identifier_resolver_parses() {
+    let config = load_config_from_fixtures("torii_identifier_resolver.toml")
+        .expect("config should be valid");
+    let resolver = config
+        .torii
+        .identifier_resolver
+        .expect("identifier resolver should be configured");
+    assert_eq!(resolver.policies.len(), 1);
+
+    let policy = &resolver.policies[0];
+    let expected_policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+    assert_eq!(policy.policy_id, expected_policy_id);
+    assert_eq!(policy.secret, vec![0x01, 0x02, 0x03, 0x04]);
+    assert_eq!(
+        policy.receipt_ttl,
+        Some(Duration::from_millis(30_000)),
+        "receipt ttl should parse as milliseconds"
+    );
 }
 
 #[test]

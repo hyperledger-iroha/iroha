@@ -90,15 +90,6 @@ enum NoritoBridgeLoader {
             }
         }
 
-        // Final fallback: try dlopen(nil) for builds where symbols are truly provided by the
-        // process image and no validated on-disk bridge binary was found.
-        if let defaultHandle = dlopen(nil, RTLD_NOW),
-           dlsym(defaultHandle, "connect_norito_free") != nil,
-           dlsym(defaultHandle, "connect_norito_offline_commitment_update") != nil {
-            NSLog("[NoritoBridgeLoader] found via dlopen(nil)")
-            return (defaultHandle, .valid(path: "embedded", identifier: currentIdentifier()))
-        }
-
         return (nil, lastFailure)
     }
 

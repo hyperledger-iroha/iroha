@@ -20,6 +20,4 @@ pub use error::{Perm, VMError};
 pub enum SyscallPolicy {
     /// ABI surface for version 1 programs.
     AbiV1,
-    /// Explicit ABI experiments keyed by header-version.
-    Experimental(u8),
 }

@@ -756,11 +756,11 @@ abi_state = client.get_runtime_abi_active()
 abi_hash = client.get_runtime_abi_hash()
 metrics = client.get_runtime_metrics()
 
-# Draft a runtime upgrade manifest (mirrors RuntimeUpgradeManifest fields)
+# Draft a runtime upgrade manifest (ABI stays fixed to v1 in the first release)
 manifest = {
-    "name": "Enable ABI v2",
-    "description": "Activates the next ABI policy once the fleet upgrades.",
-    "abi_version": 2,
+    "name": "Refresh runtime provenance",
+    "description": "Schedules a no-ABI-change runtime rollout.",
+    "abi_version": 1,
     "abi_hash": "00" * 32,
     "added_syscalls": [],
     "added_pointer_types": [],
@@ -812,7 +812,7 @@ client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 snapshot = client.capture_node_admin_snapshot()
 print("queue capacity:", snapshot.configuration.queue.capacity)
 print("time offset:", snapshot.time_now.offset_ms)
-print("capabilities:", snapshot.node_capabilities.supported_abi_versions)
+print("capabilities:", snapshot.node_capabilities.abi_version)
 if snapshot.telemetry_peers:
     print("telemetry peers:", len(snapshot.telemetry_peers))
 ```

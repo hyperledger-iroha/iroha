@@ -81,6 +81,15 @@ pub struct CoreHost {
     access_log: AccessLog,
 }
 
+fn parse_json_numeric_field(field: &njson::Value) -> Result<Numeric, VMError> {
+    match field {
+        njson::Value::String(raw) => raw.parse::<Numeric>().map_err(|_| VMError::DecodeError),
+        njson::Value::Number(njson::native::Number::I64(value)) => Ok(Numeric::from(*value)),
+        njson::Value::Number(njson::native::Number::U64(value)) => Ok(Numeric::from(*value)),
+        _ => Err(VMError::DecodeError),
+    }
+}
+
 #[derive(Clone)]
 struct CoreHostSnapshot {
     state: DurableStateSnapshot,
@@ -1337,7 +1346,8 @@ impl IVMHost for CoreHost {
             | syscalls::SYSCALL_JSON_GET_NAME
             | syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
             | syscalls::SYSCALL_JSON_GET_NFT_ID
-            | syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
+            | syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | syscalls::SYSCALL_JSON_GET_NUMERIC => {
                 // r10=&Json, r11=&Name key -> r10=value
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
@@ -1412,8 +1422,9 @@ impl IVMHost for CoreHost {
                     }
                     syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let acct = ScopedAccountId::parse_encoded(raw)
-                            .map_err(|_| VMError::DecodeError)?;
+                        let acct = iroha_data_model::account::AccountId::parse_encoded(raw)
+                            .map_err(|_| VMError::DecodeError)?
+                            .into_account_id();
                         let body = to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
                         out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
@@ -1454,6 +1465,20 @@ impl IVMHost for CoreHost {
                         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
                         out.extend_from_slice(&bytes);
                         let h: [u8; 32] = IrohaHash::new(&bytes).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    syscalls::SYSCALL_JSON_GET_NUMERIC => {
+                        let numeric = parse_json_numeric_field(field)?;
+                        let body = to_bytes(&numeric).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = IrohaHash::new(&body).into();
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);

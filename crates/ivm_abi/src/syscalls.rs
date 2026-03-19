@@ -9,8 +9,8 @@
 //!
 //! The table below includes helper syscalls used for cryptographic proof
 //! generation and verification, Merkle path queries and hardware feature
-//! discovery. Additional concurrency primitives may be added in future
-//! versions of the specification.
+//! discovery. Additional concurrency primitives may be added in future core
+//! releases without changing the fixed ABI v1 surface in this release.
 
 /// Debug helper for development; part of the ABI v1 surface.
 pub const SYSCALL_DEBUG_PRINT: u32 = 0;
@@ -156,6 +156,11 @@ pub const SYSCALL_JSON_GET_ACCOUNT_ID: u32 = 0x7B;
 pub const SYSCALL_JSON_GET_NFT_ID: u32 = 0x7C;
 /// Args: r10 = &Json, r11 = &Name key -> r10 = &Blob (INPUT pointer)
 pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
+/// Args: r10 = &Json, r11 = &Name key -> r10 = &NoritoBytes(Numeric) (INPUT pointer)
+///
+/// Accepts JSON string numerics (for example `"0.00001"`) and integer JSON numbers.
+/// Floating-point JSON numbers are rejected to keep the ABI deterministic.
+pub const SYSCALL_JSON_GET_NUMERIC: u32 = 0x7F;
 
 /// Build a state path from a base Name and an integer key: returns a new `&Name` TLV
 /// in INPUT with the canonical form "<base>/<key>" (decimal).
@@ -350,7 +355,7 @@ pub const SYSCALL_USE_ASSET_HANDLE: u32 = 0xB4;
 /// This function centralizes the mapping between `ProgramMetadata.abi_version`
 /// and the set of syscalls available to programs compiled against that ABI.
 /// Hosts should call this before attempting to handle a syscall to ensure
-/// stable behavior across versions; unknown or disallowed numbers must be
+/// stable first-release behavior; unknown or disallowed numbers must be
 /// rejected with `VMError::UnknownSyscall`.
 pub fn is_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     syscalls_for_policy(policy).binary_search(&number).is_ok()
@@ -366,9 +371,7 @@ pub fn abi_syscall_list() -> &'static [u32] {
     syscalls_for_policy(crate::SyscallPolicy::AbiV1)
 }
 
-/// Return the canonical syscall list for an ABI policy.
-///
-/// ABI v1 is fixed; future versions must explicitly define their surface.
+/// Return the canonical syscall list for the first-release ABI policy.
 pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
     use std::sync::OnceLock;
     static ABI_V1: OnceLock<Vec<u32>> = OnceLock::new();
@@ -413,6 +416,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_JSON_GET_ACCOUNT_ID,
             SYSCALL_JSON_GET_NFT_ID,
             SYSCALL_JSON_GET_BLOB_HEX,
+            SYSCALL_JSON_GET_NUMERIC,
         ]);
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
@@ -542,10 +546,8 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         );
         v
     });
-    match policy {
-        crate::SyscallPolicy::AbiV1 => v.as_slice(),
-        crate::SyscallPolicy::Experimental(_) => &[],
-    }
+    let crate::SyscallPolicy::AbiV1 = policy;
+    v.as_slice()
 }
 
 /// Return a symbolic name for a syscall number, when known.
@@ -659,6 +661,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_GET_ACCOUNT_ID => "JSON_GET_ACCOUNT_ID",
         SYSCALL_JSON_GET_NFT_ID => "JSON_GET_NFT_ID",
         SYSCALL_JSON_GET_BLOB_HEX => "JSON_GET_BLOB_HEX",
+        SYSCALL_JSON_GET_NUMERIC => "JSON_GET_NUMERIC",
         SYSCALL_SCHEMA_ENCODE => "SCHEMA_ENCODE",
         SYSCALL_SCHEMA_DECODE => "SCHEMA_DECODE",
         SYSCALL_SCHEMA_INFO => "SCHEMA_INFO",
@@ -790,20 +793,18 @@ pub fn render_abi_hashes_markdown_table() -> String {
     out
 }
 
-/// Compute a stable 32-byte hash of the allowed syscall surface under `policy`.
+/// Compute the stable first-release ABI hash for the allowed syscall surface.
 ///
-/// The hash is computed over the domain tag `b"IVM_ABI_V1"`, the policy tag,
-/// and the sorted list of allowed syscall numbers as little-endian `u32`.
+/// The hash is computed over the domain tag `b"IVM_ABI_V1"`, the fixed v1
+/// policy tag, and the sorted list of allowed syscall numbers as little-endian
+/// `u32`.
 pub fn compute_abi_hash(policy: crate::SyscallPolicy) -> [u8; 32] {
     use iroha_crypto::Hash;
     // Domain tag + policy tag
     let mut bytes = Vec::with_capacity(8 + 1 + syscalls_for_policy(policy).len() * 4);
     bytes.extend_from_slice(b"IVM_ABI_V1");
-    let policy_tag: u8 = match policy {
-        crate::SyscallPolicy::AbiV1 => 1,
-        crate::SyscallPolicy::Experimental(v) => v.saturating_add(0x80),
-    };
-    bytes.push(policy_tag);
+    let crate::SyscallPolicy::AbiV1 = policy;
+    bytes.push(1);
     // Policy-specific list is already sorted/deduped
     for n in syscalls_for_policy(policy) {
         bytes.extend_from_slice(&n.to_le_bytes());

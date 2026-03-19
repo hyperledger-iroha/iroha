@@ -2504,8 +2504,7 @@ class NodeCryptoCapabilities:
 class NodeCapabilities:
     """Typed advert covering `/v1/node/capabilities`."""
 
-    supported_abi_versions: List[int]
-    default_compile_target: int
+    abi_version: int
     data_model_version: int
     crypto: Optional[NodeCryptoCapabilities]
 
@@ -2513,19 +2512,12 @@ class NodeCapabilities:
     def from_payload(cls, payload: Mapping[str, Any]) -> "NodeCapabilities":
         if not isinstance(payload, Mapping):
             raise TypeError("node capabilities payload must be an object")
-        versions = payload.get("supported_abi_versions")
-        if not isinstance(versions, list):
-            raise TypeError("node capabilities missing list `supported_abi_versions` field")
-        supported = []
-        for item in versions:
-            try:
-                supported.append(int(item))
-            except (TypeError, ValueError) as exc:
-                raise TypeError("supported_abi_versions entries must be numeric") from exc
         try:
-            default = int(payload["default_compile_target"])
+            abi_version = int(payload["abi_version"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise TypeError("node capabilities missing numeric `default_compile_target` field") from exc
+            raise TypeError("node capabilities missing numeric `abi_version` field") from exc
+        if abi_version <= 0:
+            raise TypeError("node capabilities `abi_version` must be positive")
         try:
             data_model_version = int(payload["data_model_version"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -2541,8 +2533,7 @@ class NodeCapabilities:
                 raise TypeError("node capabilities `crypto` field must be an object when present")
             crypto_caps = NodeCryptoCapabilities.from_payload(crypto_payload)
         return cls(
-            supported_abi_versions=supported,
-            default_compile_target=default,
+            abi_version=abi_version,
             data_model_version=data_model_version,
             crypto=crypto_caps,
         )
@@ -5325,7 +5316,7 @@ class RuntimeUpgradeCounters:
 class RuntimeMetrics:
     """Summary metrics for runtime upgrades."""
 
-    active_abi_versions_count: int
+    abi_version: int
     upgrade_events_total: RuntimeUpgradeCounters
 
     @classmethod
@@ -5333,41 +5324,31 @@ class RuntimeMetrics:
         if not isinstance(payload, Mapping):
             raise TypeError("runtime metrics payload must be an object")
         try:
-            active_count = int(payload.get("active_abi_versions_count", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("runtime metrics `active_abi_versions_count` must be numeric") from exc
+            abi_version = int(payload["abi_version"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TypeError("runtime metrics `abi_version` must be numeric") from exc
         counters_payload = payload.get("upgrade_events_total", {})
         counters = RuntimeUpgradeCounters.from_payload(
             counters_payload if isinstance(counters_payload, Mapping) else {}
         )
-        return cls(active_abi_versions_count=active_count, upgrade_events_total=counters)
+        return cls(abi_version=abi_version, upgrade_events_total=counters)
 
 
 @dataclass(frozen=True)
 class RuntimeAbiActive:
-    """Active ABI versions advertised by `/v1/runtime/abi/active`."""
+    """Active ABI version advertised by `/v1/runtime/abi/active`."""
 
-    active_versions: List[int]
-    default_compile_target: int
+    abi_version: int
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RuntimeAbiActive":
         if not isinstance(payload, Mapping):
             raise TypeError("runtime ABI active payload must be an object")
-        versions = payload.get("active_versions")
-        if not isinstance(versions, list):
-            raise TypeError("runtime ABI active payload missing list `active_versions` field")
-        active_versions: List[int] = []
-        for item in versions:
-            try:
-                active_versions.append(int(item))
-            except (TypeError, ValueError) as exc:
-                raise TypeError("active_versions entries must be numeric") from exc
         try:
-            default = int(payload["default_compile_target"])
+            abi_version = int(payload["abi_version"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise TypeError("runtime ABI active missing numeric `default_compile_target` field") from exc
-        return cls(active_versions=active_versions, default_compile_target=default)
+            raise TypeError("runtime ABI active missing numeric `abi_version` field") from exc
+        return cls(abi_version=abi_version)
 
 
 @dataclass(frozen=True)
@@ -5436,6 +5417,26 @@ def _coerce_int_list(values: Any, label: str) -> List[int]:
     return result
 
 
+def _validate_runtime_upgrade_manifest_fields(
+    *,
+    abi_version: int,
+    added_syscalls: List[int],
+    added_pointer_types: List[int],
+    start_height: int,
+    end_height: int,
+) -> None:
+    if abi_version != 1:
+        raise ValueError("runtime upgrade manifest `abi_version` must be 1 in the first release")
+    if added_syscalls:
+        raise ValueError("runtime upgrade manifest `added_syscalls` must be empty in the first release")
+    if added_pointer_types:
+        raise ValueError(
+            "runtime upgrade manifest `added_pointer_types` must be empty in the first release"
+        )
+    if end_height <= start_height:
+        raise ValueError("runtime upgrade manifest `end_height` must be greater than `start_height`")
+
+
 @dataclass(frozen=True)
 class RuntimeUpgradeManifest:
     """Runtime upgrade manifest advertised by `/v1/runtime/upgrades`."""
@@ -5477,6 +5478,13 @@ class RuntimeUpgradeManifest:
         added_pointer_types = _coerce_int_list(
             payload.get("added_pointer_types", []), "runtime upgrade manifest `added_pointer_types`"
         )
+        _validate_runtime_upgrade_manifest_fields(
+            abi_version=abi_version,
+            added_syscalls=added_syscalls,
+            added_pointer_types=added_pointer_types,
+            start_height=start_height,
+            end_height=end_height,
+        )
         return cls(
             name=name,
             description=description,
@@ -5491,6 +5499,13 @@ class RuntimeUpgradeManifest:
     def to_payload(self) -> Dict[str, Any]:
         """Return a JSON-serialisable payload suitable for Torii POST requests."""
 
+        _validate_runtime_upgrade_manifest_fields(
+            abi_version=self.abi_version,
+            added_syscalls=self.added_syscalls,
+            added_pointer_types=self.added_pointer_types,
+            start_height=self.start_height,
+            end_height=self.end_height,
+        )
         return {
             "name": self.name,
             "description": self.description,
@@ -8150,7 +8165,7 @@ class ToriiClient(_BaseToriiClient):
         return RuntimeMetrics.from_payload(payload)
 
     def get_runtime_abi_active(self) -> Optional[Any]:
-        """Fetch the active ABI versions and default compile target (`GET /v1/runtime/abi/active`)."""
+        """Fetch the active ABI version (`GET /v1/runtime/abi/active`)."""
 
         return self.request_json(
             "GET",

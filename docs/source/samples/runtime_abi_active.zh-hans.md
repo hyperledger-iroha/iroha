@@ -17,11 +17,10 @@ Endpoint
 Response (first release; single ABI)
 ```json
 {
-  "active_versions": [1],
-  "default_compile_target": 1
+  "abi_version": 1
 }
 ```
 
 Notes
-- The list is sorted ascending. The default compile target is the highest active version (1 in the first release).
+- The first release exposes a single fixed ABI version, so this endpoint always returns `1`.
 

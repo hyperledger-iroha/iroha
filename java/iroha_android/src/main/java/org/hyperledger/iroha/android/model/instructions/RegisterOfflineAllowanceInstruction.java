@@ -4,7 +4,6 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.address.AssetIdLiteral;
 
 /**
  * Typed builder for the {@code RegisterOfflineAllowance} instruction.
@@ -541,7 +540,10 @@ public final class RegisterOfflineAllowanceInstruction implements InstructionTem
       private Builder() {}
 
       public Builder setAssetId(final String assetId) {
-        this.assetId = AssetIdLiteral.normalizeEncoded(assetId);
+        if (assetId == null || assetId.isBlank()) {
+          throw new IllegalArgumentException("assetId must not be blank");
+        }
+        this.assetId = assetId;
         return this;
       }
 

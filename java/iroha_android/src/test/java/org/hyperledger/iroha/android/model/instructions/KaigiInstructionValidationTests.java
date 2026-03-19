@@ -5,9 +5,6 @@ import java.util.Map;
 
 public final class KaigiInstructionValidationTests {
 
-  private static final String ENCODED_ACCOUNT_ID =
-      "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV";
-
   private KaigiInstructionValidationTests() {}
 
   public static void main(final String[] args) {
@@ -25,7 +22,7 @@ public final class KaigiInstructionValidationTests {
     assertThrows(
         () ->
             RegisterKaigiRelayInstruction.builder()
-                .setRelayId(ENCODED_ACCOUNT_ID)
+                .setRelayId("relay-alpha@wonderland")
                 .setHpkePublicKeyBase64("not!base64")
                 .setBandwidthClass(1)
                 .build(),
@@ -37,7 +34,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             SetKaigiRelayManifestInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .addRelayManifestHop(ENCODED_ACCOUNT_ID, "not!base64", 7)
+                .addRelayManifestHop("relay-alpha@wonderland", "not!base64", 7)
                 .build(),
         "expected invalid relay manifest hpke key to throw");
   }
@@ -47,7 +44,7 @@ public final class KaigiInstructionValidationTests {
     args.put("action", "SetKaigiRelayManifest");
     args.put("call.domain_id", "wonderland");
     args.put("call.call_name", "weekly-sync");
-    args.put("relay_manifest.hop.0.relay_id", ENCODED_ACCOUNT_ID);
+    args.put("relay_manifest.hop.0.relay_id", "relay-alpha@wonderland");
     args.put("relay_manifest.hop.0.hpke_public_key", "not!base64");
     args.put("relay_manifest.hop.0.weight", "1");
 
@@ -61,8 +58,8 @@ public final class KaigiInstructionValidationTests {
         () ->
             CreateKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setHost(ENCODED_ACCOUNT_ID)
-                .addRelayManifestHop(ENCODED_ACCOUNT_ID, "not!base64", 7)
+                .setHost("host@wonderland")
+                .addRelayManifestHop("relay-alpha@wonderland", "not!base64", 7)
                 .build(),
         "expected invalid create relay manifest hpke key to throw");
   }
@@ -72,7 +69,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             JoinKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setParticipant(ENCODED_ACCOUNT_ID)
+                .setParticipant("alice@wonderland")
                 .setProofBase64("not!base64")
                 .build(),
         "expected invalid join proof base64 to throw");
@@ -83,7 +80,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             LeaveKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setParticipant(ENCODED_ACCOUNT_ID)
+                .setParticipant("alice@wonderland")
                 .setProofBase64("not!base64")
                 .build(),
         "expected invalid leave proof base64 to throw");

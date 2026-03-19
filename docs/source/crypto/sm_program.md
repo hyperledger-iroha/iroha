@@ -344,8 +344,7 @@ summary below tracks the headline items surfaced to release engineering.
 
 ```json
 {
-  "supported_abi_versions": [1],
-  "default_compile_target": 1,
+  "abi_version": 1,
   "data_model_version": 1,
   "crypto": {
     "sm": {

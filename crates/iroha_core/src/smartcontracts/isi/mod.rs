@@ -8,6 +8,7 @@ pub mod block;
 /// Content lane instruction handlers.
 pub mod content;
 pub mod domain;
+pub mod identifier;
 pub mod kaigi;
 pub mod multisig;
 pub mod nft;
@@ -16,6 +17,7 @@ pub mod offline;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
 pub mod query;
+pub mod ram_lfe;
 pub mod repo;
 pub mod settlement;
 /// Viral social incentive instruction handlers.
@@ -119,6 +121,13 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::domain_link::BindAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountLabel>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
+    dispatch_instruction::<iroha_data_model::isi::identifier::RegisterIdentifierPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::identifier::ActivateIdentifierPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::identifier::ClaimIdentifier>,
+    dispatch_instruction::<iroha_data_model::isi::identifier::RevokeIdentifier>,
+    dispatch_instruction::<iroha_data_model::isi::ram_lfe::RegisterRamLfeProgramPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,
     dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,

@@ -156,9 +156,6 @@ pub fn validate_tlv_bytes(bytes: &[u8]) -> Result<Tlv<'_>, VMError> {
 // Memory-region validation lives in the VM crate, which owns the `Memory` type.
 
 /// Return the set of pointer types allowed for a given syscall ABI policy.
-///
-/// Policy notes:
-/// - Experimental policies are empty until a versioned surface is defined.
 fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerType> {
     static ABI_V1: OnceLock<HashSet<PointerType>> = OnceLock::new();
     let v1 = ABI_V1.get_or_init(|| {
@@ -178,13 +175,8 @@ fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerTy
             PointerType::ProofBlob,
         ])
     });
-    match policy {
-        SyscallPolicy::AbiV1 => v1,
-        SyscallPolicy::Experimental(_) => {
-            static EMPTY: OnceLock<HashSet<PointerType>> = OnceLock::new();
-            EMPTY.get_or_init(HashSet::new)
-        }
-    }
+    let SyscallPolicy::AbiV1 = policy;
+    v1
 }
 
 /// Expose the policy allowlist for callers that need to diff surfaces.
@@ -291,8 +283,8 @@ mod tests {
         let _first = PointerPolicyGuard::install(SyscallPolicy::AbiV1, 1);
         assert_eq!(current_policy(), Some((SyscallPolicy::AbiV1, 1)));
         {
-            let _second = PointerPolicyGuard::install(SyscallPolicy::Experimental(7), 7);
-            assert_eq!(current_policy(), Some((SyscallPolicy::Experimental(7), 7)));
+            let _second = PointerPolicyGuard::install(SyscallPolicy::AbiV1, 7);
+            assert_eq!(current_policy(), Some((SyscallPolicy::AbiV1, 7)));
         }
         assert_eq!(current_policy(), Some((SyscallPolicy::AbiV1, 1)));
     }

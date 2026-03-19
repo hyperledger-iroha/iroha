@@ -590,6 +590,12 @@ pub enum Instr {
         json: Temp,
         key: Temp,
     },
+    /// JSON getters: (&Json, &Name key) -> &NoritoBytes(Numeric)
+    JsonGetNumeric {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
     /// JSON getters: (&Json, &Name key) -> &Json
     JsonGetJson {
         dest: Temp,
@@ -1871,6 +1877,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
                     ctx.current_instr(Instr::JsonGetInt {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
+                    d
+                }
+                "json_get_numeric" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetNumeric {
                         dest: d,
                         json: j,
                         key: k,
@@ -3998,6 +4015,27 @@ mod tests {
         assert!(
             saw_trigger_event,
             "expected GetTriggerEvent instruction in lowered IR"
+        );
+    }
+
+    #[test]
+    fn lower_json_get_numeric_builtin() {
+        let src = "fn main() { let ev = trigger_event(); let _amount: Amount = json_get_numeric(ev, name(\"amount\")); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_json_get_numeric = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::JsonGetNumeric { .. } = instr {
+                    saw_json_get_numeric = true;
+                }
+            }
+        }
+        assert!(
+            saw_json_get_numeric,
+            "expected JsonGetNumeric instruction in lowered IR"
         );
     }
 

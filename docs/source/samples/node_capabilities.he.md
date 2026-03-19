@@ -18,8 +18,7 @@ translator: manual
 תגובה (מהדורה ראשונה; מדיניות ABI יחידה V1)
 ```json
 {
-  "supported_abi_versions": [1],
-  "default_compile_target": 1,
+  "abi_version": 1,
   "data_model_version": 1,
   "crypto": {
     "sm": {
@@ -44,8 +43,8 @@ translator: manual
 ```
 
 הערות
-- השדה `supported_abi_versions` מציין אילו גרסאות ABI מתקבלות בעת קבלה לרשת.
-- `default_compile_target` הוא גרסת ה-ABI הגבוהה ביותר הפעילה, והקומפיילרים של Kotodama צריכים להשתמש בה כברירת המחדל.
+- השדה `abi_version` מציין אילו גרסאות ABI מתקבלות בעת קבלה לרשת.
+- `abi_version` היא גרסת ה-ABI היחידה שהצומת מקבל, וגם מהדרי Kotodama צריכים להשתמש בה.
 - השדה `data_model_version` הוא גרסת התאימות של מודל הנתונים; ה‑SDK צריכים לדחות שליחות כאשר הערך שונה מהערך המובנה.
 - `crypto.curves.allowed_curve_ids` משקף את מזהי העקומות המוגדרים ב־`iroha_config.crypto.curves.allowed_curve_ids` (ראו [`address_curve_registry`](../references/address_curve_registry.md)). אם מתוכנן שימוש ב‑ML‑DSA, GOST או SM בחרו צומת שמפרסם את המזהה המתאים.
 

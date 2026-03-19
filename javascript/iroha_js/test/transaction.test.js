@@ -38,8 +38,7 @@ const REGISTER_ACCOUNT_DOMAIN_ID = "wonderland";
 const ASSET_DEFINITION_ID = "rose#wonderland";
 const ASSET_DEFINITION_ID_INPUT = ASSET_DEFINITION_ID.toLowerCase();
 const NODE_CAPABILITIES = {
-  supported_abi_versions: [1],
-  default_compile_target: 1,
+  abi_version: 1,
   data_model_version: 1,
   crypto: {
     sm: {

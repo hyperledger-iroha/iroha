@@ -259,7 +259,7 @@ mod tests {
     use super::*;
     use iroha_data_model::query::{
         QueryRequest, QueryResponse, SingularQueryBox, SingularQueryOutputBox,
-        executor::prelude::FindParameters, runtime::ActiveAbiVersions,
+        executor::prelude::FindParameters, runtime::AbiVersion,
     };
 
     fn eq_json(a: &[u8], b: &[u8]) -> bool {
@@ -337,12 +337,9 @@ mod tests {
     #[test]
     fn query_response_roundtrip() {
         let reg = DefaultRegistry::new();
-        let resp = QueryResponse::Singular(SingularQueryOutputBox::ActiveAbiVersions(
-            ActiveAbiVersions {
-                active_versions: vec![1],
-                default_compile_target: 1,
-            },
-        ));
+        let resp = QueryResponse::Singular(SingularQueryOutputBox::AbiVersion(AbiVersion {
+            abi_version: 1,
+        }));
         let json_bytes = njson::to_vec(&resp).expect("serialize json");
         let enc = reg
             .encode_json("QueryResponse", &json_bytes)

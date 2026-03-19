@@ -6,6 +6,9 @@ mod confidential;
 #[cfg(not(feature = "ffi_import"))]
 /// Symmetric/asymmetric encryption utilities.
 pub mod encryption;
+#[cfg(not(feature = "ffi_import"))]
+/// Baseline BFV fully homomorphic encryption primitives.
+pub mod fhe_bfv;
 mod hash;
 #[cfg(not(feature = "ffi_import"))]
 /// Hybrid KEM/DEM helpers used by SoraFS payload envelopes.
@@ -20,6 +23,9 @@ mod multihash;
 #[cfg(not(feature = "ffi_import"))]
 /// Lane privacy commitment registry (NX-10).
 pub mod privacy;
+#[cfg(not(feature = "ffi_import"))]
+/// RAM-LFE commitment and evaluation interfaces.
+pub mod ram_lfe;
 pub(crate) mod rng;
 mod secrecy;
 mod signature;
@@ -85,6 +91,8 @@ pub use confidential::{
 use derive_more::Display;
 pub use error::Error;
 use error::ParseError;
+#[cfg(not(feature = "ffi_import"))]
+pub use fhe_bfv::*;
 use getset::Getters;
 pub use hash::*;
 #[cfg(not(feature = "ffi_import"))]
@@ -103,6 +111,8 @@ pub use privacy::{
     MerkleCommitment, MerkleWitness, PrivacyError, PrivacyWitness, PrivacyWitnessKind,
     SnarkCircuit, SnarkCircuitId, SnarkWitness, hash_proof, hash_public_inputs,
 };
+#[cfg(not(feature = "ffi_import"))]
+pub use ram_lfe::*;
 #[cfg(feature = "sm")]
 pub use sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]

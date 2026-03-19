@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import org.hyperledger.iroha.android.address.AssetIdLiteral;
 import org.hyperledger.iroha.android.model.InstructionBox;
 
 /** Typed builder for {@code SetAssetKeyValue} instructions targeting concrete asset balances. */
@@ -106,7 +105,7 @@ public final class SetAssetKeyValueInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setAssetId(final String assetId) {
-      this.assetId = AssetIdLiteral.normalizeEncoded(assetId);
+      this.assetId = Objects.requireNonNull(assetId, "assetId");
       return this;
     }
 
@@ -143,3 +142,4 @@ public final class SetAssetKeyValueInstruction implements InstructionTemplate {
     }
   }
 }
+

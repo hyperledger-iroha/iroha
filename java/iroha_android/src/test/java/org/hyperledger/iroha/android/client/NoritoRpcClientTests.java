@@ -261,13 +261,13 @@ public final class NoritoRpcClientTests {
       final TransactionPayload payload =
           TransactionPayload.builder()
               .setChainId("00000001")
-              .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+              .setAuthority("alice@test")
               .setInstructionBytes(new byte[] {0x01, 0x02})
               .build();
       final StubCodecAdapter codec =
           new StubCodecAdapter(
               "encoded".getBytes(StandardCharsets.UTF_8),
-              payload.toBuilder().setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV").build());
+              payload.toBuilder().setAuthority("bob@test").build());
       final NoritoRpcClient client =
           NoritoRpcClient.builder()
               .setBaseUri(server.baseUri())
@@ -277,7 +277,7 @@ public final class NoritoRpcClientTests {
           client.callTransaction("/rpc/codec", payload, codec, null);
       assert codec.encodeCallCount() == 1 : "Codec should encode request once";
       assert codec.decodeCallCount() == 1 : "Codec should decode response once";
-      assert "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV".equals(decoded.authority())
+      assert "bob@test".equals(decoded.authority())
           : "Decoded payload should come from codec adapter";
     }
   }

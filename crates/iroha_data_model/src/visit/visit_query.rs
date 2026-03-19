@@ -43,7 +43,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_account_ids_by_domain_id(FindAccountIdsByDomainId),
         visit_find_proof_record_by_id(FindProofRecordById),
         visit_find_contract_manifest_by_code_hash(FindContractManifestByCodeHash),
-        visit_find_active_abi_versions(FindActiveAbiVersions),
+        visit_find_abi_version(FindAbiVersion),
         visit_find_asset_by_id(FindAssetById),
         visit_find_twitter_binding_by_hash(FindTwitterBindingByHash),
         visit_find_da_pin_intent_by_ticket(FindDaPinIntentByTicket),
@@ -120,9 +120,7 @@ macro_rules! query_visitors {
             visit_find_contract_manifest_by_code_hash(
                 &$crate::query::smart_contract::FindContractManifestByCodeHash
             ),
-            visit_find_active_abi_versions(
-                &$crate::query::runtime::prelude::FindActiveAbiVersions
-            ),
+            visit_find_abi_version(&$crate::query::runtime::prelude::FindAbiVersion),
             visit_find_asset_by_id(&$crate::query::asset::prelude::FindAssetById),
             visit_find_twitter_binding_by_hash(
                 &$crate::query::oracle::prelude::FindTwitterBindingByHash
@@ -209,7 +207,7 @@ mod tests {
             SingularQueryBox::FindAccountIdsByDomainId(_) => {}
             SingularQueryBox::FindProofRecordById(_) => {}
             SingularQueryBox::FindContractManifestByCodeHash(_) => {}
-            SingularQueryBox::FindActiveAbiVersions(_) => {}
+            SingularQueryBox::FindAbiVersion(_) => {}
             SingularQueryBox::FindAssetById(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}
@@ -318,9 +316,7 @@ mod tests {
                     code_hash: manifest_hash,
                 },
             ),
-            SingularQueryBox::FindActiveAbiVersions(
-                crate::query::runtime::prelude::FindActiveAbiVersions,
-            ),
+            SingularQueryBox::FindAbiVersion(crate::query::runtime::prelude::FindAbiVersion),
             SingularQueryBox::FindAssetById(crate::query::asset::prelude::FindAssetById::new(
                 asset_id,
             )),

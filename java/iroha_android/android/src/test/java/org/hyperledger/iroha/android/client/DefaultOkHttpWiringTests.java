@@ -9,7 +9,6 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.ByteBuffer;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +18,6 @@ import okhttp3.mockwebserver.RecordedRequest;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
 import okio.ByteString;
-import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnector;
@@ -55,19 +53,17 @@ public final class DefaultOkHttpWiringTests {
       final String uaidHex = "11".repeat(32);
       final String canonicalUaid = "uaid:" + uaidHex;
       final String responseUaid = "UAID:" + uaidHex.toUpperCase(Locale.ROOT);
-      final String responseAccount = sampleAuthority((byte) 0x31);
       final String responseBody =
           String.format(
               """
               {
                 "uaid": "%s",
                 "dataspaces": [
-                  {"dataspace_id": 1, "dataspace_alias": "alpha", "accounts": ["%s"]}
+                  {"dataspace_id": 1, "dataspace_alias": "alpha", "accounts": ["user@test"]}
                 ]
               }
               """,
-              responseUaid,
-              responseAccount);
+              responseUaid);
       server.enqueue(
           new MockResponse()
               .setResponseCode(200)
@@ -270,17 +266,6 @@ public final class DefaultOkHttpWiringTests {
 
   private static Object extractExecutor(final Object target) throws Exception {
     return extractField(target, "executor");
-  }
-
-  private static String sampleAuthority(final byte seed) {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, seed);
-    try {
-      return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build sample authority", ex);
-    }
   }
 
   private static Object extractField(final Object target, final String name) throws Exception {

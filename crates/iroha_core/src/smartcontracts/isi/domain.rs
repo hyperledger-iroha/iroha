@@ -50,6 +50,26 @@ pub mod isi {
         lease_expiry_ms.map(|expiry| expiry.saturating_add(ASSET_ALIAS_GRACE_MS))
     }
 
+    fn upsert_account_rekey_record(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        label: &AccountLabel,
+        account: &AccountId,
+    ) {
+        let record = match state_transaction
+            .world
+            .account_rekey_records
+            .get(label)
+            .cloned()
+        {
+            Some(record) => record.repoint_to_account(account.clone()),
+            None => AccountRekeyRecord::new(label.clone(), account.clone()),
+        };
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(label.clone(), record);
+    }
+
     fn ensure_asset_definition_human_fields(
         asset_definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
@@ -1720,11 +1740,13 @@ pub mod isi {
                 state_transaction.world.uaid_accounts.remove(uaid);
                 for opaque in account_value.opaque_ids() {
                     state_transaction.world.opaque_uaids.remove(*opaque);
+                    state_transaction.world.identifier_claims.remove(*opaque);
                 }
                 state_transaction.rebuild_space_directory_bindings(uaid);
             } else {
                 for opaque in account_value.opaque_ids() {
                     state_transaction.world.opaque_uaids.remove(*opaque);
+                    state_transaction.world.identifier_claims.remove(*opaque);
                 }
             }
 
@@ -2397,12 +2419,33 @@ pub mod isi {
             }
 
             state_transaction.world.account(&account)?;
-            let existing_alias_binding = state_transaction.world.account_aliases.get(&label);
-            if existing_alias_binding.is_some_and(|existing| existing != &account) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label already registered".to_owned().into(),
-                )
-                .into());
+            let existing_alias_binding =
+                state_transaction.world.account_aliases.get(&label).cloned();
+            if let Some(existing_owner) = existing_alias_binding.as_ref() {
+                if existing_owner != &account {
+                    if !authority_controls_domain && !authority_can_register_domain_accounts {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Account label already registered".to_owned().into(),
+                        )
+                        .into());
+                    }
+
+                    let displaced_label = state_transaction
+                        .world
+                        .account(existing_owner)?
+                        .label()
+                        .cloned();
+                    if displaced_label.as_ref() == Some(&label) {
+                        state_transaction
+                            .world
+                            .account_mut(existing_owner)?
+                            .set_label(None);
+                    }
+                    state_transaction
+                        .world
+                        .account_aliases
+                        .remove(label.clone());
+                }
             }
             if existing_alias_binding.is_none()
                 && state_transaction
@@ -2411,16 +2454,19 @@ pub mod isi {
                     .get(&label)
                     .is_some()
             {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label already registered".to_owned().into(),
-                )
-                .into());
+                if !authority_controls_domain && !authority_can_register_domain_accounts {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Account label already registered".to_owned().into(),
+                    )
+                    .into());
+                }
             }
 
             state_transaction
                 .world
                 .account_aliases
                 .insert(label.clone(), account.clone());
+            upsert_account_rekey_record(state_transaction, &label, &account);
 
             let already_linked = state_transaction
                 .world
@@ -2469,7 +2515,15 @@ pub mod isi {
 
             let authority_controls_subject = authority.subject_id() == subject;
             let authority_controls_domain = authority == &domain_owner;
-            if !authority_controls_subject && !authority_controls_domain {
+            let authority_can_register_domain_accounts = authority_can_register_account_in_domain(
+                &state_transaction.world,
+                authority,
+                &label.domain,
+            );
+            if !authority_controls_subject
+                && !authority_controls_domain
+                && !authority_can_register_domain_accounts
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "authority is not permitted to set this account label"
                         .to_owned()
@@ -2479,16 +2533,32 @@ pub mod isi {
             }
 
             let existing_label = state_transaction.world.account(&account)?.label().cloned();
-            if state_transaction
-                .world
-                .account_aliases
-                .get(&label)
-                .is_some_and(|existing| existing != &account)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label already registered".to_owned().into(),
-                )
-                .into());
+            let existing_alias_owner = state_transaction.world.account_aliases.get(&label).cloned();
+            if let Some(existing_owner) = existing_alias_owner.as_ref() {
+                if existing_owner != &account {
+                    if !authority_controls_domain && !authority_can_register_domain_accounts {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "Account label already registered".to_owned().into(),
+                        )
+                        .into());
+                    }
+
+                    let displaced_label = state_transaction
+                        .world
+                        .account(existing_owner)?
+                        .label()
+                        .cloned();
+                    if displaced_label.as_ref() == Some(&label) {
+                        state_transaction
+                            .world
+                            .account_mut(existing_owner)?
+                            .set_label(None);
+                    }
+                    state_transaction
+                        .world
+                        .account_aliases
+                        .remove(label.clone());
+                }
             }
             if existing_label.as_ref() != Some(&label)
                 && state_transaction
@@ -2497,10 +2567,12 @@ pub mod isi {
                     .get(&label)
                     .is_some()
             {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label already registered".to_owned().into(),
-                )
-                .into());
+                if !authority_controls_domain && !authority_can_register_domain_accounts {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "Account label already registered".to_owned().into(),
+                    )
+                    .into());
+                }
             }
 
             if let Some(previous_label) = existing_label.as_ref() {
@@ -2522,17 +2594,7 @@ pub mod isi {
                 .world
                 .account_aliases
                 .insert(label.clone(), account.clone());
-
-            if let Some(signatory) = account.try_signatory() {
-                state_transaction.world.account_rekey_records.insert(
-                    label.clone(),
-                    AccountRekeyRecord {
-                        label: label.clone(),
-                        active_signatory: signatory.clone(),
-                        previous_signatories: Vec::new(),
-                    },
-                );
-            }
+            upsert_account_rekey_record(state_transaction, &label, &account);
 
             let already_linked = state_transaction
                 .world
@@ -3166,7 +3228,7 @@ mod tests {
     }
 
     #[test]
-    fn set_account_label_binds_existing_multisig_account_without_rekey_record() {
+    fn set_account_label_binds_existing_multisig_account_with_rekey_record() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -3201,9 +3263,18 @@ mod tests {
             Some(&account_id),
             "multisig alias index should be inserted"
         );
+        let rekey_record = tx
+            .world
+            .account_rekey_records
+            .get(&account_label)
+            .expect("multisig aliases should create rekey records");
+        assert_eq!(
+            rekey_record.active_account_id, account_id,
+            "rekey record should point at the multisig account"
+        );
         assert!(
-            tx.world.account_rekey_records.get(&account_label).is_none(),
-            "multisig accounts should not create single-key rekey records"
+            rekey_record.active_signatory.is_none(),
+            "multisig rekey records should not invent a single-key signatory"
         );
         assert_eq!(
             tx.world
@@ -3212,6 +3283,171 @@ mod tests {
                 .label(),
             Some(&account_label),
             "multisig account should expose the bound label"
+        );
+    }
+
+    #[test]
+    fn set_account_label_allows_account_registrar_to_repoint_existing_alias() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_owner = (*ALICE_ID).clone();
+        let registrar = (*BOB_ID).clone();
+        seed_domain(&mut state, &domain_id, &domain_owner);
+        seed_account(&mut state, &registrar, &domain_id);
+
+        let alias = AccountLabel::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let first_keypair = KeyPair::random();
+        let first_id = AccountId::new(first_keypair.public_key().clone());
+        let second_keypair = KeyPair::random();
+        let second_id = AccountId::new(second_keypair.public_key().clone());
+        let permission: Permission = CanRegisterAccount {
+            domain: domain_id.clone(),
+        }
+        .into();
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Grant::account_permission(permission, registrar.clone())
+            .execute(&domain_owner, &mut tx)
+            .expect("grant registrar permission");
+        Register::account(Account::new(
+            first_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register first account");
+        Register::account(Account::new(
+            second_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register second account");
+
+        SetAccountLabel {
+            account: first_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&domain_owner, &mut tx)
+        .expect("seed alias on first account");
+
+        SetAccountLabel {
+            account: second_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&registrar, &mut tx)
+        .expect("registrar should repoint alias");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&alias),
+            Some(&second_id),
+            "alias should resolve to the replacement account"
+        );
+        assert_eq!(
+            tx.world
+                .account(&first_id)
+                .expect("first account should exist")
+                .label(),
+            None,
+            "previous account label should be cleared after repoint"
+        );
+        assert_eq!(
+            tx.world
+                .account(&second_id)
+                .expect("second account should exist")
+                .label(),
+            Some(&alias),
+            "replacement account should expose the moved label"
+        );
+        let rekey_record = tx
+            .world
+            .account_rekey_records
+            .get(&alias)
+            .expect("single-key repoint should refresh the rekey record");
+        assert_eq!(
+            rekey_record.active_account_id, second_id,
+            "rekey record should follow the replacement account"
+        );
+        assert_eq!(
+            rekey_record.previous_account_ids,
+            vec![first_id],
+            "rekey record should retain the prior concrete account"
+        );
+        assert_eq!(
+            rekey_record.active_signatory,
+            Some(second_keypair.public_key().clone()),
+            "rekey record should follow the replacement account"
+        );
+    }
+
+    #[test]
+    fn set_account_label_allows_global_account_registrar_to_repoint_existing_alias() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_owner = (*ALICE_ID).clone();
+        let registrar = (*BOB_ID).clone();
+        seed_domain(&mut state, &domain_id, &domain_owner);
+        seed_account(&mut state, &registrar, &domain_id);
+
+        let alias = AccountLabel::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let first_keypair = KeyPair::random();
+        let first_id = AccountId::new(first_keypair.public_key().clone());
+        let second_keypair = KeyPair::random();
+        let second_id = AccountId::new(second_keypair.public_key().clone());
+        let permission = Permission::new(
+            "CanRegisterAccount".parse().expect("permission name"),
+            iroha_primitives::json::Json::new(()),
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Grant::account_permission(permission, registrar.clone())
+            .execute(&domain_owner, &mut tx)
+            .expect("grant global registrar permission");
+        Register::account(Account::new(
+            first_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register first account");
+        Register::account(Account::new(
+            second_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register second account");
+
+        SetAccountLabel {
+            account: first_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&domain_owner, &mut tx)
+        .expect("seed alias on first account");
+
+        SetAccountLabel {
+            account: second_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&registrar, &mut tx)
+        .expect("global registrar should repoint alias");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&alias),
+            Some(&second_id),
+            "alias should resolve to the replacement account"
+        );
+        assert_eq!(
+            tx.world
+                .account(&first_id)
+                .expect("first account should exist")
+                .label(),
+            None,
+            "previous account label should be cleared after repoint"
+        );
+        assert_eq!(
+            tx.world
+                .account(&second_id)
+                .expect("second account should exist")
+                .label(),
+            Some(&alias),
+            "replacement account should expose the moved label"
         );
     }
 
@@ -3265,16 +3501,31 @@ mod tests {
             Some(&account_id),
             "issuance alias should resolve to the same multisig account"
         );
-        assert!(
-            tx.world.account_rekey_records.get(&banking_label).is_none(),
-            "multisig alias binding should not create single-key rekey records"
+        let banking_record = tx
+            .world
+            .account_rekey_records
+            .get(&banking_label)
+            .expect("banking alias should create a rekey record");
+        assert_eq!(
+            banking_record.active_account_id, account_id,
+            "banking rekey record should resolve to the multisig account"
         );
         assert!(
-            tx.world
-                .account_rekey_records
-                .get(&issuance_label)
-                .is_none(),
-            "multisig alias binding should not create single-key rekey records"
+            banking_record.active_signatory.is_none(),
+            "multisig alias records should not expose a single-key signatory"
+        );
+        let issuance_record = tx
+            .world
+            .account_rekey_records
+            .get(&issuance_label)
+            .expect("issuance alias should create a rekey record");
+        assert_eq!(
+            issuance_record.active_account_id, account_id,
+            "issuance rekey record should resolve to the multisig account"
+        );
+        assert!(
+            issuance_record.active_signatory.is_none(),
+            "multisig alias records should not expose a single-key signatory"
         );
         assert!(
             tx.world
@@ -3293,6 +3544,7 @@ mod tests {
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
+        seed_account(&mut state, &registrar, &domain_id);
 
         let alias = AccountLabel::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
@@ -3335,6 +3587,7 @@ mod tests {
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
+        seed_account(&mut state, &registrar, &domain_id);
 
         let alias = AccountLabel::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
@@ -3371,11 +3624,13 @@ mod tests {
     }
 
     #[test]
-    fn bind_account_alias_rejects_alias_owned_by_different_account() {
+    fn bind_account_alias_rejects_alias_owned_by_different_account_without_registrar_rights() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
+        let domain_owner = (*ALICE_ID).clone();
+        let unauthorized = (*BOB_ID).clone();
+        seed_domain(&mut state, &domain_id, &domain_owner);
+        seed_account(&mut state, &unauthorized, &domain_id);
 
         let alias = AccountLabel::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
         let first_keypair = KeyPair::random();
@@ -3389,26 +3644,26 @@ mod tests {
         Register::account(Account::new(
             first_id.clone().to_account_id(domain_id.clone()),
         ))
-        .execute(&authority, &mut tx)
+        .execute(&domain_owner, &mut tx)
         .expect("register first account");
         Register::account(Account::new(
             second_id.clone().to_account_id(domain_id.clone()),
         ))
-        .execute(&authority, &mut tx)
+        .execute(&domain_owner, &mut tx)
         .expect("register second account");
 
         BindAccountAlias {
             account: first_id.clone(),
             label: alias.clone(),
         }
-        .execute(&authority, &mut tx)
+        .execute(&domain_owner, &mut tx)
         .expect("bind alias to first account");
 
         let err = BindAccountAlias {
             account: second_id.clone(),
             label: alias.clone(),
         }
-        .execute(&authority, &mut tx)
+        .execute(&unauthorized, &mut tx)
         .expect_err("alias collision should be rejected");
 
         assert!(
@@ -3419,6 +3674,136 @@ mod tests {
             tx.world.account_aliases.get(&alias),
             Some(&first_id),
             "existing alias binding must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn bind_account_alias_allows_account_registrar_to_repoint_existing_alias() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_owner = (*ALICE_ID).clone();
+        let registrar = (*BOB_ID).clone();
+        seed_domain(&mut state, &domain_id, &domain_owner);
+        seed_account(&mut state, &registrar, &domain_id);
+
+        let alias = AccountLabel::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let first_keypair = KeyPair::random();
+        let first_id = AccountId::new(first_keypair.public_key().clone());
+        let second_keypair = KeyPair::random();
+        let second_id = AccountId::new(second_keypair.public_key().clone());
+        let permission: Permission = CanRegisterAccount {
+            domain: domain_id.clone(),
+        }
+        .into();
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Grant::account_permission(permission, registrar.clone())
+            .execute(&domain_owner, &mut tx)
+            .expect("grant registrar permission");
+        Register::account(Account::new(
+            first_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register first account");
+        Register::account(Account::new(
+            second_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register second account");
+
+        BindAccountAlias {
+            account: first_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&domain_owner, &mut tx)
+        .expect("seed alias on first account");
+
+        BindAccountAlias {
+            account: second_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&registrar, &mut tx)
+        .expect("registrar should repoint alias");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&alias),
+            Some(&second_id),
+            "alias should resolve to the replacement account"
+        );
+        assert_eq!(
+            tx.world
+                .account(&first_id)
+                .expect("first account should exist")
+                .label(),
+            None,
+            "previous primary label should be cleared when its alias is rebound"
+        );
+    }
+
+    #[test]
+    fn bind_account_alias_allows_global_account_registrar_to_repoint_existing_alias() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_owner = (*ALICE_ID).clone();
+        let registrar = (*BOB_ID).clone();
+        seed_domain(&mut state, &domain_id, &domain_owner);
+        seed_account(&mut state, &registrar, &domain_id);
+
+        let alias = AccountLabel::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let first_keypair = KeyPair::random();
+        let first_id = AccountId::new(first_keypair.public_key().clone());
+        let second_keypair = KeyPair::random();
+        let second_id = AccountId::new(second_keypair.public_key().clone());
+        let permission = Permission::new(
+            "CanRegisterAccount".parse().expect("permission name"),
+            iroha_primitives::json::Json::new(()),
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Grant::account_permission(permission, registrar.clone())
+            .execute(&domain_owner, &mut tx)
+            .expect("grant global registrar permission");
+        Register::account(Account::new(
+            first_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register first account");
+        Register::account(Account::new(
+            second_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&domain_owner, &mut tx)
+        .expect("register second account");
+
+        BindAccountAlias {
+            account: first_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&domain_owner, &mut tx)
+        .expect("seed alias on first account");
+
+        BindAccountAlias {
+            account: second_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&registrar, &mut tx)
+        .expect("global registrar should repoint alias");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&alias),
+            Some(&second_id),
+            "alias should resolve to the replacement account"
+        );
+        assert_eq!(
+            tx.world
+                .account(&first_id)
+                .expect("first account should exist")
+                .label(),
+            None,
+            "previous primary label should be cleared when its alias is rebound"
         );
     }
 

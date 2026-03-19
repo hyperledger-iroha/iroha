@@ -1683,6 +1683,110 @@ pub struct AliasErrorResponseDto {
     pub error: String,
 }
 
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Summary information for a registered identifier policy.
+pub struct IdentifierPolicySummaryDto {
+    pub policy_id: String,
+    pub owner: String,
+    pub active: bool,
+    pub normalization: String,
+    pub resolver_public_key: String,
+    pub backend: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption_public_parameters: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption_public_parameters_decoded:
+        Option<iroha_crypto::BfvIdentifierPublicParameters>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub ram_fhe_profile: Option<iroha_crypto::BfvRamProgramProfile>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// List response for identifier policies.
+pub struct IdentifierPolicyListDto {
+    pub total: u64,
+    pub items: Vec<IdentifierPolicySummaryDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+/// Resolve a raw identifier under one policy namespace.
+pub struct IdentifierResolveRequestDto {
+    pub policy_id: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub input: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub encrypted_input: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Successful response emitted by `/v1/identifiers/resolve`.
+pub struct IdentifierResolveResponseDto {
+    pub policy_id: String,
+    pub opaque_id: String,
+    pub receipt_hash: String,
+    pub uaid: String,
+    pub account_id: String,
+    pub resolved_at_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
+    pub backend: String,
+    pub signature: String,
+    pub signature_payload_hex: String,
+    pub signature_payload: iroha_data_model::identifier::IdentifierResolutionReceiptPayload,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Persisted identifier-claim binding returned by receipt-hash lookup.
+pub struct IdentifierClaimLookupResponseDto {
+    pub policy_id: String,
+    pub opaque_id: String,
+    pub receipt_hash: String,
+    pub uaid: String,
+    pub account_id: String,
+    pub verified_at_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
+}
+
 impl<G> TelemetryGate for MaybeTelemetry<G>
 where
     G: TelemetryGate + Clone,
@@ -7034,6 +7138,72 @@ const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
 const MULTISIG_PROPOSAL_METADATA_PREFIX: &str = "multisig/proposals/";
 
 #[cfg(feature = "app_api")]
+fn multisig_not_found_error() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_selector_validation_error(message: impl Into<String>) -> Error {
+    conversion_error(message.into())
+}
+
+#[cfg(feature = "app_api")]
+fn parse_multisig_account_alias(alias_input: &str) -> Result<account::rekey::AccountLabel> {
+    let canonical = alias_input.trim().to_ascii_lowercase();
+    let (label, domain) = canonical.split_once('@').ok_or_else(|| {
+        multisig_selector_validation_error(
+            "multisig_account_alias must be formatted as label@domain".to_owned(),
+        )
+    })?;
+    if label.trim().is_empty() || domain.trim().is_empty() {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_alias must be formatted as label@domain".to_owned(),
+        ));
+    }
+
+    let label_name = Name::from_str(label).map_err(|err| {
+        multisig_selector_validation_error(format!("invalid multisig_account_alias: {err}"))
+    })?;
+    let domain_id = DomainId::from_str(domain).map_err(|err| {
+        multisig_selector_validation_error(format!("invalid multisig_account_alias: {err}"))
+    })?;
+    Ok(account::rekey::AccountLabel::new(domain_id, label_name))
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_multisig_account_selector(
+    state: &CoreState,
+    selector: &MultisigAccountSelectorDto,
+) -> Result<iroha_data_model::account::AccountId> {
+    let alias = selector
+        .multisig_account_alias
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match (&selector.multisig_account_id, alias) {
+        (Some(_), Some(_)) => Err(multisig_selector_validation_error(
+            "exactly one of multisig_account_id or multisig_account_alias must be set".to_owned(),
+        )),
+        (None, None) => Err(multisig_selector_validation_error(
+            "exactly one of multisig_account_id or multisig_account_alias must be set".to_owned(),
+        )),
+        (Some(account_id), None) => Ok(account_id.clone()),
+        (None, Some(alias)) => {
+            let label = parse_multisig_account_alias(alias)?;
+            let world = state.world_view();
+            world
+                .account_rekey_records()
+                .get(&label)
+                .map(|record| record.active_account_id.clone())
+                .or_else(|| world.account_aliases().get(&label).cloned())
+                .ok_or_else(multisig_not_found_error)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn load_multisig_spec(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
@@ -7044,14 +7214,27 @@ fn load_multisig_spec(
     })?;
     let key =
         Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("static multisig spec metadata key");
-    let value = account
-        .metadata()
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| conversion_error("multisig spec metadata missing".to_owned()))?;
+    let value = account.metadata().get(&key).cloned().ok_or_else(|| {
+        multisig_selector_validation_error(format!(
+            "resolved account is not a multisig authority: {multisig_account_id}"
+        ))
+    })?;
     value.try_into_any_norito().map_err(|err| {
         conversion_error(format!("invalid multisig spec metadata on account: {err}"))
     })
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_multisig_account_and_spec(
+    state: &CoreState,
+    selector: &MultisigAccountSelectorDto,
+) -> Result<(
+    iroha_data_model::account::AccountId,
+    iroha_executor_data_model::isi::multisig::MultisigSpec,
+)> {
+    let multisig_account_id = resolve_multisig_account_selector(state, selector)?;
+    let spec = load_multisig_spec(state, &multisig_account_id)?;
+    Ok((multisig_account_id, spec))
 }
 
 #[cfg(feature = "app_api")]
@@ -7078,6 +7261,37 @@ fn load_multisig_proposal_value(
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_multisig_proposal_hash(
+    proposal_id: Option<String>,
+    instructions_hash: Option<String>,
+) -> Result<(String, HashOf<Vec<iroha_data_model::isi::InstructionBox>>)> {
+    let proposal_id_literal = proposal_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let instructions_hash_literal = instructions_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let hash_literal = instructions_hash_literal
+        .clone()
+        .or_else(|| proposal_id_literal.clone())
+        .ok_or_else(|| {
+            multisig_selector_validation_error(
+                "proposal_id or instructions_hash is required".to_owned(),
+            )
+        })?;
+    let instructions_hash = hash_literal
+        .parse::<HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+        .map_err(|err| {
+            multisig_selector_validation_error(format!("invalid instructions_hash: {err}"))
+        })?;
+    Ok((hash_literal, instructions_hash))
+}
+
+#[cfg(feature = "app_api")]
 fn approvals_reach_quorum(
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
     approvals: &BTreeSet<iroha_data_model::account::AccountId>,
@@ -7090,6 +7304,59 @@ fn approvals_reach_quorum(
         })
         .sum();
     approved_weight >= u16::from(spec.quorum)
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_is_nonterminal(
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    now_ms: u64,
+) -> bool {
+    proposal.is_relayed != Some(true)
+        && proposal.expires_at_ms > now_ms
+        && !approvals_reach_quorum(spec, &proposal.approvals)
+}
+
+#[cfg(feature = "app_api")]
+fn list_multisig_nonterminal_proposals(
+    state: &CoreState,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+) -> Result<Vec<MultisigProposalEntryDto>> {
+    let world = state.world_view();
+    let account = world.account(multisig_account_id).map_err(|_| {
+        conversion_error(format!("multisig account not found: {multisig_account_id}"))
+    })?;
+    let now_ms = current_time_millis();
+    let mut proposals = Vec::new();
+
+    for (key, value) in account.metadata().iter() {
+        let key_str = key.as_ref();
+        let Some(hash_literal) = key_str.strip_prefix(MULTISIG_PROPOSAL_METADATA_PREFIX) else {
+            continue;
+        };
+        let proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue =
+            value.clone().try_into_any_norito().map_err(|err| {
+                conversion_error(format!("invalid multisig proposal metadata: {err}"))
+            })?;
+        if !multisig_proposal_is_nonterminal(spec, &proposal, now_ms) {
+            continue;
+        }
+        proposals.push(MultisigProposalEntryDto {
+            proposal_id: hash_literal.to_owned(),
+            instructions_hash: hash_literal.to_owned(),
+            proposal,
+        });
+    }
+
+    proposals.sort_by(|left, right| {
+        right
+            .proposal
+            .proposed_at_ms
+            .cmp(&left.proposal.proposed_at_ms)
+            .then_with(|| left.instructions_hash.cmp(&right.instructions_hash))
+    });
+    Ok(proposals)
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -7185,6 +7452,599 @@ mod multisig_contract_call_tests {
     }
 }
 
+#[cfg(all(test, feature = "app_api"))]
+mod multisig_selector_tests {
+    use std::num::{NonZeroU16, NonZeroU64};
+
+    use http_body_util::BodyExt as _;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        queue::Queue,
+        smartcontracts::Execute,
+        smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
+        state::{State, World},
+    };
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        ValidationFail,
+        account::{MultisigMember, MultisigPolicy},
+        isi::Grant,
+        permission, prelude as dm,
+        query::error::QueryExecutionFail,
+    };
+    use iroha_executor_data_model::isi::multisig::{MultisigProposalValue, MultisigSpec};
+    use iroha_executor_data_model::permission::{
+        governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
+    };
+
+    use super::*;
+
+    fn alias_selector(alias: &str) -> MultisigAccountSelectorDto {
+        MultisigAccountSelectorDto {
+            multisig_account_id: None,
+            multisig_account_alias: Some(alias.to_owned()),
+        }
+    }
+
+    fn concrete_selector(multisig_account_id: dm::AccountId) -> MultisigAccountSelectorDto {
+        MultisigAccountSelectorDto {
+            multisig_account_id: Some(multisig_account_id),
+            multisig_account_alias: None,
+        }
+    }
+
+    fn build_queue() -> Arc<Queue> {
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events,
+        ))
+    }
+
+    fn build_state(world: World) -> Arc<State> {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        Arc::new(State::new_for_testing(world, kura, query))
+    }
+
+    fn multisig_test_world() -> (
+        World,
+        dm::AccountId,
+        dm::AccountId,
+        dm::AccountId,
+        String,
+        String,
+    ) {
+        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let label_name: Name = "cbdc".parse().expect("label");
+        let alias_literal = format!("{}@{}", label_name, domain_id);
+
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let signer_one_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_one.public_key().clone());
+        let signer_two_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_two.public_key().clone());
+
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let multisig_id = dm::ScopedAccountId::new_multisig(domain_id.clone(), policy);
+        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([
+                (signer_one_id.clone().into(), 1_u8),
+                (signer_two_id.clone().into(), 1_u8),
+            ]),
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
+            IrohaJson::new(spec),
+        );
+
+        let active_instructions = vec![dm::Log::new(dm::Level::INFO, "active".to_owned()).into()];
+        let active_hash = HashOf::new(&active_instructions);
+        multisig_metadata.insert(
+            Name::from_str(&format!("{MULTISIG_PROPOSAL_METADATA_PREFIX}{active_hash}"))
+                .expect("proposal key"),
+            IrohaJson::new(MultisigProposalValue {
+                instructions: active_instructions,
+                proposed_at_ms: 1_700_000_000_000,
+                expires_at_ms: 4_000_000_000_000,
+                approvals: BTreeSet::from([signer_one_id.clone().into()]),
+                is_relayed: None,
+            }),
+        );
+
+        let executed_instructions =
+            vec![dm::Log::new(dm::Level::INFO, "executed".to_owned()).into()];
+        let executed_hash = HashOf::new(&executed_instructions);
+        multisig_metadata.insert(
+            Name::from_str(&format!(
+                "{MULTISIG_PROPOSAL_METADATA_PREFIX}{executed_hash}"
+            ))
+            .expect("proposal key"),
+            IrohaJson::new(MultisigProposalValue {
+                instructions: executed_instructions,
+                proposed_at_ms: 1_700_000_000_001,
+                expires_at_ms: 4_000_000_000_000,
+                approvals: BTreeSet::from([
+                    signer_one_id.clone().into(),
+                    signer_two_id.clone().into(),
+                ]),
+                is_relayed: Some(true),
+            }),
+        );
+
+        let expired_instructions = vec![dm::Log::new(dm::Level::INFO, "expired".to_owned()).into()];
+        let expired_hash = HashOf::new(&expired_instructions);
+        multisig_metadata.insert(
+            Name::from_str(&format!(
+                "{MULTISIG_PROPOSAL_METADATA_PREFIX}{expired_hash}"
+            ))
+            .expect("proposal key"),
+            IrohaJson::new(MultisigProposalValue {
+                instructions: expired_instructions,
+                proposed_at_ms: 1_600_000_000_000,
+                expires_at_ms: 1,
+                approvals: BTreeSet::new(),
+                is_relayed: None,
+            }),
+        );
+
+        let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
+        let authority = signer_one_id.account().clone();
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let multisig_account = Account::new(multisig_id)
+            .with_label(Some(label))
+            .with_metadata(multisig_metadata)
+            .build(&authority);
+        let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
+        let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
+
+        (
+            World::with(
+                [domain],
+                [multisig_account, signer_one_account, signer_two_account],
+                [],
+            ),
+            multisig_account_id,
+            signer_one_id.into(),
+            signer_two_id.into(),
+            alias_literal,
+            active_hash.to_string(),
+        )
+    }
+
+    fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
+        let mut code = Vec::new();
+        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 1,
+            abi_version,
+        };
+        let mut out = meta.encode();
+        out.extend_from_slice(&code);
+        out
+    }
+
+    fn multisig_contract_test_fixture() -> (
+        Arc<State>,
+        dm::AccountId,
+        dm::AccountId,
+        dm::AccountId,
+        String,
+        KeyPair,
+    ) {
+        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let label_name: Name = "cbdc".parse().expect("label");
+        let alias_literal = format!("{}@{}", label_name, domain_id);
+
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let signer_one_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_one.public_key().clone());
+        let signer_two_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_two.public_key().clone());
+
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let multisig_id = dm::ScopedAccountId::new_multisig(domain_id.clone(), policy);
+        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([
+                (signer_one_id.clone().into(), 1_u8),
+                (signer_two_id.clone().into(), 1_u8),
+            ]),
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
+            IrohaJson::new(spec),
+        );
+
+        let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
+        let authority = signer_one_id.account().clone();
+        let domain = Domain::new(domain_id).build(&authority);
+        let multisig_account = Account::new(multisig_id)
+            .with_label(Some(label))
+            .with_metadata(multisig_metadata)
+            .build(&authority);
+        let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
+        let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
+        let state = build_state(World::with(
+            [domain],
+            [multisig_account, signer_one_account, signer_two_account],
+            [],
+        ));
+
+        (
+            state,
+            multisig_account_id,
+            signer_one_id.into(),
+            signer_two_id.into(),
+            alias_literal,
+            signer_one,
+        )
+    }
+
+    fn install_contract_instance(
+        state: &State,
+        authority: &dm::AccountId,
+        authority_keypair: &KeyPair,
+        namespace: &str,
+        contract_id: &str,
+    ) {
+        let mut block = state.block(dm::BlockHeader::new(
+            NonZeroU64::new(1).expect("height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+
+        let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
+        Grant::account_permission(register_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant CanRegisterSmartContractCode");
+
+        let enact_permission: permission::Permission = CanEnactGovernance.into();
+        Grant::account_permission(enact_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant CanEnactGovernance");
+
+        let code = minimal_ivm_program(1);
+        let code_hash =
+            register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
+        let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
+        let manifest = manifest::ContractManifest {
+            code_hash: Some(code_hash),
+            abi_hash: Some(abi_hash),
+            compiler_fingerprint: Some("torii-tests".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        }
+        .signed(authority_keypair);
+        register_manifest(authority, manifest, &mut stx).expect("register manifest");
+        activate_instance(authority, namespace, contract_id, code_hash, &mut stx)
+            .expect("activate instance");
+
+        stx.apply();
+        block.commit().expect("commit block");
+    }
+
+    fn expect_not_found(err: Error) {
+        match err {
+            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {}
+            other => panic!("expected not found error, got {other:?}"),
+        }
+    }
+
+    fn expect_conversion(err: Error) -> String {
+        match err {
+            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))) => {
+                message
+            }
+            other => panic!("expected conversion error, got {other:?}"),
+        }
+    }
+
+    async fn decode_json_response(resp: Response) -> norito::json::Value {
+        let body = resp
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        norito::json::from_slice(&body).expect("json body")
+    }
+
+    #[test]
+    fn multisig_selector_rejects_both_fields() {
+        let state = build_state(World::default());
+        let err = resolve_multisig_account_selector(
+            state.as_ref(),
+            &MultisigAccountSelectorDto {
+                multisig_account_id: Some(dm::AccountId::new(
+                    KeyPair::random().public_key().clone(),
+                )),
+                multisig_account_alias: Some("cbdc@hbl".to_owned()),
+            },
+        )
+        .expect_err("selector must be rejected");
+        let message = expect_conversion(err);
+        assert!(message.contains("exactly one of multisig_account_id or multisig_account_alias"));
+    }
+
+    #[test]
+    fn multisig_selector_rejects_neither_field() {
+        let state = build_state(World::default());
+        let err = resolve_multisig_account_selector(
+            state.as_ref(),
+            &MultisigAccountSelectorDto::default(),
+        )
+        .expect_err("selector must be rejected");
+        let message = expect_conversion(err);
+        assert!(message.contains("exactly one of multisig_account_id or multisig_account_alias"));
+    }
+
+    #[tokio::test]
+    async fn multisig_spec_returns_not_found_for_unknown_alias() {
+        let state = build_state(World::default());
+        let err = handle_post_multisig_spec(
+            state,
+            NoritoJson(MultisigSpecRequestDto {
+                selector: alias_selector("missing@hbl"),
+            }),
+        )
+        .await
+        .expect_err("unknown alias must fail");
+        expect_not_found(err);
+    }
+
+    #[tokio::test]
+    async fn multisig_spec_rejects_alias_bound_non_multisig_account() {
+        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let keypair = KeyPair::random();
+        let scoped = dm::ScopedAccountId::new(domain_id.clone(), keypair.public_key().clone());
+        let authority = scoped.account().clone();
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(scoped)
+            .with_label(Some(account::rekey::AccountLabel::new(
+                domain_id,
+                "cbdc".parse().expect("label"),
+            )))
+            .build(&authority);
+        let state = build_state(World::with([domain], [account], []));
+
+        let err = handle_post_multisig_spec(
+            state,
+            NoritoJson(MultisigSpecRequestDto {
+                selector: alias_selector("cbdc@hbl"),
+            }),
+        )
+        .await
+        .expect_err("non-multisig alias must fail");
+        let message = expect_conversion(err);
+        assert!(message.contains("resolved account is not a multisig authority"));
+    }
+
+    #[tokio::test]
+    async fn multisig_read_endpoints_match_alias_and_concrete_resolution() {
+        let (
+            world,
+            multisig_account_id,
+            _signer_one_id,
+            _signer_two_id,
+            alias_literal,
+            active_hash,
+        ) = multisig_test_world();
+        let state = build_state(world);
+
+        let JsonBody(alias_spec) = handle_post_multisig_spec(
+            state.clone(),
+            NoritoJson(MultisigSpecRequestDto {
+                selector: alias_selector(&alias_literal),
+            }),
+        )
+        .await
+        .expect("alias spec");
+        let JsonBody(concrete_spec) = handle_post_multisig_spec(
+            state.clone(),
+            NoritoJson(MultisigSpecRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+            }),
+        )
+        .await
+        .expect("concrete spec");
+        assert_eq!(
+            alias_spec.resolved_multisig_account_id,
+            concrete_spec.resolved_multisig_account_id
+        );
+        assert_eq!(alias_spec.spec, concrete_spec.spec);
+
+        let JsonBody(alias_list) = handle_post_multisig_proposals_list(
+            state.clone(),
+            NoritoJson(MultisigProposalsListRequestDto {
+                selector: alias_selector(&alias_literal),
+            }),
+        )
+        .await
+        .expect("alias list");
+        let JsonBody(concrete_list) = handle_post_multisig_proposals_list(
+            state.clone(),
+            NoritoJson(MultisigProposalsListRequestDto {
+                selector: concrete_selector(multisig_account_id.clone()),
+            }),
+        )
+        .await
+        .expect("concrete list");
+        assert_eq!(
+            alias_list.resolved_multisig_account_id,
+            concrete_list.resolved_multisig_account_id
+        );
+        assert_eq!(alias_list.proposals.len(), 1);
+        assert_eq!(alias_list.proposals, concrete_list.proposals);
+        assert_eq!(alias_list.proposals[0].proposal_id, active_hash);
+
+        let JsonBody(alias_get) = handle_post_multisig_proposals_get(
+            state.clone(),
+            NoritoJson(MultisigProposalsGetRequestDto {
+                selector: alias_selector(&alias_literal),
+                proposal_id: Some(active_hash.clone()),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("alias get");
+        let JsonBody(concrete_get) = handle_post_multisig_proposals_get(
+            state,
+            NoritoJson(MultisigProposalsGetRequestDto {
+                selector: concrete_selector(multisig_account_id),
+                proposal_id: None,
+                instructions_hash: Some(active_hash.clone()),
+            }),
+        )
+        .await
+        .expect("concrete get");
+        assert_eq!(
+            alias_get.resolved_multisig_account_id,
+            concrete_get.resolved_multisig_account_id
+        );
+        assert_eq!(alias_get.instructions_hash, active_hash);
+        assert_eq!(alias_get.proposal, concrete_get.proposal);
+    }
+
+    #[tokio::test]
+    async fn multisig_approve_accepts_alias_selector_and_returns_resolved_account_id() {
+        let (world, multisig_account_id, _signer_one_id, signer_two_id, alias_literal, active_hash) =
+            multisig_test_world();
+        let state = build_state(world);
+        let response = handle_post_contract_call_multisig_approve(
+            Arc::new("multisig-selector-test".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigContractCallApproveDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_123),
+                proposal_id: Some(active_hash.clone()),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("approve response");
+
+        let payload = decode_json_response(response).await;
+        assert_eq!(payload["ok"].as_bool(), Some(true));
+        assert_eq!(payload["submitted"].as_bool(), Some(false));
+        assert_eq!(
+            payload["resolved_multisig_account_id"].as_str(),
+            Some(multisig_account_id.to_string().as_str())
+        );
+        assert_eq!(payload["proposal_id"].as_str(), Some(active_hash.as_str()));
+        assert_eq!(
+            payload["instructions_hash"].as_str(),
+            Some(active_hash.as_str())
+        );
+        assert!(payload["signing_message_b64"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn multisig_propose_accepts_alias_selector_and_returns_resolved_account_id() {
+        let (
+            state,
+            multisig_account_id,
+            authority_account_id,
+            signer_two_id,
+            alias_literal,
+            authority_keypair,
+        ) = multisig_contract_test_fixture();
+        install_contract_instance(
+            state.as_ref(),
+            &authority_account_id,
+            &authority_keypair,
+            "apps",
+            "demo",
+        );
+
+        let response = handle_post_contract_call_multisig_propose(
+            Arc::new("multisig-selector-test".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigContractCallProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_234),
+                namespace: "apps".to_owned(),
+                contract_id: "demo".to_owned(),
+                entrypoint: "main".to_owned(),
+                payload: Some(IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }))),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: Some(10_000),
+            }),
+        )
+        .await
+        .expect("propose response");
+
+        let payload = decode_json_response(response).await;
+        assert_eq!(payload["ok"].as_bool(), Some(true));
+        assert_eq!(payload["submitted"].as_bool(), Some(false));
+        assert_eq!(
+            payload["resolved_multisig_account_id"].as_str(),
+            Some(multisig_account_id.to_string().as_str())
+        );
+        let proposal_id = payload["proposal_id"]
+            .as_str()
+            .expect("proposal id")
+            .to_owned();
+        assert_eq!(
+            payload["instructions_hash"].as_str(),
+            Some(proposal_id.as_str())
+        );
+        assert!(payload["signing_message_b64"].as_str().is_some());
+    }
+}
+
 /// POST /v1/contracts/call/multisig/propose — propose a multisig participation envelope
 /// for a contract call.
 #[iroha_futures::telemetry_future]
@@ -7201,7 +8061,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
     let MultisigContractCallProposeDto {
-        multisig_account_id,
+        selector,
         signer_account_id,
         private_key,
         public_key_hex,
@@ -7219,6 +8079,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
     let gas_limit = gas_limit.unwrap_or(DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT);
+    let (multisig_account_id, spec) = resolve_multisig_account_and_spec(&state, &selector)?;
 
     let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
     let PreparedContractCall {
@@ -7246,7 +8107,6 @@ pub async fn handle_post_contract_call_multisig_propose(
     let propose_instruction =
         MultisigPropose::new(multisig_account_id.clone(), proposal_instructions, None);
     let will_execute = {
-        let spec = load_multisig_spec(&state, &multisig_account_id)?;
         let mut approvals = BTreeSet::new();
         approvals.insert(signer_account_id.clone());
         approvals_reach_quorum(&spec, &approvals)
@@ -7272,6 +8132,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             .await?;
             MultisigContractCallResponseDto {
                 ok: true,
+                resolved_multisig_account_id: multisig_account_id.clone(),
                 submitted: Some(true),
                 proposal_id: Some(proposal_id),
                 instructions_hash: Some(instructions_hash),
@@ -7335,6 +8196,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             .await?;
             MultisigContractCallResponseDto {
                 ok: true,
+                resolved_multisig_account_id: multisig_account_id.clone(),
                 submitted: Some(true),
                 proposal_id: Some(proposal_id),
                 instructions_hash: Some(instructions_hash),
@@ -7352,6 +8214,7 @@ pub async fn handle_post_contract_call_multisig_propose(
                 .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
             MultisigContractCallResponseDto {
                 ok: true,
+                resolved_multisig_account_id: multisig_account_id,
                 submitted: Some(false),
                 proposal_id: Some(proposal_id),
                 instructions_hash: Some(instructions_hash),
@@ -7361,13 +8224,7 @@ pub async fn handle_post_contract_call_multisig_propose(
             }
         };
 
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(JsonBody(response).into_response())
 }
 
 /// POST /v1/contracts/call/multisig/approve — approve a multisig participation envelope
@@ -7386,7 +8243,7 @@ pub async fn handle_post_contract_call_multisig_approve(
     use iroha_executor_data_model::isi::multisig::MultisigApprove;
 
     let MultisigContractCallApproveDto {
-        multisig_account_id,
+        selector,
         signer_account_id,
         private_key,
         public_key_hex,
@@ -7395,29 +8252,15 @@ pub async fn handle_post_contract_call_multisig_approve(
         proposal_id,
         instructions_hash,
     } = req;
+    let (multisig_account_id, spec) = resolve_multisig_account_and_spec(&state, &selector)?;
+    let (hash_literal, instructions_hash) =
+        resolve_multisig_proposal_hash(proposal_id.clone(), instructions_hash)?;
     let proposal_id_literal = proposal_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let instructions_hash_literal = instructions_hash
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    let hash_literal = instructions_hash_literal
-        .clone()
-        .or_else(|| proposal_id_literal.clone());
-    let Some(hash_literal) = hash_literal else {
-        return Err(conversion_error(
-            "proposal_id or instructions_hash is required".to_owned(),
-        ));
-    };
-    let instructions_hash = hash_literal
-        .parse::<HashOf<Vec<dm::InstructionBox>>>()
-        .map_err(|err| conversion_error(format!("invalid instructions_hash: {err}")))?;
     let will_execute = {
-        let spec = load_multisig_spec(&state, &multisig_account_id)?;
         let mut approvals =
             load_multisig_proposal_value(&state, &multisig_account_id, &instructions_hash)?
                 .map(|proposal| proposal.approvals)
@@ -7425,7 +8268,7 @@ pub async fn handle_post_contract_call_multisig_approve(
         approvals.insert(signer_account_id.clone());
         approvals_reach_quorum(&spec, &approvals)
     };
-    let approve_instruction = MultisigApprove::new(multisig_account_id, instructions_hash);
+    let approve_instruction = MultisigApprove::new(multisig_account_id.clone(), instructions_hash);
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder =
@@ -7448,6 +8291,7 @@ pub async fn handle_post_contract_call_multisig_approve(
             .await?;
             MultisigContractCallResponseDto {
                 ok: true,
+                resolved_multisig_account_id: multisig_account_id.clone(),
                 submitted: Some(true),
                 proposal_id: proposal_id_literal,
                 instructions_hash: Some(hash_literal),
@@ -7511,6 +8355,7 @@ pub async fn handle_post_contract_call_multisig_approve(
             .await?;
             MultisigContractCallResponseDto {
                 ok: true,
+                resolved_multisig_account_id: multisig_account_id.clone(),
                 submitted: Some(true),
                 proposal_id: proposal_id_literal,
                 instructions_hash: Some(hash_literal),
@@ -7528,6 +8373,7 @@ pub async fn handle_post_contract_call_multisig_approve(
                 .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
             MultisigContractCallResponseDto {
                 ok: true,
+                resolved_multisig_account_id: multisig_account_id,
                 submitted: Some(false),
                 proposal_id: proposal_id_literal,
                 instructions_hash: Some(hash_literal),
@@ -7537,13 +8383,61 @@ pub async fn handle_post_contract_call_multisig_approve(
             }
         };
 
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(JsonBody(response).into_response())
+}
+
+/// POST /v1/multisig/spec — resolve a multisig selector and return the active authority spec.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_spec(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<MultisigSpecRequestDto>,
+) -> Result<JsonBody<MultisigSpecResponseDto>> {
+    let (resolved_multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(&state, &req.selector)?;
+    Ok(JsonBody(MultisigSpecResponseDto {
+        resolved_multisig_account_id,
+        spec,
+    }))
+}
+
+/// POST /v1/multisig/proposals/list — list active nonterminal proposals for a multisig authority.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_proposals_list(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<MultisigProposalsListRequestDto>,
+) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
+    let (resolved_multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(&state, &req.selector)?;
+    let proposals =
+        list_multisig_nonterminal_proposals(&state, &resolved_multisig_account_id, &spec)?;
+    Ok(JsonBody(MultisigProposalsListResponseDto {
+        resolved_multisig_account_id,
+        proposals,
+    }))
+}
+
+/// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_multisig_proposals_get(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<MultisigProposalsGetRequestDto>,
+) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
+    let (resolved_multisig_account_id, _spec) =
+        resolve_multisig_account_and_spec(&state, &req.selector)?;
+    let (hash_literal, instructions_hash) =
+        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash)?;
+    let proposal =
+        load_multisig_proposal_value(&state, &resolved_multisig_account_id, &instructions_hash)?
+            .ok_or_else(multisig_not_found_error)?;
+    Ok(JsonBody(MultisigProposalGetResponseDto {
+        resolved_multisig_account_id,
+        proposal_id: hash_literal.clone(),
+        instructions_hash: hash_literal,
+        proposal,
+    }))
 }
 
 /// Fetch proof verification record by proof id.
@@ -8788,6 +9682,25 @@ pub struct ContractCallResponseDto {
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
+    Default,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Selects a multisig authority either by its active concrete account id or by stable alias.
+pub struct MultisigAccountSelectorDto {
+    /// Active concrete multisig account id.
+    #[norito(default)]
+    pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
+    /// Stable alias in `label@domain` format.
+    #[norito(default)]
+    pub multisig_account_alias: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -8795,8 +9708,9 @@ pub struct ContractCallResponseDto {
 )]
 /// Request payload for proposing a multisig-wrapped contract call.
 pub struct MultisigContractCallProposeDto {
-    /// Canonical multisig account controlling the action.
-    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Alias-aware selector for the multisig authority controlling the action.
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
     /// Signer account submitting this proposal participation.
     pub signer_account_id: iroha_data_model::account::AccountId,
     /// Optional private key used to sign and submit directly.
@@ -8841,8 +9755,9 @@ pub struct MultisigContractCallProposeDto {
 )]
 /// Request payload for approving a multisig-wrapped contract call proposal.
 pub struct MultisigContractCallApproveDto {
-    /// Canonical multisig account controlling the action.
-    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Alias-aware selector for the multisig authority controlling the action.
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
     /// Signer account submitting this approval participation.
     pub signer_account_id: iroha_data_model::account::AccountId,
     /// Optional private key used to sign and submit directly.
@@ -8871,6 +9786,8 @@ pub struct MultisigContractCallApproveDto {
 pub struct MultisigContractCallResponseDto {
     /// Whether processing succeeded.
     pub ok: bool,
+    /// Active concrete multisig account id used after selector resolution.
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Whether a transaction was submitted.
     #[norito(default)]
     pub submitted: Option<bool>,
@@ -8889,6 +9806,89 @@ pub struct MultisigContractCallResponseDto {
     /// Optional detached signing message bytes.
     #[norito(default)]
     pub signing_message_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for resolving a multisig spec through the alias-aware selector.
+pub struct MultisigSpecRequestDto {
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload containing the resolved active multisig account and its spec.
+pub struct MultisigSpecResponseDto {
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for listing nonterminal multisig proposals.
+pub struct MultisigProposalsListRequestDto {
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
+)]
+/// Envelope describing a multisig proposal returned by Torii.
+pub struct MultisigProposalEntryDto {
+    pub proposal_id: String,
+    pub instructions_hash: String,
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for nonterminal multisig proposal listings.
+pub struct MultisigProposalsListResponseDto {
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    pub proposals: Vec<MultisigProposalEntryDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for fetching a single multisig proposal.
+pub struct MultisigProposalsGetRequestDto {
+    #[norito(flatten)]
+    pub selector: MultisigAccountSelectorDto,
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for a resolved multisig proposal lookup.
+pub struct MultisigProposalGetResponseDto {
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    pub proposal_id: String,
+    pub instructions_hash: String,
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 }
 
 #[cfg(feature = "app_api")]
@@ -15118,6 +16118,12 @@ pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multi
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE: &str = "/v1/contracts/call/multisig/approve";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/list";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
@@ -22116,7 +23122,7 @@ mod query_endpoint_tests {
     async fn handle_queries_rejects_invalid_signature() {
         use iroha_crypto::KeyPair;
         use iroha_data_model::query::{
-            QueryRequest, prelude::SingularQueryBox, runtime::prelude::FindActiveAbiVersions,
+            QueryRequest, prelude::SingularQueryBox, runtime::prelude::FindAbiVersion,
         };
 
         let authority_key = KeyPair::random();
@@ -22129,10 +23135,8 @@ mod query_endpoint_tests {
             LiveQueryStore::start_test(),
         ));
 
-        let payload = QueryRequest::Singular(SingularQueryBox::FindActiveAbiVersions(
-            FindActiveAbiVersions,
-        ))
-        .with_authority(authority);
+        let payload = QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+            .with_authority(authority);
         let signed = payload.sign(&signer_key);
 
         let err = handle_queries_with_opts(
@@ -29245,8 +30249,8 @@ mod cursor_mode_tests {
     ) -> iroha_data_model::query::SignedQuery {
         use iroha_data_model::query::QueryRequest;
         let req = QueryRequest::Singular(
-            iroha_data_model::query::prelude::SingularQueryBox::FindActiveAbiVersions(
-                iroha_data_model::query::runtime::prelude::FindActiveAbiVersions,
+            iroha_data_model::query::prelude::SingularQueryBox::FindAbiVersion(
+                iroha_data_model::query::runtime::prelude::FindAbiVersion,
             ),
         )
         .with_authority(authority.clone());

@@ -40,7 +40,7 @@ Iroha は署名付きフレームを受け付ける Norito ベースの `/query`
 
 サポートされている単一クエリ:
 
-- `FindActiveAbiVersions`
+- `FindAbiVersion`
 - `FindExecutorDataModel`
 - `FindParameters`
 - `FindContractManifestByCodeHash`（32 バイトの `code_hash` を 16 進文字列で指定）

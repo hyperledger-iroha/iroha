@@ -315,7 +315,7 @@ public final class TransactionFixtureManifestTests {
     }
     final String accountLiteral = normalizeAuthority(authority);
     try {
-      final AccountAddress accountAddress = AccountAddress.fromI105(accountLiteral, null);
+      final AccountAddress accountAddress = AccountAddress.fromIH58(accountLiteral, null);
       final Optional<AccountAddress.SingleKeyPayload> payload = accountAddress.singleKeyPayload();
       if (!payload.isPresent()) {
         throw new IllegalStateException(
@@ -371,14 +371,10 @@ public final class TransactionFixtureManifestTests {
         name + ": chain mismatch vs payload bytes",
         chain,
         raw.chainId());
-    final String normalizedAuthority = normalizeAuthority(authority);
-    final String normalizedRawAuthority = normalizeAuthority(raw.authority());
-    if (!Objects.equals(normalizedAuthority, normalizedRawAuthority)) {
-      System.out.println(
-          "[fixture-drift] "
-              + name
-              + ": authority differs between manifest metadata and payload bytes");
-    }
+    assertEquals(
+        name + ": authority mismatch vs payload bytes",
+        normalizeAuthority(authority),
+        normalizeAuthority(raw.authority()));
     assertEquals(
         name + ": creation_time_ms mismatch vs payload bytes",
         creationTimeMs,
@@ -389,66 +385,53 @@ public final class TransactionFixtureManifestTests {
     assertTrue(
         name + ": nonce mismatch vs payload bytes",
         optionalLongEquals(raw.nonce(), nonce));
-    TransactionPayload payload = null;
+    final TransactionPayload payload;
     try {
       payload = PAYLOAD_CODEC.decodeTransaction(payloadBytes);
     } catch (final Exception ex) {
-      System.out.println(
-          "[fixture-drift] "
-              + name
-              + ": payload bytes failed strict decoding ("
-              + ex.getClass().getSimpleName()
-              + ": "
-              + ex.getMessage()
-              + ")");
+      throw new IllegalStateException(name + ": failed to decode payload", ex);
     }
-    if (payload != null) {
-      assertEquals(
-          name + ": chain mismatch vs decoded payload",
-          chain,
-          payload.chainId());
-      final String normalizedDecodedAuthority = normalizeAuthority(payload.authority());
-      if (!Objects.equals(normalizedAuthority, normalizedDecodedAuthority)) {
-        System.out.println(
-            "[fixture-drift] "
-                + name
-                + ": authority differs between manifest metadata and decoded payload");
-      }
-      assertEquals(
-          name + ": creation_time_ms mismatch vs decoded payload",
-          creationTimeMs,
-          payload.creationTimeMs());
-      assertTrue(
-          name + ": TTL mismatch vs decoded payload",
-          optionalLongEquals(payload.timeToLiveMs(), ttl));
-      assertTrue(
-          name + ": nonce mismatch vs decoded payload",
-          optionalIntEquals(payload.nonce(), nonce));
-      if (raw.executable().isIvm()) {
-        assertTrue(name + ": executable type mismatch", payload.executable().isIvm());
-        assertArrayEquals(
-            name + ": IVM bytes mismatch vs decoded payload",
-            raw.executable().ivmBytes(),
-            payload.executable().ivmBytes());
-      } else {
-        assertTrue(name + ": executable type mismatch", payload.executable().isInstructions());
-        assertInstructionPayloadsMatch(
-            name,
-            raw.executable().instructions(),
-            payload.executable().instructions());
-      }
-      final byte[] reencoded;
-      try {
-        reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
-      } catch (final Exception ex) {
-        throw new IllegalStateException(name + ": failed to re-encode payload", ex);
-      }
-      // TODO: Regenerate Android transaction fixture manifests for strict encoded-only account literals.
-      if (!Arrays.equals(payloadBytes, reencoded)) {
-        System.out.println(
-            "[fixture-drift] " + name + ": payload bytes differ after strict authority normalization");
-      }
+    assertEquals(
+        name + ": chain mismatch vs decoded payload",
+        chain,
+        payload.chainId());
+    assertEquals(
+        name + ": authority mismatch vs decoded payload",
+        normalizeAuthority(authority),
+        normalizeAuthority(payload.authority()));
+    assertEquals(
+        name + ": creation_time_ms mismatch vs decoded payload",
+        creationTimeMs,
+        payload.creationTimeMs());
+    assertTrue(
+        name + ": TTL mismatch vs decoded payload",
+        optionalLongEquals(payload.timeToLiveMs(), ttl));
+    assertTrue(
+        name + ": nonce mismatch vs decoded payload",
+        optionalIntEquals(payload.nonce(), nonce));
+    if (raw.executable().isIvm()) {
+      assertTrue(name + ": executable type mismatch", payload.executable().isIvm());
+      assertArrayEquals(
+          name + ": IVM bytes mismatch vs decoded payload",
+          raw.executable().ivmBytes(),
+          payload.executable().ivmBytes());
+    } else {
+      assertTrue(name + ": executable type mismatch", payload.executable().isInstructions());
+      assertInstructionPayloadsMatch(
+          name,
+          raw.executable().instructions(),
+          payload.executable().instructions());
     }
+    final byte[] reencoded;
+    try {
+      reencoded = PAYLOAD_CODEC.encodeTransaction(payload);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(name + ": failed to re-encode payload", ex);
+    }
+    assertArrayEquals(
+        name + ": payload bytes differ after Android re-encoding",
+        payloadBytes,
+        reencoded);
 
     final SignedParts signedParts = decodeSignedParts(name, signedBytes);
     assertArrayEquals(
@@ -458,40 +441,32 @@ public final class TransactionFixtureManifestTests {
     verifySignature(name, signingKey, payloadBytes, signedParts.signature());
     final SignedTransaction signed =
         new SignedTransaction(payloadBytes, signedParts.signature(), new byte[0], SIGNED_SCHEMA);
-    byte[] encodedSigned = null;
+    final byte[] encodedSigned;
     try {
       encodedSigned = SignedTransactionEncoder.encode(signed);
     } catch (final Exception ex) {
-      System.out.println(
-          "[fixture-drift] "
-              + name
-              + ": strict signed-transaction re-encode failed ("
-              + ex.getClass().getSimpleName()
-              + ": "
-              + ex.getMessage()
-              + ")");
+      throw new IllegalStateException(name + ": failed to encode signed transaction", ex);
     }
-    if (encodedSigned != null) {
-      if (!Arrays.equals(signedBytes, encodedSigned)) {
-        System.out.println(
-            "[fixture-drift] " + name + ": signed bytes differ after strict authority normalization");
-      }
-      final byte[] versioned;
-      try {
-        versioned = SignedTransactionEncoder.encodeVersioned(signed);
-      } catch (final Exception ex) {
-        throw new IllegalStateException(name + ": failed to encode versioned signed transaction", ex);
-      }
-      assertEquals(
-          name + ": versioned length mismatch",
-          encodedSigned.length + 1,
-          versioned.length);
-      assertEquals(name + ": versioned prefix mismatch", VERSION_BYTE, versioned[0]);
-      assertArrayEquals(
-          name + ": versioned payload mismatch",
-          encodedSigned,
-          Arrays.copyOfRange(versioned, 1, versioned.length));
+    assertArrayEquals(
+        name + ": signed bytes differ after Android re-encoding",
+        signedBytes,
+        encodedSigned);
+
+    final byte[] versioned;
+    try {
+      versioned = SignedTransactionEncoder.encodeVersioned(signed);
+    } catch (final Exception ex) {
+      throw new IllegalStateException(name + ": failed to encode versioned signed transaction", ex);
     }
+    assertEquals(
+        name + ": versioned length mismatch",
+        signedBytes.length + 1,
+        versioned.length);
+    assertEquals(name + ": versioned prefix mismatch", VERSION_BYTE, versioned[0]);
+    assertArrayEquals(
+        name + ": versioned payload mismatch",
+        signedBytes,
+        Arrays.copyOfRange(versioned, 1, versioned.length));
 
     compatChecked++;
   }
@@ -637,7 +612,11 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static String decodeAuthorityField(final byte[] payload, final String field) {
-    return decodeFieldPayload(payload, STRING_ADAPTER, field);
+    try {
+      return decodeAccountIdStruct(payload, field);
+    } catch (final IllegalArgumentException ex) {
+      return decodeFieldPayload(payload, STRING_ADAPTER, field);
+    }
   }
 
   private static String decodeAccountIdStruct(final byte[] payload, final String field) {
@@ -660,9 +639,9 @@ public final class TransactionFixtureManifestTests {
     }
     final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
     if (payloadData != null) {
-      final String i105 = toI105(domain, payloadData);
-      if (i105 != null) {
-        return i105 + "@" + domain;
+      final String ih58 = toIh58(domain, payloadData);
+      if (ih58 != null) {
+        return ih58 + "@" + domain;
       }
     }
     return publicKeyLiteral + "@" + domain;
@@ -681,9 +660,9 @@ public final class TransactionFixtureManifestTests {
     }
     final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
     if (payloadData != null) {
-      final String i105 = toI105(domain, payloadData);
-      if (i105 != null) {
-        return i105 + "@" + domain;
+      final String ih58 = toIh58(domain, payloadData);
+      if (ih58 != null) {
+        return ih58 + "@" + domain;
       }
     }
     return publicKeyLiteral + "@" + domain;
@@ -784,14 +763,14 @@ public final class TransactionFixtureManifestTests {
     return -1;
   }
 
-  private static String toI105(final String domain, final PublicKeyPayload payload) {
+  private static String toIh58(final String domain, final PublicKeyPayload payload) {
     final String algorithm = algorithmForCurveId(payload.curveId);
     if (algorithm == null) {
       return null;
     }
     try {
-      final AccountAddress address = AccountAddress.fromAccount(payload.keyBytes, algorithm);
-      return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      final AccountAddress address = AccountAddress.fromAccount(domain, payload.keyBytes, algorithm);
+      return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       return null;
     }
@@ -1327,8 +1306,9 @@ public final class TransactionFixtureManifestTests {
     if (trimmed.isEmpty()) {
       return trimmed;
     }
-    if (trimmed.indexOf('@') >= 0) {
-      throw new IllegalStateException("authority must not include @domain suffix");
+    final int atIndex = trimmed.lastIndexOf('@');
+    if (atIndex > 0) {
+      return trimmed.substring(0, atIndex);
     }
     return trimmed;
   }

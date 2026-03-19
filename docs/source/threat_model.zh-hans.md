@@ -79,7 +79,7 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 - Detached manifest signature verification using release keys defined in governance manifests.
 - Admission compares `abi_hash` and `code_hash`; mismatches reject deployment (tested in `crates/iroha_core/tests/runtime_upgrade_admission.rs`).
 - Upgrade rollouts require governance approval and support deterministic rollback to the prior build.
-- Config pinning via `iroha_config` prevents unexpected ABI versions during admission.
+- Config pinning via `iroha_config` prevents unexpected ABI drift during admission.
 - Runtime admission enforces provenance policy (SBOM digests, SLSA attestation bytes, trusted signer signatures + thresholds) with rejection telemetry.
 
 **Outstanding gaps**

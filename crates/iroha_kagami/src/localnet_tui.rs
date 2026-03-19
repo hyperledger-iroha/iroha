@@ -14,8 +14,9 @@ use iroha_test_samples::ALICE_ID;
 use crate::{
     Outcome, RunArgs,
     localnet::{
-        AssetSpec, BuildLineArg, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST, LocalnetOptions,
-        SoraProfile, canonical_asset_definition_literal, generate_localnet,
+        AssetSpec, BuildLineArg, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST,
+        LOCALNET_SAMPLE_ASSET_NAME, LocalnetOptions, SoraProfile,
+        canonical_asset_definition_literal, generate_localnet,
     },
     tui,
 };
@@ -175,11 +176,24 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 let id = Text::new("Asset definition id (aid:<32-lower-hex>)")
                     .with_default(&default_id)
                     .prompt()?;
+                let name = Text::new("Asset display name")
+                    .with_default(LOCALNET_SAMPLE_ASSET_NAME)
+                    .with_validator(|input: &str| {
+                        use iroha_data_model::asset::definition::validate_asset_name;
+                        match validate_asset_name(input) {
+                            Ok(()) => Ok(inquire::validator::Validation::Valid),
+                            Err(e) => Ok(inquire::validator::Validation::Invalid(
+                                e.to_string().into(),
+                            )),
+                        }
+                    })
+                    .prompt()?;
                 let qty: u64 = CustomType::new("Mint quantity to Alice (I105)?")
                     .with_default(100u64)
                     .prompt()?;
                 assets.push(AssetSpec {
                     id,
+                    name,
                     mint_to: ALICE_ID
                         .clone()
                         .to_account_id("wonderland".parse().expect("valid domain")),

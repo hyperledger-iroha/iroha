@@ -1980,6 +1980,9 @@ impl IVM {
     /// Load a program (bytecode) into the VM's code memory.
     pub fn load_program(&mut self, program: &[u8]) -> Result<(), VMError> {
         let parsed = ProgramMetadata::parse(program)?;
+        if parsed.metadata.abi_version != 1 {
+            return Err(VMError::InvalidMetadata);
+        }
         let header_len = parsed.header_len;
         let literal_prefix = parsed.literal_prefix_len();
         let code_region = &program[header_len..];
@@ -2316,13 +2319,13 @@ impl IVM {
         self.metadata.abi_version
     }
 
-    /// Effective syscall policy inferred from `abi_version`.
-    /// This can be used by hosts to gate syscall ranges or features.
+    /// Effective syscall policy for the currently loaded program.
+    ///
+    /// The first release only accepts ABI v1 programs, so loaded programs
+    /// always use the canonical v1 syscall surface.
     pub fn syscall_policy(&self) -> SyscallPolicy {
-        match self.metadata.abi_version {
-            1 => SyscallPolicy::AbiV1,
-            v => SyscallPolicy::Experimental(v),
-        }
+        debug_assert_eq!(self.metadata.abi_version, 1);
+        SyscallPolicy::AbiV1
     }
 
     /// Execute a full block of transactions using the parallel scheduler.
@@ -5825,6 +5828,18 @@ mod tests {
             .map(|ops| ops.len())
             .unwrap_or_default();
         assert_eq!(vm.predecoded_index.len(), decoded_len);
+    }
+
+    #[test]
+    fn load_program_rejects_non_v1_abi_version() {
+        set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+        let mut program = ProgramMetadata::default_for(1, 0, 2).encode();
+        program.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
+        assert!(matches!(
+            vm.load_program(&program),
+            Err(VMError::InvalidMetadata)
+        ));
     }
 
     #[test]

@@ -19,8 +19,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.KeyManagementException;
-import org.hyperledger.iroha.android.address.AccountIdLiteral;
-import org.hyperledger.iroha.android.address.AssetIdLiteral;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
@@ -214,101 +212,75 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, UaidJsonParser::parseManifests, "UAID manifests");
   }
 
-  /** Resolves an account alias via `POST /v1/aliases/resolve`. Returns {@code null} on 404. */
-  public CompletableFuture<AccountAliasResolution> resolveAccountAlias(final String alias) {
-    final String normalizedAlias = normalizeAliasInput(alias, "alias");
-    final byte[] body =
-        JsonEncoder.encode(Map.of("alias", normalizedAlias)).getBytes(StandardCharsets.UTF_8);
-    final TransportRequest request = buildJsonPostRequest("/v1/aliases/resolve", body);
-    return fetchJsonNullable(
-        request, HttpClientTransport::parseAccountAliasResolution, "account alias resolution");
+  /** Fetches globally registered identifier policies from `/v1/identifier-policies`. */
+  public CompletableFuture<IdentifierPolicyListResponse> listIdentifierPolicies() {
+    final TransportRequest request = buildJsonGetRequest("/v1/identifier-policies", Map.of());
+    return fetchJson(request, IdentifierJsonParser::parsePolicyList, "identifier policy list");
   }
 
-  /** Resolves an asset alias via `POST /v1/assets/aliases/resolve`. Returns {@code null} on 404. */
-  public CompletableFuture<AssetAliasResolution> resolveAssetAlias(final String alias) {
-    final String normalizedAlias = normalizeAliasInput(alias, "alias");
+  /** Fetches a persisted identifier claim by its deterministic receipt hash. */
+  public CompletableFuture<Optional<IdentifierClaimRecord>> getIdentifierClaimByReceiptHash(
+      final String receiptHash) {
+    final String normalizedReceiptHash = normalizeHex32(receiptHash, "receiptHash");
+    final TransportRequest request =
+        buildJsonGetRequest(
+            "/v1/identifiers/receipts/" + encodePathSegment(normalizedReceiptHash), Map.of());
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseClaimRecord, "identifier claim lookup");
+  }
+
+  /** Resolves an identifier using a typed request wrapper. */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
+      final IdentifierResolveRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
     final byte[] body =
-        JsonEncoder.encode(Map.of("alias", normalizedAlias)).getBytes(StandardCharsets.UTF_8);
-    final TransportRequest request = buildJsonPostRequest("/v1/assets/aliases/resolve", body);
-    return fetchJsonNullable(
-        request, HttpClientTransport::parseAssetAliasResolution, "asset alias resolution");
+        encodeJsonBody(
+            buildIdentifierResolvePayload(
+                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+    final TransportRequest request = buildJsonPostRequest("/v1/identifiers/resolve", body);
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier resolve");
   }
 
   /**
-   * Builds a canonical encoded asset id (`norito:<hex>`) from textual inputs.
-   *
-   * <p>When aliases are provided, this helper resolves them online (`/v1/aliases/resolve`,
-   * `/v1/assets/aliases/resolve`) before encoding. If a non-alias asset-definition input fails
-   * canonical encoding, this helper attempts asset-alias resolution before returning an error. For
-   * offline-only canonical encoding, use
-   * {@link AssetIdLiteral#encodeFromParts(String, String)}.
+   * Resolves a hidden identifier by posting either a plaintext input or BFV ciphertext hex to
+   * `/v1/identifiers/resolve`.
    */
-  public CompletableFuture<String> buildAssetIdLiteralResolvingAliases(
-      final String assetDefinitionIdOrAlias, final String accountIdOrAlias) {
-    final String normalizedAssetInput =
-        normalizeAliasInput(assetDefinitionIdOrAlias, "assetDefinitionIdOrAlias");
-    final String normalizedAccountInput =
-        normalizeAliasInput(accountIdOrAlias, "accountIdOrAlias");
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
+      final String policyId, final String input, final String encryptedInputHex) {
+    return resolveIdentifier(buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
+  }
 
-    CompletableFuture<String> accountFuture;
-    try {
-      accountFuture =
-          CompletableFuture.completedFuture(
-              AccountIdLiteral.extractI105Address(normalizedAccountInput));
-    } catch (final IllegalArgumentException ex) {
-      accountFuture =
-          resolveAccountAlias(normalizedAccountInput)
-              .thenApply(
-                  resolved -> {
-                    if (resolved == null) {
-                      throw new IllegalArgumentException(
-                          "account alias '" + normalizedAccountInput + "' was not found");
-                    }
-                    return resolved.accountId();
-                  });
-    }
+  /** Issues a claim receipt using a typed request wrapper. */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
+      final String accountId, final IdentifierResolveRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final String normalizedAccountId = normalizeNonBlank(accountId, "accountId");
+    final byte[] body =
+        encodeJsonBody(
+            buildIdentifierResolvePayload(
+                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+    final TransportRequest request =
+        buildJsonPostRequest(
+            "/v1/accounts/"
+                + encodePathSegment(normalizedAccountId)
+                + "/identifiers/claim-receipt",
+            body);
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt");
+  }
 
-    final CompletableFuture<String> assetDefinitionFuture;
-    if (normalizedAssetInput.indexOf('@') >= 0) {
-      assetDefinitionFuture =
-          resolveAssetAlias(normalizedAssetInput)
-              .thenApply(
-                  resolved -> {
-                    if (resolved == null) {
-                      throw new IllegalArgumentException(
-                          "asset alias '" + normalizedAssetInput + "' was not found");
-                    }
-                    return resolved.assetDefinitionId();
-                  });
-    } else {
-      assetDefinitionFuture = CompletableFuture.completedFuture(normalizedAssetInput);
-    }
-
-    return accountFuture.thenCompose(
-        accountId ->
-            assetDefinitionFuture.thenCompose(
-                assetDefinitionId -> {
-                  try {
-                    return CompletableFuture.completedFuture(
-                        AssetIdLiteral.encodeFromParts(assetDefinitionId, accountId));
-                  } catch (final IllegalArgumentException ex) {
-                    if (normalizedAssetInput.indexOf('@') >= 0) {
-                      throw ex;
-                    }
-                    return resolveAssetAlias(normalizedAssetInput)
-                        .thenApply(
-                            resolved -> {
-                              if (resolved == null) {
-                                throw new IllegalArgumentException(
-                                    "asset definition '"
-                                        + normalizedAssetInput
-                                        + "' is invalid and alias resolution did not find a mapping");
-                              }
-                              return AssetIdLiteral.encodeFromParts(
-                                  resolved.assetDefinitionId(), accountId);
-                            });
-                  }
-                }));
+  /**
+   * Issues a claim receipt for {@code accountId} by posting either a plaintext input or BFV
+   * ciphertext hex to `/v1/accounts/{account_id}/identifiers/claim-receipt`.
+   */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
+      final String accountId,
+      final String policyId,
+      final String input,
+      final String encryptedInputHex) {
+    return issueIdentifierClaimReceipt(
+        accountId, buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
   }
 
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
@@ -955,80 +927,6 @@ public final class HttpClientTransport implements IrohaClient {
     throw new IllegalStateException("Pipeline status response must be a JSON object");
   }
 
-  @SuppressWarnings("unchecked")
-  private static Map<String, Object> parseJsonObjectPayload(
-      final byte[] body, final String errorContext) {
-    final String json = new String(body, StandardCharsets.UTF_8).trim();
-    if (json.isEmpty()) {
-      throw new IllegalStateException(errorContext + " response body was empty");
-    }
-    final Object parsed = JsonParser.parse(json);
-    if (!(parsed instanceof Map<?, ?> map)) {
-      throw new IllegalStateException(errorContext + " response must be a JSON object");
-    }
-    return (Map<String, Object>) map;
-  }
-
-  private static String requiredString(
-      final Map<String, Object> map, final String field, final String errorContext) {
-    final Object value = map.get(field);
-    if (!(value instanceof String stringValue)) {
-      throw new IllegalStateException(errorContext + " missing `" + field + "` string field");
-    }
-    final String trimmed = stringValue.trim();
-    if (trimmed.isEmpty()) {
-      throw new IllegalStateException(errorContext + " field `" + field + "` must not be blank");
-    }
-    return trimmed;
-  }
-
-  private static String optionalString(final Map<String, Object> map, final String field) {
-    final Object value = map.get(field);
-    if (!(value instanceof String stringValue)) {
-      return null;
-    }
-    final String trimmed = stringValue.trim();
-    return trimmed.isEmpty() ? null : trimmed;
-  }
-
-  private static Long optionalLong(final Map<String, Object> map, final String field) {
-    final Object value = map.get(field);
-    if (!(value instanceof Number numberValue)) {
-      return null;
-    }
-    return numberValue.longValue();
-  }
-
-  private static String normalizeAliasInput(final String value, final String field) {
-    final String trimmed = Objects.requireNonNull(value, field).trim();
-    if (trimmed.isEmpty()) {
-      throw new IllegalArgumentException(field + " must not be blank");
-    }
-    return trimmed;
-  }
-
-  private static AccountAliasResolution parseAccountAliasResolution(final byte[] body) {
-    final Map<String, Object> map = parseJsonObjectPayload(body, "account alias resolution");
-    final String alias = requiredString(map, "alias", "account alias resolution");
-    final String accountId = requiredString(map, "account_id", "account alias resolution");
-    final Long index = optionalLong(map, "index");
-    final String source = optionalString(map, "source");
-    return new AccountAliasResolution(alias, accountId, index, source);
-  }
-
-  private static AssetAliasResolution parseAssetAliasResolution(final byte[] body) {
-    final Map<String, Object> map = parseJsonObjectPayload(body, "asset alias resolution");
-    final String alias = requiredString(map, "alias", "asset alias resolution");
-    final String assetDefinitionId =
-        requiredString(map, "asset_definition_id", "asset alias resolution");
-    final String assetName = requiredString(map, "asset_name", "asset alias resolution");
-    final String description = optionalString(map, "description");
-    final String logo = optionalString(map, "logo");
-    final String source = optionalString(map, "source");
-    return new AssetAliasResolution(
-        alias, assetDefinitionId, assetName, description, logo, source);
-  }
-
   private static TransactionStatusHttpException buildPipelineStatusHttpException(
       final String hashHex, final ClientResponse response) {
     final String bodyPreview = HttpErrorMessageExtractor.extractMessage(response.body());
@@ -1079,9 +977,9 @@ public final class HttpClientTransport implements IrohaClient {
         TransportRequest.builder()
             .setUri(resolvePath(path))
             .setMethod("POST")
-            .addHeader("Accept", "application/json")
+            .setBody(Objects.requireNonNull(body, "body"))
             .addHeader("Content-Type", "application/json")
-            .setBody(body)
+            .addHeader("Accept", "application/json")
             .setTimeout(config.requestTimeout());
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
       builder.addHeader(entry.getKey(), entry.getValue());
@@ -1188,12 +1086,12 @@ public final class HttpClientTransport implements IrohaClient {
     return future;
   }
 
-  private <T> CompletableFuture<T> fetchJsonNullable(
+  private <T> CompletableFuture<Optional<T>> fetchJsonAllowingNotFound(
       final TransportRequest request,
       final Function<byte[], T> parser,
       final String errorContext) {
     notifyRequest(request);
-    final CompletableFuture<T> future = new CompletableFuture<>();
+    final CompletableFuture<Optional<T>> future = new CompletableFuture<>();
     executor
         .execute(request)
         .whenComplete(
@@ -1207,7 +1105,6 @@ public final class HttpClientTransport implements IrohaClient {
                 future.completeExceptionally(error);
                 return;
               }
-
               final ClientResponse clientResponse =
                   new ClientResponse(
                       response.statusCode(),
@@ -1217,7 +1114,7 @@ public final class HttpClientTransport implements IrohaClient {
                       extractRejectCode(response));
               if (response.statusCode() == 404) {
                 notifyResponse(request, clientResponse);
-                future.complete(null);
+                future.complete(Optional.empty());
                 return;
               }
               if (response.statusCode() < 200 || response.statusCode() >= 300) {
@@ -1231,12 +1128,94 @@ public final class HttpClientTransport implements IrohaClient {
               try {
                 final T parsed = parser.apply(response.body());
                 notifyResponse(request, clientResponse);
-                future.complete(parsed);
+                future.complete(Optional.of(parsed));
               } catch (final RuntimeException ex) {
                 notifyFailure(request, ex);
                 future.completeExceptionally(ex);
               }
             });
     return future;
+  }
+
+  private static byte[] encodeJsonBody(final Map<String, Object> payload) {
+    return JsonEncoder.encode(Objects.requireNonNull(payload, "payload"))
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  static IdentifierResolveRequest buildIdentifierResolveRequest(
+      final String policyId, final String input, final String encryptedInputHex) {
+    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null
+            ? null
+            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of input or encryptedInputHex must be provided");
+    }
+    return normalizedInput != null
+        ? IdentifierResolveRequest.plaintext(policyId, normalizedInput)
+        : IdentifierResolveRequest.encrypted(policyId, normalizedEncryptedInput);
+  }
+
+  static Map<String, Object> buildIdentifierResolvePayload(
+      final String policyId, final String input, final String encryptedInputHex) {
+    final String normalizedPolicyId = normalizeNonBlank(policyId, "policyId");
+    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null ? null : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of input or encryptedInputHex must be provided");
+    }
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("policy_id", normalizedPolicyId);
+    if (normalizedInput != null) {
+      payload.put("input", normalizedInput);
+    } else {
+      payload.put("encrypted_input", normalizedEncryptedInput);
+    }
+    return payload;
+  }
+
+  static String normalizeOptionalNonBlank(final String value, final String field) {
+    return value == null ? null : normalizeNonBlank(value, field);
+  }
+
+  static String normalizeNonBlank(final String value, final String field) {
+    final String trimmed = Objects.requireNonNull(value, field + " must not be null").trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    return trimmed;
+  }
+
+  static String normalizeEvenLengthHex(final String value, final String field) {
+    String trimmed = normalizeNonBlank(value, field);
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      trimmed = trimmed.substring(2);
+    }
+    if ((trimmed.length() & 1) != 0 || trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must be an even-length hex string");
+    }
+    for (int i = 0; i < trimmed.length(); i++) {
+      final char c = trimmed.charAt(i);
+      final boolean isHex =
+          (c >= '0' && c <= '9')
+              || (c >= 'a' && c <= 'f')
+              || (c >= 'A' && c <= 'F');
+      if (!isHex) {
+        throw new IllegalArgumentException(field + " must be an even-length hex string");
+      }
+    }
+    return trimmed.toLowerCase();
+  }
+
+  static String normalizeHex32(final String value, final String field) {
+    final String normalized = normalizeEvenLengthHex(value, field);
+    if (normalized.length() != 64) {
+      throw new IllegalArgumentException(field + " must contain 64 hex characters");
+    }
+    return normalized;
   }
 }

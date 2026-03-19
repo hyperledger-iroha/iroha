@@ -796,6 +796,7 @@ mod tests {
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
                 .expect("non-zero events buffer capacity"),
+                identifier_resolver: None,
                 ws_message_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
                 ),

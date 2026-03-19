@@ -30,10 +30,7 @@ implementations; it no longer tries to auto-build the native module at runtime.
 Run `npm run build:native` explicitly after installing the Rust toolchain to
 enable the native path. Set `IROHA_JS_NATIVE_DIR` to point at an alternate
 `native/` folder for test harness overrides; pass `IROHA_JS_NATIVE_WARN=0` to
-silence verification warnings in noisy CI logs. For local builds where the
-checksum manifest lags the compiled artifact, `IROHA_JS_ALLOW_UNVERIFIED_NATIVE=1`
-lets the loader accept the current hash while keeping verification enabled
-elsewhere.
+silence verification warnings in noisy CI logs.
 Set `IROHA_JS_FORCE_NATIVE=1` to throw when the native binding is unavailable
 or fails verification (useful for CI that must exercise native paths).
 
@@ -2625,12 +2622,12 @@ sign via `TxBuilder`, so rollout automation no longer needs bespoke HTTP clients
 ```js
 const torii = new ToriiClient("http://localhost:8080");
 const caps = await torii.getNodeCapabilities();
-console.log("Active ABI versions", caps.supportedAbiVersions);
+console.log("ABI version", caps.abiVersion);
 console.log("Allowed curve IDs", caps.crypto.curves.allowedCurveIds);
 console.log("Allowed curve bitmap", caps.crypto.curves.allowedCurveBitmap);
 
 const abi = await torii.getRuntimeAbiActive();
-console.log(`Default compile target: ABI v${abi.defaultCompileTarget}`);
+console.log(`Runtime ABI v${abi.abiVersion}`);
 
 const upgrades = await torii.listRuntimeUpgrades();
 for (const item of upgrades) {
@@ -2638,9 +2635,9 @@ for (const item of upgrades) {
 }
 
 const manifest = {
-  name: "ABI v5",
-  description: "Enable new syscalls",
-  abiVersion: 5,
+  name: "ABI v1 maintenance",
+  description: "Schedule a no-ABI-change runtime rollout",
+  abiVersion: 1,
   abiHash: "0123...cdef",
   startHeight: 10_000,
   endHeight: 10_500,

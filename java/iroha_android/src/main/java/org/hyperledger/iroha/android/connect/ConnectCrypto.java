@@ -17,7 +17,6 @@ import org.bouncycastle.crypto.params.HKDFParameters;
 import org.bouncycastle.crypto.params.KeyParameter;
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters;
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters;
-import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /** Cryptographic helpers for the wallet-role Connect session. */
 public final class ConnectCrypto {
@@ -162,14 +161,11 @@ public final class ConnectCrypto {
     requireLength(sessionId, KEY_LENGTH, "sessionId");
     requireLength(appPublicKey, KEY_LENGTH, "appPublicKey");
     requireLength(walletPublicKey, KEY_LENGTH, "walletPublicKey");
-    final String normalizedAccountId;
-    try {
-      normalizedAccountId = AccountIdLiteral.extractI105Address(accountId);
-    } catch (final IllegalArgumentException ex) {
-      throw new ConnectProtocolException("accountId must be canonical I105 encoded", ex);
+    if (accountId == null || accountId.trim().isEmpty()) {
+      throw new ConnectProtocolException("accountId must not be empty");
     }
 
-    final byte[] accountBytes = normalizedAccountId.getBytes(StandardCharsets.UTF_8);
+    final byte[] accountBytes = accountId.getBytes(StandardCharsets.UTF_8);
     int size = "iroha-connect|approve|".getBytes(StandardCharsets.UTF_8).length + sessionId.length + appPublicKey.length + walletPublicKey.length + accountBytes.length;
     if (permissionsHash != null) {
       size += permissionsHash.length;

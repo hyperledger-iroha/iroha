@@ -40,7 +40,7 @@ public final class TransactionPayloadFixtureTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000001");
-    payload.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
+    payload.put("authority", "alice@wonderland");
     payload.put("creation_time_ms", 0L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
@@ -48,7 +48,7 @@ public final class TransactionPayloadFixtureTests {
     final Map<String, Object> fixtureMap = new LinkedHashMap<>();
     fixtureMap.put("name", "wire_instruction_fixture");
     fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
+    fixtureMap.put("authority", "alice@wonderland");
     fixtureMap.put("creation_time_ms", 0L);
     fixtureMap.put("payload", payload);
 
@@ -85,7 +85,7 @@ public final class TransactionPayloadFixtureTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000001");
-    payload.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
+    payload.put("authority", "alice@wonderland");
     payload.put("creation_time_ms", 0L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
@@ -93,7 +93,7 @@ public final class TransactionPayloadFixtureTests {
     final Map<String, Object> fixtureMap = new LinkedHashMap<>();
     fixtureMap.put("name", "wire_instruction_arguments_fixture");
     fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV");
+    fixtureMap.put("authority", "alice@wonderland");
     fixtureMap.put("creation_time_ms", 0L);
     fixtureMap.put("payload", payload);
 
@@ -132,13 +132,12 @@ public final class TransactionPayloadFixtureTests {
         if (payload.executable().isInstructions()) {
           assert allInstructionsWire(payload)
               : name + ": instruction fixtures must use wire payloads";
+          final String actual = Base64.getEncoder().encodeToString(encoded);
+          assert expected.equals(actual) : name + ": encoded payload mismatch";
+          return;
         }
         final String actual = Base64.getEncoder().encodeToString(encoded);
-        // TODO: Regenerate Android payload fixtures for strict encoded-only account authority literals.
-        if (!expected.equals(actual)) {
-          System.out.println(
-              "[fixture-drift] " + name + ": payload_base64 differs under strict authority normalization");
-        }
+        assert expected.equals(actual) : name + ": encoded payload mismatch";
       });
       if (fixture.encoded().isEmpty()) {
         final String base64 = Base64.getEncoder().encodeToString(encoded);

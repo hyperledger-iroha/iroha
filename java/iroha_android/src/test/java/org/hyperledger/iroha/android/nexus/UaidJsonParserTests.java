@@ -29,12 +29,12 @@ public final class UaidJsonParserTests {
               "dataspace_alias": "primary",
               "accounts": [
                 {
-                  "account_id": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV",
+                  "account_id": "alice@wonderland",
                   "label": "alice",
                   "assets": [
                     {
-                      "asset_id": "norito:00",
-                      "asset_definition_id": "norito:00",
+                      "asset_id": "usd#wonderland#alice",
+                      "asset_definition_id": "usd#wonderland",
                       "quantity": "15"
                     }
                   ]
@@ -56,12 +56,12 @@ public final class UaidJsonParserTests {
     assert "primary".equals(dataspace.dataspaceAlias()) : "dataspace alias mismatch";
     assert dataspace.accounts().size() == 1 : "account list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAccount account = dataspace.accounts().get(0);
-    assert "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV".equals(account.accountId()) : "account id mismatch";
+    assert "alice@wonderland".equals(account.accountId()) : "account id mismatch";
     assert "alice".equals(account.label()) : "account label mismatch";
     assert account.assets().size() == 1 : "asset list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert "norito:00".equals(asset.assetId()) : "asset id mismatch";
-    assert "norito:00".equals(asset.assetDefinitionId()) : "definition id mismatch";
+    assert "usd#wonderland#alice".equals(asset.assetId()) : "asset id mismatch";
+    assert "usd#wonderland".equals(asset.assetDefinitionId()) : "definition id mismatch";
     assert "15".equals(asset.quantity()) : "quantity mismatch";
   }
 
@@ -78,7 +78,7 @@ public final class UaidJsonParserTests {
               "manifest_hash": "deadbeef",
               "status": "Active",
               "lifecycle": { "activated_epoch": 1.5 },
-              "accounts": ["6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"],
+              "accounts": ["alice@wonderland"],
               "manifest": {}
             }
           ]

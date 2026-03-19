@@ -151,8 +151,8 @@ impl JsonDeserialize for QueryEnvelopeJson {
 /// Supported singular queries for the JSON DSL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SingularQueryJson {
-    /// Returns the active ABI versions exposed by the runtime.
-    FindActiveAbiVersions,
+    /// Returns the active ABI version exposed by the runtime.
+    FindAbiVersion,
     /// Returns metadata describing the executor data model.
     FindExecutorDataModel,
     /// Returns the current blockchain parameter set.
@@ -234,7 +234,7 @@ impl SingularQueryJson {
             .and_then(Value::as_str)
             .ok_or(QueryJsonError::MissingField("singular", "type"))?;
         match ty {
-            "FindActiveAbiVersions" => Ok(SingularQueryJson::FindActiveAbiVersions),
+            "FindAbiVersion" => Ok(SingularQueryJson::FindAbiVersion),
             "FindExecutorDataModel" => Ok(SingularQueryJson::FindExecutorDataModel),
             "FindParameters" => Ok(SingularQueryJson::FindParameters),
             "FindDomainsByAccountId" => {
@@ -308,7 +308,7 @@ impl SingularQueryJson {
 
     fn kind_label(&self) -> &'static str {
         match self {
-            SingularQueryJson::FindActiveAbiVersions => "FindActiveAbiVersions",
+            SingularQueryJson::FindAbiVersion => "FindAbiVersion",
             SingularQueryJson::FindExecutorDataModel => "FindExecutorDataModel",
             SingularQueryJson::FindParameters => "FindParameters",
             SingularQueryJson::FindDomainsByAccountId { .. } => "FindDomainsByAccountId",
@@ -323,11 +323,9 @@ impl SingularQueryJson {
 
     fn into_box(self) -> Result<SingularQueryBox, QueryJsonError> {
         match self {
-            SingularQueryJson::FindActiveAbiVersions => {
-                Ok(SingularQueryBox::FindActiveAbiVersions(
-                    crate::query::runtime::prelude::FindActiveAbiVersions,
-                ))
-            }
+            SingularQueryJson::FindAbiVersion => Ok(SingularQueryBox::FindAbiVersion(
+                crate::query::runtime::prelude::FindAbiVersion,
+            )),
             SingularQueryJson::FindExecutorDataModel => {
                 Ok(SingularQueryBox::FindExecutorDataModel(
                     crate::query::executor::prelude::FindExecutorDataModel,

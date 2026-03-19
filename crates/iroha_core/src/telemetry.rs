@@ -8977,11 +8977,10 @@ impl Actor {
             }
         }
 
-        // Runtime: update active ABI versions count from current state view
-        let active_abi_versions_count = world_view.active_abi_versions().len() as u64;
+        // Runtime: export the fixed v1 ABI version used by this release.
         self.metrics
-            .runtime_active_abi_versions_count
-            .set(active_abi_versions_count);
+            .runtime_abi_version
+            .set(u64::from(world_view.abi_version()));
 
         // Update IVM pre-decode cache counters from global ivm cache
         let stats = ivm::ivm_cache::global_stats();

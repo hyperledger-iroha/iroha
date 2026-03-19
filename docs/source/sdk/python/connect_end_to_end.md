@@ -311,7 +311,7 @@ snapshot = client.capture_node_admin_snapshot()
 print("Queue capacity:", snapshot.configuration.queue.capacity)
 print("Peers:", [peer.address for peer in snapshot.peers])
 print("Time offset (ms):", snapshot.time_now.offset_ms)
-print("ABI versions:", snapshot.node_capabilities.supported_abi_versions)
+print("ABI version:", snapshot.node_capabilities.abi_version)
 print("Data model version:", snapshot.node_capabilities.data_model_version)
 
 if snapshot.telemetry_peers is None:

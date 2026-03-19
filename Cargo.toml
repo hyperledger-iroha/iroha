@@ -202,6 +202,7 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("adaptive-telemetry"))',
     'cfg(feature, values("adaptive-telemetry-log"))',
     'cfg(feature, values("bench-internal"))',
+    'cfg(feature, values("bfv-accel"))',
     'cfg(feature, values("columnar"))',
     'cfg(feature, values("compact-len"))',
     'cfg(feature, values("compression"))',

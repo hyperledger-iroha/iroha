@@ -8,26 +8,30 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
 import org.hyperledger.iroha.android.crypto.Blake2b;
+import org.hyperledger.iroha.android.crypto.Blake2s;
 
 public final class AccountAddress {
 
   public static final String DEFAULT_DOMAIN_NAME = "default";
-  public static final int DEFAULT_I105_DISCRIMINANT = 753;
+  public static final int DEFAULT_IH58_PREFIX = 753;
+  public static final int DEFAULT_I105_DISCRIMINANT = DEFAULT_IH58_PREFIX;
 
-  private static final byte[] I105_CHECKSUM_PREFIX = "I105PRE".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] LOCAL_DOMAIN_KEY = "SORA-LOCAL-K:v1".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] IH58_CHECKSUM_PREFIX = "IH58PRE".getBytes(StandardCharsets.UTF_8);
   private static final String COMPRESSED_SENTINEL = "sora";
   private static final int COMPRESSED_CHECKSUM_LEN = 6;
   private static final int BECH32M_CONST = 0x2bc830a3;
-  private static final String I105_WARNING =
-      "I105 addresses are the canonical account literal encoding. "
-          + "Use the chain-discriminant sentinel (for example, `sora` on discriminant 753).";
+  private static final String COMPRESSED_WARNING =
+      "Compressed Sora addresses rely on half-width kana and are only interoperable inside "
+          + "Sora-aware apps. Prefer IH58 when sharing with explorers, wallets, or QR codes.";
 
-  private static final String[] I105_ALPHABET = {
+  private static final String[] IH58_ALPHABET = {
       "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H",
       "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b",
       "c", "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t",
@@ -49,7 +53,7 @@ public final class AccountAddress {
   private static final String[] COMPRESSED_ALPHABET;
   private static final String[] COMPRESSED_ALPHABET_FULLWIDTH;
   private static final Map<String, Integer> COMPRESSED_INDEX;
-  private static final Map<String, Integer> I105_INDEX;
+  private static final Map<String, Integer> IH58_INDEX;
   private static final int COMPRESSED_BASE;
   private static final BigInteger BASE_58 = BigInteger.valueOf(58L);
 
@@ -59,13 +63,13 @@ public final class AccountAddress {
 
   static {
     configureCurveSupport(CurveSupportConfig.ed25519Only());
-    COMPRESSED_ALPHABET = new String[I105_ALPHABET.length + SORA_KANA.length];
-    System.arraycopy(I105_ALPHABET, 0, COMPRESSED_ALPHABET, 0, I105_ALPHABET.length);
-    System.arraycopy(SORA_KANA, 0, COMPRESSED_ALPHABET, I105_ALPHABET.length, SORA_KANA.length);
-    COMPRESSED_ALPHABET_FULLWIDTH = new String[I105_ALPHABET.length + SORA_KANA_FULLWIDTH.length];
-    System.arraycopy(I105_ALPHABET, 0, COMPRESSED_ALPHABET_FULLWIDTH, 0, I105_ALPHABET.length);
+    COMPRESSED_ALPHABET = new String[IH58_ALPHABET.length + SORA_KANA.length];
+    System.arraycopy(IH58_ALPHABET, 0, COMPRESSED_ALPHABET, 0, IH58_ALPHABET.length);
+    System.arraycopy(SORA_KANA, 0, COMPRESSED_ALPHABET, IH58_ALPHABET.length, SORA_KANA.length);
+    COMPRESSED_ALPHABET_FULLWIDTH = new String[IH58_ALPHABET.length + SORA_KANA_FULLWIDTH.length];
+    System.arraycopy(IH58_ALPHABET, 0, COMPRESSED_ALPHABET_FULLWIDTH, 0, IH58_ALPHABET.length);
     System.arraycopy(
-        SORA_KANA_FULLWIDTH, 0, COMPRESSED_ALPHABET_FULLWIDTH, I105_ALPHABET.length, SORA_KANA_FULLWIDTH.length);
+        SORA_KANA_FULLWIDTH, 0, COMPRESSED_ALPHABET_FULLWIDTH, IH58_ALPHABET.length, SORA_KANA_FULLWIDTH.length);
     COMPRESSED_BASE = COMPRESSED_ALPHABET.length;
 
     COMPRESSED_INDEX = new HashMap<>();
@@ -76,9 +80,9 @@ public final class AccountAddress {
       COMPRESSED_INDEX.put(COMPRESSED_ALPHABET_FULLWIDTH[i], i);
     }
 
-    I105_INDEX = new HashMap<>();
-    for (int i = 0; i < I105_ALPHABET.length; i++) {
-      I105_INDEX.put(I105_ALPHABET[i], i);
+    IH58_INDEX = new HashMap<>();
+    for (int i = 0; i < IH58_ALPHABET.length; i++) {
+      IH58_INDEX.put(IH58_ALPHABET[i], i);
     }
   }
 
@@ -92,38 +96,91 @@ public final class AccountAddress {
     return Arrays.copyOf(canonicalBytes, canonicalBytes.length);
   }
 
+  /**
+   * Re-encodes this address with a domain selector derived from the provided domain label when this address currently
+   * uses the {@code default} domain selector (tag {@code 0x00}).
+   *
+   * <p>Some Core API deployments return account IDs encoded with the default-domain selector, while Torii/explorer
+   * interactions require the FI-local (Local12) selector (tag {@code 0x01}) derived from the FI's domain label.
+   *
+   * <p>This helper is intentionally conservative:
+   * <ul>
+   *   <li>If this address already uses {@code local12} or {@code global} selectors, it returns {@code this}.</li>
+   *   <li>If {@code domainLabel} canonicalizes to {@code default}, it returns {@code this}.</li>
+   * </ul>
+   */
+  public AccountAddress rebasedFromDefaultDomain(final String domainLabel) throws AccountAddressException {
+    Objects.requireNonNull(domainLabel, "domainLabel must not be null");
+    parseCanonical(canonicalBytes);
+    if (canonicalBytes.length < 2) {
+      return this;
+    }
+
+    final int tag = canonicalBytes[1] & 0xFF;
+    if (tag != 0x00) {
+      return this;
+    }
+
+    final String canonicalLabel = domainLabel.trim().toLowerCase(Locale.ROOT);
+    if (canonicalLabel.isBlank() || canonicalLabel.equalsIgnoreCase(DEFAULT_DOMAIN_NAME)) {
+      return this;
+    }
+
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(canonicalBytes[0]); // header
+    out.write(0x01); // local12 domain selector
+    final byte[] digest = computeLocalDigest(canonicalLabel);
+    out.write(digest, 0, digest.length);
+    out.write(canonicalBytes, 2, canonicalBytes.length - 2); // skip old default selector tag
+    return fromCanonicalBytes(out.toByteArray());
+  }
+
   public String canonicalHex() {
     return "0x" + bytesToHex(canonicalBytes);
   }
 
-  public String toI105(final int networkPrefix) throws AccountAddressException {
-    return encodeI105(networkPrefix, canonicalBytes);
+  public String toIH58(final int networkPrefix) throws AccountAddressException {
+    return encodeIh58(networkPrefix, canonicalBytes);
   }
 
+  /**
+   * Backward-compatible alias for the older I105 naming.
+   */
+  public String toI105(final int prefix) throws AccountAddressException {
+    return toIH58(prefix);
+  }
+
+  /**
+   * Backward-compatible alias for the older I105 naming.
+   */
   public String toI105Default() throws AccountAddressException {
+    return toCompressedSora();
+  }
+
+  public String toCompressedSora() throws AccountAddressException {
     return encodeCompressed(canonicalBytes, COMPRESSED_ALPHABET);
   }
 
-  public String toI105DefaultFullWidth() throws AccountAddressException {
+  public String toCompressedSoraFullWidth() throws AccountAddressException {
     return encodeCompressed(canonicalBytes, COMPRESSED_ALPHABET_FULLWIDTH);
   }
 
   /**
-   * Convenience helper that surfaces canonical I105 output alongside the shared warning string.
+   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
-    return displayFormats(DEFAULT_I105_DISCRIMINANT);
+    return displayFormats(DEFAULT_IH58_PREFIX);
   }
 
   /**
-   * Convenience helper that surfaces canonical I105 output alongside the shared warning string.
+   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int networkPrefix) throws AccountAddressException {
-    final String i105 = toI105(networkPrefix);
-    final String i105Default = toI105Default();
-    return new DisplayFormats(i105, i105Default, networkPrefix, I105_WARNING);
+    final String ih58 = toIH58(networkPrefix);
+    final String compressed = toCompressedSora();
+    return new DisplayFormats(ih58, compressed, networkPrefix, COMPRESSED_WARNING);
   }
 
   /**
@@ -133,7 +190,16 @@ public final class AccountAddress {
    */
   public Optional<SingleKeyPayload> singleKeyPayload() throws AccountAddressException {
     parseCanonical(canonicalBytes);
-    return extractSingleKeyPayload(canonicalBytes);
+    return extractSingleKeyPayload(canonicalBytes, false);
+  }
+
+  /**
+   * Returns the single-key controller payload without rejecting disabled-but-known curves.
+   */
+  public Optional<SingleKeyPayload> singleKeyPayloadIgnoringCurveSupport()
+      throws AccountAddressException {
+    parseCanonical(canonicalBytes, true);
+    return extractSingleKeyPayload(canonicalBytes, true);
   }
 
   /**
@@ -143,17 +209,26 @@ public final class AccountAddress {
    */
   public Optional<MultisigPolicyPayload> multisigPolicyPayload() throws AccountAddressException {
     parseCanonical(canonicalBytes);
-    return extractMultisigPayload(canonicalBytes);
+    return extractMultisigPayload(canonicalBytes, false);
   }
 
-  public static String i105WarningMessage() {
-    return I105_WARNING;
+  /**
+   * Returns the multisig policy payload without rejecting disabled-but-known curves.
+   */
+  public Optional<MultisigPolicyPayload> multisigPolicyPayloadIgnoringCurveSupport()
+      throws AccountAddressException {
+    parseCanonical(canonicalBytes, true);
+    return extractMultisigPayload(canonicalBytes, true);
+  }
+
+  public static String compressedWarningMessage() {
+    return COMPRESSED_WARNING;
   }
 
   public static AccountAddress fromAccount(
+      final String domain,
       final byte[] publicKey,
       final String algorithm) throws AccountAddressException {
-    Objects.requireNonNull(publicKey, "publicKey must not be null");
     if (publicKey.length > 0xFF) {
       throw new AccountAddressException(
           AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG, "key payload too long: " + publicKey.length);
@@ -162,6 +237,15 @@ public final class AccountAddress {
 
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(header);
+
+    if (domain.equalsIgnoreCase(DEFAULT_DOMAIN_NAME)) {
+      out.write(0x00);
+    } else {
+      out.write(0x01);
+      final byte[] digest = computeLocalDigest(domain);
+      out.write(digest, 0, digest.length);
+    }
+
     out.write(0x00);
     out.write(curveIdForAlgorithm(algorithm));
     out.write(publicKey.length);
@@ -171,10 +255,30 @@ public final class AccountAddress {
   }
 
   /**
+   * Backward-compatible overload that uses the default domain selector.
+   */
+  public static AccountAddress fromAccount(
+      final byte[] publicKey, final String algorithm) throws AccountAddressException {
+    return fromAccount(DEFAULT_DOMAIN_NAME, publicKey, algorithm);
+  }
+
+  /**
+   * Constructs a multisig account address from the provided policy payload.
+   */
+  public static AccountAddress fromMultisigPolicy(final MultisigPolicyPayload policy)
+      throws AccountAddressException {
+    return fromMultisigPolicy(DEFAULT_DOMAIN_NAME, policy);
+  }
+
+  /**
    * Constructs a multisig account address from the provided policy payload.
    */
   public static AccountAddress fromMultisigPolicy(
+      final String domain,
       final MultisigPolicyPayload policy) throws AccountAddressException {
+    if (domain == null || domain.isBlank()) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "domain must not be blank");
+    }
     if (policy == null) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "multisig policy must not be null");
     }
@@ -224,7 +328,14 @@ public final class AccountAddress {
     final byte header = encodeHeader((byte) 0, (byte) 0, (byte) 1);
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(header);
-    // Canonical payloads are globally scoped and no longer encode domain selectors.
+
+    if (domain.equalsIgnoreCase(DEFAULT_DOMAIN_NAME)) {
+      out.write(0x00);
+    } else {
+      out.write(0x01);
+      final byte[] digest = computeLocalDigest(domain);
+      out.write(digest, 0, digest.length);
+    }
 
     out.write(0x01); // multisig controller tag
     out.write(policy.version() & 0xFF);
@@ -253,57 +364,118 @@ public final class AccountAddress {
     return new AccountAddress(copy);
   }
 
-  public static AccountAddress fromI105(final String encoded, final Integer expectedPrefix)
+  public static AccountAddress fromCanonicalHex(final String encoded) throws AccountAddressException {
+    final String body = encoded.startsWith("0x") || encoded.startsWith("0X")
+        ? encoded.substring(2)
+        : encoded;
+    final byte[] bytes = hexToBytes(body);
+    return fromCanonicalBytes(bytes);
+  }
+
+  public static AccountAddress fromIH58(final String encoded, final Integer expectedPrefix)
       throws AccountAddressException {
-    final DecodeResult decode = decodeI105(encoded);
+    final DecodeResult decode = decodeIh58(encoded);
     if (expectedPrefix != null && decode.networkPrefix != expectedPrefix) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
-          "unexpected I105 network prefix: expected " + expectedPrefix + ", found " + decode.networkPrefix);
+          "unexpected IH58 network prefix: expected " + expectedPrefix + ", found " + decode.networkPrefix);
     }
     final AccountAddress address = fromCanonicalBytes(decode.canonical);
-    final String reencoded = address.toI105(decode.networkPrefix);
+    final String reencoded = address.toIH58(decode.networkPrefix);
     if (!reencoded.equals(encoded)) {
-      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
+      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "IH58 checksum mismatch");
     }
     return address;
   }
 
-  public static AccountAddress fromI105Default(final String encoded) throws AccountAddressException {
+  public static AccountAddress fromCompressedSora(final String encoded) throws AccountAddressException {
     final byte[] canonical = decodeCompressed(encoded);
     return fromCanonicalBytes(canonical);
   }
 
-  /**
-   * Parses encoded account addresses only.
-   *
-   * <p>Canonical hex is intentionally excluded from this parser.
-   */
-  public static ParseResult parseEncoded(final String input, final Integer expectedPrefix)
+  public static ParseResult parseAny(final String input, final Integer expectedPrefix)
       throws AccountAddressException {
     final String trimmed = input.trim();
     if (trimmed.isEmpty()) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "address string is empty");
     }
-    if (trimmed.indexOf('@') >= 0) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address must not include @domain suffix");
-    }
     if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
-      return new ParseResult(fromI105Default(trimmed), Format.I105_DEFAULT);
+      return new ParseResult(fromCompressedSora(trimmed), Format.COMPRESSED);
     }
     if (containsCompressedGlyph(trimmed)) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "i105-default address must start with sora sentinel");
+          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
+    }
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      return new ParseResult(fromCanonicalHex(trimmed), Format.CANONICAL_HEX);
     }
     try {
-      return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
+      return new ParseResult(fromIH58(trimmed, expectedPrefix), Format.IH58);
     } catch (final AccountAddressException ex) {
       final String message = ex.getMessage();
       if (message != null
-          && (message.startsWith("unexpected I105 network prefix")
-              || message.contains("I105"))) {
+          && (message.startsWith("unexpected IH58 network prefix")
+              || message.contains("IH58"))) {
+        throw ex;
+      }
+    }
+    throw new AccountAddressException(
+        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, "unsupported address format");
+  }
+
+  /**
+   * Backward-compatible alias for the older encoded-address parsing name.
+   */
+  public static ParseResult parseEncoded(final String input, final Integer expectedPrefix)
+      throws AccountAddressException {
+    return parseAny(input, expectedPrefix);
+  }
+
+  /**
+   * Parses any supported encoded form while tolerating known curves that are currently disabled in
+   * the runtime configuration.
+   */
+  public static ParseResult parseEncodedIgnoringCurveSupport(
+      final String input, final Integer expectedPrefix) throws AccountAddressException {
+    final String trimmed = input.trim();
+    if (trimmed.isEmpty()) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_LENGTH, "address string is empty");
+    }
+    if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
+      final byte[] canonical = decodeCompressed(trimmed);
+      parseCanonical(canonical, true);
+      return new ParseResult(new AccountAddress(canonical), Format.COMPRESSED);
+    }
+    if (containsCompressedGlyph(trimmed)) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
+          "compressed address must start with sora sentinel");
+    }
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      final String body =
+          trimmed.startsWith("0x") || trimmed.startsWith("0X") ? trimmed.substring(2) : trimmed;
+      final byte[] canonical = hexToBytes(body);
+      parseCanonical(canonical, true);
+      return new ParseResult(new AccountAddress(canonical), Format.CANONICAL_HEX);
+    }
+    try {
+      final DecodeResult decode = decodeIh58(trimmed);
+      if (expectedPrefix != null && decode.networkPrefix != expectedPrefix) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
+            "unexpected IH58 network prefix: expected "
+                + expectedPrefix
+                + ", found "
+                + decode.networkPrefix);
+      }
+      parseCanonical(decode.canonical, true);
+      return new ParseResult(new AccountAddress(decode.canonical), Format.IH58);
+    } catch (final AccountAddressException ex) {
+      final String message = ex.getMessage();
+      if (message != null
+          && (message.startsWith("unexpected IH58 network prefix")
+              || message.contains("IH58"))) {
         throw ex;
       }
     }
@@ -314,7 +486,7 @@ public final class AccountAddress {
   private static boolean containsCompressedGlyph(final String value) {
     for (int i = 0; i < value.length(); i++) {
       final String symbol = String.valueOf(value.charAt(i));
-      if (COMPRESSED_INDEX.containsKey(symbol) && !I105_INDEX.containsKey(symbol)) {
+      if (COMPRESSED_INDEX.containsKey(symbol) && !IH58_INDEX.containsKey(symbol)) {
         return true;
       }
     }
@@ -322,8 +494,9 @@ public final class AccountAddress {
   }
 
   public enum Format {
-    I105,
-    I105_DEFAULT
+    IH58,
+    COMPRESSED,
+    CANONICAL_HEX
   }
 
   public enum AccountAddressErrorCode {
@@ -331,14 +504,15 @@ public final class AccountAddress {
     KEY_PAYLOAD_TOO_LONG("ERR_KEY_PAYLOAD_TOO_LONG"),
     INVALID_HEADER_VERSION("ERR_INVALID_HEADER_VERSION"),
     INVALID_NORM_VERSION("ERR_INVALID_NORM_VERSION"),
-    INVALID_I105_DISCRIMINANT("ERR_INVALID_I105_DISCRIMINANT"),
-    INVALID_I105_ENCODING("ERR_INVALID_I105_ENCODING"),
-    INVALID_I105_DISCRIMINANT_ENCODING("ERR_INVALID_I105_DISCRIMINANT_ENCODING"),
+    INVALID_IH58_PREFIX("ERR_INVALID_IH58_PREFIX"),
+    INVALID_IH58_ENCODING("ERR_INVALID_IH58_ENCODING"),
+    INVALID_IH58_PREFIX_ENCODING("ERR_INVALID_IH58_PREFIX_ENCODING"),
     INVALID_LENGTH("ERR_INVALID_LENGTH"),
     CHECKSUM_MISMATCH("ERR_CHECKSUM_MISMATCH"),
     INVALID_HEX_ADDRESS("ERR_INVALID_HEX_ADDRESS"),
     UNEXPECTED_NETWORK_PREFIX("ERR_UNEXPECTED_NETWORK_PREFIX"),
     UNKNOWN_ADDRESS_CLASS("ERR_UNKNOWN_ADDRESS_CLASS"),
+    UNKNOWN_DOMAIN_TAG("ERR_UNKNOWN_DOMAIN_TAG"),
     UNEXPECTED_EXTENSION_FLAG("ERR_UNEXPECTED_EXTENSION_FLAG"),
     UNKNOWN_CONTROLLER_TAG("ERR_UNKNOWN_CONTROLLER_TAG"),
     UNKNOWN_CURVE("ERR_UNKNOWN_CURVE"),
@@ -374,20 +548,20 @@ public final class AccountAddress {
   }
 
   public static final class DisplayFormats {
-    public final String i105;
-    public final String i105Default;
+    public final String ih58;
+    public final String compressed;
     public final int networkPrefix;
-    public final String i105Warning;
+    public final String compressedWarning;
 
     private DisplayFormats(
-        final String i105,
-        final String i105Default,
+        final String ih58,
+        final String compressed,
         final int networkPrefix,
-        final String i105Warning) {
-      this.i105 = i105;
-      this.i105Default = i105Default;
+        final String compressedWarning) {
+      this.ih58 = ih58;
+      this.compressed = compressed;
       this.networkPrefix = networkPrefix;
-      this.i105Warning = i105Warning;
+      this.compressedWarning = compressedWarning;
     }
   }
 
@@ -502,80 +676,68 @@ public final class AccountAddress {
   // -- Canonical decoding helpers --
 
   private static void parseCanonical(final byte[] canonical) throws AccountAddressException {
-    if (canonical.length < 2) {
+    parseCanonical(canonical, false);
+  }
+
+  private static void parseCanonical(final byte[] canonical, final boolean ignoreCurveSupport)
+      throws AccountAddressException {
+    if (canonical.length < 4) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
     final byte header = canonical[0];
     decodeHeader(header);
-    final ParsedController parsed = parseControllerAt(canonical, 1);
-    if (parsed.cursor != canonical.length) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-          "unexpected trailing bytes in canonical payload");
-    }
-  }
+    int cursor = 1;
 
-  private static Optional<SingleKeyPayload> extractSingleKeyPayload(final byte[] canonical)
-      throws AccountAddressException {
-    if (canonical.length < 2) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    final byte domainTag = canonical[cursor++];
+    switch (domainTag) {
+      case 0x00:
+        break;
+      case 0x01:
+        if (cursor + 12 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 12;
+        break;
+      case 0x02:
+        if (cursor + 4 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 4;
+        break;
+      default:
+        throw new AccountAddressException(
+            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: " + domainTag);
     }
-    final byte header = canonical[0];
-    decodeHeader(header);
 
-    final ParsedController parsed = parseControllerAt(canonical, 1);
-    if (parsed.cursor != canonical.length) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-          "unexpected trailing bytes in canonical payload");
-    }
-    return Optional.ofNullable(parsed.singleKey);
-  }
-
-  private static Optional<MultisigPolicyPayload> extractMultisigPayload(final byte[] canonical)
-      throws AccountAddressException {
-    if (canonical.length < 2) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
-    }
-    final byte header = canonical[0];
-    decodeHeader(header);
-
-    final ParsedController parsed = parseControllerAt(canonical, 1);
-    if (parsed.cursor != canonical.length) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
-          "unexpected trailing bytes in canonical payload");
-    }
-    return Optional.ofNullable(parsed.multisigPolicy);
-  }
-
-  private static ParsedController parseControllerAt(final byte[] canonical, int cursor)
-      throws AccountAddressException {
     if (cursor >= canonical.length) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
-
-    final int controllerTag = canonical[cursor++] & 0xFF;
+    final byte controllerTag = canonical[cursor++];
     switch (controllerTag) {
       case 0x00: {
         if (cursor + 2 > canonical.length) {
           throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
         }
         final int curveId = canonical[cursor++] & 0xFF;
-        ensureCurveEnabled(curveId, "curve id " + curveId);
+        if (!ignoreCurveSupport) {
+          ensureCurveEnabled(curveId, "curve id " + curveId);
+        }
         final int keyLen = canonical[cursor++] & 0xFF;
         final int end = cursor + keyLen;
         if (end > canonical.length) {
           throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
         }
-        final byte[] key = Arrays.copyOfRange(canonical, cursor, end);
-        return ParsedController.single(end, new SingleKeyPayload(curveId, key));
+        if (end != canonical.length) {
+          throw new AccountAddressException(
+              AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
+        }
+        break;
       }
       case 0x01: {
         if (cursor + 4 > canonical.length) {
           throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
         }
-        final int version = canonical[cursor++] & 0xFF;
+        cursor++; // version (currently unused, but enforced for length)
         final int threshold =
             ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
         cursor += 2;
@@ -584,15 +746,15 @@ public final class AccountAddress {
           throw new AccountAddressException(
               AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: zero members");
         }
-
         long totalWeight = 0L;
-        final List<MultisigMemberPayload> members = new ArrayList<>(memberCount);
         for (int i = 0; i < memberCount; i++) {
           if (cursor + 5 > canonical.length) {
             throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
           }
           final int curveId = canonical[cursor++] & 0xFF;
-          ensureCurveEnabled(curveId, "curve id " + curveId);
+          if (!ignoreCurveSupport) {
+            ensureCurveEnabled(curveId, "curve id " + curveId);
+          }
           final int weight =
               ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
           cursor += 2;
@@ -610,9 +772,7 @@ public final class AccountAddress {
           if (cursor + keyLen > canonical.length) {
             throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
           }
-          final byte[] key = Arrays.copyOfRange(canonical, cursor, cursor + keyLen);
           cursor += keyLen;
-          members.add(new MultisigMemberPayload(curveId, weight, key));
           totalWeight += weight;
         }
         if (threshold <= 0) {
@@ -621,43 +781,164 @@ public final class AccountAddress {
         }
         if (totalWeight < threshold) {
           throw new AccountAddressException(
-              AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
-              "InvalidMultisigPolicy: threshold exceeds total weight");
+              AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: threshold exceeds total weight");
         }
-        return ParsedController.multisig(
-            cursor, new MultisigPolicyPayload(version, threshold, members));
+        if (cursor != canonical.length) {
+          if (cursor > canonical.length) {
+            throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+          }
+          throw new AccountAddressException(
+              AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
+        }
+        break;
       }
       default:
         throw new AccountAddressException(
-            AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG,
-            "unknown controller payload tag: " + controllerTag);
+            AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG, "unknown controller tag: " + controllerTag);
     }
   }
 
-  private static final class ParsedController {
-    final int tag;
-    final int cursor;
-    final SingleKeyPayload singleKey;
-    final MultisigPolicyPayload multisigPolicy;
+  private static Optional<SingleKeyPayload> extractSingleKeyPayload(
+      final byte[] canonical, final boolean ignoreCurveSupport) throws AccountAddressException {
+    if (canonical.length < 4) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    int cursor = 0;
+    final byte header = canonical[cursor++];
+    decodeHeader(header);
 
-    private ParsedController(
-        final int tag,
-        final int cursor,
-        final SingleKeyPayload singleKey,
-        final MultisigPolicyPayload multisigPolicy) {
-      this.tag = tag;
-      this.cursor = cursor;
-      this.singleKey = singleKey;
-      this.multisigPolicy = multisigPolicy;
+    final byte domainTag = canonical[cursor++];
+    switch (domainTag) {
+      case 0x00:
+        break;
+      case 0x01:
+        if (cursor + 12 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 12;
+        break;
+      case 0x02:
+        if (cursor + 4 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 4;
+        break;
+      default:
+        throw new AccountAddressException(
+            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: " + domainTag);
     }
 
-    static ParsedController single(final int cursor, final SingleKeyPayload payload) {
-      return new ParsedController(0x00, cursor, payload, null);
+    if (cursor >= canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    final byte controllerTag = canonical[cursor++];
+    if (controllerTag != 0x00) {
+      return Optional.empty();
+    }
+    if (cursor + 2 > canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    final int curveId = canonical[cursor++] & 0xFF;
+    if (!ignoreCurveSupport) {
+      ensureCurveEnabled(curveId, "curve id " + curveId);
+    }
+    final int keyLen = canonical[cursor++] & 0xFF;
+    final int end = cursor + keyLen;
+    if (end > canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    if (end != canonical.length) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
+    }
+    final byte[] key = Arrays.copyOfRange(canonical, cursor, end);
+    return Optional.of(new SingleKeyPayload(curveId, key));
+  }
+
+  private static Optional<MultisigPolicyPayload> extractMultisigPayload(
+      final byte[] canonical, final boolean ignoreCurveSupport) throws AccountAddressException {
+    if (canonical.length < 4) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    int cursor = 0;
+    final byte header = canonical[cursor++];
+    decodeHeader(header);
+
+    final byte domainTag = canonical[cursor++];
+    switch (domainTag) {
+      case 0x00:
+        break;
+      case 0x01:
+        if (cursor + 12 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 12;
+        break;
+      case 0x02:
+        if (cursor + 4 > canonical.length) {
+          throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+        }
+        cursor += 4;
+        break;
+      default:
+        throw new AccountAddressException(
+            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: " + domainTag);
     }
 
-    static ParsedController multisig(final int cursor, final MultisigPolicyPayload payload) {
-      return new ParsedController(0x01, cursor, null, payload);
+    if (cursor >= canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
     }
+    final byte controllerTag = canonical[cursor++];
+    if (controllerTag != 0x01) {
+      return Optional.empty();
+    }
+    if (cursor + 4 > canonical.length) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+    }
+    final int version = canonical[cursor++] & 0xFF;
+    final int threshold =
+        ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+    cursor += 2;
+    final int memberCount = canonical[cursor++] & 0xFF;
+    if (memberCount == 0) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: zero members");
+    }
+
+    final List<MultisigMemberPayload> members = new ArrayList<>(memberCount);
+    for (int i = 0; i < memberCount; i++) {
+      if (cursor + 5 > canonical.length) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+      }
+      final int curveId = canonical[cursor++] & 0xFF;
+      if (!ignoreCurveSupport) {
+        ensureCurveEnabled(curveId, "curve id " + curveId);
+      }
+      final int weight =
+          ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+      cursor += 2;
+      final int keyLen =
+          ((canonical[cursor] & 0xFF) << 8) | (canonical[cursor + 1] & 0xFF);
+      cursor += 2;
+      if (keyLen <= 0) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "InvalidMultisigPolicy: invalid key length");
+      }
+      if (cursor + keyLen > canonical.length) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+      }
+      final byte[] key = Arrays.copyOfRange(canonical, cursor, cursor + keyLen);
+      cursor += keyLen;
+      members.add(new MultisigMemberPayload(curveId, weight, key));
+    }
+    if (cursor != canonical.length) {
+      if (cursor > canonical.length) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
+      }
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
+    }
+    return Optional.of(new MultisigPolicyPayload(version, threshold, members));
   }
 
   private static byte encodeHeader(final byte version, final byte classId, final byte normVersion)
@@ -811,15 +1092,20 @@ public final class AccountAddress {
     }
   }
 
-  private static String encodeI105(final int prefix, final byte[] canonical) throws AccountAddressException {
-    final byte[] prefixBytes = encodeI105Prefix(prefix);
+  private static byte[] computeLocalDigest(final String label) {
+    final byte[] digest = Blake2s.digest(label.getBytes(StandardCharsets.UTF_8), LOCAL_DOMAIN_KEY, 32);
+    return Arrays.copyOf(digest, 12);
+  }
+
+  private static String encodeIh58(final int prefix, final byte[] canonical) throws AccountAddressException {
+    final byte[] prefixBytes = encodeIh58Prefix(prefix);
     final byte[] body = new byte[prefixBytes.length + canonical.length];
     System.arraycopy(prefixBytes, 0, body, 0, prefixBytes.length);
     System.arraycopy(canonical, 0, body, prefixBytes.length, canonical.length);
 
-    final byte[] checksumInput = new byte[I105_CHECKSUM_PREFIX.length + body.length];
-    System.arraycopy(I105_CHECKSUM_PREFIX, 0, checksumInput, 0, I105_CHECKSUM_PREFIX.length);
-    System.arraycopy(body, 0, checksumInput, I105_CHECKSUM_PREFIX.length, body.length);
+    final byte[] checksumInput = new byte[IH58_CHECKSUM_PREFIX.length + body.length];
+    System.arraycopy(IH58_CHECKSUM_PREFIX, 0, checksumInput, 0, IH58_CHECKSUM_PREFIX.length);
+    System.arraycopy(body, 0, checksumInput, IH58_CHECKSUM_PREFIX.length, body.length);
 
     final byte[] checksum = Blake2b.digest512(checksumInput);
     final byte[] payload = new byte[body.length + 2];
@@ -830,21 +1116,21 @@ public final class AccountAddress {
     return encodeBase58(payload);
   }
 
-  private static DecodeResult decodeI105(final String encoded) throws AccountAddressException {
+  private static DecodeResult decodeIh58(final String encoded) throws AccountAddressException {
     final byte[] body = decodeBase58(encoded);
     if (body.length < 3) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for I105 payload");
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload");
     }
     final byte[] payload = Arrays.copyOf(body, body.length - 2);
     final byte[] checksumBytes = Arrays.copyOfRange(body, body.length - 2, body.length);
-    final PrefixResult prefixResult = decodeI105Prefix(payload);
+    final PrefixResult prefixResult = decodeIh58Prefix(payload);
 
-    final byte[] checksumInput = new byte[I105_CHECKSUM_PREFIX.length + payload.length];
-    System.arraycopy(I105_CHECKSUM_PREFIX, 0, checksumInput, 0, I105_CHECKSUM_PREFIX.length);
-    System.arraycopy(payload, 0, checksumInput, I105_CHECKSUM_PREFIX.length, payload.length);
+    final byte[] checksumInput = new byte[IH58_CHECKSUM_PREFIX.length + payload.length];
+    System.arraycopy(IH58_CHECKSUM_PREFIX, 0, checksumInput, 0, IH58_CHECKSUM_PREFIX.length);
+    System.arraycopy(payload, 0, checksumInput, IH58_CHECKSUM_PREFIX.length, payload.length);
     final byte[] expected = Arrays.copyOf(Blake2b.digest512(checksumInput), 2);
     if (!Arrays.equals(checksumBytes, expected)) {
-      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
+      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "IH58 checksum mismatch");
     }
 
     final byte[] canonical = Arrays.copyOfRange(payload, prefixResult.prefixLength, payload.length);
@@ -861,9 +1147,9 @@ public final class AccountAddress {
     }
   }
 
-  private static byte[] encodeI105Prefix(final int prefix) throws AccountAddressException {
+  private static byte[] encodeIh58Prefix(final int prefix) throws AccountAddressException {
     if (prefix < 0 || prefix > 0x3FFF) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_I105_DISCRIMINANT, "invalid I105 prefix: " + prefix);
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_IH58_PREFIX, "invalid IH58 prefix: " + prefix);
     }
     if (prefix <= 63) {
       return new byte[] { (byte) prefix };
@@ -873,9 +1159,9 @@ public final class AccountAddress {
     return new byte[] { (byte) lower, (byte) upper };
   }
 
-  private static PrefixResult decodeI105Prefix(final byte[] payload) throws AccountAddressException {
+  private static PrefixResult decodeIh58Prefix(final byte[] payload) throws AccountAddressException {
     if (payload.length == 0) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for I105 payload");
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload");
     }
     final int first = payload[0] & 0xFF;
     if (first <= 63) {
@@ -883,12 +1169,12 @@ public final class AccountAddress {
     }
     if ((first & 0b0100_0000) != 0) {
       if (payload.length < 2) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for I105 payload");
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload");
       }
       final int value = ((payload[1] & 0xFF) << 6) | (first & 0x3F);
       return new PrefixResult(value, 2);
     }
-    throw new AccountAddressException(AccountAddressErrorCode.INVALID_I105_DISCRIMINANT_ENCODING, "invalid I105 prefix encoding: " + first);
+    throw new AccountAddressException(AccountAddressErrorCode.INVALID_IH58_PREFIX_ENCODING, "invalid IH58 prefix encoding: " + first);
   }
 
   private static final class PrefixResult {
@@ -918,18 +1204,18 @@ public final class AccountAddress {
 
   private static byte[] decodeCompressed(final String encoded) throws AccountAddressException {
     if (!encoded.startsWith(COMPRESSED_SENTINEL)) {
-      throw new AccountAddressException(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "i105-default address must start with sora sentinel");
+      throw new AccountAddressException(AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "compressed address must start with sora sentinel");
     }
     final String payload = encoded.substring(COMPRESSED_SENTINEL.length());
     if (payload.length() <= COMPRESSED_CHECKSUM_LEN) {
-      throw new AccountAddressException(AccountAddressErrorCode.COMPRESSED_TOO_SHORT, "i105-default address is too short");
+      throw new AccountAddressException(AccountAddressErrorCode.COMPRESSED_TOO_SHORT, "compressed address is too short");
     }
     final int[] digits = new int[payload.length()];
     for (int i = 0; i < payload.length(); i++) {
       final String symbol = String.valueOf(payload.charAt(i));
       final Integer value = COMPRESSED_INDEX.get(symbol);
       if (value == null) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_COMPRESSED_CHAR, "invalid i105-default alphabet symbol: " + symbol);
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_COMPRESSED_CHAR, "invalid compressed alphabet symbol: " + symbol);
       }
       digits[i] = value;
     }
@@ -938,7 +1224,7 @@ public final class AccountAddress {
     final byte[] canonical = decodeBaseN(dataDigits, COMPRESSED_BASE);
     final int[] expected = compressedChecksumDigits(canonical);
     if (!Arrays.equals(checksumDigits, expected)) {
-      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "i105-default checksum mismatch");
+      throw new AccountAddressException(AccountAddressErrorCode.CHECKSUM_MISMATCH, "compressed checksum mismatch");
     }
     return canonical;
   }
@@ -988,16 +1274,16 @@ public final class AccountAddress {
 
   private static String encodeBase58(final byte[] input) throws AccountAddressException {
     if (input.length == 0) {
-      return I105_ALPHABET[0];
+      return IH58_ALPHABET[0];
     }
     BigInteger value = new BigInteger(1, input);
     final StringBuilder builder = new StringBuilder();
     while (value.compareTo(BigInteger.ZERO) > 0) {
       final BigInteger[] divRem = value.divideAndRemainder(BASE_58);
-      builder.append(I105_ALPHABET[divRem[1].intValue()]);
+      builder.append(IH58_ALPHABET[divRem[1].intValue()]);
       value = divRem[0];
     }
-    final String zeroSymbol = I105_ALPHABET[0];
+    final String zeroSymbol = IH58_ALPHABET[0];
     for (int i = 0; i < input.length && input[i] == 0; i++) {
       builder.append(zeroSymbol);
     }
@@ -1009,14 +1295,14 @@ public final class AccountAddress {
 
   private static byte[] decodeBase58(final String encoded) throws AccountAddressException {
     if (encoded == null || encoded.isEmpty()) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid I105 payload length");
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid IH58 payload length");
     }
     BigInteger value = BigInteger.ZERO;
     for (int index = 0; index < encoded.length(); index++) {
       final String symbol = String.valueOf(encoded.charAt(index));
-      final Integer digit = I105_INDEX.get(symbol);
+      final Integer digit = IH58_INDEX.get(symbol);
       if (digit == null) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_I105_ENCODING, "invalid I105 base58 encoding");
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_IH58_ENCODING, "invalid IH58 base58 encoding");
       }
       value = value.multiply(BASE_58).add(BigInteger.valueOf(digit));
     }
@@ -1024,7 +1310,7 @@ public final class AccountAddress {
     if (decoded.length > 0 && decoded[0] == 0) {
       decoded = Arrays.copyOfRange(decoded, 1, decoded.length);
     }
-    final char zeroChar = I105_ALPHABET[0].charAt(0);
+    final char zeroChar = IH58_ALPHABET[0].charAt(0);
     int leadingZeros = 0;
     while (leadingZeros < encoded.length() && encoded.charAt(leadingZeros) == zeroChar) {
       leadingZeros++;
@@ -1149,6 +1435,21 @@ public final class AccountAddress {
       sb.append(String.format("%02x", b & 0xFF));
     }
     return sb.toString();
+  }
+
+  private static byte[] hexToBytes(final String hex) throws AccountAddressException {
+    if ((hex.length() & 1) == 1) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "hex string must have even length");
+    }
+    final byte[] out = new byte[hex.length() / 2];
+    for (int i = 0; i < hex.length(); i += 2) {
+      try {
+        out[i / 2] = (byte) Integer.parseInt(hex.substring(i, i + 2), 16);
+      } catch (final NumberFormatException ex) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_HEX_ADDRESS, "invalid hex string");
+      }
+    }
+    return out;
   }
 
   public static final class CurveSupportConfig {

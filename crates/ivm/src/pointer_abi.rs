@@ -42,13 +42,15 @@ impl crate::memory::Memory {
 
         match validate_tlv_bytes(envelope) {
             Ok(tlv) => {
-                if let Some((policy, abi_version)) = current_policy()
-                    && !is_type_allowed_for_policy(policy, tlv.type_id)
-                {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: abi_version,
-                        type_id: tlv.type_id as u16,
-                    });
+                if let Some((policy, abi_version)) = current_policy() {
+                    let unsupported_abi = abi_version != 1;
+                    let disallowed_type = !is_type_allowed_for_policy(policy, tlv.type_id);
+                    if unsupported_abi || disallowed_type {
+                        return Err(VMError::AbiTypeNotAllowed {
+                            abi: abi_version,
+                            type_id: tlv.type_id as u16,
+                        });
+                    }
                 }
                 Ok(tlv)
             }

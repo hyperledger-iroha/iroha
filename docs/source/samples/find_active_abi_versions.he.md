@@ -10,26 +10,24 @@ translator: manual
 
 <div dir="rtl">
 
-# ‏FindActiveAbiVersions — סכמת שאילתת Norito (דוגמה)
+# ‏FindAbiVersion — סכמת שאילתת Norito (דוגמה)
 
-שם טיפוס: `iroha_data_model::query::runtime::ActiveAbiVersions`
+שם טיפוס: `iroha_data_model::query::runtime::AbiVersion`
 
 שדות
-- `active_versions: Vec<u16>` — רשימה ממוינת של גרסאות ABI הפעילות בצומת הנוכחי.
-- `default_compile_target: u16` — הגרסה הגבוהה ביותר מבין הפעילות; קומפיילרים צריכים לייעד אותה כברירת המחדל.
+- `abi_version: u16` — the fixed ABI version currently accepted on this node.
 
 תגובה לדוגמה ב־Norito JSON (מהדורה ראשונה; ABI יחיד)
 ```json
 {
-  "active_versions": [1],
-  "default_compile_target": 1
+  "abi_version": 1
 }
 ```
 
-שאילתה (חתומה) — `FindActiveAbiVersions`
+שאילתה (חתומה) — `FindAbiVersion`
 - מסלול: ‏`/query` (מסגרת `SignedQuery` ב־Norito)
-- וריאנט תיבת השאילתה הסינגולרית: `FindActiveAbiVersions`
-- וריאנט הפלט: `ActiveAbiVersions`
+- וריאנט תיבת השאילתה הסינגולרית: `FindAbiVersion`
+- וריאנט הפלט: `AbiVersion`
 
 הערות
 - במהדורה הראשונה גרסת ABI ‎1‎ פעילה תמיד. גרסאות שמופעלות באמצעות מנגנון הממשל מתווספות לקבוצה לצמיתות. הדוגמה לעיל מייצגת מצב שבו קיימת גרסה יחידה.

@@ -32,7 +32,7 @@ public final class PendingQueueInspectorTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
-            .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+            .setAuthority("inspector@wonderland")
             .setCreationTimeMs(issuedAt)
             .setInstructionBytes(new byte[] {0x01, 0x02})
             .setTimeToLiveMs(5_000L)

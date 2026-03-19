@@ -84,6 +84,8 @@ pub mod fraud;
 pub mod hijiri;
 /// Identifier newtypes and supporting helpers.
 pub mod id;
+/// Hidden-function-backed identifier policy and claim types.
+pub mod identifier;
 /// IPFS helper types used for off-chain references.
 pub mod ipfs;
 /// Instruction-set interface (ISI) data types.
@@ -125,6 +127,8 @@ pub mod proof;
 pub mod qr_stream;
 /// Query builders, predicates, and parameter types.
 pub mod query;
+/// Generic hidden-program RAM-LFE program policies and receipts.
+pub mod ram_lfe;
 /// Repo agreement descriptors and governance knobs.
 pub mod repo;
 /// Role-based access control definitions.
@@ -340,6 +344,7 @@ pub mod prelude {
         events::prelude::*,
         executor::prelude::*,
         fastpq::*,
+        identifier::prelude::*,
         ipfs::IpfsPath,
         isi::prelude::*,
         kaigi::prelude::*,
@@ -357,6 +362,7 @@ pub mod prelude {
         peer::prelude::*,
         permission::prelude::*,
         query::prelude::*,
+        ram_lfe::prelude::*,
         repo::prelude::*,
         role::prelude::*,
         sns::prelude::*,

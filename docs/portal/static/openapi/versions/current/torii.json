@@ -10408,7 +10408,7 @@
     },
     "/v1/runtime/abi/active": {
       "get": {
-        "description": "Return active ABI version list.",
+        "description": "Return the fixed runtime ABI version.",
         "responses": {
           "200": {
             "content": {
@@ -10421,7 +10421,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Fetch active ABI versions.",
+        "summary": "Fetch the active ABI version.",
         "tags": [
           "Runtime"
         ]

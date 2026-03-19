@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 #if canImport(Combine)
 import Combine
 #endif
@@ -540,8 +541,7 @@ final class ToriiClientTests: XCTestCase {
 
     private func nodeCapabilitiesBody(dataModelVersion: Int = ToriiNodeCapabilities.expectedDataModelVersion) -> Data {
         let payload: [String: Any] = [
-            "supported_abi_versions": [1],
-            "default_compile_target": 1,
+            "abi_version": 1,
             "data_model_version": dataModelVersion
         ]
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
@@ -559,6 +559,25 @@ final class ToriiClientTests: XCTestCase {
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         let canonicalHex = try address.canonicalHex()
         return canonicalHex
+    }
+
+    private func signedIdentifierReceiptFixture(accountId: String,
+                                                resolvedAtMs: UInt64 = 42,
+                                                expiresAtMs: UInt64? = 142) throws -> (resolverPublicKey: String, signatureHex: String, signaturePayloadHex: String) {
+        let privateKey = Curve25519.Signing.PrivateKey()
+        let multihash = OfflineNorito.publicKeyMultihash(
+            algorithm: .ed25519,
+            payload: privateKey.publicKey.rawRepresentation
+        )
+        let payloadBytes = Data([0x01, 0x02, 0x03, 0x04, 0xA0])
+        var digest = Blake2b.hash256(payloadBytes)
+        digest[digest.count - 1] |= 0x01
+        let signature = try privateKey.signature(for: digest)
+        return (
+            resolverPublicKey: "ed25519:\(multihash)",
+            signatureHex: signature.hexUppercased(),
+            signaturePayloadHex: payloadBytes.hexUppercased()
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -738,6 +757,321 @@ final class ToriiClientTests: XCTestCase {
 
         let resolved = try await makeClient().resolveAccountAlias("missing-alias")
         XCTAssertNil(resolved)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListIdentifierPoliciesAsync() async throws {
+        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifier-policies")
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "total": 1,
+              "items": [{
+                "policy_id":"phone#retail",
+                "owner":"\(owner)",
+                "active":true,
+                "normalization":"phone_e164",
+                "resolver_public_key":"ed25519:resolver-key",
+                "backend":"bfv-affine-sha3-256-v1",
+                "input_encryption":"bfv-v1",
+                "input_encryption_public_parameters":"ABCD",
+                "input_encryption_public_parameters_decoded":{
+                  "parameters":{
+                    "polynomial_degree":64,
+                    "plaintext_modulus":257,
+                    "ciphertext_modulus":1099511627776,
+                    "decomposition_base_log":12
+                  },
+                  "public_key":{
+                    "b":[1,2,3],
+                    "a":[4,5,6]
+                  },
+                  "max_input_bytes":32
+                },
+                "note":"retail phone policy"
+              }]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let response = try await makeClient().listIdentifierPolicies()
+        XCTAssertEqual(response.total, 1)
+        XCTAssertEqual(response.items.count, 1)
+        XCTAssertEqual(response.items.first?.policyId, "phone#retail")
+        XCTAssertEqual(response.items.first?.owner, owner)
+        XCTAssertEqual(response.items.first?.normalization, .phoneE164)
+        XCTAssertEqual(response.items.first?.inputEncryption, "bfv-v1")
+        XCTAssertEqual(response.items.first?.inputEncryptionPublicParameters, "ABCD")
+        XCTAssertEqual(
+            response.items.first?.inputEncryptionPublicParametersDecoded?.parameters.polynomialDegree,
+            64
+        )
+        XCTAssertEqual(
+            response.items.first?.inputEncryptionPublicParametersDecoded?.parameters.decompositionBaseLog,
+            12
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveIdentifierAsync() async throws {
+        let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let opaqueId = "opaque:\(String(repeating: "11", count: 32))"
+        let receiptHash = String(repeating: "22", count: 32)
+        let uaid = "uaid:\(String(repeating: "33", count: 31))35"
+        let signed = try signedIdentifierReceiptFixture(accountId: accountId)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
+            XCTAssertEqual(payload["input"] as? String, "+1 (555) 123-4567")
+            XCTAssertNil(payload["encrypted_input"])
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "resolved_at_ms":42,
+              "expires_at_ms":142,
+              "backend":"bfv-affine-sha3-256-v1",
+              "signature":"\(signed.signatureHex)",
+              "signature_payload_hex":"\(signed.signaturePayloadHex)",
+              "signature_payload":{
+                "policy_id":"phone#retail",
+                "opaque_id":"\(opaqueId)",
+                "receipt_hash":"\(receiptHash)",
+                "uaid":"\(uaid)",
+                "account_id":"\(accountId)",
+                "resolved_at_ms":42,
+                "expires_at_ms":142
+              }
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let receipt = try await makeClient().resolveIdentifier(
+            policyId: " phone#retail ",
+            input: " +1 (555) 123-4567 "
+        )
+        XCTAssertEqual(receipt?.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.uaid, uaid)
+        XCTAssertEqual(receipt?.accountId, accountId)
+        XCTAssertEqual(receipt?.resolvedAtMs, 42)
+        XCTAssertEqual(receipt?.expiresAtMs, 142)
+        XCTAssertEqual(receipt?.backend, "bfv-affine-sha3-256-v1")
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "phone#retail",
+            owner: accountId,
+            active: true,
+            normalization: .phoneE164,
+            resolverPublicKey: signed.resolverPublicKey,
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            note: nil
+        )
+        XCTAssertEqual(try receipt?.verifySignature(using: policy), true)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveIdentifierReturnsNilOnNotFound() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
+            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 404,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data())
+        }
+
+        let receipt = try await makeClient().resolveIdentifier(
+            policyId: "phone#retail",
+            encryptedInputHex: "0xABCD"
+        )
+        XCTAssertNil(receipt)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIssueIdentifierClaimReceiptAsync() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let opaqueId = "opaque:\(String(repeating: "44", count: 32))"
+        let receiptHash = String(repeating: "55", count: 32)
+        let uaid = "uaid:\(String(repeating: "66", count: 31))67"
+        let signed = try signedIdentifierReceiptFixture(accountId: accountId,
+                                                        resolvedAtMs: 7,
+                                                        expiresAtMs: nil)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/accounts/\(accountId)/identifiers/claim-receipt"
+            )
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
+            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "resolved_at_ms":7,
+              "backend":"bfv-affine-sha3-256-v1",
+              "signature":"\(signed.signatureHex)",
+              "signature_payload_hex":"\(signed.signaturePayloadHex)",
+              "signature_payload":{
+                "policy_id":"phone#retail",
+                "opaque_id":"\(opaqueId)",
+                "receipt_hash":"\(receiptHash)",
+                "uaid":"\(uaid)",
+                "account_id":"\(accountId)",
+                "resolved_at_ms":7
+              }
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let receipt = try await makeClient().issueIdentifierClaimReceipt(
+            accountId: accountId,
+            policyId: "phone#retail",
+            encryptedInputHex: "ABCD"
+        )
+        XCTAssertEqual(receipt?.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.uaid, uaid)
+        XCTAssertEqual(receipt?.accountId, accountId)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetIdentifierClaimByReceiptHashAsync() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/identifiers/receipts/\(String(repeating: "55", count: 32))"
+            )
+            XCTAssertEqual(request.httpMethod, "GET")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
+              "receipt_hash":"\(String(repeating: "55", count: 32))",
+              "uaid":"uaid:\(String(repeating: "66", count: 31))67",
+              "account_id":"\(accountId)",
+              "verified_at_ms":7
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let claim = try await makeClient().getIdentifierClaimByReceiptHash(String(repeating: "55", count: 32))
+        XCTAssertEqual(claim?.policyId, "phone#retail")
+        XCTAssertEqual(claim?.accountId, accountId)
+        XCTAssertEqual(claim?.verifiedAtMs, 7)
+    }
+
+    func testIdentifierNormalizationCanonicalizesPhoneAndEmail() throws {
+        XCTAssertEqual(
+            try ToriiIdentifierNormalization.phoneE164.normalize(" +1 (555) 123-4567 ", field: "phone"),
+            "+15551234567"
+        )
+        XCTAssertEqual(
+            try ToriiIdentifierNormalization.emailAddress.normalize(" Alice.Example@Example.COM ", field: "email"),
+            "alice.example@example.com"
+        )
+        XCTAssertEqual(
+            try ToriiIdentifierNormalization.accountNumber.normalize(" gb82-west-1234 ", field: "account"),
+            "GB82WEST1234"
+        )
+    }
+
+    func testIdentifierLookupRequestBuilderCanonicalizesPolicyInput() throws {
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "phone#retail",
+            owner: try canonicalOwnerLiteral(),
+            active: true,
+            normalization: .phoneE164,
+            resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            note: nil
+        )
+        let request = try policy.plaintextRequest(input: " +1 (555) 123-4567 ")
+        XCTAssertEqual(request.policyId, "phone#retail")
+        XCTAssertEqual(request.input, "+15551234567")
+        XCTAssertNil(request.encryptedInputHex)
+    }
+
+    func testIdentifierBfvEnvelopeBuilderProducesDeterministicCiphertext() throws {
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "string#retail",
+            owner: try canonicalOwnerLiteral(),
+            active: true,
+            normalization: .exact,
+            resolverPublicKey: "ed25519:ed0120" + String(repeating: "11", count: 32),
+            backend: "bfv-affine-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
+                parameters: ToriiIdentifierBfvParameters(
+                    polynomialDegree: 8,
+                    plaintextModulus: 256,
+                    ciphertextModulus: 16_777_216,
+                    decompositionBaseLog: 12
+                ),
+                publicKey: ToriiIdentifierBfvPublicKey(
+                    b: [11_472_226, 15_791_131, 10_301_391, 6_321_610, 502_045, 1_948_157, 5_332_249, 12_641_494],
+                    a: [3_503_246, 2_379_264, 12_091_019, 30_169, 15_804_162, 8_155_629, 2_418_997, 3_003_107]
+                ),
+                maxInputBytes: 3
+            ),
+            note: nil
+        )
+        let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+        let expected =
+            "4e525430000035a9bf76d68dbb0c35a9bf76d68dbb0c00b0040000000000007f6fd892e275492500a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002bab6f00000000000800000000000000440e93000000000008000000000000005b2502000000000008000000000000004a671400000000000800000000000000bc3e2600000000000800000000000000413d86000000000008000000000000005619f800000000000800000000000000bd73fa0000000000880000000000000008000000000000000800000000000000ee884300000000000800000000000000dd21b100000000000800000000000000fe7c52000000000008000000000000001639a5000000000008000000000000006a979d00000000000800000000000000ddd4430000000000080000000000000051086700000000000800000000000000ef13ae00000000002001000000000000880000000000000008000000000000000800000000000000776dc80000000000080000000000000093060d0000000000080000000000000033077500000000000800000000000000ddc4190000000000080000000000000062ea230000000000080000000000000056ef0b00000000000800000000000000ab52d500000000000800000000000000e9457c0000000000880000000000000008000000000000000800000000000000f2214200000000000800000000000000c9edcf000000000008000000000000001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000000008000000000000003dee83000000000008000000000000006e7efa00000000000800000000000000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e8700000000000800000000000000aed22c000000000008000000000000006121980000000000080000000000000036ac8d00000000000800000000000000d143930000000000080000000000000089206d0000000000880000000000000008000000000000000800000000000000417ded00000000000800000000000000d79c33000000000008000000000000009f332d0000000000080000000000000091fe5700000000000800000000000000533de8000000000008000000000000005db9df00000000000800000000000000a8c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d656000000000008000000000000005d874500000000000800000000000000567ab30000000000080000000000000007272f00000000000800000000000000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a00000000000800000000000000704fc100000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000000008000000000000005748720000000000080000000000000060909200000000000800000000000000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f680000000000"
+
+        XCTAssertEqual(try policy.encryptInput("ab", seedHex: seedHex), expected)
+        let request = try policy.encryptedRequest(input: "ab", seedHex: seedHex)
+        XCTAssertEqual(request.policyId, "string#retail")
+        XCTAssertNil(request.input)
+        XCTAssertEqual(request.encryptedInputHex, expected)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -3677,7 +4011,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetNodeCapabilitiesAsync() async throws {
         let payload = """
-        {"supported_abi_versions":[1,2,3],"default_compile_target":2}
+        {"abi_version":1}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -3687,8 +4021,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let capabilities = try await makeClient().getNodeCapabilities()
-        XCTAssertEqual(capabilities.supportedAbiVersions, [1, 2, 3])
-        XCTAssertEqual(capabilities.defaultCompileTarget, 2)
+        XCTAssertEqual(capabilities.abiVersion, 1)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -3952,7 +4285,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetRuntimeMetricsAsync() async throws {
         let payload = """
-        {"active_abi_versions_count":4,"upgrade_events_total":{"proposed":5,"activated":6,"canceled":1}}
+        {"abi_version":1,"upgrade_events_total":{"proposed":5,"activated":6,"canceled":1}}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -3962,7 +4295,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
 
         let metrics = try await makeClient().getRuntimeMetrics()
-        XCTAssertEqual(metrics.activeAbiVersionsCount, 4)
+        XCTAssertEqual(metrics.abiVersion, 1)
         XCTAssertEqual(metrics.upgradeEventsTotal.proposed, 5)
         XCTAssertEqual(metrics.upgradeEventsTotal.activated, 6)
         XCTAssertEqual(metrics.upgradeEventsTotal.canceled, 1)
@@ -3971,7 +4304,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetRuntimeAbiActiveAsync() async throws {
         let payload = """
-        {"active_versions":[1,4,7],"default_compile_target":4}
+        {"abi_version":1}
         """.data(using: .utf8)!
 
         StubURLProtocol.handler = { request in
@@ -3981,8 +4314,7 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
 
         let snapshot = try await makeClient().getRuntimeAbiActive()
-        XCTAssertEqual(snapshot.activeVersions, [1, 4, 7])
-        XCTAssertEqual(snapshot.defaultCompileTarget, 4)
+        XCTAssertEqual(snapshot.abiVersion, 1)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4014,10 +4346,10 @@ final class ToriiClientHeaderTests: XCTestCase {
                 "manifest": {
                   "name": "Upgrade Foo",
                   "description": "Test upgrade",
-                  "abi_version": 2,
+                  "abi_version": 1,
                   "abi_hash": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-                  "added_syscalls": [42],
-                  "added_pointer_types": [7],
+                  "added_syscalls": [],
+                  "added_pointer_types": [],
                   "start_height": 100,
                   "end_height": 200
                 },
@@ -4049,9 +4381,9 @@ final class ToriiClientHeaderTests: XCTestCase {
         let manifest = item.record.manifest
         XCTAssertEqual(manifest.name, "Upgrade Foo")
         XCTAssertEqual(manifest.description, "Test upgrade")
-        XCTAssertEqual(manifest.abiVersion, 2)
-        XCTAssertEqual(manifest.addedSyscalls, [42])
-        XCTAssertEqual(manifest.addedPointerTypes, [7])
+        XCTAssertEqual(manifest.abiVersion, 1)
+        XCTAssertEqual(manifest.addedSyscalls, [])
+        XCTAssertEqual(manifest.addedPointerTypes, [])
         XCTAssertEqual(manifest.startHeight, 100)
         XCTAssertEqual(manifest.endHeight, 200)
         XCTAssertEqual(manifest.abiHashHex, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
@@ -4062,9 +4394,9 @@ final class ToriiClientHeaderTests: XCTestCase {
         let manifest = ToriiRuntimeUpgradeManifest(
             name: "Upgrade Foo",
             description: "Test",
-            abiVersion: 3,
+            abiVersion: 1,
             abiHashHex: "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-            addedSyscalls: [10, 11],
+            addedSyscalls: [],
             addedPointerTypes: [],
             startHeight: 123,
             endHeight: 456
@@ -4082,12 +4414,12 @@ final class ToriiClientHeaderTests: XCTestCase {
                 return (HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!, Data())
             }
             XCTAssertEqual(manifestJSON["name"] as? String, "Upgrade Foo")
-            XCTAssertEqual(manifestJSON["abi_version"] as? Int, 3)
+            XCTAssertEqual(manifestJSON["abi_version"] as? Int, 1)
             XCTAssertEqual(manifestJSON["abi_hash"] as? String, "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
             XCTAssertEqual(manifestJSON["start_height"] as? Int, 123)
             XCTAssertEqual(manifestJSON["end_height"] as? Int, 456)
             if let syscalls = manifestJSON["added_syscalls"] as? [NSNumber] {
-                XCTAssertEqual(syscalls.map(\.intValue), [10, 11])
+                XCTAssertTrue(syscalls.isEmpty)
             }
             if let pointerTypes = manifestJSON["added_pointer_types"] as? [NSNumber] {
                 XCTAssertTrue(pointerTypes.isEmpty)
@@ -4100,6 +4432,48 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertTrue(action.ok)
         XCTAssertEqual(action.txInstructions.first?.wireId, "Upgrade")
         XCTAssertEqual(action.txInstructions.first?.payloadHex, "00")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListRuntimeUpgradesRejectsNonV1ManifestAsync() async throws {
+        let upgradeId = String(repeating: "9", count: 64)
+        let payload = """
+        {
+          "items": [
+            {
+              "id_hex": "\(upgradeId)",
+              "record": {
+                "manifest": {
+                  "name": "Upgrade Foo",
+                  "description": "Test upgrade",
+                  "abi_version": 2,
+                  "abi_hash": "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
+                  "added_syscalls": [],
+                  "added_pointer_types": [],
+                  "start_height": 100,
+                  "end_height": 200
+                },
+                "status": { "Proposed": null },
+                "proposer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "created_height": 90
+              }
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/runtime/upgrades")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+            return (response, payload)
+        }
+
+        do {
+            _ = try await makeClient().listRuntimeUpgrades()
+            XCTFail("expected listRuntimeUpgrades to reject non-v1 ABI manifests")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("abi_version must be 1"))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -7000,6 +7374,225 @@ id: 88
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testProposeMultisigContractCallEncodesAliasSelector() {
+        let expectation = expectation(description: "propose multisig contract call")
+        let proposalId = String(repeating: "a", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/call/multisig/propose")
+            XCTAssertEqual(request.httpMethod, "POST")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@hbl")
+            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["namespace"] as? String, "apps")
+            XCTAssertEqual(json["contract_id"] as? String, "mint")
+            XCTAssertEqual(json["entrypoint"] as? String, "execute")
+            XCTAssertEqual(json["gas_limit"] as? Int, 5)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigContractCallProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl"),
+            signerAccountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            namespace: "apps",
+            contractId: "mint",
+            entrypoint: "execute",
+            payload: .object(["amount": .string("10")]),
+            gasAssetId: "norito:4e52543000000011",
+            feeSponsor: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            gasLimit: 5
+        )
+        makeClient().proposeMultisigContractCall(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertTrue(response.ok)
+                XCTAssertEqual(response.resolvedMultisigAccountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                XCTAssertEqual(response.proposalId, proposalId)
+                XCTAssertEqual(response.instructionsHash, proposalId)
+                XCTAssertEqual(response.creationTimeMs, 123)
+                XCTAssertEqual(response.signingMessageB64, "AQ==")
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testApproveMultisigContractCallEncodesConcreteSelector() {
+        let expectation = expectation(description: "approve multisig contract call")
+        let proposalId = String(repeating: "b", count: 64)
+        let txHash = String(repeating: "c", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/call/multisig/approve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["multisig_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            XCTAssertEqual(json["proposal_id"] as? String, proposalId)
+            XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","executed_tx_hash_hex":"\(txHash)"}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigContractCallApproveRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            signerAccountId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            signatureB64: "AQ==",
+            proposalId: proposalId
+        )
+        makeClient().approveMultisigContractCall(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertTrue(response.ok)
+                XCTAssertEqual(response.proposalId, proposalId)
+                XCTAssertEqual(response.executedTxHashHex, txHash)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testGetMultisigSpecDecodesResolvedAccount() {
+        let expectation = expectation(description: "multisig spec")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/spec")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@ubl")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","spec":{"quorum":2,"transaction_ttl_ms":60000}}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigSpecRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@ubl")
+        )
+        makeClient().getMultisigSpec(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertEqual(response.resolvedMultisigAccountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                XCTAssertEqual(response.spec["quorum"], .number(2))
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testListMultisigProposalsDecodesEntries() {
+        let expectation = expectation(description: "multisig proposals list")
+        let proposalId = String(repeating: "d", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl"]}}]}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposalsListRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl")
+        )
+        makeClient().listMultisigProposals(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertEqual(response.proposals.count, 1)
+                XCTAssertEqual(response.proposals.first?.proposalId, proposalId)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testGetMultisigProposalDecodesProposalLookup() {
+        let expectation = expectation(description: "multisig proposal get")
+        let proposalId = String(repeating: "e", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["instructions_hash"] as? String, proposalId)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl","operator2@hbl"]}}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposalGetRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl"),
+            instructionsHash: proposalId
+        )
+        makeClient().getMultisigProposal(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertEqual(response.proposalId, proposalId)
+                XCTAssertEqual(response.instructionsHash, proposalId)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {
+        let selector = ToriiMultisigAccountSelector(
+            multisigAccountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            multisigAccountAlias: "cbdc@hbl"
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(selector)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("exactly one"))
+        }
     }
 
     func testFetchContractCodeBytesDecodesResponse() {

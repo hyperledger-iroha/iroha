@@ -44,8 +44,8 @@ translation_last_reviewed: 2026-01-01
   - `description: String` — תיאור קצר למפעילים.
   - `abi_version: u16` — גרסת ABI יעד להפעלה (חייבת להיות 1 במהדורה הראשונה).
   - `abi_hash: [u8; 32]` — hash ABI קנוני למדיניות היעד.
-  - `added_syscalls: Vec<u16>` — מספרי syscall שנעשים תקפים עם גרסה זו.
-  - `added_pointer_types: Vec<u16>` — מזהי סוגי pointer שנוספו בשדרוג.
+  - `added_syscalls: Vec<u16>` — רשימת דלתא שמורה; בגרסת השחרור הראשונה היא חייבת להיות ריקה.
+  - `added_pointer_types: Vec<u16>` — רשימת דלתא שמורה; בגרסת השחרור הראשונה היא חייבת להיות ריקה.
   - `start_height: u64` — גובה הבלוק הראשון שבו ההפעלה מותרת.
   - `end_height: u64` — גבול עליון בלעדי לחלון ההפעלה.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — digests של SBOM לארטיפקטים של שדרוג.
@@ -119,7 +119,7 @@ translation_last_reviewed: 2026-01-01
 
 Torii ו-CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (ממומש)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (ממומש)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (ממומש)
   - `GET /v1/runtime/upgrades` -> רשימת רשומות (ממומש).
   - `POST /v1/runtime/upgrades/propose` -> עוטף את `ProposeRuntimeUpgrade` (מחזיר instruction skeleton; ממומש).
@@ -135,7 +135,7 @@ Torii ו-CLI
 
 API לשאילתות ליבה
 - שאילתת Norito יחידה (חתומה):
-  - `FindActiveAbiVersions` מחזיר מבנה Norito `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` מחזיר מבנה Norito `{ abi_version: u16 }`.
   - דוגמה: `docs/source/samples/find_active_abi_versions.md` (סוג/שדות ודוגמת JSON).
 
 הערות יישום (v1 בלבד)
@@ -155,7 +155,7 @@ API לשאילתות ליבה
   - להפיק `abi_version = 1` ולשבץ `abi_hash` קנוני של v1 ב-manifests `.to`.
 
 Telemetria
-- הוספת gauge `runtime.active_abi_versions` ו-counter `runtime.upgrade_events_total{kind}`.
+- הוספת gauge `runtime.abi_version` ו-counter `runtime.upgrade_events_total{kind}`.
 
 שיקולי אבטחה
 - רק root/sudo רשאים להציע/להפעיל/לבטל; manifests חייבים להיות חתומים כראוי.

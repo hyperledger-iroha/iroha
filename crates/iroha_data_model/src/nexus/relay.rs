@@ -52,13 +52,13 @@ pub struct LaneRelayEnvelope {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub manifest_root: Option<[u8; 32]>,
-    /// FastPQ proof material required before this relay can be admitted into the merge path.
+    /// `FastPQ` proof material required before this relay can be admitted into the merge path.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
 
-/// FastPQ proof metadata attached to a lane relay envelope.
+/// `FastPQ` proof metadata attached to a lane relay envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -318,7 +318,7 @@ impl LaneRelayEnvelope {
         self
     }
 
-    /// Attach FastPQ proof material to the envelope.
+    /// Attach `FastPQ` proof material to the envelope.
     #[must_use]
     pub fn with_fastpq_proof_material(
         mut self,
@@ -328,13 +328,13 @@ impl LaneRelayEnvelope {
         self
     }
 
-    /// Whether the envelope includes structurally valid FastPQ proof material.
+    /// Whether the envelope includes structurally valid `FastPQ` proof material.
     #[must_use]
     pub fn has_fastpq_proof_material(&self) -> bool {
         self.verify_fastpq_proof_material().is_ok()
     }
 
-    /// Validate FastPQ proof metadata.
+    /// Validate `FastPQ` proof metadata.
     ///
     /// # Errors
     ///
@@ -362,7 +362,7 @@ impl LaneRelayEnvelope {
         Ok(())
     }
 
-    /// Compute the canonical FastPQ proof digest expected for this envelope.
+    /// Compute the canonical `FastPQ` proof digest expected for this envelope.
     #[must_use]
     pub fn expected_fastpq_proof_digest(&self, verified_at_height: Option<u64>) -> Hash {
         let mut payload = Vec::with_capacity(
@@ -511,10 +511,10 @@ pub enum LaneRelayError {
     /// Aggregate signature bytes are missing, zeroed, or invalid.
     #[error("aggregate signature missing or invalid for QC")]
     AggregateSignatureInvalid,
-    /// FastPQ proof metadata is required for merge admission.
+    /// `FastPQ` proof metadata is required for merge admission.
     #[error("FastPQ proof metadata missing for lane relay envelope")]
     MissingFastpqProof,
-    /// FastPQ proof metadata failed structural validation.
+    /// `FastPQ` proof metadata failed structural validation.
     #[error("FastPQ proof metadata is invalid for lane relay envelope")]
     InvalidFastpqProof,
 }

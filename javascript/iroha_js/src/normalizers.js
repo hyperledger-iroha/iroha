@@ -21,7 +21,7 @@ function assertString(value, name) {
   return value;
 }
 
-function normalizeUaidLiteral(value, name) {
+export function normalizeUaidLiteral(value, name) {
   const literal = assertString(value, name).trim();
   if (!literal) {
     fail(ValidationErrorCode.INVALID_ACCOUNT_ID, `${name} must be a non-empty string`, name);
@@ -49,7 +49,7 @@ function normalizeUaidLiteral(value, name) {
   return `uaid:${hexPortion.toLowerCase()}`;
 }
 
-function normalizeOpaqueLiteral(value, name) {
+export function normalizeOpaqueLiteral(value, name) {
   const literal = assertString(value, name).trim();
   if (!literal) {
     fail(ValidationErrorCode.INVALID_ACCOUNT_ID, `${name} must be a non-empty string`, name);
@@ -148,6 +148,33 @@ export function canonicalizeMultihashHex(value, name) {
   return `${fnHex}${lenHex}${payloadHex}`;
 }
 
+export function normalizeIdentifierInput(value, normalization, name = "identifier") {
+  const raw = assertString(value, name);
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  const mode = assertString(normalization, `${name}Normalization`).trim().toLowerCase();
+  switch (mode) {
+    case "exact":
+      return trimmed;
+    case "lowercase_trimmed":
+      return trimmed.toLowerCase();
+    case "phone_e164":
+      return normalizePhoneIdentifier(trimmed, name);
+    case "email_address":
+      return normalizeEmailIdentifier(trimmed, name);
+    case "account_number":
+      return normalizeAccountNumberIdentifier(trimmed, name);
+    default:
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name}Normalization must be one of exact, lowercase_trimmed, phone_e164, email_address, or account_number`,
+        `${name}Normalization`,
+      );
+  }
+}
+
 function decodeVarint(bytes, start, end, name) {
   let value = 0n;
   let shift = 0n;
@@ -174,6 +201,53 @@ function decodeVarint(bytes, start, end, name) {
     );
   }
   return Number(value);
+}
+
+function normalizePhoneIdentifier(raw, name) {
+  const compact = Array.from(raw)
+    .filter((ch) => ![" ", "\t", "\n", "\r", "-", "(", ")", "."].includes(ch))
+    .join("");
+  const withoutPrefix = compact.startsWith("+")
+    ? compact.slice(1)
+    : compact.startsWith("00")
+      ? compact.slice(2)
+      : compact;
+  if (!withoutPrefix || !/^[0-9]+$/.test(withoutPrefix)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must contain digits with optional leading '+' or '00'`,
+      name,
+    );
+  }
+  return `+${withoutPrefix}`;
+}
+
+function normalizeEmailIdentifier(raw, name) {
+  const lowered = raw.trim().toLowerCase();
+  const parts = lowered.split("@");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must contain exactly one '@' with non-empty local and domain parts`,
+      name,
+    );
+  }
+  return lowered;
+}
+
+function normalizeAccountNumberIdentifier(raw, name) {
+  const normalized = Array.from(raw)
+    .filter((ch) => ![" ", "\t", "\n", "\r", "-"].includes(ch))
+    .map((ch) => ch.toUpperCase())
+    .join("");
+  if (!normalized || !/^[A-Z0-9_/.]+$/.test(normalized)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must contain ASCII alphanumeric characters, '_', '/', or '.'`,
+      name,
+    );
+  }
+  return normalized;
 }
 
 export function normalizeAccountId(value, name) {

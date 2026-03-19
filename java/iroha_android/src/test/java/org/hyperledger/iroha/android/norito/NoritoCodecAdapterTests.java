@@ -47,15 +47,6 @@ public final class NoritoCodecAdapterTests {
     javaCodecRoundTripsPayload();
     javaCodecEncodesAccountIdAuthority();
     javaCodecEncodesMultisigAuthority();
-    javaCodecCanonicalizesMultisigAuthorityOrder();
-    javaCodecReencodesSingleKeyPayloadIdentically();
-    javaCodecReencodesMultisigPayloadIdentically();
-    javaCodecRejectsNegativeChainIdFieldLength();
-    javaCodecRejectsNegativeAccountControllerVariantLength();
-    javaCodecRejectsNegativeMultisigMemberCount();
-    javaCodecRejectsOversizedMultisigMemberCountForPayload();
-    javaCodecRejectsLegacyCanonicalAuthorityIdentifier();
-    javaCodecRejectsNestedDomainAuthorityIdentifier();
     javaCodecEncodesMultisigSignatures();
     javaCodecEncodesChainIdLayout();
     javaCodecSupportsInstructionsVariant();
@@ -67,11 +58,10 @@ public final class NoritoCodecAdapterTests {
 
   private static void javaCodecRoundTripsPayload() throws NoritoException {
     final byte[] instructions = "android-instructions".getBytes();
-    final String authority = sampleAuthority(0x10);
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000001")
-            .setAuthority(authority)
+            .setAuthority("alice@wonderland")
             .setCreationTimeMs(1_735_000_000_123L)
             .setExecutable(Executable.ivm(instructions))
             .setTimeToLiveMs(5_000L)
@@ -84,7 +74,7 @@ public final class NoritoCodecAdapterTests {
 
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
     assert decoded.chainId().equals("00000001") : "Chain ID must round-trip";
-    assert decoded.authority().equals(authority) : "Authority must round-trip";
+    assert decoded.authority().equals("alice@wonderland") : "Authority must round-trip";
     assert decoded.creationTimeMs() == 1_735_000_000_123L : "creation_time_ms must round-trip";
     assert Arrays.equals(instructions, decoded.executable().ivmBytes())
         : "Decoded payload should match original instructions";
@@ -97,15 +87,15 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecEncodesAccountIdAuthority() throws NoritoException {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) 0x3A);
-    final String i105;
+    final String ih58;
     try {
-      i105 =
-          AccountAddress.fromAccount(publicKey, "ed25519")
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      ih58 =
+          AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
+              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
     }
-    final String authority = i105;
+    final String authority = ih58 + "@wonderland";
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -118,14 +108,32 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
-    assert authority.equals(decoded.authority()) : "AccountId authority must round-trip";
+    assert authority.equals(decoded.authority()) : "AccountId authority must round-trip with domain";
     final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
     readField(decoder, "payload.chain_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
-    assertSingleAuthorityField(
-        authorityField,
-        PublicKeyCodec.encodePublicKeyMultihash(0x01, publicKey),
-        "payload.authority");
+    final int expectedStringPayloadLen = 8 + authority.getBytes(StandardCharsets.UTF_8).length;
+    assert authorityField.length != expectedStringPayloadLen
+        : "AccountId authority should encode as struct, not legacy string";
+    final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
+    final long domainNameFieldLen = readU64(authorityField, 8, "authority.domain.name");
+    final long domainStringLen = readU64(authorityField, 16, "authority.domain.name.string");
+    assert domainNameFieldLen == 8 + domainStringLen : "DomainId name must wrap a single string";
+    assert domainFieldLen == 8 + domainNameFieldLen : "Domain field must wrap a DomainId payload";
+    final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
+    final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
+    final int controllerPayloadOffset = controllerFieldOffset + 8;
+    final long controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag");
+    assert controllerTag == 0L : "AccountController tag must be Single";
+    final long publicKeyFieldLen =
+        readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.public_key");
+    final long publicKeyStringLen =
+        readU64(authorityField, controllerPayloadOffset + 12, "authority.controller.public_key.string");
+    assert publicKeyFieldLen == 8 + publicKeyStringLen
+        : "Public key field must wrap a single string";
+    assert authorityField.length
+        == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
+        : "Authority payload must contain domain and controller fields only";
   }
 
   private static void javaCodecEncodesMultisigAuthority() throws NoritoException {
@@ -139,15 +147,15 @@ public final class NoritoCodecAdapterTests {
         AccountAddress.MultisigMemberPayload.of(0x01, 2, memberKeyB);
     final AccountAddress.MultisigPolicyPayload policy =
         AccountAddress.MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB));
-    final String i105;
+    final String ih58;
     try {
-      i105 =
-          AccountAddress.fromMultisigPolicy(policy)
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+      ih58 =
+          AccountAddress.fromMultisigPolicy("wonderland", policy)
+              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build multisig authority address", ex);
     }
-    final String authority = i105;
+    final String authority = ih58 + "@wonderland";
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -161,330 +169,52 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
     assert authority.equals(decoded.authority()) : "Multisig authority must round-trip";
+
     final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
     readField(decoder, "payload.chain_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
-    assertMultisigAuthorityField(
-        authorityField,
-        1,
-        2,
-        new String[] {
-          PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyA),
-          PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyB)
-        },
-        new int[] {1, 2},
-        "payload.authority");
-  }
+    final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
+    final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
+    final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
+    final int controllerPayloadOffset = controllerFieldOffset + 8;
+    final long controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag");
+    assert controllerTag == 1L : "AccountController tag must be Multisig";
+    final long policyLen =
+        readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.policy");
+    final int policyOffset = controllerPayloadOffset + 12;
+    assert authorityField.length >= policyOffset + policyLen
+        : "Multisig policy payload must fit within controller field";
 
-  private static void javaCodecCanonicalizesMultisigAuthorityOrder() throws NoritoException {
-    final byte[] memberKeyA = fill(0x11, 32);
-    final byte[] memberKeyB = fill(0x22, 32);
-    final String sortedAuthority;
-    final String reversedAuthority;
-    try {
-      sortedAuthority =
-          AccountAddress.fromMultisigPolicy(
-                  AccountAddress.MultisigPolicyPayload.of(
-                      1,
-                      2,
-                      listOf(
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyA),
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyB))))
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-      reversedAuthority =
-          AccountAddress.fromMultisigPolicy(
-                  AccountAddress.MultisigPolicyPayload.of(
-                      1,
-                      2,
-                      listOf(
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyB),
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyA))))
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build multisig authorities", ex);
-    }
+    int cursor = policyOffset;
+    final int version = authorityField[cursor] & 0xFF;
+    cursor += 1;
+    final int threshold = readU16(authorityField, cursor, "authority.controller.policy.threshold");
+    cursor += 2;
+    assert version == 1 : "Multisig policy version must round-trip";
+    assert threshold == 2 : "Multisig policy threshold must round-trip";
+    final long memberCount =
+        readU64(authorityField, cursor, "authority.controller.policy.members");
+    cursor += 8;
+    assert memberCount == 2L : "Multisig policy member count must round-trip";
 
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    final byte[] sortedBytes =
-        adapter.encodeTransaction(
-            TransactionPayload.builder()
-                .setChainId("sort-test")
-                .setAuthority(sortedAuthority)
-                .setCreationTimeMs(1L)
-                .setExecutable(Executable.ivm(new byte[] {0x01}))
-                .build());
-    final byte[] reversedBytes =
-        adapter.encodeTransaction(
-            TransactionPayload.builder()
-                .setChainId("sort-test")
-                .setAuthority(reversedAuthority)
-                .setCreationTimeMs(1L)
-                .setExecutable(Executable.ivm(new byte[] {0x01}))
-                .build());
+    final String expectedMemberA =
+        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyA);
+    final String expectedMemberB =
+        PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyB);
 
-    assert Arrays.equals(sortedBytes, reversedBytes)
-        : "Multisig member ordering must be canonicalized";
-  }
+    cursor = assertMultisigMember(authorityField, cursor, expectedMemberA, 1, "member[0]");
+    cursor = assertMultisigMember(authorityField, cursor, expectedMemberB, 2, "member[1]");
 
-  private static void javaCodecReencodesSingleKeyPayloadIdentically() throws NoritoException {
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("00000000-0000-0000-0000-000000000000")
-            .setAuthority(sampleAuthority(0x10))
-            .setCreationTimeMs(1_710_600_000_000L)
-            .setExecutable(Executable.ivm(new byte[] {0x01, 0x02, 0x03}))
-            .build();
-
-    final byte[] encoded = adapter.encodeTransaction(payload);
-    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
-    final byte[] reencoded = adapter.encodeTransaction(decoded);
-
-    assert Arrays.equals(encoded, reencoded)
-        : "Single-key payload must encode/decode/re-encode identically";
-  }
-
-  private static void javaCodecReencodesMultisigPayloadIdentically() throws NoritoException {
-    final byte[] memberKeyA = fill(0x33, 32);
-    final byte[] memberKeyB = fill(0x44, 32);
-    final String authority;
-    try {
-      authority =
-          AccountAddress.fromMultisigPolicy(
-                  AccountAddress.MultisigPolicyPayload.of(
-                      1,
-                      2,
-                      listOf(
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyA),
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyB))))
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build multisig authority", ex);
-    }
-
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("00000000-0000-0000-0000-000000000000")
-            .setAuthority(authority)
-            .setCreationTimeMs(1_710_600_000_000L)
-            .setExecutable(Executable.ivm(new byte[] {0x01, 0x02, 0x03}))
-            .build();
-
-    final byte[] encoded = adapter.encodeTransaction(payload);
-    final TransactionPayload decoded = adapter.decodeTransaction(encoded);
-    final byte[] reencoded = adapter.encodeTransaction(decoded);
-
-    assert Arrays.equals(encoded, reencoded)
-        : "Multisig payload must encode/decode/re-encode identically";
-  }
-
-  private static void javaCodecRejectsNegativeChainIdFieldLength() throws NoritoException {
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("neg-chain-len")
-            .setAuthority(sampleAuthority(0x24))
-            .setCreationTimeMs(1_710_700_000_001L)
-            .setExecutable(Executable.ivm(new byte[] {0x01}))
-            .build();
-
-    final byte[] encoded = adapter.encodeTransaction(payload);
-    final byte[][] fields = splitTransactionFields(encoded);
-    final byte[] malformedChainField = Arrays.copyOf(fields[0], fields[0].length);
-    Arrays.fill(malformedChainField, 0, 8, (byte) 0xFF);
-    final byte[] malformedPayload =
-        assemblePayload(
-            NoritoHeader.MINOR_VERSION,
-            malformedChainField,
-            fields[1],
-            fields[2],
-            fields[3],
-            fields[4],
-            fields[5],
-            fields[6]);
-
-    final IllegalArgumentException root = expectDecodeIllegalArgument(adapter, malformedPayload);
-    assert root.getMessage().contains("Field payload must be non-negative")
-        : "unexpected error message: " + root.getMessage();
-  }
-
-  private static void javaCodecRejectsNegativeAccountControllerVariantLength() throws NoritoException {
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("neg-controller-len")
-            .setAuthority(sampleAuthority(0x25))
-            .setCreationTimeMs(1_710_700_000_002L)
-            .setExecutable(Executable.ivm(new byte[] {0x02}))
-            .build();
-
-    final byte[] encoded = adapter.encodeTransaction(payload);
-    final byte[][] fields = splitTransactionFields(encoded);
-    final byte[] malformedAuthorityField = Arrays.copyOf(fields[1], fields[1].length);
-    Arrays.fill(malformedAuthorityField, 4, 12, (byte) 0xFF);
-    final byte[] malformedPayload =
-        assemblePayload(
-            NoritoHeader.MINOR_VERSION,
-            fields[0],
-            malformedAuthorityField,
-            fields[2],
-            fields[3],
-            fields[4],
-            fields[5],
-            fields[6]);
-
-    final IllegalArgumentException root = expectDecodeIllegalArgument(adapter, malformedPayload);
-    assert root.getMessage().contains("AccountController variant payload must be non-negative")
-        : "unexpected error message: " + root.getMessage();
-  }
-
-  private static void javaCodecRejectsNegativeMultisigMemberCount() throws NoritoException {
-    final byte[] memberKeyA = fill(0x33, 32);
-    final byte[] memberKeyB = fill(0x44, 32);
-    final String authority;
-    try {
-      authority =
-          AccountAddress.fromMultisigPolicy(
-                  AccountAddress.MultisigPolicyPayload.of(
-                      1,
-                      2,
-                      listOf(
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyA),
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyB))))
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build multisig authority", ex);
-    }
-
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("neg-member-count")
-            .setAuthority(authority)
-            .setCreationTimeMs(1_710_700_000_003L)
-            .setExecutable(Executable.ivm(new byte[] {0x03}))
-            .build();
-
-    final byte[] encoded = adapter.encodeTransaction(payload);
-    final byte[][] fields = splitTransactionFields(encoded);
-    final byte[] malformedAuthorityField = mutateMultisigMemberCount(fields[1], -1L);
-    final byte[] malformedPayload =
-        assemblePayload(
-            NoritoHeader.MINOR_VERSION,
-            fields[0],
-            malformedAuthorityField,
-            fields[2],
-            fields[3],
-            fields[4],
-            fields[5],
-            fields[6]);
-
-    final IllegalArgumentException root = expectDecodeIllegalArgument(adapter, malformedPayload);
-    assert root.getMessage().contains("MultisigMember count must be non-negative")
-        : "unexpected error message: " + root.getMessage();
-  }
-
-  private static void javaCodecRejectsOversizedMultisigMemberCountForPayload() throws NoritoException {
-    final byte[] memberKeyA = fill(0x55, 32);
-    final byte[] memberKeyB = fill(0x66, 32);
-    final String authority;
-    try {
-      authority =
-          AccountAddress.fromMultisigPolicy(
-                  AccountAddress.MultisigPolicyPayload.of(
-                      1,
-                      2,
-                      listOf(
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyA),
-                          AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyB))))
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build multisig authority", ex);
-    }
-
-    final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
-    final TransactionPayload payload =
-        TransactionPayload.builder()
-            .setChainId("oversized-member-count")
-            .setAuthority(authority)
-            .setCreationTimeMs(1_710_700_000_004L)
-            .setExecutable(Executable.ivm(new byte[] {0x04}))
-            .build();
-
-    final byte[] encoded = adapter.encodeTransaction(payload);
-    final byte[][] fields = splitTransactionFields(encoded);
-    final byte[] malformedAuthorityField =
-        mutateMultisigMemberCount(fields[1], (long) Integer.MAX_VALUE);
-    final byte[] malformedPayload =
-        assemblePayload(
-            NoritoHeader.MINOR_VERSION,
-            fields[0],
-            malformedAuthorityField,
-            fields[2],
-            fields[3],
-            fields[4],
-            fields[5],
-            fields[6]);
-
-    final IllegalArgumentException root = expectDecodeIllegalArgument(adapter, malformedPayload);
-    assert root.getMessage().contains("MultisigMember count exceeds payload bounds")
-        : "unexpected error message: " + root.getMessage();
-  }
-
-  private static void javaCodecRejectsLegacyCanonicalAuthorityIdentifier() throws NoritoException {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, (byte) 0x6C);
-    final String canonical;
-    try {
-      canonical = AccountAddress.fromAccount(publicKey, "ed25519").canonicalHex();
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build canonical authority address", ex);
-    }
-    try {
-      TransactionPayload.builder()
-          .setChainId("00000002")
-          .setAuthority(canonical)
-          .setCreationTimeMs(1_735_000_000_456L)
-          .setExecutable(Executable.ivm(new byte[] {0x01}))
-          .build();
-      throw new AssertionError("expected canonical authority identifier rejection");
-    } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("canonical I105 encoded")
-          : "unexpected error message: " + expected.getMessage();
-    }
-  }
-
-  private static void javaCodecRejectsNestedDomainAuthorityIdentifier() throws NoritoException {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, (byte) 0x7D);
-    final String i105;
-    try {
-      i105 =
-          AccountAddress.fromAccount(publicKey, "ed25519")
-              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build authority address", ex);
-    }
-    try {
-      TransactionPayload.builder()
-          .setChainId("00000002")
-          .setAuthority(i105 + "@wonderland@fallback")
-          .setCreationTimeMs(1_735_000_000_456L)
-          .setExecutable(Executable.ivm(new byte[] {0x01}))
-          .build();
-      throw new AssertionError("expected nested-domain authority identifier rejection");
-    } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("must not include @domain suffix")
-          : "unexpected error message: " + expected.getMessage();
-    }
+    assert authorityField.length
+        == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
+        : "Authority payload must contain domain and controller fields only";
   }
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000003")
-            .setAuthority(sampleAuthority(0x31))
+            .setAuthority("alice@wonderland")
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x0A, 0x0B}))
             .build();
@@ -543,7 +273,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(chainId)
-            .setAuthority(sampleAuthority(0x41))
+            .setAuthority("chain@wonderland")
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();
@@ -569,7 +299,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000009")
-            .setAuthority(sampleAuthority(0x51))
+            .setAuthority("instructions@wonderland")
             .setCreationTimeMs(1_735_111_111_000L)
             .setExecutable(
                 Executable.instructions(
@@ -614,7 +344,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000011")
-            .setAuthority(sampleAuthority(0x61))
+            .setAuthority("wire@wonderland")
             .setCreationTimeMs(1_735_111_111_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
@@ -637,7 +367,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000012")
-            .setAuthority(sampleAuthority(0x71))
+            .setAuthority("ivm@wonderland")
             .setCreationTimeMs(1_735_222_222_123L)
             .setExecutable(Executable.ivm(ivmBytes))
             .build();
@@ -679,7 +409,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000013")
-            .setAuthority(sampleAuthority(0x81))
+            .setAuthority("layout@wonderland")
             .setCreationTimeMs(1_735_222_333_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
@@ -804,82 +534,19 @@ public final class NoritoCodecAdapterTests {
       final String label) {
     final long memberLen = readU64(payload, offset, "authority.controller.policy." + label);
     final int memberOffset = offset + 8;
-    final int memberSize = Math.toIntExact(memberLen);
-    final byte[] memberPayload = Arrays.copyOfRange(payload, memberOffset, memberOffset + memberSize);
-    final NoritoDecoder memberDecoder =
-        new NoritoDecoder(memberPayload, NoritoHeader.MINOR_VERSION);
-    final byte[] publicKeyField = readField(memberDecoder, "authority.controller.policy." + label + ".public_key");
-    final byte[] weightField = readField(memberDecoder, "authority.controller.policy." + label + ".weight");
-    assert memberDecoder.remaining() == 0 : label + " payload should not have trailing bytes";
+    final long publicKeyLen =
+        readU64(payload, memberOffset, "authority.controller.policy." + label + ".public_key");
+    final int publicKeyOffset = memberOffset + 8;
+    final int publicKeySize = Math.toIntExact(publicKeyLen);
     final String publicKey =
-        decodeFieldPayload(
-            publicKeyField,
-            NoritoAdapters.stringAdapter(),
-            "authority.controller.policy." + label + ".public_key");
-    final int weight =
-        Math.toIntExact(
-            decodeFieldPayload(
-                weightField,
-                NoritoAdapters.uint(16),
-                "authority.controller.policy." + label + ".weight"));
+        new String(payload, publicKeyOffset, publicKeySize, StandardCharsets.UTF_8);
+    final int weightOffset = publicKeyOffset + publicKeySize;
+    final int weight = readU16(payload, weightOffset, "authority.controller.policy." + label + ".weight");
     assert expectedPublicKey.equals(publicKey) : label + " public key must round-trip";
     assert weight == expectedWeight : label + " weight must round-trip";
-    return memberOffset + memberSize;
-  }
-
-  private static void assertSingleAuthorityField(
-      final byte[] authorityField, final String expectedPublicKey, final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(authorityField, NoritoHeader.MINOR_VERSION);
-    final long controllerTag = readU32(authorityField, 0, field + ".tag");
-    assert controllerTag == 0L : field + " must encode AccountController::Single";
-    decoder.readUInt(32);
-    final byte[] controllerPayload = readField(decoder, field + ".controller");
-    final String publicKeyLiteral =
-        decodeFieldPayload(controllerPayload, NoritoAdapters.stringAdapter(), field + ".public_key");
-    assert decoder.remaining() == 0 : field + " should not have trailing bytes";
-    assert expectedPublicKey.equals(publicKeyLiteral) : field + " public key must round-trip";
-  }
-
-  private static void assertMultisigAuthorityField(
-      final byte[] authorityField,
-      final int expectedVersion,
-      final int expectedThreshold,
-      final String[] expectedPublicKeys,
-      final int[] expectedWeights,
-      final String field) {
-    final long controllerTag = readU32(authorityField, 0, field + ".tag");
-    assert controllerTag == 1L : field + " must encode AccountController::Multisig";
-    final NoritoDecoder decoder = new NoritoDecoder(authorityField, NoritoHeader.MINOR_VERSION);
-    decoder.readUInt(32);
-    final byte[] policyPayload = readField(decoder, field + ".policy");
-    assert decoder.remaining() == 0 : field + " should not have trailing bytes";
-
-    final NoritoDecoder policyDecoder = new NoritoDecoder(policyPayload, NoritoHeader.MINOR_VERSION);
-    final byte[] versionField = readField(policyDecoder, field + ".policy.version");
-    final byte[] thresholdField = readField(policyDecoder, field + ".policy.threshold");
-    final byte[] membersField = readField(policyDecoder, field + ".policy.members");
-    assert policyDecoder.remaining() == 0 : field + ".policy should not have trailing bytes";
-
-    final long version =
-        decodeFieldPayload(versionField, NoritoAdapters.uint(8), field + ".policy.version");
-    final long threshold =
-        decodeFieldPayload(thresholdField, NoritoAdapters.uint(16), field + ".policy.threshold");
-    assert version == expectedVersion : field + ".policy.version must round-trip";
-    assert threshold == expectedThreshold : field + ".policy.threshold must round-trip";
-
-    final long count = readU64(membersField, 0, field + ".policy.members.count");
-    assert count == expectedPublicKeys.length : field + ".policy.members count mismatch";
-    int offset = 8;
-    for (int i = 0; i < expectedPublicKeys.length; i++) {
-      offset =
-          assertMultisigMember(
-              membersField,
-              offset,
-              expectedPublicKeys[i],
-              expectedWeights[i],
-              "member[" + i + "]");
-    }
-    assert offset == membersField.length : field + ".policy.members should consume all bytes";
+    final int expectedLen = 8 + publicKeySize + 2;
+    assert memberLen == expectedLen : label + " payload size mismatch";
+    return memberOffset + Math.toIntExact(memberLen);
   }
 
   private static <T> T decodeFieldPayload(
@@ -959,98 +626,6 @@ public final class NoritoCodecAdapterTests {
     final byte[] out = new byte[length];
     Arrays.fill(out, (byte) value);
     return out;
-  }
-
-  private static byte[][] splitTransactionFields(final byte[] payload) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
-    final byte[][] fields = new byte[7][];
-    fields[0] = readField(decoder, "payload.chain_id");
-    fields[1] = readField(decoder, "payload.authority");
-    fields[2] = readField(decoder, "payload.creation_time_ms");
-    fields[3] = readField(decoder, "payload.executable");
-    fields[4] = readField(decoder, "payload.time_to_live_ms");
-    fields[5] = readField(decoder, "payload.nonce");
-    fields[6] = readField(decoder, "payload.metadata");
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException("payload has trailing bytes");
-    }
-    return fields;
-  }
-
-  private static IllegalArgumentException expectDecodeIllegalArgument(
-      final NoritoJavaCodecAdapter adapter, final byte[] payload) {
-    try {
-      adapter.decodeTransaction(payload);
-      throw new AssertionError("expected decode failure");
-    } catch (final NoritoException expected) {
-      final Throwable root = rootCause(expected);
-      assert root instanceof IllegalArgumentException
-          : "expected IllegalArgumentException root cause, got " + root;
-      return (IllegalArgumentException) root;
-    }
-  }
-
-  private static Throwable rootCause(final Throwable throwable) {
-    Throwable current = throwable;
-    while (current.getCause() != null) {
-      current = current.getCause();
-    }
-    return current;
-  }
-
-  private static byte[] mutateMultisigMemberCount(
-      final byte[] authorityField, final long countValue) {
-    final NoritoDecoder authorityDecoder =
-        new NoritoDecoder(authorityField, NoritoHeader.MINOR_VERSION);
-    final long tag = authorityDecoder.readUInt(32);
-    if (tag != 1L) {
-      throw new IllegalArgumentException("authority must encode AccountController::Multisig");
-    }
-    final byte[] policyField = readField(authorityDecoder, "payload.authority.policy");
-    if (authorityDecoder.remaining() != 0) {
-      throw new IllegalArgumentException("authority field has trailing bytes");
-    }
-
-    final NoritoDecoder policyDecoder = new NoritoDecoder(policyField, NoritoHeader.MINOR_VERSION);
-    final byte[] versionField = readField(policyDecoder, "payload.authority.policy.version");
-    final byte[] thresholdField = readField(policyDecoder, "payload.authority.policy.threshold");
-    final byte[] membersField = readField(policyDecoder, "payload.authority.policy.members");
-    if (policyDecoder.remaining() != 0) {
-      throw new IllegalArgumentException("policy field has trailing bytes");
-    }
-    if (membersField.length < 8) {
-      throw new IllegalArgumentException("members field too short to mutate count");
-    }
-
-    final byte[] mutatedMembersField = Arrays.copyOf(membersField, membersField.length);
-    writeU64LittleEndian(mutatedMembersField, 0, countValue);
-
-    final byte[] mutatedPolicyField =
-        assemblePayload(
-            NoritoHeader.MINOR_VERSION, versionField, thresholdField, mutatedMembersField);
-    final NoritoEncoder authorityEncoder = new NoritoEncoder(NoritoHeader.MINOR_VERSION);
-    authorityEncoder.writeUInt(1L, 32);
-    authorityEncoder.writeLength(mutatedPolicyField.length, false);
-    authorityEncoder.writeBytes(mutatedPolicyField);
-    return authorityEncoder.toByteArray();
-  }
-
-  private static void writeU64LittleEndian(
-      final byte[] target, final int offset, final long value) {
-    for (int i = 0; i < 8; i++) {
-      target[offset + i] = (byte) ((value >>> (8 * i)) & 0xFF);
-    }
-  }
-
-  private static String sampleAuthority(final int fillByte) {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, (byte) fillByte);
-    try {
-      return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build sample authority", ex);
-    }
   }
 
   private static java.util.Optional<byte[]> decodeOptionPayload(

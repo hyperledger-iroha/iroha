@@ -630,6 +630,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
         TlvLen { value, .. } => f(*value),
         JsonGetInt { json, key, .. }
+        | JsonGetNumeric { json, key, .. }
         | JsonGetJson { json, key, .. }
         | JsonGetName { json, key, .. }
         | JsonGetAccountId { json, key, .. }
@@ -808,6 +809,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::JsonEncode { dest, .. } => Some(*dest),
         Instr::JsonDecode { dest, .. } => Some(*dest),
         Instr::JsonGetInt { dest, .. }
+        | Instr::JsonGetNumeric { dest, .. }
         | Instr::JsonGetJson { dest, .. }
         | Instr::JsonGetName { dest, .. }
         | Instr::JsonGetAccountId { dest, .. }

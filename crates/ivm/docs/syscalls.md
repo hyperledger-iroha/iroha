@@ -1,10 +1,10 @@
 //! IVM Syscall Table (ABI v1)
 
 This document lists IVM syscall numbers and their ABI for `abi_version = 1`.
-The host and VM enforce an ABI‑version gating policy: for each `abi_version` the
-set of available syscalls is fixed and unknown or disallowed numbers must be
-rejected with `E_SCALL_UNKNOWN` (mapped to `VMError::UnknownSyscall`). The
-canonical policy is centralized in `ivm::syscalls::is_syscall_allowed(policy, number)`.
+The host and VM enforce the fixed first-release ABI v1 policy: the set of
+available syscalls is fixed and unknown or disallowed numbers must be rejected
+with `E_SCALL_UNKNOWN` (mapped to `VMError::UnknownSyscall`). The canonical
+policy is centralized in `ivm::syscalls::is_syscall_allowed(policy, number)`.
 
 ABI policy
 - V1 (1): allows the canonical ABI surface listed here and in `abi_syscall_list()`; unknown numbers
@@ -389,6 +389,7 @@ but they must not change the host ABI.
 | 0x7C | JSON_GET_NFT_ID | - | - | - |
 | 0x7D | JSON_GET_BLOB_HEX | - | - | - |
 | 0x7E | VRF_EPOCH_SEED | - | - | - |
+| 0x7F | JSON_GET_NUMERIC | - | - | - |
 | 0x90 | SM3_HASH | - | - | - |
 | 0x91 | SM2_VERIFY | - | - | - |
 | 0x92 | SM4_GCM_SEAL | - | - | - |

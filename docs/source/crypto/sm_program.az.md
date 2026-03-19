@@ -323,8 +323,7 @@ Aşağıdakı xülasə mühəndisliyi buraxmaq üçün ortaya çıxan başlıq m
 
 ```json
 {
-  "supported_abi_versions": [1],
-  "default_compile_target": 1,
+  "abi_version": 1,
   "data_model_version": 1,
   "crypto": {
     "sm": {

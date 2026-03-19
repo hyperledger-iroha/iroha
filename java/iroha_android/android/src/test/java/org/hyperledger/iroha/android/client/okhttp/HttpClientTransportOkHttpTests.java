@@ -5,7 +5,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 
-import java.util.Arrays;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
@@ -14,7 +13,6 @@ import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
-import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.ClientConfig;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
@@ -51,7 +49,7 @@ public final class HttpClientTransportOkHttpTests {
       final TransactionPayload payload =
           TransactionPayload.builder()
               .setChainId("00000001")
-              .setAuthority(sampleAuthority((byte) 0x21))
+              .setAuthority("okhttp@wonderland")
               .setCreationTimeMs(1_700_000_000_000L)
               .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))
               .setTimeToLiveMs(5_000L)
@@ -90,17 +88,6 @@ public final class HttpClientTransportOkHttpTests {
       assertEquals("application/x-norito, application/json", recorded.getHeader("Accept"));
       assertEquals("ok", recorded.getHeader("X-Test"));
       assertArrayEquals(SignedTransactionEncoder.encodeVersioned(tx), recorded.getBody().readByteArray());
-    }
-  }
-
-  private static String sampleAuthority(final byte seed) {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, seed);
-    try {
-      return AccountAddress.fromAccount(publicKey, "ed25519")
-          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    } catch (final AccountAddress.AccountAddressException ex) {
-      throw new IllegalStateException("Failed to build sample authority", ex);
     }
   }
 

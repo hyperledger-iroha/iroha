@@ -57,6 +57,8 @@
 //! - `app_api_https` (off by default): enables HTTPS webhook delivery using rustls
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
 mod api_version;
+#[cfg(feature = "app_api")]
+mod identifier_resolution;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "push")]
@@ -649,12 +651,34 @@ fn resolve_alias_on_chain(
 ) -> Result<Option<(String, AccountId)>, Error> {
     let (canonical, alias_label) = parse_account_alias_label(alias_input)?;
     let state_view = app.state.view();
-    Ok(state_view
+    if let Some(account_id) = state_view
         .world()
         .account_aliases()
         .get(&alias_label)
         .cloned()
-        .map(|account_id| (canonical, account_id)))
+    {
+        return Ok(Some((canonical, account_id)));
+    }
+
+    let mut matched_account_id: Option<AccountId> = None;
+    for (account_id, value) in state_view.world().accounts().iter() {
+        if value.as_ref().label() != Some(&alias_label) {
+            continue;
+        }
+        if let Some(existing) = matched_account_id.as_ref() {
+            if existing != account_id {
+                return Err(Error::Query(
+                    iroha_data_model::ValidationFail::InternalError(format!(
+                        "account alias `{canonical}` is bound to multiple accounts: {existing} and {account_id}"
+                    )),
+                ));
+            }
+        } else {
+            matched_account_id = Some(account_id.clone());
+        }
+    }
+
+    Ok(matched_account_id.map(|account_id| (canonical, account_id)))
 }
 
 fn resolve_alias_index_on_chain(
@@ -755,6 +779,8 @@ struct AppState {
     online_peers: OnlinePeersProvider,
     iso_bridge: Option<Arc<Iso20022BridgeRuntime>>,
     alias_service: Option<Arc<AliasService>>,
+    #[cfg(feature = "app_api")]
+    identifier_resolver: Option<Arc<identifier_resolution::IdentifierResolutionService>>,
     telemetry: routing::MaybeTelemetry,
     telemetry_profile: TelemetryProfile,
     api_versions: api_version::ApiVersionPolicy,
@@ -1851,6 +1877,73 @@ async fn enforce_api_version(
     Ok(response)
 }
 
+fn is_json_content_type(raw: &str) -> bool {
+    let base = raw.split(';').next().map(str::trim).unwrap_or_default();
+    if base.is_empty() {
+        return false;
+    }
+    if base.eq_ignore_ascii_case("application/json") || base.eq_ignore_ascii_case("text/json") {
+        return true;
+    }
+    base.to_ascii_lowercase().ends_with("+json")
+}
+
+fn normalize_json_content_type(raw: &str) -> Option<String> {
+    if !is_json_content_type(raw) {
+        return None;
+    }
+
+    let mut parts = raw.split(';');
+    let media_type = parts.next()?.trim();
+    if media_type.is_empty() {
+        return None;
+    }
+
+    let mut normalized = String::from(media_type);
+    for part in parts {
+        let parameter = part.trim();
+        if parameter.is_empty() {
+            continue;
+        }
+        let is_charset = parameter.split_once('=').map_or(false, |(name, _)| {
+            name.trim().eq_ignore_ascii_case("charset")
+        });
+        if is_charset {
+            continue;
+        }
+
+        normalized.push_str("; ");
+        normalized.push_str(parameter);
+    }
+    normalized.push_str("; charset=utf-8");
+
+    Some(normalized)
+}
+
+fn normalize_json_response_content_type(headers: &mut HeaderMap) {
+    let raw = headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    let Some(raw_content_type) = raw else {
+        return;
+    };
+    let Some(normalized) = normalize_json_content_type(raw_content_type) else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(&normalized) {
+        headers.insert(axum::http::header::CONTENT_TYPE, value);
+    }
+}
+
+async fn enforce_json_utf8_charset(
+    req: axum::http::Request<Body>,
+    next: Next,
+) -> Result<axum::response::Response, Infallible> {
+    let mut response = next.run(req).await;
+    normalize_json_response_content_type(response.headers_mut());
+    Ok(response)
+}
+
 async fn record_http_metrics(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -1896,6 +1989,63 @@ async fn record_http_metrics(
     });
 
     Ok(response)
+}
+
+#[cfg(test)]
+mod content_type_utf8_tests {
+    use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
+
+    use super::{normalize_json_content_type, normalize_json_response_content_type};
+
+    #[test]
+    fn normalizes_json_media_type_with_utf8_charset() {
+        assert_eq!(
+            normalize_json_content_type("application/json"),
+            Some("application/json; charset=utf-8".to_string())
+        );
+    }
+
+    #[test]
+    fn keeps_non_charset_parameters_when_normalizing() {
+        assert_eq!(
+            normalize_json_content_type(
+                "application/problem+json; profile=\"urn:problem\"; charset=iso-8859-1"
+            ),
+            Some("application/problem+json; profile=\"urn:problem\"; charset=utf-8".to_string())
+        );
+    }
+
+    #[test]
+    fn leaves_non_json_content_type_untouched() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/plain; charset=iso-8859-1"),
+        );
+
+        normalize_json_response_content_type(&mut headers);
+
+        assert_eq!(
+            headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/plain; charset=iso-8859-1"))
+        );
+    }
+
+    #[test]
+    fn rewrites_header_in_place_for_json_responses() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=latin1"),
+        );
+
+        normalize_json_response_content_type(&mut headers);
+
+        assert_eq!(
+            headers.get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/json; charset=utf-8"))
+        );
+    }
 }
 
 // Small helper to enforce token + rate limit
@@ -4215,6 +4365,198 @@ fn parse_account_id_for_endpoint(
 }
 
 #[cfg(feature = "app_api")]
+fn normalize_identifier_input(
+    policy: &iroha_data_model::identifier::IdentifierPolicy,
+    raw: &str,
+) -> Result<String, Error> {
+    policy.normalization.normalize(raw).map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_normalization_label(
+    normalization: iroha_data_model::identifier::IdentifierNormalization,
+) -> &'static str {
+    match normalization {
+        iroha_data_model::identifier::IdentifierNormalization::Exact => "exact",
+        iroha_data_model::identifier::IdentifierNormalization::LowercaseTrimmed => {
+            "lowercase_trimmed"
+        }
+        iroha_data_model::identifier::IdentifierNormalization::PhoneE164 => "phone_e164",
+        iroha_data_model::identifier::IdentifierNormalization::EmailAddress => "email_address",
+        iroha_data_model::identifier::IdentifierNormalization::AccountNumber => "account_number",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_conversion_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_internal_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn parse_encrypted_identifier_ciphertext(
+    raw: &str,
+) -> Result<iroha_crypto::BfvIdentifierCiphertext, Error> {
+    let literal = raw.trim();
+    if literal.is_empty() {
+        return Err(identifier_conversion_error(
+            "encrypted identifier ciphertext must not be empty",
+        ));
+    }
+    let bytes = hex::decode(literal.trim_start_matches("0x")).map_err(|err| {
+        identifier_conversion_error(format!(
+            "encrypted identifier ciphertext is not valid hex: {err}"
+        ))
+    })?;
+    let archived =
+        norito::from_bytes::<iroha_crypto::BfvIdentifierCiphertext>(&bytes).map_err(|err| {
+            identifier_conversion_error(format!(
+                "encrypted identifier ciphertext is not valid Norito BFV data: {err}"
+            ))
+        })?;
+    Ok(norito::core::NoritoDeserialize::deserialize(archived))
+}
+
+#[cfg(feature = "app_api")]
+fn derive_identifier_request_draft(
+    resolver: &identifier_resolution::IdentifierResolutionService,
+    policy: &iroha_data_model::identifier::IdentifierPolicy,
+    program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
+    request: &routing::IdentifierResolveRequestDto,
+) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
+    match (request.input.as_deref(), request.encrypted_input.as_deref()) {
+        (Some(raw), None) => {
+            let normalized = normalize_identifier_input(policy, raw)?;
+            resolver
+                .derive(policy, program_policy, &normalized)
+                .map_err(|err| identifier_internal_error(err.to_string()))
+        }
+        (None, Some(ciphertext_hex)) => {
+            let ciphertext = parse_encrypted_identifier_ciphertext(ciphertext_hex)?;
+            match program_policy.commitment.backend {
+                iroha_crypto::RamLfeBackend::BfvAffineSha3_256V1
+                | iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1 => resolver
+                    .derive_encrypted(policy, program_policy, &ciphertext)
+                    .map_err(|err| identifier_internal_error(err.to_string())),
+                _ => {
+                    let raw = resolver
+                        .decrypt_input(policy, program_policy, &ciphertext)
+                        .map_err(|err| match err {
+                            identifier_resolution::IdentifierResolutionError::Fhe(_)
+                            | identifier_resolution::IdentifierResolutionError::InvalidUtf8 => {
+                                identifier_conversion_error(err.to_string())
+                            }
+                            _ => identifier_internal_error(err.to_string()),
+                        })?;
+                    let normalized = normalize_identifier_input(policy, &raw)?;
+                    resolver
+                        .derive(policy, program_policy, &normalized)
+                        .map_err(|err| identifier_internal_error(err.to_string()))
+                }
+            }
+        }
+        (Some(_), Some(_)) => Err(identifier_conversion_error(
+            "supply exactly one of `input` or `encrypted_input`",
+        )),
+        (None, None) => Err(identifier_conversion_error(
+            "one of `input` or `encrypted_input` is required",
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_policy_summary_dto(
+    policy: &iroha_data_model::identifier::IdentifierPolicy,
+    program_policy: Option<&iroha_data_model::ram_lfe::RamLfeProgramPolicy>,
+) -> routing::IdentifierPolicySummaryDto {
+    let public_parameters = program_policy
+        .and_then(|policy| identifier_resolution::decode_bfv_public_parameters(policy).ok());
+    let ram_fhe_profile = program_policy
+        .and_then(|policy| identifier_resolution::decode_ram_fhe_profile(policy).ok())
+        .flatten();
+    routing::IdentifierPolicySummaryDto {
+        policy_id: policy.id.to_string(),
+        owner: policy.owner.to_string(),
+        active: policy.active,
+        normalization: identifier_normalization_label(policy.normalization).to_owned(),
+        resolver_public_key: program_policy
+            .map(|policy| policy.resolver_public_key.to_string())
+            .unwrap_or_default(),
+        backend: program_policy
+            .map(|policy| policy.commitment.backend.as_str().to_owned())
+            .unwrap_or_default(),
+        input_encryption: public_parameters.as_ref().map(|_| "bfv-v1".to_owned()),
+        input_encryption_public_parameters: public_parameters
+            .as_ref()
+            .and_then(|value| norito::to_bytes(value).ok())
+            .map(hex::encode_upper),
+        input_encryption_public_parameters_decoded: public_parameters,
+        ram_fhe_profile,
+        note: policy.note.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_receipt_response(
+    receipt: &iroha_data_model::identifier::IdentifierResolutionReceipt,
+    backend: &str,
+) -> Result<routing::IdentifierResolveResponseDto, Error> {
+    let signature_payload = receipt.payload();
+    let signature_payload_hex = receipt
+        .payload_bytes()
+        .map(hex::encode_upper)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
+    Ok(routing::IdentifierResolveResponseDto {
+        policy_id: receipt.payload.policy_id.to_string(),
+        opaque_id: receipt.payload.opaque_id.to_string(),
+        receipt_hash: receipt.payload.receipt_hash.to_string(),
+        uaid: receipt.payload.uaid.to_string(),
+        account_id: receipt.payload.account_id.to_string(),
+        resolved_at_ms: receipt.resolved_at_ms(),
+        expires_at_ms: receipt.expires_at_ms(),
+        backend: backend.to_owned(),
+        signature: hex::encode_upper(
+            receipt
+                .signature
+                .as_ref()
+                .ok_or_else(|| {
+                    identifier_internal_error("identifier receipt is missing a signature")
+                })?
+                .payload(),
+        ),
+        signature_payload_hex,
+        signature_payload,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn identifier_claim_lookup_response(
+    claim: &iroha_data_model::identifier::IdentifierClaimRecord,
+) -> routing::IdentifierClaimLookupResponseDto {
+    routing::IdentifierClaimLookupResponseDto {
+        policy_id: claim.policy_id.to_string(),
+        opaque_id: claim.opaque_id.to_string(),
+        receipt_hash: claim.receipt_hash.to_string(),
+        uaid: claim.uaid.to_string(),
+        account_id: claim.account_id.to_string(),
+        verified_at_ms: claim.verified_at_ms,
+        expires_at_ms: claim.expires_at_ms,
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
     raw.parse::<DomainId>()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
@@ -4916,12 +5258,16 @@ async fn handler_explorer_transaction_detail(
     if !allowed {
         check_access(&app, &headers, None, "v1/explorer/transactions/{hash}").await?;
     }
-    crate::routing::handle_v1_explorer_transaction_detail(
+    match crate::routing::handle_v1_explorer_transaction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
     )
     .await
+    {
+        Ok(response) => Ok(response),
+        Err(error) => Ok(explorer_json_error_response(error)),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -4941,13 +5287,31 @@ async fn handler_explorer_instruction_detail(
         )
         .await?;
     }
-    crate::routing::handle_v1_explorer_instruction_detail(
+    match crate::routing::handle_v1_explorer_instruction_detail(
         app.state.clone(),
         app.telemetry.clone(),
         hash,
         index,
     )
     .await
+    {
+        Ok(response) => Ok(response),
+        Err(error) => Ok(explorer_json_error_response(error)),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn explorer_json_error_response(error: Error) -> AxResponse {
+    let status = error.status_code();
+    let message = error.to_string();
+    let payload = json_object(vec![
+        json_entry("error", "request_failed"),
+        json_entry("status", status.as_u16()),
+        json_entry("message", message),
+    ]);
+    let mut response = JsonBody(payload).into_response();
+    *response.status_mut() = status;
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -10159,6 +10523,136 @@ async fn handler_post_contract_call_multisig_approve(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_multisig_spec(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigSpecRequestDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_spec"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(&headers, None, "v1/multisig/spec", app.api_token_enforced());
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_spec"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_spec(app.state.clone(), request).await {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_spec"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_proposals_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigProposalsListRequestDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/multisig/proposals/list",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_proposals_list"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_proposals_list(app.state.clone(), request).await {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_proposals_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigProposalsGetRequestDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/multisig/proposals/get",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_proposals_get"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_proposals_get(app.state.clone(), request).await {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_sorafs_register_manifest(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -13181,6 +13675,175 @@ async fn handler_asset_alias_resolve(
     )
 }
 
+#[cfg(feature = "app_api")]
+async fn handler_identifier_policies(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, None, "v1/identifier-policies").await?;
+    let world = app.state.world_view();
+    let items = world
+        .identifier_policies_iter()
+        .map(|policy| {
+            identifier_policy_summary_dto(
+                policy,
+                world.ram_lfe_program_policies().get(&policy.program_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    json_ok(routing::IdentifierPolicyListDto {
+        total: u64::try_from(items.len()).unwrap_or(u64::MAX),
+        items,
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_identifier_resolve(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, None, "v1/identifiers/resolve").await?;
+    let policy_id =
+        iroha_data_model::identifier::IdentifierPolicyId::from_str(request.policy_id.trim())
+            .map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+                ))
+            })?;
+
+    let world = app.state.world_view();
+    let Some(policy) = world.identifier_policies().get(&policy_id).cloned() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if !policy.active {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
+    let Some(program_policy) = world
+        .ram_lfe_program_policies()
+        .get(&policy.program_id)
+        .cloned()
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if !program_policy.active {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
+    let Some(resolver) = app.identifier_resolver.as_ref() else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
+    let draft = derive_identifier_request_draft(resolver, &policy, &program_policy, &request)?;
+    let Some(claim) = world.resolve_identifier_claim(&policy.id, &draft.opaque_id) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if claim
+        .expires_at_ms
+        .is_some_and(|expires_at_ms| expires_at_ms <= draft.resolved_at_ms)
+    {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let receipt = resolver
+        .sign_receipt(&policy, &program_policy, &draft, &claim)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        })?;
+    json_ok(identifier_receipt_response(
+        &receipt,
+        draft.backend.as_str(),
+    )?)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_identifier_claim_receipt(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(account_literal): AxPath<String>,
+    NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        None,
+        "v1/accounts/{account_id}/identifiers/claim-receipt",
+    )
+    .await?;
+    let account_id = parse_account_id_for_endpoint(
+        &app,
+        &account_literal,
+        "/v1/accounts/{account_id}/identifiers/claim-receipt",
+    )?;
+    let policy_id =
+        iroha_data_model::identifier::IdentifierPolicyId::from_str(request.policy_id.trim())
+            .map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+                ))
+            })?;
+    let world = app.state.world_view();
+    let Some(policy) = world.identifier_policies().get(&policy_id).cloned() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if !policy.active {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
+    let Some(program_policy) = world
+        .ram_lfe_program_policies()
+        .get(&policy.program_id)
+        .cloned()
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if !program_policy.active {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
+    let Some(account) = world.account(&account_id).ok() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let Some(uaid) = account.uaid().copied() else {
+        return Ok(StatusCode::CONFLICT.into_response());
+    };
+    let Some(resolver) = app.identifier_resolver.as_ref() else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
+    let draft = derive_identifier_request_draft(resolver, &policy, &program_policy, &request)?;
+    let receipt = resolver
+        .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        })?;
+    json_ok(identifier_receipt_response(
+        &receipt,
+        draft.backend.as_str(),
+    )?)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_identifier_receipt_lookup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(receipt_hash_literal): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        None,
+        "v1/identifiers/receipts/{receipt_hash}",
+    )
+    .await?;
+    let receipt_hash = Hash::from_str(receipt_hash_literal.trim()).map_err(|err| {
+        identifier_conversion_error(format!("invalid identifier receipt hash: {err}"))
+    })?;
+    let world = app.state.world_view();
+    let Some(claim) = world.resolve_identifier_claim_by_receipt_hash(&receipt_hash) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    json_ok(identifier_claim_lookup_response(&claim))
+}
+
 fn normalise_alias(input: &str) -> String {
     input
         .chars()
@@ -13902,6 +14565,8 @@ pub struct Torii {
     push_rate_limiter: limits::RateLimiter,
     iso_bridge: Option<Arc<Iso20022BridgeRuntime>>,
     alias_service: Option<Arc<AliasService>>,
+    #[cfg(feature = "app_api")]
+    identifier_resolver: Option<Arc<identifier_resolution::IdentifierResolutionService>>,
     rbc_store_dir: Option<PathBuf>,
     rbc_sampling: iroha_config::parameters::actual::RbcSampling,
     da_receipt_signer: KeyPair,
@@ -14493,6 +15158,20 @@ impl Torii {
             #[cfg(not(feature = "app_api"))]
             let group = group;
 
+            #[cfg(feature = "app_api")]
+            let group = group
+                .route("/v1/multisig/spec", post(handler_post_multisig_spec))
+                .route(
+                    "/v1/multisig/proposals/list",
+                    post(handler_post_multisig_proposals_list),
+                )
+                .route(
+                    "/v1/multisig/proposals/get",
+                    post(handler_post_multisig_proposals_get),
+                );
+            #[cfg(not(feature = "app_api"))]
+            let group = group;
+
             let group = group
                 .route(
                     "/v1/sorafs/pin/register",
@@ -14814,6 +15493,16 @@ impl Torii {
                     "/v1/space-directory/manifests/revoke",
                     post(handler_space_directory_manifest_revoke),
                 )
+                .route("/v1/identifier-policies", get(handler_identifier_policies))
+                .route(
+                    "/v1/accounts/{account_id}/identifiers/claim-receipt",
+                    post(handler_identifier_claim_receipt),
+                )
+                .route(
+                    "/v1/identifiers/receipts/{receipt_hash}",
+                    get(handler_identifier_receipt_lookup),
+                )
+                .route("/v1/identifiers/resolve", post(handler_identifier_resolve))
                 // Repo agreements listing
                 .route("/v1/repo/agreements", get(handler_repo_agreements))
                 .route(
@@ -16028,6 +16717,34 @@ impl Torii {
                 allowed_controllers: cfg.allowed_controllers.clone(),
             }
         });
+        #[cfg(feature = "app_api")]
+        let identifier_resolver = config.identifier_resolver.as_ref().and_then(|cfg| {
+            if cfg.policies.is_empty() {
+                iroha_logger::warn!(
+                    "torii.identifier_resolver is enabled but no policies are configured"
+                );
+                return None;
+            }
+            let service = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+            for (index, policy_cfg) in cfg.policies.iter().enumerate() {
+                let signer =
+                    KeyPair::from_private_key(policy_cfg.signer_private_key.0.clone())
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "invalid torii.identifier_resolver.policies[{index}].signer_private_key: {err}"
+                            )
+                        });
+                service.register_policy_runtime(
+                    policy_cfg.policy_id.clone(),
+                    policy_cfg.secret.clone(),
+                    signer,
+                    policy_cfg.receipt_ttl.and_then(|ttl| {
+                        u64::try_from(ttl.as_millis()).ok()
+                    }),
+                );
+            }
+            Some(service)
+        });
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
@@ -16092,6 +16809,8 @@ impl Torii {
             high_load_subscription_tx_threshold,
             iso_bridge: iso_bridge_runtime,
             alias_service,
+            #[cfg(feature = "app_api")]
+            identifier_resolver,
             rbc_store_dir: None,
             rbc_sampling: config.rbc_sampling.clone(),
             da_receipt_signer,
@@ -16327,6 +17046,8 @@ impl Torii {
             online_peers: self.online_peers.clone(),
             iso_bridge: self.iso_bridge.clone(),
             alias_service: self.alias_service.clone(),
+            #[cfg(feature = "app_api")]
+            identifier_resolver: self.identifier_resolver.clone(),
             telemetry: self.telemetry.clone(),
             telemetry_profile: self.telemetry_profile,
             api_versions: self.api_versions.clone(),
@@ -16554,6 +17275,7 @@ impl Torii {
                 enforce_api_version,
             ))
             .layer(axum::middleware::from_fn(inject_remote_addr_header))
+            .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 record_http_metrics,
@@ -18346,6 +19068,8 @@ pub(crate) mod tests_runtime_handlers {
             online_peers: peers,
             iso_bridge,
             alias_service,
+            #[cfg(feature = "app_api")]
+            identifier_resolver: None,
             telemetry,
             telemetry_profile,
             api_versions: api_version::ApiVersionPolicy::default(),
@@ -18448,7 +19172,7 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
-        // Active ABI versions
+        // Active ABI version
         let resp = super::handler_runtime_abi_active(State(app.clone()), headers.clone(), None)
             .await
             .expect("ok");
@@ -18458,11 +19182,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let active: crate::runtime::RuntimeAbiActiveResponse =
             norito::json::from_slice(&bytes).expect("decode json");
-        assert!(active.active_versions.contains(&1));
-        assert_eq!(
-            active.default_compile_target,
-            *active.active_versions.iter().max().unwrap()
-        );
+        assert_eq!(active.abi_version, 1);
 
         // ABI hash
         let resp = super::handler_runtime_abi_hash(State(app), headers, None)
@@ -18476,6 +19196,68 @@ pub(crate) mod tests_runtime_handlers {
             norito::json::from_slice(&bytes).expect("decode json");
         assert_eq!(hash.policy, "V1");
         assert_eq!(hash.abi_hash_hex.len(), 64);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn explorer_transaction_detail_not_found_returns_json_response() {
+        let app = mk_app_state_for_tests();
+        let headers = HeaderMap::new();
+        let missing_hash = "00".repeat(32);
+
+        let response = super::handler_explorer_transaction_detail(
+            State(app),
+            headers,
+            axum::extract::Path(missing_hash),
+        )
+        .await
+        .expect("explorer detail handler should map errors to HTTP responses");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let _payload: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("json error payload");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn explorer_instruction_detail_not_found_returns_json_response() {
+        let app = mk_app_state_for_tests();
+        let headers = HeaderMap::new();
+        let missing_hash = "00".repeat(32);
+
+        let response = super::handler_explorer_instruction_detail(
+            State(app),
+            headers,
+            axum::extract::Path((missing_hash, 0)),
+        )
+        .await
+        .expect("explorer instruction detail handler should map errors to HTTP responses");
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let _payload: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("json error payload");
     }
 
     #[cfg(feature = "telemetry")]
@@ -18548,6 +19330,65 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(torii.tx_rate_per_authority_per_sec.unwrap().get(), 123);
         assert_eq!(torii.tx_burst_per_authority.unwrap().get(), 456);
         assert_eq!(torii.high_load_tx_threshold, 50);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_identifier_resolver_uses_config_runtime() {
+        let mut cfg = crate::test_utils::mk_minimal_root_cfg();
+        let signer = KeyPair::random();
+        cfg.torii.identifier_resolver =
+            Some(iroha_config::parameters::actual::ToriiIdentifierResolver {
+                policies: vec![
+                    iroha_config::parameters::actual::ToriiIdentifierResolverPolicy {
+                        policy_id: "phone#retail".parse().expect("policy id"),
+                        secret: vec![0x01, 0x02, 0x03, 0x04],
+                        signer_private_key: iroha_crypto::ExposedPrivateKey(
+                            signer.private_key().clone(),
+                        ),
+                        receipt_ttl: Some(Duration::from_secs(30)),
+                    },
+                ],
+            });
+
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+
+        let torii = Torii::new_with_handle(
+            ChainId::from("identifier-resolver-config-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+
+        assert!(
+            torii.identifier_resolver.is_some(),
+            "Torii should build an in-process identifier resolver from config"
+        );
     }
 
     #[tokio::test]
@@ -18982,7 +19823,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let metrics: crate::runtime::RuntimeMetricsResponse =
             norito::json::from_slice(&metrics_bytes).expect("decode json");
-        assert_eq!(metrics.active_abi_versions_count, 1);
+        assert_eq!(metrics.abi_version, 1);
 
         let caps_resp = super::handler_node_capabilities(State(app), headers, None)
             .await
@@ -18993,8 +19834,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let caps: crate::runtime::NodeCapabilitiesResponse =
             norito::json::from_slice(&caps_bytes).expect("decode json");
-        assert!(caps.supported_abi_versions.contains(&1));
-        assert_eq!(caps.default_compile_target, 1);
+        assert_eq!(caps.abi_version, 1);
         assert_eq!(
             caps.data_model_version,
             iroha_data_model::DATA_MODEL_VERSION
@@ -21426,13 +22266,22 @@ mod tests {
     use futures::executor;
     use http_body_util::BodyExt as _;
     use iroha_config::parameters::actual;
-    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{
+        BfvIdentifierPublicParameters, BfvParameters, Hash, KeyPair, RamLfeBackend,
+        RamLfeVerificationMode, SignatureOf, bfv_affine_policy_commitment,
+        bfv_programmed_policy_commitment_with_program,
+        bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
+        derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
+    };
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
         account::rekey::AccountLabel,
         account::{Account, AccountId, OpaqueAccountId},
         block::{BlockHeader, BlockSignature, SignedBlock},
         domain::{Domain, DomainId},
+        identifier::{IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId},
+        isi::identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
+        isi::ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
         name::Name,
         nexus::{
             AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId,
@@ -21440,6 +22289,7 @@ mod tests {
         },
         permission::Permission,
         proof::{ProofId, ProofRecord, ProofStatus, VerifyingKeyId, VerifyingKeyRecord},
+        ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
         transaction::{
             IvmBytecode, IvmProved,
             signed::{TransactionBuilder, TransactionResultInner},
@@ -21463,6 +22313,7 @@ mod tests {
             mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world, negotiated,
         },
     };
+    use iroha_core::smartcontracts::Execute;
 
     fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
         let signer_keypair = KeyPair::random();
@@ -21480,6 +22331,194 @@ mod tests {
             currency_assets: Vec::new(),
             reference_data: actual::IsoReferenceData::default(),
         }
+    }
+
+    fn sample_identifier_policy(
+        owner: &AccountId,
+        signer: &KeyPair,
+        policy_id: &IdentifierPolicyId,
+    ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
+        sample_identifier_policy_with_backend(
+            owner,
+            signer,
+            policy_id,
+            RamLfeBackend::BfvAffineSha3_256V1,
+        )
+    }
+
+    fn sample_programmed_identifier_policy(
+        owner: &AccountId,
+        signer: &KeyPair,
+        policy_id: &IdentifierPolicyId,
+    ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
+        sample_identifier_policy_with_backend(
+            owner,
+            signer,
+            policy_id,
+            RamLfeBackend::BfvProgrammedSha3_256V1,
+        )
+    }
+
+    fn sample_identifier_policy_with_backend(
+        owner: &AccountId,
+        signer: &KeyPair,
+        policy_id: &IdentifierPolicyId,
+        backend: RamLfeBackend,
+    ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
+        let program_id = sample_program_id(policy_id);
+        let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+            &sample_identifier_bfv_parameters(backend),
+            63,
+            b"resolver-secret",
+            &identifier_resolution::program_id_bytes(&program_id),
+        )
+        .expect("identifier BFV parameters");
+        let program_policy = match backend {
+            RamLfeBackend::BfvAffineSha3_256V1 => RamLfeProgramPolicy::new(
+                program_id.clone(),
+                owner.clone(),
+                backend,
+                RamLfeVerificationMode::Signed,
+                bfv_affine_policy_commitment(
+                    b"resolver-secret",
+                    norito::to_bytes(&public_parameters).expect("encode BFV parameters"),
+                )
+                .expect("policy commitment"),
+                signer.public_key().clone(),
+            ),
+            RamLfeBackend::BfvProgrammedSha3_256V1 => {
+                let hidden_program = default_bfv_programmed_hidden_program();
+                let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+                    public_parameters,
+                    &hidden_program,
+                    RamLfeVerificationMode::Signed,
+                    None,
+                );
+                let encoded_public_parameters = norito::to_bytes(&programmed_public_parameters)
+                    .expect("encode programmed BFV parameters");
+                RamLfeProgramPolicy::new(
+                    program_id.clone(),
+                    owner.clone(),
+                    backend,
+                    RamLfeVerificationMode::Signed,
+                    bfv_programmed_policy_commitment_with_program(
+                        b"resolver-secret",
+                        &encoded_public_parameters,
+                        &hidden_program,
+                    )
+                    .expect("policy commitment"),
+                    signer.public_key().clone(),
+                )
+            }
+            RamLfeBackend::HkdfSha3_512PrfV1 => unreachable!("sample BFV policy"),
+        };
+        let policy = IdentifierPolicy::new(
+            policy_id.clone(),
+            owner.clone(),
+            IdentifierNormalization::PhoneE164,
+            program_id,
+        );
+        (policy, program_policy)
+    }
+
+    fn sample_program_id(policy_id: &IdentifierPolicyId) -> RamLfeProgramId {
+        policy_id
+            .to_string()
+            .replace('#', "_")
+            .parse()
+            .expect("program id")
+    }
+
+    fn sample_identifier_bfv_parameters(backend: RamLfeBackend) -> BfvParameters {
+        BfvParameters {
+            polynomial_degree: 64,
+            ciphertext_modulus: match backend {
+                RamLfeBackend::BfvProgrammedSha3_256V1 => 1_u64 << 52,
+                RamLfeBackend::BfvAffineSha3_256V1 | RamLfeBackend::HkdfSha3_512PrfV1 => {
+                    1_u64 << 40
+                }
+            },
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        }
+    }
+
+    fn shared_sdk_identifier_bfv_public_parameters(
+        policy_id: &IdentifierPolicyId,
+    ) -> BfvIdentifierPublicParameters {
+        let parameters = sample_identifier_bfv_parameters(RamLfeBackend::BfvProgrammedSha3_256V1);
+        let program_id = sample_program_id(policy_id);
+        let (derived, _, _) = derive_identifier_key_material_from_seed(
+            &parameters,
+            63,
+            b"resolver-secret",
+            &identifier_resolution::program_id_bytes(&program_id),
+        )
+        .expect("derive shared SDK BFV public parameters");
+        derived
+    }
+
+    fn sample_identifier_policy_with_public_parameters(
+        owner: &AccountId,
+        signer: &KeyPair,
+        policy_id: &IdentifierPolicyId,
+        normalization: IdentifierNormalization,
+        public_parameters: &BfvIdentifierPublicParameters,
+    ) -> (IdentifierPolicy, RamLfeProgramPolicy) {
+        let program_id = sample_program_id(policy_id);
+        let hidden_program = default_bfv_programmed_hidden_program();
+        let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+            public_parameters.clone(),
+            &hidden_program,
+            RamLfeVerificationMode::Signed,
+            None,
+        );
+        let encoded_public_parameters =
+            norito::to_bytes(&programmed_public_parameters).expect("encode BFV parameters");
+        let program_policy = RamLfeProgramPolicy::new(
+            program_id.clone(),
+            owner.clone(),
+            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeVerificationMode::Signed,
+            bfv_programmed_policy_commitment_with_program(
+                b"resolver-secret",
+                &encoded_public_parameters,
+                &hidden_program,
+            )
+            .expect("policy commitment"),
+            signer.public_key().clone(),
+        );
+        let policy =
+            IdentifierPolicy::new(policy_id.clone(), owner.clone(), normalization, program_id);
+        (policy, program_policy)
+    }
+
+    fn register_and_activate_identifier_policy_bundle(
+        authority: &AccountId,
+        tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+        policy: &IdentifierPolicy,
+        program_policy: &RamLfeProgramPolicy,
+    ) {
+        RegisterRamLfeProgramPolicy {
+            policy: program_policy.clone(),
+        }
+        .execute(authority, tx)
+        .expect("register program policy");
+        ActivateRamLfeProgramPolicy {
+            program_id: program_policy.program_id.clone(),
+        }
+        .execute(authority, tx)
+        .expect("activate program policy");
+        RegisterIdentifierPolicy {
+            policy: policy.clone(),
+        }
+        .execute(authority, tx)
+        .expect("register policy");
+        ActivateIdentifierPolicy {
+            policy_id: policy.id.clone(),
+        }
+        .execute(authority, tx)
+        .expect("activate policy");
     }
 
     fn seed_proof_record_at_height(
@@ -21873,6 +22912,720 @@ mod tests {
         .into_response();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn alias_resolve_scans_account_labels_when_alias_index_is_missing() {
+        let alias = "banking@sbp";
+        let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
+            "sbp".parse::<DomainId>().expect("domain id"),
+            "banking".parse::<Name>().expect("label"),
+        );
+        let domain_id: DomainId = "sbp".parse().expect("domain id");
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account_id = authority.clone().to_account_id(domain_id);
+        let account = Account::new(account_id.clone())
+            .with_label(Some(alias_label))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let response = handler_alias_resolve(
+            State(app),
+            NoritoJson(routing::AliasResolveRequestDto {
+                alias: alias.to_string(),
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("body")
+            .to_bytes();
+        let dto: routing::AliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.alias, alias);
+        assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.source.as_deref(), Some("on_chain"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_policies_lists_registered_policy() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id))
+            .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
+                b"uaid-directory",
+            ))))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (policy, program_policy) = sample_identifier_policy(&authority, &signer, &policy_id);
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_identifier_policy_bundle(
+            &authority,
+            &mut tx,
+            &policy,
+            &program_policy,
+        );
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_identifier_policies(State(app), HeaderMap::new())
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierPolicyListDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items.len(), 1);
+        assert_eq!(dto.items[0].policy_id, policy_id.to_string());
+        assert!(dto.items[0].active);
+        assert_eq!(dto.items[0].backend, "bfv-affine-sha3-256-v1");
+        assert_eq!(dto.items[0].normalization, "phone_e164");
+        assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
+        assert!(
+            dto.items[0]
+                .input_encryption_public_parameters
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(dto.items[0].ram_fhe_profile.is_none());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_policies_expose_programmed_ram_fhe_profile() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id))
+            .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
+                b"uaid-directory-program-profile",
+            ))))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_identifier_policy_bundle(
+            &authority,
+            &mut tx,
+            &policy,
+            &program_policy,
+        );
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_identifier_policies(State(app), HeaderMap::new())
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierPolicyListDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items[0].backend, "bfv-programmed-sha3-256-v1");
+        let profile = dto.items[0]
+            .ram_fhe_profile
+            .clone()
+            .expect("programmed policies should expose a RAM-FHE profile");
+        assert_eq!(profile.profile_version, 1);
+        assert_eq!(profile.register_count, 4);
+        assert_eq!(profile.memory_lane_count, 32);
+        assert_eq!(profile.ciphertext_mul_per_step, 1);
+        assert_eq!(
+            profile.encrypted_input_mode,
+            iroha_crypto::BfvRamEncryptedInputMode::ResolverCanonicalizedEnvelopeV1
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_policies_enforce_token_policy() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            let mut tokens = HashSet::new();
+            tokens.insert("token-identifier".to_owned());
+            state.api_tokens_set = Arc::new(tokens);
+        }
+
+        let missing = handler_identifier_policies(State(app.clone()), HeaderMap::new()).await;
+        assert!(matches!(
+            missing,
+            Err(Error::Query(ValidationFail::NotPermitted(_)))
+        ));
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("token-identifier"));
+        let response = handler_identifier_policies(State(app), headers)
+            .await
+            .expect("token accepted")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_resolve_returns_bound_account() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory"));
+        let account = Account::new(authority.clone().to_account_id(domain_id))
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let input = "+15551234567";
+        let draft = resolver
+            .derive(&policy, &program_policy, input)
+            .expect("derive opaque id");
+
+        let receipt = resolver
+            .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
+            .expect("claim receipt");
+        let header = BlockHeader::new(
+            nonzero!(1_u64),
+            None,
+            None,
+            None,
+            receipt.resolved_at_ms(),
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_identifier_policy_bundle(
+            &authority,
+            &mut tx,
+            &policy,
+            &program_policy,
+        );
+        ClaimIdentifier {
+            account: authority.clone(),
+            receipt,
+        }
+        .execute(&authority, &mut tx)
+        .expect("claim identifier");
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_identifier_resolve(
+            State(app),
+            HeaderMap::new(),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: policy_id.to_string(),
+                input: Some(" +1 (555) 123-4567 ".to_string()),
+                encrypted_input: None,
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.policy_id, policy_id.to_string());
+        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.uaid, uaid.to_string());
+        assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+        assert!(
+            !dto.signature.is_empty(),
+            "resolve responses should carry a signed receipt"
+        );
+        assert!(
+            !dto.signature_payload_hex.is_empty(),
+            "resolve responses should expose the signed payload bytes"
+        );
+        assert_eq!(dto.signature_payload.policy_id.to_string(), dto.policy_id);
+        assert_eq!(dto.signature_payload.opaque_id.to_string(), dto.opaque_id);
+        assert_eq!(
+            dto.signature_payload.receipt_hash.to_string(),
+            dto.receipt_hash
+        );
+        assert_eq!(dto.signature_payload.uaid.to_string(), dto.uaid);
+        assert_eq!(dto.signature_payload.account_id.to_string(), dto.account_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-programmed"));
+        let account = Account::new(authority.clone().to_account_id(domain_id))
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let input = "+15551234567";
+        let draft = resolver
+            .derive(&policy, &program_policy, input)
+            .expect("derive opaque id");
+
+        let receipt = resolver
+            .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
+            .expect("claim receipt");
+        let header = BlockHeader::new(
+            nonzero!(1_u64),
+            None,
+            None,
+            None,
+            receipt.resolved_at_ms(),
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_identifier_policy_bundle(
+            &authority,
+            &mut tx,
+            &policy,
+            &program_policy,
+        );
+        ClaimIdentifier {
+            account: authority.clone(),
+            receipt,
+        }
+        .execute(&authority, &mut tx)
+        .expect("claim identifier");
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_identifier_resolve(
+            State(app),
+            HeaderMap::new(),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: policy_id.to_string(),
+                input: Some(" +1 (555) 123-4567 ".to_string()),
+                encrypted_input: None,
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.policy_id, policy_id.to_string());
+        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.uaid, uaid.to_string());
+        assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_resolve_accepts_bfv_encrypted_input() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-encrypted"));
+        let account = Account::new(authority.clone().to_account_id(domain_id.clone()))
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let public_parameters = shared_sdk_identifier_bfv_public_parameters(&policy_id);
+        let (policy, program_policy) = sample_identifier_policy_with_public_parameters(
+            &authority,
+            &signer,
+            &policy_id,
+            IdentifierNormalization::Exact,
+            &public_parameters,
+        );
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let input = "ab";
+        let draft = resolver
+            .derive(&policy, &program_policy, input)
+            .expect("derive opaque id");
+        let receipt = resolver
+            .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
+            .expect("claim receipt");
+        let header = BlockHeader::new(
+            nonzero!(1_u64),
+            None,
+            None,
+            None,
+            receipt.resolved_at_ms(),
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_identifier_policy_bundle(
+            &authority,
+            &mut tx,
+            &policy,
+            &program_policy,
+        );
+        ClaimIdentifier {
+            account: authority.clone(),
+            receipt,
+        }
+        .execute(&authority, &mut tx)
+        .expect("claim identifier");
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let encrypted_input = hex::encode(
+            norito::to_bytes(
+                &encrypt_identifier_from_seed(
+                    &public_parameters,
+                    input.as_bytes(),
+                    b"identifier-route-bfv-ciphertext",
+                )
+                .expect("encrypt BFV identifier input"),
+            )
+            .expect("encode BFV identifier ciphertext"),
+        );
+
+        let response = handler_identifier_resolve(
+            State(app),
+            HeaderMap::new(),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: policy_id.to_string(),
+                input: None,
+                encrypted_input: Some(encrypted_input),
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.policy_id, policy_id.to_string());
+        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.uaid, uaid.to_string());
+        assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.signature_payload.opaque_id.to_string(), dto.opaque_id);
+        assert_eq!(
+            dto.signature_payload.receipt_hash.to_string(),
+            dto.receipt_hash
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_resolve_enforces_token_policy() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            let mut tokens = HashSet::new();
+            tokens.insert("token-resolve".to_owned());
+            state.api_tokens_set = Arc::new(tokens);
+        }
+
+        let missing = handler_identifier_resolve(
+            State(app),
+            HeaderMap::new(),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: "phone#retail".to_owned(),
+                input: Some("+15551234567".to_owned()),
+                encrypted_input: None,
+            }),
+        )
+        .await;
+        assert!(matches!(
+            missing,
+            Err(Error::Query(ValidationFail::NotPermitted(_)))
+        ));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_claim_receipt_normalizes_phone_input() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-claim"));
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id))
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_identifier_policy_bundle(
+            &authority,
+            &mut tx,
+            &policy,
+            &program_policy,
+        );
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_identifier_claim_receipt(
+            State(app.clone()),
+            HeaderMap::new(),
+            AxPath(authority.to_string()),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: policy_id.to_string(),
+                input: Some(" +1 (555) 123-4567 ".to_string()),
+                encrypted_input: None,
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        let expected_draft = resolver
+            .derive(&policy, &program_policy, "+15551234567")
+            .expect("normalized derive");
+        assert_eq!(dto.opaque_id, expected_draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, expected_draft.receipt_hash.to_string());
+        assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.uaid, uaid.to_string());
+        assert_eq!(dto.signature_payload.uaid.to_string(), dto.uaid);
+        assert_eq!(dto.signature_payload.account_id.to_string(), dto.account_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_receipt_lookup_returns_persisted_claim() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-receipt-lookup"));
+        let account = Account::new(authority.clone().to_account_id(domain_id.clone()))
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
+        let mut app = mk_app_state_for_tests_with_world(world);
+
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_policy_runtime(
+            policy_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let draft = resolver
+            .derive(&policy, &program_policy, "+15551234567")
+            .expect("derive opaque id");
+        let receipt = resolver
+            .issue_claim_receipt(&policy, &program_policy, &draft, uaid, authority.clone())
+            .expect("claim receipt");
+        let receipt_hash = receipt.payload.receipt_hash.to_string();
+        let header = BlockHeader::new(
+            nonzero!(1_u64),
+            None,
+            None,
+            None,
+            receipt.resolved_at_ms(),
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_identifier_policy_bundle(
+            &authority,
+            &mut tx,
+            &policy,
+            &program_policy,
+        );
+        ClaimIdentifier {
+            account: authority.clone(),
+            receipt,
+        }
+        .execute(&authority, &mut tx)
+        .expect("claim identifier");
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response =
+            handler_identifier_receipt_lookup(State(app), HeaderMap::new(), AxPath(receipt_hash))
+                .await
+                .expect("handler should succeed")
+                .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::IdentifierClaimLookupResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.policy_id, policy_id.to_string());
+        assert_eq!(dto.opaque_id, draft.opaque_id.to_string());
+        assert_eq!(dto.receipt_hash, draft.receipt_hash.to_string());
+        assert_eq!(dto.uaid, uaid.to_string());
+        assert_eq!(dto.account_id, authority.to_string());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn identifier_claim_receipt_enforces_token_policy() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            state.require_api_token = true;
+            let mut tokens = HashSet::new();
+            tokens.insert("token-claim".to_owned());
+            state.api_tokens_set = Arc::new(tokens);
+        }
+
+        let missing = handler_identifier_claim_receipt(
+            State(app),
+            HeaderMap::new(),
+            AxPath("ed0120deadbeef".to_owned()),
+            NoritoJson(routing::IdentifierResolveRequestDto {
+                policy_id: "phone#retail".to_owned(),
+                input: Some("+15551234567".to_owned()),
+                encrypted_input: None,
+            }),
+        )
+        .await;
+        assert!(matches!(
+            missing,
+            Err(Error::Query(ValidationFail::NotPermitted(_)))
+        ));
     }
 
     #[tokio::test]

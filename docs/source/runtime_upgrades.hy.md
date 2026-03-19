@@ -22,7 +22,7 @@ Goals
 - Operator‑friendly rollout with capability visibility and clear failure modes.
 
 Non‑Goals
-- Introducing new ABI versions or expanding syscall/pointer-type surfaces (out of scope for this release).
+- Changing `abi_version` away from `1` or expanding syscall/pointer-type surfaces is out of scope for this release.
 - Changing existing syscall numbers or pointer-type IDs (forbidden).
 - Live patching nodes without deploying updated binaries.
 
@@ -40,8 +40,8 @@ State Objects (Data Model)
   - `description: String` — short description for operators.
   - `abi_version: u16` — target ABI version to activate (must be 1 in the first release).
   - `abi_hash: [u8; 32]` — canonical ABI hash for the target policy.
-  - `added_syscalls: Vec<u16>` — syscall numbers that become valid with this version.
-  - `added_pointer_types: Vec<u16>` — pointer-type identifiers added by the upgrade.
+  - `added_syscalls: Vec<u16>` — reserved delta list; must be empty in the first release.
+  - `added_pointer_types: Vec<u16>` — reserved delta list; must be empty in the first release.
   - `start_height: u64` — first block height where activation is permitted.
   - `end_height: u64` — exclusive upper bound on the activation window.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — SBOM digests for upgrade artefacts.
@@ -115,7 +115,7 @@ Operator Rollout (No Downtime)
 
 Torii & CLI
 - Torii
-  - `GET /v1/runtime/abi/active` → `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/active` → `{ abi_version: u16 }` (implemented)
   - `GET /v1/runtime/abi/hash` → `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
   - `GET /v1/runtime/upgrades` → list of records (implemented).
   - `POST /v1/runtime/upgrades/propose` → wraps `ProposeRuntimeUpgrade` (returns instruction skeleton; implemented).
@@ -131,7 +131,7 @@ Torii & CLI
 
 Core Query API
 - Norito singular query (signed):
-  - `FindActiveAbiVersions` returns a Norito-encoded struct `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` returns a Norito-encoded struct `{ abi_version: u16 }`.
   - See sample: `docs/source/samples/find_active_abi_versions.md` (type/fields and JSON example).
 
 Implementation Notes (v1-only)
@@ -151,7 +151,7 @@ Implementation Notes (v1-only)
   - Emit `abi_version = 1` and embed the canonical v1 `abi_hash` in `.to` manifests.
 
 Telemetry
-- Add `runtime.active_abi_versions` gauge and `runtime.upgrade_events_total{kind}` counter.
+- Add `runtime.abi_version` gauge and `runtime.upgrade_events_total{kind}` counter.
 
 Security Considerations
 - Only root/sudo may propose/activate/cancel; manifests must be signed appropriately.

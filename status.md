@@ -2,752 +2,509 @@
 
 Last updated: 2026-03-19
 
-## 2026-03-19 Follow-up: near-tip RBC roster promotion and commit-ready validation fast path
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/qc.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/rbc.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/validation.rs`, and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - near-tip/same-epoch RBC sessions can now promote a deterministically
-    derivable roster from `Init` to authoritative `Derived` as soon as the
-    payload becomes locally known, then immediately flush/retry any stashed
-    `READY` / `DELIVER` work;
-  - near-tip pending blocks can now bypass the old proposal-evidence wait when
-    they already have commit-readiness evidence (`RBC DELIVER`, cached commit
-    QC, or accumulated commit votes), and cached commit QC now supersedes a
-    stale validation-inflight marker so the block validates inline immediately;
-  - the public `/v1/sumeragi/status` surface remains unchanged.
-- Added focused coverage for:
-  - same-epoch `BlockCreated` promotion of an RBC roster plus immediate flush
-    of stashed `READY` / `DELIVER`,
-  - near-tip validation proceeding on commit votes,
-  - near-tip validation proceeding on delivered RBC,
-  - cached commit QC superseding validation inflight and forcing inline
-    validation.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib validation_allows_near_tip_commit_votes_without_proposal_evidence -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib validation_allows_near_tip_delivered_rbc_without_proposal_evidence -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib handle_qc_supersedes_validation_inflight_on_commit_qc -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib queue_backpressured -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_bypasses_queue_backpressure_for_active_pending -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib proposal_backpressure_ignores_committed_tip_rbc_cleanup_backlog -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib commit_pipeline_snapshot_tracks_last_and_ema_fields -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib round_gap_snapshot_records_markers_in_order -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib commit_outcome_kickstarts_next_proposal_and_records_round_gap -- --nocapture` (pass),
-  - `cargo test -p izanami` (pass),
-  - `cargo build --release -p irohad --bin iroha3d -p izanami` (pass).
-- Fresh shared-host stable soaks on the rebuilt release binaries were run with
-  the unchanged 4-peer envelope
-  `--faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --tps 7 --max-inflight 14 --workload-profile stable`
-  and were intentionally stopped early once the late-tail pattern was clear:
-  - NPoS soak log:
-    `/tmp/izanami_npos_soak_after_commit_ready_fix_20260319T134226Z.log`,
-    preserved network:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_wyDBZN`,
-    reached `strict_min_height=304` in `8.67 min` for a projected
-    `2104.0 blocks/hour`, but still hit a `10002ms` cliff at height `302`
-    followed by `5002ms` at height `304`;
-  - permissioned soak log:
-    `/tmp/izanami_permissioned_soak_after_commit_ready_fix_20260319T135130Z.log`,
-    preserved network:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_8SABI5`,
-    reached `strict_min_height=412` in `11.17 min` for a projected
-    `2212.9 blocks/hour` and showed no `5s`/`10s` stall in that window.
-- Acceptance readout from the rerun:
-  - the old RBC readiness signatures disappeared from both reruns:
-    `deferring RBC DELIVER: READY quorum not yet satisfied=0`,
-    `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`,
-    `deferring local RBC READY: commit roster unavailable=0`,
-    `deferring RBC DELIVER: commit roster unavailable=0`;
-  - no workload contamination appeared in the sampled windows:
-    `Trigger with id ... not found=0`,
-    `burn_trigger_repetitions overflow=0`;
-  - the remaining peer-local warnings are now reschedule-only:
-    NPoS preserved peer logs show `3` hits of
-    `commit quorum missing past timeout; rescheduling block for reassembly`
-    (for example heights `59`, `222`, `286`);
-    permissioned preserved peer logs show `6` such hits (for example heights
-    `192`, `292`, `345`, `346`, `360`).
-- Result:
-  - the roster-promotion + commit-ready validation cut materially reduced the
-    old RBC/validation stalls and clearly improved the permissioned path;
-  - the dominant remaining shared-host tail is now late commit quorum
-    completion and reassembly/rebroadcast churn after a block is already
-    pending, especially on NPoS, rather than `READY`-quorum starvation or
-    delayed near-tip validation.
+## 2026-03-19 Follow-up: merge conflicts are resolved and the workspace compile gate is green
+- Resolved the remaining merge conflicts across the Rust workspace, SDKs,
+  docs, and build/config files, with manual reconciliation in:
+  - `.gitignore`,
+  - `Cargo.toml`,
+  - `Dockerfile.cross`, and
+  - `crates/iroha_torii/src/routing.rs`.
+- Preserved the newer branch-side Torii/OpenAPI/API changes while restoring the
+  Sumeragi status wire fields for `commit_pipeline` and `round_gap` in the
+  Torii routing path so the consensus status response stays coherent with the
+  merged data model.
+- Validation so far:
+  - `git diff --name-only --diff-filter=U` (clean)
+  - `git diff --check` (clean)
+  - `cargo check --workspace` (pass)
 
-## 2026-03-18 Follow-up: commit-pipeline status and post-DELIVER proposal unblock
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/propose.rs`,
-  `crates/iroha_core/src/sumeragi/status.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`,
-  `crates/iroha_data_model/src/block/consensus.rs`,
-  `crates/iroha_torii/src/routing.rs`, and
-  `crates/izanami/src/chaos.rs`:
-  - `/v1/sumeragi/status` now exposes `commit_pipeline` and `round_gap`
-    snapshots in both Norito and JSON form, including last-sample fields for
-    commit/drain subtotals plus EMA fields for the operator-facing aggregate
-    timings;
-  - commit-pipeline ticks now publish the hidden post-DELIVER timing budget,
-    and round-gap markers now record `DELIVER -> state_commit`,
-    `state_commit -> next_propose`, and `DELIVER -> next_propose`;
-  - proposal backpressure now ignores committed-tip RBC cleanup backlog, so a
-    block stops blocking pacemaker/proposal readiness once
-    `commit_with_certificate`, Kura durability, and local `state_commit`
-    succeed even if post-commit bookkeeping/broadcast work is still pending;
-  - the healthy NPoS probe parser/log path now samples the richer status
-    payload so warmed probes can report the new commit-budget fields directly.
-- Added focused regression/status coverage for:
-  - committed-tip RBC cleanup backlog no longer blocking proposals,
-  - commit-pipeline last/EMA snapshots,
-  - round-gap marker ordering/publication,
-  - next-proposal kickstart after durable local commit,
-  - Torii `/v1/sumeragi/status` shape with the new sections,
-  - Izanami timing snapshot parsing for the extended status payload.
-- Focused validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib proposal_backpressure_ignores_committed_tip_rbc_cleanup_backlog -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib commit_pipeline_snapshot_tracks_last_and_ema_fields -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib round_gap_snapshot_records_markers_in_order -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib commit_outcome_kickstarts_next_proposal_and_records_round_gap -- --nocapture` (pass),
-  - `cargo test -p iroha_torii --features telemetry --test sumeragi_status_endpoint sumeragi_status_endpoint_shape -- --nocapture` (pass),
-  - `cargo test -p izanami build_sumeragi_timing_snapshot_extracts_effective_windows -- --nocapture` (pass).
-- Package-level validation status:
-  - `cargo test -p iroha_core` was started and progressed into the long-running
-    model/fairness tail, but before the suite could finish it had already
-    reported a wider frontier/missing-QC failure cluster outside the narrow
-    files changed for this cut, including
-    `frontier_catchup_target_keeps_contiguous_frontier_when_qc_head_lags_one_block`,
-    `force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availability_timeout`,
-    `force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_availability_timeout`,
-    `missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per_window`,
-    and related canonical-frontier/missing-QC suppression tests;
-  - because that broader `iroha_core` package run did not finish during this
-    turn, `cargo test -p izanami` and
-    `cargo build --release -p irohad --bin iroha3d -p izanami` have not been
-    rerun yet on this cut.
-- Result:
-  - operator status now publishes the real hidden post-DELIVER commit budget,
-    and the proposal-critical path ends at durable local state commit rather
-    than waiting for post-commit broadcast/telemetry cleanup;
-  - the warmed 4-peer healthy NPoS probe still needs to be rerun on this code
-    to compare `interval p50/p95`, `phase_pipeline_total_ema_ms`, the new
-    `commit_pipeline` / `round_gap` fields, and the two lingering tail counters.
+## 2026-03-19 Follow-up: generic hidden-program RAM-LFE program-policy foundations now exist in `iroha_crypto`, `iroha_data_model`, `iroha_core`, and the identifier Torii path
+- Extended `crates/iroha_crypto/src/ram_lfe.rs` from an identifier-only
+  programmed BFV path into a program-aware hidden RAM-LFE substrate:
+  - programmed BFV public parameters now publish a hidden-program digest,
+    verification mode, optional proof verifier metadata, and the public
+    RAM-FHE execution profile,
+  - the programmed evaluator now executes an explicit canonical
+    branchless `HiddenRamFheProgram` instruction tape instead of deriving an
+    implicit program from the resolver secret,
+  - generic output hashing is now separated from identifier-facing hash
+    derivation so identifier receipts can deterministically bind to the generic
+    execution output hash.
+- Added generic RAM-LFE on-chain types in
+  `crates/iroha_data_model/src/{ram_lfe.rs,identifier.rs,isi/ram_lfe.rs}`:
+  - new `RamLfeProgramId`, `RamLfeProgramPolicy`,
+    `RamLfeExecutionReceiptPayload`, and `RamLfeExecutionReceipt`,
+  - new RAM-LFE program-policy ISIs for register/activate/deactivate,
+  - renamed the generic public surface from `ram_fhe` to `ram_lfe` so
+    policy/receipt abstractions use LFE terminology while BFV-specific
+    execution metadata stays explicitly FHE-scoped,
+  - identifier policies now reference a `program_id` instead of embedding an
+    inline commitment and resolver public key,
+  - identifier receipts now carry a nested generic execution payload plus an
+    optional signature/proof attachment.
+- Wired RAM-LFE program policies into world state and identifier claim
+  verification in `crates/iroha_core/src/{state.rs,smartcontracts/isi/mod.rs,smartcontracts/isi/{ram_lfe.rs,identifier.rs}}`:
+  - world state now stores RAM-LFE program policies separately from identifier
+    policies and claims,
+  - identifier claims now resolve the referenced program policy, validate the
+    published hidden-program digest / backend / verification mode against the
+    nested execution receipt payload, and verify either:
+    - signed identifier receipts, or
+    - proof-carrying execution receipts bound to the execution payload hash via
+      the existing Halo2 envelope stack.
+- Updated Torii's identifier resolver plumbing in
+  `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs}` so the identifier
+  app endpoints now build receipts from the referenced RAM-LFE program policy
+  rather than the legacy inline identifier policy commitment.
+- Updated docs in
+  `docs/source/universal_accounts_guide.md`,
+  `crates/iroha_crypto/src/ram_lfe.rs`, and
+  `crates/iroha_crypto/src/fhe_bfv.rs` so they explicitly distinguish:
+  - RAM-LFE as the outer policy/commitment/receipt abstraction, and
+  - BFV / RAM-FHE as the encrypted execution backend and its public profile
+    metadata.
+- Validation so far:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_crypto` (pass)
+  - `cargo check -p iroha_data_model` (pass)
+  - `cargo check -p iroha_core` (pass)
+  - `cargo check -p iroha_torii` (pass)
+  - `cargo test -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib --no-run` (pass)
+  - `cargo test -p iroha_torii identifier_ -- --nocapture` (pass)
+- Remaining work in this tranche:
+  - rename Torii runtime config from `torii.identifier_resolver` to the generic
+    `torii.ram_lfe` shape and key runtime material by `program_id`,
+  - add the generic Torii RAM-LFE execute/list/verify routes and their OpenAPI
+    descriptions,
+  - migrate JS/Swift/Android clients to the generic RAM-LFE policy/receipt
+    shapes and add client-side signed/proof verification for the generic API,
+  - broaden validation from compile gates to the targeted and workspace test
+    suites once the remaining API/config migration is in place.
 
-## 2026-03-18 Follow-up: dedicated consensus-vote fast lane in P2P
-- Updated `crates/iroha_p2p/src/peer.rs` and `crates/iroha_p2p/src/network.rs`:
-  - split the high-priority per-peer outbound path so `Control`,
-    `Consensus`, `ConsensusPayload`, and `ConsensusChunk` no longer share the
-    same post queue or encrypted batch class;
-  - route `Topic::Consensus` through its own dedicated sender and preserve
-    strict high-lane scheduling order
-    `Control -> Consensus -> ConsensusPayload -> ConsensusChunk` with bounded
-    burst fairness so payload/chunk traffic still drains;
-  - keep relay spoke/assist direct posts correct by routing targets without a
-    live direct session through the configured hub instead of deferring an
-    impossible direct reconnect.
-- Added focused `iroha_p2p` coverage for:
-  - dedicated `ConsensusPayload` handle routing,
-  - high-lane post ordering/fairness,
-  - encrypted batch ordering/fairness,
-  - relay reroute behavior for spoke-mode posts,
-  - relay hub integration paths between spokes and between spoke/assist.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_p2p` (pass),
-  - `cargo test -p iroha_core --lib emitted_precommit_vote_posts_bypass_background_queue -- --nocapture` (pass),
-  - `cargo build --release -p irohad --bin iroha3d -p izanami` (pass).
-- Runtime signal from a fresh warmed 4-peer healthy NPoS release probe:
-  - preserved network:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_dPORC0`,
-  - command envelope matched the recent healthy probes:
-    `--allow-net --nexus --peers 4 --faulty 0 --duration 300s --target-blocks 40 --progress-interval 10s --progress-timeout 180s --tps 1 --max-inflight 8 --workload-profile stable`,
-  - all four peers reached `44` core blocks,
-  - Izanami summary: `elapsed=70.013524666s`, `interval_p50_ms=1667`,
-    `interval_p95_ms=2501`, `successes=71`, `failures=0`,
-  - target-height phase snapshot:
-    `phase_propose_ema_ms=418`, `phase_collect_da_ema_ms=299`,
-    `phase_collect_prevote_ema_ms=60`, `phase_collect_precommit_ema_ms=89`,
-    `phase_commit_ema_ms=180`, `phase_pipeline_total_ema_ms=1046`.
-- Acceptance readout from the preserved peer logs:
-  - `dropping block sync update missing commit-role quorum`: `0`,
-  - `stake quorum observed but block payload missing`: `0`,
-  - `commit quorum missing past timeout; rescheduling block for reassembly`: `1`
-    (height `6` on `proven_constrictor`).
-- Result:
-  - the dedicated consensus-vote lane keeps the run healthy and does not
-    reintroduce the old sender-side churn, but it does not materially improve
-    the healthy-path pace yet;
-  - the short release probe still sits near the preserved baseline
-    (`~70.0s / 44 ~= 1.59s/block` vs the prior `~1.64s/block`) and still shows
-    the familiar `2501ms` tail, so the remaining bottleneck is now narrower
-    than queue/class competition alone.
+## 2026-03-19 Follow-up: `ram_lfe` now has an instruction-driven programmed BFV backend with a published RAM-FHE profile
+- Extended `crates/iroha_crypto/src/ram_lfe.rs` with a third identifier
+  evaluator backend:
+  - `BfvProgrammedSha3_256V1` (`bfv-programmed-sha3-256-v1`) now supplements
+    the historical HKDF-backed PRF and the earlier BFV affine evaluator.
+  - the new path derives a hidden per-step RAM-style instruction trace from the
+    resolver secret and commitment transcript, executes that program over BFV
+    registers and ciphertext memory lanes, then hashes the canonicalized lane
+    outputs into the deterministic `opaque_id` and `receipt_hash`.
+  - programmed policies now enforce a stronger BFV ciphertext-modulus floor
+    than the affine path because the RAM backend uses ciphertext-ciphertext
+    multiplication.
+  - programmed policy commitments now canonicalize BFV public parameters into a
+    `BfvProgrammedPublicParameters` bundle that publishes the stable
+    `BfvRamProgramProfile`; legacy raw BFV parameter payloads are upgraded onto
+    that bundle when the commitment is rebuilt.
+- Threaded the new backend through Torii in
+  `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,openapi.rs}`:
+  - plaintext identifier resolution now server-encrypts into BFV for both BFV
+    backends,
+  - affine encrypted identifier resolution still evaluates client ciphertexts
+    directly,
+  - programmed encrypted identifier resolution now canonicalizes decrypted input
+    back onto the resolver's deterministic BFV envelope before executing the
+    RAM program so semantically equivalent ciphertexts produce the same receipt,
+  - `GET /v1/identifier-policies` now exposes `ram_fhe_profile` for programmed
+    policies and the static OpenAPI schema documents the new profile object and
+    canonicalized encrypted-input mode,
+  - added focused Torii coverage for deterministic receipt derivation and
+    plaintext/encrypted parity plus end-to-end account binding with the
+    programmed backend.
+- Updated `docs/source/universal_accounts_guide.md` so the UAID identifier
+  guide documents all three current `ram_lfe` backends and the new programmed
+  BFV path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
+  - `cargo check -p iroha_crypto -p iroha_torii` (pass)
+  - `cargo clippy -p iroha_crypto -p iroha_torii --all-targets -- -D warnings` (pass)
 
-## 2026-03-18 Follow-up: initial RBC pacing behind BlockCreated
-- Updated `crates/iroha_core/src/sumeragi/main_loop/rbc.rs`:
-  - the initial `broadcast_rbc_session_plan(...)` path now sends `RbcInit`
-    through `schedule_background_via_queue(...)` and leaves the first payload
-    chunk in the outbound queue instead of flushing it immediately;
-  - this is a sender-side ordering cut aimed at reducing the case where
-    followers process `RbcInit` before the matching `BlockCreated` and enter
-    `rbc_ready_chunks_pending` with no payload available to hydrate.
-- Updated focused RBC helpers/tests in:
-  - `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  - `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
-- Focused validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib broadcast_rbc_session_plan_queues_single_chunk_behind_initial_init -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib rbc_outbound_chunk_budget_limits_per_tick -- --nocapture` (pass),
-  - `cargo build --release -p irohad --bin iroha3d -p izanami` (pass).
-- Runtime signal from the preserved healthy 4-peer NPoS probe:
-  - top-level log: `/tmp/izanami_npos_healthy_probe_init_trails_block_created_20260318T075100Z.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_vzqxev`,
-  - all four peers persisted `44` core blocks, so the run cleared the `40`
-    target despite the known harness summary/connection-reset bug.
-- Before/after healthy-path timing from preserved peer logs:
-  - baseline network:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_04kaD1`,
-  - queued-init network:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_vzqxev`,
-  - `BlockCreated -> READY(2)`:
-    `p50 359ms -> 313ms`, `mean 490ms -> 417ms`,
-  - `BlockCreated -> RBC DELIVER`:
-    `p50 548ms -> 514ms`, `mean 712ms -> 656ms`,
-  - `rbc_ready_chunks_pending -> received BlockCreated` gap:
-    `p50 268ms -> 222ms`, `mean 416ms -> 390ms`,
-  - peer-commit window pace:
-    `height 2 -> 40` improved from `68.26s` (`~1.80s/block`) to `62.33s`
-    (`~1.64s/block`).
-- Churn counters in the preserved network:
-  - `commit quorum missing past timeout; rescheduling block for reassembly`: `0`,
-  - `stake quorum observed but block payload missing`: `2` (heights `11`, `44`),
-  - `missing block dwell exceeded view-change window; routed through frontier recovery`: `0`,
-  - `cached proposal slot stalled past quorum timeout`: `0`,
-  - `applied unified frontier recovery cleanup`: `0`,
-  - `frontier recovery exhausted catch-up windows; rotating view`: `0`,
-  - `dropping block sync update missing commit-role quorum`: `0`.
+## 2026-03-18 Follow-up: deterministic BFV acceleration landed, and the workspace lint/compile gates are green
+- Replaced the old scalar-only BFV multiplication baseline in
+  `crates/iroha_crypto/src/fhe_bfv.rs` with a deterministic CRT-NTT backend
+  behind the new default `bfv-accel` feature from
+  `crates/iroha_crypto/Cargo.toml` and the root `Cargo.toml` cfg allow-list:
+  - `BfvParameters::convolution_backend()` now reports whether a parameter set
+    runs on the scalar schoolbook fallback or the accelerated CRT-NTT path.
+  - BFV multiplication now dispatches to exact-arithmetic CRT-NTT when the
+    parameter set is supported, while preserving identical outputs through the
+    scalar fallback on unsupported shapes or when `bfv-accel` is disabled.
+- Updated the BFV/identifier docs in
+  `docs/source/universal_accounts_guide.md` to describe the new default
+  deterministic acceleration path and the fallback behavior.
+- Closed the workspace validation blockers that surfaced during the full lint
+  sweep:
+  - removed a duplicate websocket test definition in
+    `crates/iroha_telemetry/src/ws.rs`,
+  - cleaned up strict-clippy issues in
+    `crates/iroha_data_model/src/{account/address/compliance_vectors.rs,consensus.rs,identifier.rs,nexus/relay.rs}`,
+  - fixed the unused receiver / duplicate-noop-arm issues in
+    `crates/iroha_config/src/parameters/actual.rs` and
+    `crates/iroha_executor/src/default/isi/multisig/transaction.rs`,
+  - removed a duplicated bench runtime definition in
+    `crates/iroha_core/benches/validation.rs`.
+- Validation:
+  - `cargo test -p iroha_crypto bfv -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test --workspace --no-run` (pass)
+  - `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings` (pass)
 
-## 2026-03-18 Follow-up: healthy-path phase-EMA instrumentation and root-cause profile
-- Updated `crates/izanami/src/chaos.rs`:
-  - the warmed healthy NPoS probe now fetches both `/v1/sumeragi/phases` and
-    `/v1/sumeragi/status` at target height;
-  - target-height logs now include all per-phase EMA fields
-    (`propose`, `collect_da`, `collect_prevote`, `collect_precommit`,
-    `collect_aggregator`, `commit`, `pipeline_total`) plus the effective live
-    timing windows (`block_time`, `commit_time`, `commit_quorum_timeout`,
-    `availability_timeout`, `pacemaker_interval`);
-  - added focused parser coverage for the richer `ema_ms` payload and the timing
-    snapshot builder.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p izanami parse_sumeragi_phase_snapshot -- --nocapture` (pass),
-  - `cargo test -p izanami build_sumeragi_timing_snapshot_extracts_effective_windows -- --nocapture` (pass),
-  - `cargo build --release -p izanami` (pass).
-- Runtime signal from the instrumented warmed 4-peer healthy NPoS probe:
-  - log: `/tmp/izanami_npos_healthy_probe_phase_ema_20260318T054247Z.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_vjijnA`,
-  - result: `120/120`, `elapsed=211.170527s`, `interval_p50_ms=1673`,
-    `interval_p95_ms=2503`, `successes=212`, no sender-side recovery warnings;
-  - target-height timing snapshot:
-    - `phase_propose_ema_ms=232`,
-    - `phase_collect_da_ema_ms=228`,
-    - `phase_collect_prevote_ema_ms=60`,
-    - `phase_collect_precommit_ema_ms=426`,
-    - `phase_commit_ema_ms=180`,
-    - `phase_pipeline_total_ema_ms=1126`,
-    - `effective_block_time_ms=120`,
-    - `effective_commit_time_ms=180`,
-    - `effective_commit_quorum_timeout_ms=660`,
-    - `effective_availability_timeout_ms=750`,
-    - `effective_pacemaker_interval_ms=120`.
-- Short comparison run with higher offered load:
-  - log: `/tmp/izanami_npos_healthy_probe_phase_ema_tps5_20260318T054247Z.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_h4M1Ad`,
-  - result: `60/60`, `elapsed=100.547463167s`, `interval_p50_ms=1667`,
-    `interval_p95_ms=2503`, `successes=502`;
-  - the same block cadence at `tps=5` rules out low offered load or queue
-    starvation as the dominant cause of the remaining `~1.67s/block`.
-- Root-cause finding from preserved peer logs:
-  - proposal assembly itself is cheap, typically `~120-170ms`;
-  - the residual block-time loss is in the healthy post-proposal path:
-    - roughly `~560ms` waiting for RBC READY quorum before DELIVER,
-    - then another `~700-850ms` across commit-QC validation / rebuild, commit
-      certificate finalization, state commit, and Kura store,
-    - only after that does the next proposal begin;
-  - example on `steadfast_octopus` for heights `60 -> 61`:
-    - proposal `60` succeeded at `2026-03-18T05:51:25.592539Z`,
-    - RBC DELIVER fired at `2026-03-18T05:51:26.153225Z`,
-    - state committed at `2026-03-18T05:51:26.952502Z`,
-    - Kura stored at `2026-03-18T05:51:26.994340Z`,
-    - proposal `61` started at `2026-03-18T05:51:27.126447Z`;
-  - this confirms the remaining bottleneck is healthy-path DA/commit finality,
-    not sender-side late-frontier recovery.
+## 2026-03-18 Follow-up: BFV SDK envelopes now roundtrip into Torii with the shared fixture
+- Fixed the BFV identifier envelope schema hash in
+  `javascript/iroha_js/src/toriiClient.js`,
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, and
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierBfvEnvelopeBuilder.java`:
+  - SDK builders now frame `BfvIdentifierCiphertext` using Rust Norito's
+    fully qualified type name
+    `iroha_crypto::fhe_bfv::BfvIdentifierCiphertext` instead of the bare short
+    schema label, which was the cause of the Torii-side schema mismatch.
+- Tightened the Torii BFV integration test in
+  `crates/iroha_torii/src/lib.rs`:
+  - `identifier_resolve_accepts_bfv_encrypted_input` now submits the exact
+    shared SDK ciphertext fixture bytes for `string#retail` instead of
+    generating encrypted input on the Rust side.
+  - added a guard that the shared SDK BFV public parameters still derive from
+    the Rust resolver seed for that namespace.
+- Updated the deterministic SDK fixtures in
+  `javascript/iroha_js/test/toriiClient.identifier.test.js`,
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`, and
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  so all three SDKs and Torii now assert the same Rust-compatible wire bytes.
+- Validation:
+  - `cargo test -p iroha_torii identifier_resolve_accepts_bfv_encrypted_input --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js javascript/iroha_js/test/normalizers.test.js` (pass)
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
 
-## 2026-03-18 Follow-up: first single-vote frontier quiet-window extension
-- Updated `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - the first contiguous-frontier vote-backed resend now keeps a longer quiet
-    window for the weakest `1 / min_votes` case, extending the old
-    `8 * rebroadcast_cooldown()` settle window up to at least one full
-    `quorum_timeout`;
-  - this change is limited to the first non-near-quorum single-vote resend on
-    the contiguous frontier; repeated vote-backed resends, near-quorum resend,
-    sparse receive policy, retransmit targets, quorum thresholds, and public
-    protocol behavior remain unchanged.
-- Added or updated focused regressions in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - `reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_settle_window`,
-  - `reschedule_defers_first_single_vote_quorum_timeout_past_legacy_frontier_settle_window`,
-  - plus the refreshed vote-backed resend subset:
-    `contiguous_frontier_vote_backed_`,
-    `reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
-    and
-    `reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress`.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_settle_window -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib reschedule_defers_first_single_vote_quorum_timeout_past_legacy_frontier_settle_window -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib contiguous_frontier_vote_backed_ -- --nocapture` (pass, 2 tests),
-  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress -- --nocapture` (pass).
-- Runtime signal from the preserved warmed 4-peer healthy NPoS probe:
-  - log: `/tmp/izanami_npos_healthy_probe_single_vote_quiet_window_keepdirs_20260318T000000Z.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_24jY7K`,
-  - the harness still shut peers down through the same fatal-signal summary bug,
-    but all four peers persisted `124` core blocks, so the run again cleared
-    the `120` target;
-  - peer-log profile is now essentially free of sender-side late-frontier churn:
-    - `commit quorum missing past timeout; rescheduling block for reassembly`: `0`,
-    - `stake quorum observed but block payload missing`: `1` (height `92` on one peer),
-    - `missing block dwell exceeded view-change window; routed through frontier recovery`: `0`,
-    - `cached proposal slot stalled past quorum timeout`: `0`,
-    - `applied unified frontier recovery cleanup`: `0`,
-    - `frontier recovery exhausted catch-up windows; rotating view`: `0`,
-    - `dropping block sync update missing commit-role quorum`: `0`;
-  - this rerun confirms the earlier `height 62 / 105` one-vote reschedule class
-    is gone, and the remaining block-time gap is no longer explained by
-    sender-side late-frontier recovery churn.
+## 2026-03-18 Follow-up: SDKs now build BFV identifier ciphertext envelopes locally
+- Extended the JS SDK in
+  `javascript/iroha_js/src/{toriiClient.js,index.js}`:
+  - added `encryptIdentifierInputForPolicy(policy, input, { seed | seedHex })`,
+  - extended `buildIdentifierRequestForPolicy(...)` with
+    `{ input, encrypt: true }` so wallets can derive BFV `encrypted_input`
+    locally from published policy parameters,
+  - now parses `decomposition_base_log` from policy BFV metadata.
+- Extended the Swift SDK in
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`:
+  - added BFV public-parameter parity for `decompositionBaseLog`,
+  - added `ToriiIdentifierPolicySummary.encryptInput(...)`,
+    `.encryptedRequest(input:...)`, and
+    `ToriiIdentifierLookupRequest.encrypted(policy:input:...)`,
+  - added a deterministic pure-Swift BFV envelope builder that emits framed
+    Norito `BfvIdentifierCiphertext` bytes.
+- Extended the Android SDK in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/`:
+  - added `IdentifierBfvEnvelopeBuilder`,
+  - added BFV public-parameter parity for `decompositionBaseLog`,
+  - added `IdentifierPolicySummary.encryptInput(...)` and
+    `.encryptedRequestFromInput(...)`,
+  - added `IdentifierResolveRequest.encryptedFromInput(...)`.
+- Updated focused SDK tests in
+  `javascript/iroha_js/test/toriiClient.identifier.test.js`,
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`, and
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  to lock deterministic BFV envelope output against a shared seeded fixture.
+- Updated `docs/source/universal_accounts_guide.md` to document the new local
+  BFV envelope helpers across JS, Swift, and Android.
+- Validation:
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js javascript/iroha_js/test/normalizers.test.js` (pass)
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
 
-## 2026-03-18 Follow-up: same-slot fresh-fetch dwell suppression
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/qc.rs`, and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - exact-slot deferred missing-payload QCs now count as active same-slot
-    recovery for frontier cleanup / rotation suppression;
-  - contiguous-frontier commit-quorum missing-payload fast recovery now seeds
-    the frontier owner create-only instead of waiting for a later dwell timeout;
-  - `retry_missing_block_requests(...)` now suppresses frontier handoff when the
-    same-slot missing-block fetch was just refreshed, so sender-side dwell
-    escalation no longer fires with `since_last_ms=0`;
-  - sparse receive policy, retransmit targets, quorum thresholds, and public
-    protocol behavior remain unchanged.
-- Added or updated focused regressions in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - `frontier_recovery_suppresses_cleanup_while_same_slot_deferred_missing_payload_qc_remains_recent_without_backlog`,
-  - `frontier_recovery_suppresses_rotation_while_same_slot_deferred_missing_payload_qc_remains_recent_without_backlog`,
-  - `defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only`,
-  - `retry_missing_block_requests_suppresses_frontier_handoff_while_contiguous_fetch_remains_fresh`,
-  - plus the refreshed `retry_missing_block_requests_` and
-    `frontier_recovery_suppresses_` subsets.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib retry_missing_block_requests_ -- --nocapture` (pass, 19 tests),
-  - `cargo test -p iroha_core --lib frontier_recovery_suppresses_ -- --nocapture` (pass, 11 tests),
-  - `cargo test -p iroha_core --lib defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only -- --nocapture` (pass).
-- Runtime signal from the preserved warmed 4-peer healthy NPoS probe:
-  - log: `/tmp/izanami_npos_healthy_probe_fresh_fetch_suppression_20260317T214106Z.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_N60xZO`,
-  - the harness still shut peers down through the same fatal-signal summary bug,
-    but all four peers persisted `122` core blocks, so the run again cleared
-    the `120` target;
-  - peer-log profile tightened further:
-    - `commit quorum missing past timeout; rescheduling block for reassembly`: `2`,
-    - `stake quorum observed but block payload missing`: `2`,
-    - `missing block dwell exceeded view-change window; routed through frontier recovery`: `0`,
-    - `cached proposal slot stalled past quorum timeout`: `0`,
-    - `applied unified frontier recovery cleanup`: `0`,
-    - `frontier recovery exhausted catch-up windows; rotating view`: `0`,
-    - `dropping block sync update missing commit-role quorum`: `0`;
-  - compared with the previous preserved run, the same-slot fresh-fetch cut
-    removed the surviving `missing block dwell -> frontier recovery` class
-    entirely and left only two one-vote sender reschedules (`height 62` and
-    `height 105`) plus two QC-missing-payload warnings (`height 6` and
-    `height 29`).
+## 2026-03-18 Follow-up: identifier receipts now have a query surface, and SDKs can verify them client-side
+- Extended the identifier receipt path in
+  `crates/iroha_data_model/src/identifier.rs`,
+  `crates/iroha_core/src/state.rs`, and
+  `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`:
+  - `IdentifierResolutionReceipt` now exposes canonical
+    `payload_bytes()` for receipt-signature consumers.
+  - Torii resolve and claim-receipt responses now return the canonical signed
+    payload as both `signature_payload_hex` and `signature_payload`.
+  - Torii now exposes `GET /v1/identifiers/receipts/{receipt_hash}` so
+    wallets, operators, and tests can fetch the persisted
+    `IdentifierClaimRecord` bound to a deterministic receipt hash.
+- Extended the JS SDK in
+  `javascript/iroha_js/src/{toriiClient.js,index.js}`:
+  - added `ToriiClient.getIdentifierClaimByReceiptHash(...)`,
+  - added `getIdentifierBfvPublicParameters(policy)` for decoded BFV metadata,
+  - added `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })`,
+  - added `verifyIdentifierResolutionReceipt(receipt, policy)`.
+- Extended the Swift SDK in
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`:
+  - added `ToriiIdentifierLookupRequest`,
+  - added policy-bound request builders on `ToriiIdentifierPolicySummary`,
+  - added `ToriiIdentifierResolutionReceipt.verifySignature(using:)`,
+  - added `ToriiClient.getIdentifierClaimByReceiptHash(_)`.
+- Extended the Android SDK in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/`:
+  - added `IdentifierResolveRequest`,
+  - added structured BFV/public-parameter and signed-payload models,
+  - added `IdentifierReceiptVerifier`,
+  - added `HttpClientTransport.getIdentifierClaimByReceiptHash(...)`,
+  - added `IdentifierResolutionReceipt.verifySignature(policy)`.
+- Updated `docs/source/universal_accounts_guide.md` to document the new
+  receipt-lookup route, signed payload fields, and SDK verification/request
+  helpers.
+- Validation:
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js javascript/iroha_js/test/normalizers.test.js` (pass)
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+  - `CARGO_INCREMENTAL=0 cargo check -p iroha_data_model -p iroha_core -p iroha_torii` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
 
-## 2026-03-17 Follow-up: cached-slot same-slot recovery suppression
-- Updated `crates/iroha_core/src/sumeragi/main_loop/propose.rs` and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - contiguous-frontier cached-proposal quorum timeout now suppresses the
-    `propose.rs` frontier handoff while same-slot recovery is still active,
-    instead of routing the slot through a second quorum-timeout action;
-  - the suppression path only seeds the frontier owner create-only when needed
-    and preserves any existing owner state unchanged;
-  - sparse receive policy, retransmit targets, quorum thresholds, and public
-    protocol behavior remain unchanged.
-- Added focused regressions in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - `pacemaker_suppresses_contiguous_cached_slot_stall_while_same_slot_missing_payload_recovery_is_active`,
-  - `pacemaker_cached_slot_stall_preserves_existing_frontier_owner_while_same_slot_missing_payload_recovery_is_active`,
-  - plus the refreshed `pacemaker_cached_slot_` subset.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib pacemaker_routes_contiguous_cached_slot_stall_through_frontier_recovery -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib pacemaker_suppresses_contiguous_cached_slot_stall_while_same_slot_missing_payload_recovery_is_active -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib pacemaker_cached_slot_stall_preserves_existing_frontier_owner_while_same_slot_missing_payload_recovery_is_active -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib pacemaker_cached_slot_ -- --nocapture` (pass, 3 tests).
-- Runtime signal from the preserved warmed 4-peer healthy NPoS probe:
-  - log: `/tmp/izanami_npos_healthy_probe_cached_slot_same_slot_guard_20260317T205153Z.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_3stiMM`,
-  - the harness still shut peers down through the same fatal-signal summary bug,
-    but Kura persisted `124` core blocks on all four peers, so the run cleared
-    the `120` target;
-  - peer-log profile improved materially:
-    - `cached proposal slot stalled past quorum timeout`: `0`,
-    - `commit quorum missing past timeout; rescheduling block for reassembly`: `3`,
-    - `stake quorum observed but block payload missing`: `2`,
-    - `missing block dwell exceeded view-change window; routed through frontier recovery`: `2`,
-    - `validation inflight exceeded fast timeout`: `1`,
-    - `applied unified frontier recovery cleanup`: `0`,
-    - `frontier recovery exhausted catch-up windows; rotating view`: `0`,
-    - `dropping block sync update missing commit-role quorum`: `0`;
-  - the old cached-slot `propose.rs` timeout class at heights like `2/51/88`
-    disappeared in this preserved run; the remaining sender-side tail is now
-    concentrated in missing-payload / missing-block dwell and a small late
-    vote-backed resend residue.
+## 2026-03-18 Follow-up: broader Swift and Android harness paths are green again
+- Unblocked the full Swift `ToriiClientTests` class in
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift` by relaxing Torii account-id
+  query normalization to preserve legacy IH58-style encoded literals when the
+  pure-Swift `AccountAddress` parser cannot canonicalize them, while still
+  rejecting path-dangerous `%`, `/`, `?`, and `#` characters.
+- Restored Android source compatibility in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`
+  by reintroducing the domainless `fromMultisigPolicy(policy)` overload as a
+  thin wrapper over the newer domain-aware constructor.
+- Validation:
+  - `swift test --filter ToriiClientTests` (pass; `210` executed, `1` skipped)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
 
-## 2026-03-17 Follow-up: exact-slot validation-inflight suppression
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - quorum-timeout frontier cleanup / rotation now also treats exact-slot
-    pre-vote validation inflight as active same-slot recovery, so ownership is
-    preserved while vote-backed validation is still in flight;
-  - contiguous-frontier vote-backed quorum timeout now defers while exact-slot
-    pre-vote validation is still inflight instead of retransmitting /
-    advancing `quorum_timeout` ownership against work already in progress;
-  - sparse receive policy, retransmit target selection, quorum thresholds, and
-    protocol semantics remain unchanged.
-- Added focused regressions in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - `frontier_recovery_suppresses_cleanup_while_same_slot_validation_inflight_remains_active`,
-  - `frontier_recovery_suppresses_rotation_while_same_slot_validation_inflight_remains_active`,
-  - `reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight`.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib frontier_recovery_suppresses_ -- --nocapture` (pass, 9 tests),
-  - `cargo test -p iroha_core --lib reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight -- --nocapture` (pass).
-- Runtime signal from the preserved warmed 4-peer healthy NPoS probe:
-  - log: `/tmp/izanami_npos_healthy_probe_validation_guard_detached_20260317T2335.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_bHSUWP`,
-  - the harness still lost its own summary path to an external fatal signal, but
-    preserved Kura state showed `123` core blocks on all four peers;
-  - peer-log profile improved materially:
-    - `commit quorum missing past timeout; rescheduling block for reassembly`: `19`,
-    - `validation inflight exceeded fast timeout`: `0`,
-    - `stake quorum observed but block payload missing`: `0`,
-    - `applied unified frontier recovery cleanup`: `0`,
-    - `frontier recovery exhausted catch-up windows; rotating view`: `0`;
-  - approximate elapsed wall time from peer startup (`19:38:23Z`) to forced
-    teardown (`19:41:51Z`) was about `207.5s`, or about `1.69s/block` for the
-    persisted `123` blocks;
-  - the validation-inflight stall class is gone, but pure vote-backed resend
-    remained at heights such as `6`, `12`, `20`, `26`, `32`, `35`, `38`, `56`,
-    `58`, `71`, `73`, `77`, `80`, `87`, `90`, `104`, `113`, and `116`.
+## 2026-03-18 Follow-up: Swift and Android SDKs now cover the identifier-policy Torii surface
+- Extended the Swift SDK in `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`:
+  - added `ToriiIdentifierNormalization`,
+  - added `ToriiIdentifierPolicySummary`,
+    `ToriiIdentifierPolicyListResponse`, and
+    `ToriiIdentifierResolutionReceipt`,
+  - added `listIdentifierPolicies()`, `resolveIdentifier(...)`, and
+    `issueIdentifierClaimReceipt(...)` async + completion-handler APIs,
+  - added even-length ciphertext-hex validation for BFV
+    `encrypted_input` payloads instead of incorrectly reusing the fixed
+    32-byte hash validator.
+- Added focused Swift tests in
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` covering:
+  - identifier policy listing,
+  - resolve success + 404 handling,
+  - claim-receipt issuance, and
+  - client-side normalization parity for phone/email/account-number inputs.
+- Extended the Android SDK in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/`:
+  - added `IdentifierNormalization`,
+    `IdentifierPolicySummary`,
+    `IdentifierPolicyListResponse`,
+    `IdentifierResolutionReceipt`, and
+    `IdentifierJsonParser`,
+  - added `HttpClientTransport.listIdentifierPolicies()`,
+    `resolveIdentifier(...)`, and `issueIdentifierClaimReceipt(...)`,
+  - added JSON POST helpers and an allow-404 JSON fetch path for the new
+    identifier endpoints.
+- Added focused Android transport harness coverage in
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  for policy listing, resolve, 404 handling, claim-receipt path encoding, and
+  normalization parity.
+- Updated `docs/source/universal_accounts_guide.md` to reflect that JS, Swift,
+  and Android now all expose the identifier-policy client helpers.
+- Validation:
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `swift test --filter ToriiClientTests` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:compileJava` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) javac --release 21 -cp '/Users/takemiyamakoto/dev/iroha/java/iroha_android/core/build/classes/java/main:/Users/takemiyamakoto/dev/iroha/java/norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' -d /tmp/iroha-android-testclasses /Users/takemiyamakoto/dev/iroha/java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) java -ea -cp '/tmp/iroha-android-testclasses:/Users/takemiyamakoto/dev/iroha/java/iroha_android/core/build/classes/java/main:/Users/takemiyamakoto/dev/iroha/java/norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar' org.hyperledger.iroha.android.client.HttpClientTransportTests` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
 
-## 2026-03-17 Follow-up: near-quorum single-ingress backlog guard
-- Updated `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - contiguous-frontier near-quorum vote-backed reschedule now treats a single
-    inbound `block_payload_rx` or `block_rx` item as active same-slot ingress,
-    even when it stays below the generic near-quorum queue-depth floor;
-  - this applies only to the sender-side near-quorum resend path and does not
-    change zero-vote behavior, sparse intake, or quorum thresholds.
-- Added focused regression coverage:
-  - `reschedule_near_quorum_vote_backed_defers_while_single_slot_ingress_backlogged`.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib reschedule_near_quorum_ -- --nocapture` (pass, 5 tests),
-  - `cargo test -p iroha_core --lib frontier_recovery_suppresses_ -- --nocapture` (pass, 9 tests),
-  - `cargo test -p iroha_core --lib reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight -- --nocapture` (pass).
-- Runtime signal from the clean detached warmed probe:
-  - log: `/tmp/izanami_npos_healthy_probe_near_quorum_ingress_guard_20260317T2350.log`,
-  - preserved network: `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_JkrD06`,
-  - all four peers persisted `125` core blocks before clean process exit;
-  - elapsed wall time from peer startup (`19:54:49Z`) to clean shutdown
-    (`19:58:32Z`) was about `222.3s`, or about `1.78s/block` for the persisted
-    `125` blocks;
-  - live warning profile stayed better than the pre-validation-inflight runs for
-    cleanup / rotate / validation stalls, but this specific guard did not
-    improve throughput:
-    - `commit quorum missing past timeout; rescheduling block for reassembly`: `19`,
-    - `validation inflight exceeded fast timeout`: `0`,
-    - `stake quorum observed but block payload missing`: `2`,
-    - `applied unified frontier recovery cleanup`: `0`,
-    - `frontier recovery exhausted catch-up windows; rotating view`: `0`;
-  - the remaining tail is now dominated by a mix of:
-    - one-vote resend with no queue backlog at heights such as `11`, `15`, `24`,
-      `25`, `39`, `54`, `77`, `87`, and `116`,
-    - near-quorum resend with empty queues at heights such as `9`, `10`, `58`,
-      `73`, `80`, `90`, and `113`,
-    - and residual payload-missing QC events at heights `78` and `87`.
+## 2026-03-18 Follow-up: identifier receipts now carry `receipt_hash` end to end, and the JS SDK can call the new Torii identifier routes
+- Extended the identifier receipt/claim path:
+  - `crates/iroha_data_model/src/identifier.rs` now stores `receipt_hash` on
+    `IdentifierClaimRecord`, `IdentifierResolutionReceipt`, and the canonical
+    signed receipt payload,
+  - `crates/iroha_torii/src/identifier_resolution.rs` now threads the
+    hidden-function `receipt_hash` from `iroha_crypto::ram_lfe::EvalResponse`
+    into signed receipts and claim records instead of dropping it,
+  - `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}` now expose
+    `receipt_hash` in the resolve/claim-receipt DTOs and OpenAPI schema,
+  - `crates/iroha_core/src/{smartcontracts/isi/identifier.rs,state.rs}` now
+    reject all-zero receipt hashes both at claim time and during world-state
+    invariant validation.
+- Added JS SDK coverage for the identifier Torii surface:
+  - `javascript/iroha_js/src/toriiClient.js` now exposes
+    `listIdentifierPolicies()`, `resolveIdentifier()`, and
+    `issueIdentifierClaimReceipt()`,
+  - `javascript/iroha_js/src/normalizers.js` now exposes
+    `normalizeIdentifierInput()` so clients can canonicalize
+    `phone_e164` / `email_address` / `account_number` inputs exactly the way
+    the Rust policy layer expects,
+  - `javascript/iroha_js/src/index.js` re-exports the new normalizer,
+  - focused JS tests now cover policy listing, resolve, claim-receipt, and
+    normalization behavior.
+- Updated `docs/source/universal_accounts_guide.md` to mention the
+  `receipt_hash` response field and the JS SDK helpers for identifier-policy
+  resolution flows.
+- Validation:
+  - `cargo test --locked -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test --locked -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test --locked -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `node --test javascript/iroha_js/test/normalizers.test.js javascript/iroha_js/test/toriiClient.identifier.test.js` (pass)
 
-## 2026-03-17 Follow-up: same-slot missing-QC cleanup suppression
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs` and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - quorum-timeout frontier cleanup / rotation now also defers when the exact
-    `(height, view)` still has active sender-side vote-backed recovery work
-    even after queue backlog drains, including recent actionable same-slot
-    missing-QC fetches, buffered deferred `BlockSyncUpdate`s, and exact-slot
-    vote/QC verification in flight;
-  - zero-vote suppression, sparse receive policy, retransmit target selection,
-    quorum thresholds, and protocol semantics remain unchanged.
-- Added focused regressions in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - `frontier_recovery_suppresses_cleanup_while_same_slot_missing_qc_request_remains_recent_without_backlog`,
-  - `frontier_recovery_suppresses_rotation_while_same_slot_deferred_block_sync_update_remains_buffered_without_backlog`.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib frontier_recovery_suppresses_ -- --nocapture` (pass, 7 tests).
-- Runtime validation:
-  - warmed 4-peer healthy NPoS release probe started at
-    `/tmp/izanami_npos_healthy_probe_same_slot_missing_qc_guard_20260317T183650Z.log`,
-    but the `cargo run -p izanami --release --locked ...` rebuild is still in
-    progress while `iroha_data_model` is linking, so no fresh runtime consensus
-    summary is available yet from this cut.
+## 2026-03-18 Follow-up: BFV-encrypted identifier input is now wired through Torii
+- Extended `crates/iroha_crypto/src/fhe_bfv.rs` beyond the raw BFV primitive:
+  - added `BfvIdentifierPublicParameters`,
+  - deterministic per-policy BFV key derivation for client input encryption,
+  - identifier-envelope encrypt/decrypt helpers with length-prefix validation.
+- Updated `crates/iroha_torii/src/identifier_resolution.rs`:
+  - policy commitments can now publish BFV public parameters in `public_parameters`,
+  - the resolver derives/verifies the matching BFV key material from the policy secret + policy id,
+  - encrypted BFV request payloads are decrypted before policy normalization and receipt issuance.
+- Updated `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`:
+  - `GET /v1/identifier-policies` now advertises optional `input_encryption=bfv-v1` metadata plus hex-encoded public parameters,
+  - `POST /v1/identifiers/resolve` and `POST /v1/accounts/{account_id}/identifiers/claim-receipt` now accept exactly one of plaintext `input` or BFV `encrypted_input`,
+  - added handler coverage for BFV-encrypted identifier resolution.
+- Updated `docs/source/universal_accounts_guide.md` to describe the BFV-encrypted request path and to clarify that identifier derivation is still the committed PRF while input transport can now be BFV-wrapped.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_crypto bfv -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii alias_resolve_scans_account_labels_when_alias_index_is_missing --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
 
-## 2026-03-17 Follow-up: bundle-gate partitioning plus same-slot zero-vote ingress guard
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - round-recovery bundle reservation is now partitioned into `commit` and
-    `non_commit` lanes, with separate window anchors and indices, so short
-    `CommitQuorumReschedule` windows no longer consume the same per-height
-    reservation slot used by range-pull expiry, roster-proof fallback, and
-    payload-mismatch recovery;
-  - zero-vote contiguous-frontier reschedule now also suppresses
-    `drop_pending=true` when same-slot ingress remains active with inbound
-    backlog, even if the prior same-height dependency-progress timestamp has
-    gone stale; this keeps the pending frontier payload alive and seeds
-    `quorum_timeout` ownership create-only instead of discarding the slot under
-    active block/RBC ingress;
-  - sparse receive policy, retransmit target selection, quorum thresholds, and
-    protocol semantics remain unchanged.
-- Updated regression coverage in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - `round_recovery_bundle_window_gate_partitions_commit_and_non_commit_sources`,
-  - `round_recovery_bundle_window_gate_keeps_non_commit_sources_single_use_per_window`,
-  - `round_recovery_bundle_window_gate_allows_commit_reschedule_short_window_without_rearming_non_commit`,
-  - `round_recovery_bundle_window_gate_keeps_commit_reschedule_single_use_per_explicit_window`,
-  - `zero_vote_quorum_timeout_does_not_drop_while_same_slot_ingress_backlog_is_active_without_dependency_progress`,
-  - revalidated the adjacent `zero_vote_quorum_timeout_` and
-    `frontier_recovery_suppresses_` subsets.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib round_recovery_bundle_window_gate_ -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib frontier_recovery_suppresses_ -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_ -- --nocapture` (pass),
-  - warmed 4-peer healthy NPoS probes:
-    `/tmp/izanami_npos_healthy_probe_partitioned_bundle_gate_20260317T170146Z.log`
-    and `/tmp/izanami_npos_healthy_probe_same_slot_ingress_guard_20260317T171610Z.log`.
-- Runtime notes:
-  - the bundle-gate partitioning rerun removed the earlier
-    `dropping block sync update missing commit-role quorum` regression from the
-    live peer logs and moved the remaining tail away from the prior
-    same-height bundle-starvation pattern;
-  - the follow-up same-slot ingress rerun also kept visible zero-vote
-    reschedules off the `drop_pending=true` path in the observed late-frontier
-    warnings, including the previous height-`49` backlog/drop hotspot;
-  - the warmed rerun still did not emit a clean `target block height reached`
-    summary for `target_blocks=120`; the log exited with cluster teardown and
-    late client connection-refused warnings while the live peer logs had only
-    progressed into the `70s/80s`;
-  - no `dropping block sync update missing commit-role quorum` lines appeared in
-    the live peer logs for the final rerun;
-  - the remaining sender-side tail is now mostly vote-backed contiguous-frontier
-    reschedule around heights such as `47`, `59`, `72`, `74`, `83`, and `85`,
-    plus intermittent missing-payload/frontier-recovery events around heights
-    `17`, `30`, and `70`;
-  - end-to-end pace is still above the `<= 1.0s/block` target and runtime
-    validation is not yet back to a clean `120/120` success case.
+## 2026-03-18 Follow-up: `iroha_crypto` now ships a real BFV baseline instead of calling the HKDF path "FHE"
+- Added `crates/iroha_crypto/src/fhe_bfv.rs` and exported it from `crates/iroha_crypto/src/lib.rs`:
+  - deterministic BFV key generation, encryption, decryption,
+  - ciphertext addition,
+  - ciphertext-by-plaintext multiplication,
+  - ciphertext-by-ciphertext multiplication with relinearization,
+  - affine-circuit evaluation over scalar ciphertext slots.
+- Fixed the BFV multiply path to use the integer negacyclic product before the `t/q` rescale-and-round step instead of reducing modulo `q` too early, which was the source of the broken ct-ct multiplication path.
+- Added scalar-overflow validation bounds for the baseline implementation so unsupported parameter sets fail closed instead of silently overflowing the `i128` accumulation path.
+- Clarified `crates/iroha_crypto/src/ram_lfe.rs` docs:
+  - the currently wired identifier resolver is still a committed `HKDF-SHA3-512` PRF backend,
+  - it is not a homomorphic evaluator,
+  - real BFV primitives now live in `iroha_crypto::fhe_bfv`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_crypto bfv -- --nocapture` (pass)
 
-## 2026-03-17 Follow-up: same-slot frontier owner suppression
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs`:
-  - unified frontier recovery now suppresses cleanup/rotate when inbound
-    block/RBC ingress is active and the active `(height, view)` still has
-    same-slot owner state: cached hint/proposal, proposal-seen marker,
-    non-aborted pending/inflight state, exact-slot RBC state, or vote/QC
-    evidence;
-  - this preserves the current same-view slot owner long enough to avoid
-    tearing down `proposal_cache` / `proposals_seen` and reopening the same
-    frontier slot for a second hash while old-hash ingress is still arriving;
-  - after the first implementation proved too broad in `missing_qc` stall
-    tests, the guard was narrowed so bare same-height missing requests and
-    deferred missing-payload QCs do not count as same-slot owner state;
-  - sparse receive policy and quorum thresholds remain unchanged.
-- Updated regression coverage in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - added
-    `frontier_recovery_suppresses_cleanup_while_same_slot_ingress_remains_active`,
-  - added
-    `frontier_recovery_suppresses_rotation_while_same_slot_ingress_remains_active`,
-  - revalidated the broader `frontier_stall_` subset, including
-    `missing_qc_view_change_suppressed_without_frontier_stall_mode_when_reanchor_window_already_emitted`.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib frontier_recovery_suppresses_ -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib frontier_stall_ -- --nocapture` (pass),
-  - warmed 4-peer healthy NPoS probe on the final code:
-    `/tmp/izanami_npos_healthy_probe_same_slot_owner_final_20260317T160430Z.log`
-    (probe command completed successfully and preserved the network dir).
-- Runtime notes:
-  - preserved network dir:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ttUl3e`;
-  - the rebuilt final binary reached `quorum 120 / strict 120` against
-    `target_blocks=120`; target-height summary reported `elapsed=200.050s`,
-    `interval_p50_ms=1667`, `interval_p95_ms=2501`, which is about
-    `1.67s/block`;
-  - `dropping block sync update missing commit-role quorum`: `0`;
-  - `commit quorum missing past timeout; rescheduling block for reassembly`:
-    `36` (down from `41` on the previous vote-count-gated sender-side run);
-  - `applied unified frontier recovery cleanup`: `23` (down from `33`);
-  - `MissingQc|missing_qc`: `0` (down from `4`);
-  - `frontier recovery exhausted catch-up windows; rotating view`: `0`;
-  - the previous same-slot churn hotspots at heights `20` and `56` dropped out
-    of the dominant offenders, and height `66` fell to a minor `2` reschedules;
-  - the remaining isolated tail is now centered around heights `83`, `90`,
-    `105`, and `115`, so throughput improved materially but still misses the
-    `<= 1.0s/block` target.
+## 2026-03-18 Follow-up: identifier claims are now receipt-bound, normalized, access-checked, and config-wired
+- Tightened identifier claims in `crates/iroha_core/src/smartcontracts/isi/identifier.rs`:
+  - `ClaimIdentifier` now verifies a signed `IdentifierResolutionReceipt` against the policy resolver key,
+  - rejects claim/account/UAID mismatches,
+  - rejects future-issued or expired receipts,
+  - added regressions for invalid signatures and expired receipts.
+- Extended the identifier data model in `crates/iroha_data_model/src/identifier.rs`:
+  - added `IdentifierNormalization` with built-in canonicalisers for phone, email, account-number, trimmed, and exact modes,
+  - stored the normalization mode on `IdentifierPolicy`,
+  - shared the canonical signed receipt payload between Torii and core.
+- Updated Torii identifier surfaces in `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,openapi.rs}`:
+  - `GET /v1/identifier-policies`, `POST /v1/identifiers/resolve`, and
+    `POST /v1/accounts/{account_id}/identifiers/claim-receipt` now run through `check_access`,
+  - resolve/claim-receipt now normalize inputs through the active policy before deriving the opaque id,
+  - added the claim-receipt route to OpenAPI,
+  - added tests covering token enforcement, normalization, and config-driven resolver wiring.
+- Wired the in-process resolver through `iroha_config`:
+  - new `torii.identifier_resolver` config surface in `crates/iroha_config/src/parameters/{user.rs,actual.rs,defaults.rs}`,
+  - `Torii::new_with_handle` now instantiates resolver runtimes from config instead of leaving production `identifier_resolver` unset.
+- Updated `docs/source/universal_accounts_guide.md` to document normalization modes, receipt-bound claims, the claim-receipt route, and the fact that identifier endpoints honor Torii access/rate policy.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_config -p iroha_core -p iroha_torii` (pass)
+  - `cargo test -p iroha_data_model phone_normalization_strips_formatting -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model --lib email_normalization_lowercases_and_trims -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model --lib identifier_policy_id_roundtrip -- --nocapture` (pass)
+  - `cargo test -p iroha_config torii_identifier_resolver_parses -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
 
-## 2026-03-17 Follow-up: vote-backed resend now rearms only on higher vote count
-- Updated `crates/iroha_core/src/sumeragi/main_loop/pending_block.rs` and
-  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`:
-  - vote-backed quorum reschedule no longer rearms off generic
-    `pending.touch_progress(...)` activity;
-  - `PendingBlock` now records the vote count used by the last vote-backed
-    quorum reschedule, and `vote_backed_reschedule_due(...)` only reopens when
-    the current vote count is higher than that last reschedule count;
-  - this keeps RBC chunk/ready/deliver ingress and other non-vote same-block
-    progress from reopening commit-quorum retransmit without new vote evidence;
-  - zero-vote resend semantics and sparse receive policy remain unchanged.
-- Updated regression coverage:
-  - `vote_backed_reschedule_requires_progress_after_last_attempt` now asserts
-    that non-vote progress does not rearm resend and only higher vote count
-    does;
-  - `reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress`
-    now explicitly injects non-vote pending progress and verifies that the
-    actor still suppresses duplicate vote-backed retransmit.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib vote_backed_reschedule_requires_progress_after_last_attempt -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib contiguous_frontier_vote_backed_ -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_ -- --nocapture` (pass),
-  - `cargo build --release -p irohad --bin iroha3d` (pass),
-  - warmed 4-peer healthy NPoS probe log:
-    `/tmp/izanami_npos_healthy_probe_vote_count_gate_20260317T145442Z.log`
-    (probe command completed successfully and preserved the network dir).
-- Runtime notes:
-  - preserved network dir:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_EDtGKq`;
-  - the rebuilt binary reached `quorum 123 / strict 123` against
-    `target_blocks=120`; target-height summary reported `elapsed=231.153s`,
-    `interval_p50_ms=1669`, `interval_p95_ms=3336`, which is still about
-    `1.91s/block` to target;
-  - `dropping block sync update missing commit-role quorum`: `0`;
-  - `commit quorum missing past timeout; rescheduling block for reassembly`:
-    `41` (down from `47` in the prior sender-side cut run);
-  - `applied unified frontier recovery cleanup`: `33` (down from `43`);
-  - `MissingQc|missing_qc`: `4` (down from `8`);
-  - the previous late same-height hotspot around heights `90` and `113` no
-    longer appears in commit-quorum resend warnings on this run;
-  - the dominant remaining resend hotspot shifted earlier and broader, mainly
-    around heights `56`, `20`, and `66`, so the runtime bottleneck is now
-    earlier same-height candidate churn rather than the prior late `90/113`
-    rearm loop.
+## 2026-03-18 Follow-up: UAID-integrated hidden identifier policies landed across crypto, data model, core state, and Torii
+- Added reusable hidden-function plumbing in `crates/iroha_crypto/src/ram_lfe.rs`:
+  - `RamLfeBackend`, `PolicyCommitment`, `ClientRequest`, `EvalResponse`, and a committed `HKDF-SHA3-512` PRF evaluator/signing path suitable for higher-layer integration.
+- Added generic identifier-policy data model and ISIs:
+  - `IdentifierPolicyId`, `IdentifierPolicy`, `IdentifierClaimRecord`, `IdentifierResolutionReceipt`,
+  - `RegisterIdentifierPolicy`, `ActivateIdentifierPolicy`, `ClaimIdentifier`, `RevokeIdentifier`,
+  - instruction registry + visitor wiring.
+- Extended world state and invariants in `crates/iroha_core/src/state.rs`:
+  - new `identifier_policies` and `identifier_claims` storages,
+  - snapshot/JSON persistence support,
+  - invariant validation tying `opaque_id -> uaid -> account` back to account-held opaque ids.
+- Added core execution handlers in `crates/iroha_core/src/smartcontracts/isi/identifier.rs`:
+  - policy registration/activation,
+  - claim/revoke lifecycle,
+  - account-delete cleanup for identifier claims.
+- Added Torii identifier-resolution surface:
+  - `GET /v1/identifier-policies`,
+  - `POST /v1/identifiers/resolve`,
+  - in-process `IdentifierResolutionService` with signed receipts,
+  - OpenAPI documentation for the new request/response payloads.
+- Updated UAID docs in `docs/source/universal_accounts_guide.md` to describe policy namespaces, claims, and the resolve-then-transfer flow.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii` (pass)
+  - `cargo test -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model identifier_policy_id_roundtrip -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
 
-## 2026-03-17 Follow-up: sender-side late-frontier pacing/ownership cut
-- Updated `crates/iroha_core/src/sumeragi/main_loop.rs`,
-  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
-  `crates/iroha_core/src/sumeragi/main_loop/commit.rs`:
-  - added an explicit-window frontier-owner helper so commit-quorum resend can
-    use a source-specific bundle window without changing cleanup/rotate pacing;
-  - added a conservative contiguous-frontier vote-backed fast resend window:
-    near quorum now caps to `rebroadcast_cooldown()`, other vote-backed
-    contiguous-frontier cases cap to `2 * rebroadcast_cooldown()`, while
-    zero-vote, non-frontier, backpressured, backlog, and RBC-blocked paths keep
-    the existing adaptive backoff;
-  - zero-vote contiguous-frontier reschedule now preserves pending ownership on
-    the first ownerless same-height recovery window when dependency progress is
-    active and inbound backlog is present, seeding `quorum_timeout` ownership
-    create-only without resetting timers or taking a cleanup/rotate action;
-  - the zero-vote scan no longer defers that first-window ownerless same-height
-    backlog case behind the generic consensus-backlog guard, so it can reach
-    the create-only suppression path deterministically;
-  - commit-quorum reschedule bundle gating now uses the explicit capped resend
-    window, while cleanup, rotation, zero-vote suppression, range-pull expiry,
-    roster-proof fallback, and payload-mismatch recovery keep the existing
-    `frontier_recovery_window()` pacing;
-  - sparse `BlockSyncUpdate` receive policy is intentionally unchanged in this
-    cut.
-- Updated regression coverage in
-  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
-  - `zero_vote_quorum_timeout_does_not_drop_while_same_height_missing_block_recovery_backlog_is_active_without_owner`,
-  - `contiguous_frontier_vote_backed_resend_window_tracks_vote_gap`,
-  - `contiguous_frontier_vote_backed_fast_resend_window_applies_only_when_clear`,
-  - `round_recovery_bundle_window_gate_allows_commit_reschedule_short_window_without_rearming_non_commit`,
-  - `round_recovery_bundle_window_gate_keeps_commit_reschedule_single_use_per_explicit_window`,
-  - `reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
-  - `reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window`,
-  - unchanged sparse-intake checks:
-    `block_sync_quorum_accepts_only_explicit_contiguous_frontier_sparse_recovery`,
-    `block_sync_update_accepts_explicit_contiguous_frontier_requested_sparse_recovery`,
-    `block_sync_update_accepts_partial_vote_sparse_recovery_for_explicit_missing_request`.
-- Validation for this follow-up:
-  - `cargo fmt --all` (pass),
-  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_ -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib contiguous_frontier_vote_backed_ -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib round_recovery_bundle_window_gate_ -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib block_sync_quorum_accepts_only_explicit_contiguous_frontier_sparse_recovery -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib block_sync_update_accepts_explicit_contiguous_frontier_requested_sparse_recovery -- --nocapture` (pass),
-  - `cargo test -p iroha_core --lib block_sync_update_accepts_partial_vote_sparse_recovery_for_explicit_missing_request -- --nocapture` (pass),
-  - `cargo build --release -p irohad --bin iroha3d` (pass),
-  - warmed 4-peer healthy NPoS probe run via
-    `/tmp/izanami_npos_healthy_probe_sender_side_cut_20260317T133523Z.log`
-    reached target height successfully; the surrounding shell wrapper returned
-    non-zero after completion because `zsh` reserves `status`, but the captured
-    `cargo run -p izanami --release --locked -- ...` completed to `122 / 122`
-    before that post-processing error.
-- Runtime notes:
-  - warmed 4-peer healthy NPoS probe log:
-    `/tmp/izanami_npos_healthy_probe_sender_side_cut_20260317T133523Z.log`;
-    preserved network dir:
-    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_zpbgEL`;
-  - the rebuilt binary reached `quorum 122 / strict 122` against
-    `target_blocks=120`; target-height summary reported `elapsed=231.299s`,
-    `interval_p50_ms=1669`, `interval_p95_ms=2501`, which is about
-    `1.91s/block` over the `121` advanced blocks to target;
-  - `dropping block sync update missing commit-role quorum`: `0` occurrences
-    across preserved peer stdout logs;
-  - `commit quorum missing past timeout; rescheduling block for reassembly`:
-    `47` occurrences across preserved peer stdout logs;
-  - cleanup/rotation churn remained bounded but present:
-    `applied unified frontier recovery cleanup`: `43`,
-    `frontier recovery exhausted catch-up windows; rotating view`: `4`,
-    `MissingQc|missing_qc`: `8`,
-    `frontier_recovery_advance=Some(None)`: `0`,
-    `drop_pending=true`: `0`;
-  - no permanent late-frontier stall remained on this run, but repeated
-    same-height late-frontier churn was still visible around heights `90` and
-    `113`, and the `<= 1.0s/block` acceptance target is still not met.
+## 2026-03-17 Follow-up: Android transfer encoder now validates Norito AssetId payloads and normalizes COMPACT_LEN inputs
+- Updated `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoder.java`:
+  - Norito `AssetId` parsing now accepts `COMPACT_LEN` layout flags and rejects other unsupported layout flags explicitly.
+  - Added structural decode/validation for preserved `AssetId.account` and `AssetId.scope` payloads (single/multisig controller parsing, scope discriminant validation), with explicit `Invalid AssetId.account payload` / `Invalid AssetId.scope payload` error context.
+  - Added semantic multisig validation during Norito account decode (supported version check, non-empty member set, positive weights, positive threshold, threshold <= total weight, duplicate-member rejection).
+  - Added the same multisig semantic validation on transfer-side account-controller encoding so I105-derived multisig payloads follow the same constraints as decoded Norito payloads.
+  - For `COMPACT_LEN` source payloads, account/scope are transcoded into canonical non-compact transfer payload form before re-encoding, keeping transfer payloads valid under current `flags=0` transaction encoding.
+- Added regression coverage in `java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoderTests.java`:
+  - accepts COMPACT_LEN Norito asset IDs and normalizes them to canonical transfer payload bytes,
+  - accepts COMPACT_LEN Norito asset IDs with dataspace scope and normalizes scope payloads to canonical non-compact transfer bytes,
+  - accepts COMPACT_LEN Norito asset IDs with multisig account payloads and normalizes them to canonical transfer bytes (including member ordering),
+  - rejects malformed Norito `AssetId.account` payloads,
+  - rejects malformed Norito `AssetId.scope` payloads,
+  - rejects structurally valid but semantically invalid multisig policies in Norito account payloads,
+  - rejects unsupported multisig policy versions in Norito account payloads,
+  - rejects unsupported Norito `AssetId` layout flags with a deterministic error.
+- Validation:
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` (pass).
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` (pass).
+
+## 2026-03-17 Follow-up: Android AssetId decoder now fully validates scope/trailing bytes and rejects negative field lengths
+- Updated `java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AssetIdDecoder.java`:
+  - `decode(...)` now validates the full `AssetId` payload shape by decoding and checking `scope` instead of stopping after account/definition fields.
+  - `decode(...)` now validates `AssetId.account` payload structure/semantics (single/multisig controller decode, multisig version/threshold/member checks) instead of only skipping bytes.
+  - Added explicit trailing-byte rejection after the scope field.
+  - Added non-negative + bounded length checks for account/definition/scope field lengths so malformed signed-u64 lengths fail deterministically with `IllegalArgumentException`.
+  - Added strict layout-flag validation for both `AssetId` and `AssetDefinitionId` decode paths: only `COMPACT_LEN` is accepted; other layout flags are rejected.
+- Added regression coverage in `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AssetIdDecoderTests.java`:
+  - rejects malformed `AssetId.account` payloads,
+  - rejects unsupported `AssetId` layout flags,
+  - rejects malformed `AssetId.scope` payloads,
+  - rejects trailing bytes after a valid scope field,
+  - rejects negative account-length prefixes.
+  - rejects unsupported `AssetDefinitionId` layout flags.
+- Validation:
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` (pass).
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` (pass).
+
+## 2026-03-17 Follow-up: integration-test startup no longer hangs when one peer reaches block 1 before Torii `/status`
+- Updated `crates/iroha_test_network/src/lib.rs` startup gating:
+  - `NetworkPeer::start_checked(...)` still prefers `ServerStarted` (`/status`-driven),
+    but during genesis bootstrap it now falls back after a grace window when the
+    peer is running and block 1 is already committed on storage.
+  - this removes the long hang shape where `start_checked` could wait until the
+    outer network timeout even though consensus had progressed.
+- Added unit coverage in `start_event_tests`:
+  - `storage_fallback_requires_bootstrap_grace_running_and_block_1`
+  - `storage_fallback_allows_ready_bootstrap_peer`
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_test_network start_event_tests -- --nocapture` (pass)
+  - `cargo test -p integration_tests explorer_instructions_emit_i105_literals -- --nocapture` (pass; targeted test finished `ok` in `316.83s`)
+
+## 2026-03-17 Follow-up: first-release ABI surface normalized to v1 only
+- Normalized the first-release ABI surface to v1 only across the core IVM/runtime path and the public ABI API: removed experimental syscall-policy scaffolding, made `IVM::load_program` reject non-v1 ABI headers, made pointer-ABI validation fail closed for non-v1 annotations, collapsed runtime ABI queries/endpoints/telemetry to singular `abi_version = 1` payloads, and updated the canonical runtime-upgrade/syscall docs to describe `added_*` fields as reserved-and-empty in this release.
+- Extended the v1-only ABI cleanup through the runtime-upgrade SDK surface: Python, JavaScript, and Swift clients now reject runtime-upgrade manifests unless `abi_version = 1` and `added_syscalls`/`added_pointer_types` are empty, examples/tests were rewritten to match, and the remaining runtime-upgrade/nexus/threat-model docs were swept to remove stale multi-version ABI wording.
 
 ## 2026-03-17 Follow-up: sorting checks now match opaque asset-definition IDs
 - Fixed `integration_tests/tests/sorting.rs` asset-definition sorting checks to
@@ -1398,9 +1155,9 @@ Last updated: 2026-03-19
 ## 2026-03-15 Follow-up: address canonicalisation path-helper regression fix
 - Fixed `integration_tests/tests/address_canonicalisation.rs` helper paths used by account/explorer
   path-surface tests:
-  - `account_endpoint_url(...)` now targets `/v1/accounts/...` (was accidentally switched to `/v2/...`).
+  - `account_endpoint_url(...)` now targets `/v1/accounts/...`.
   - `explorer_account_qr_url(...)` now targets `/v1/explorer/accounts/.../qr`
-    (was accidentally switched to `/v2/...`).
+    with the same `/v1` handler prefix.
 - This restores expected handler dispatch so malformed literals are validated by route handlers
   (`400 Bad Request`) and canonical I105 account/explorer requests succeed (`200 OK`) instead of
   hitting `404 Not Found`.
@@ -2678,7 +2435,7 @@ Last updated: 2026-03-19
   - `cargo test -p iroha_cli --test cli_smoke --no-run` (pass)
   - `cargo test -p iroha_cli --test cli_smoke address_convert_json_summary_contains_i105_and_canonical_hex -- --nocapture` (pass)
   - `cargo test -p iroha_cli --test cli_smoke address_audit_supports_csv_output -- --nocapture` (pass)
-  - `cd javascript/iroha_js && IROHA_JS_ALLOW_UNVERIFIED_NATIVE=1 node --test --test-name-pattern "getExplorerAccountQr ignores payload address_format field" test/toriiClient.test.js` (pass)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "getExplorerAccountQr ignores payload address_format field" test/toriiClient.test.js` (pass)
 
 ## 2026-03-11 Repository-Wide Token Cleanup (Android + CLI + Docs + Tooling)
 - Removed remaining legacy account-literal token usage across non-portal docs, Android SDK/sample surfaces, CLI docs/tests, Torii client helper docs, and tooling text paths.
@@ -4238,3 +3995,9 @@ Last updated: 2026-03-19
   - `cargo test -p integration_tests --test mod nexus::runtime_dataspace_registration_perf::runtime_nexus_registration_reports_lane_lifecycle_costs -- --nocapture`
   - `cargo test -p integration_tests --test mod triggers::by_call_trigger::trigger_in_genesis -- --nocapture`
   - `cargo test -p integration_tests --test mod triggers::by_call_trigger::call_execute_trigger_with_args -- --nocapture`
+
+## 2026-03-19 JSON Numeric Trigger ABI
+- Added `JSON_GET_NUMERIC` (`0x7F`) to the ABI v1 syscall surface so Kotodama by-call triggers can read decimal `Numeric` values directly from trigger JSON args without routing amount construction through middleware.
+- Implemented the syscall in `CoreHost`, `WsvHost`, and the `iroha_core` codec-host forwarding path.
+- Added Kotodama semantic/IR/compiler support for `json_get_numeric(ev, name("amount"))`, typed as `Amount`, plus ABI/host regression tests and syscall docs updates.
+- Intended use: direct on-chain settlement-style triggers such as SBP issuance swap can now consume `"0.00001"` style amounts from `ExecuteTrigger` args and feed them into `transfer_asset(...)` unchanged.

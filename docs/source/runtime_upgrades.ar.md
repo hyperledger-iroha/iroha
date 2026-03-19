@@ -46,8 +46,8 @@ translation_last_reviewed: 2026-01-01
   - `description: String` — وصف قصير للمشغلين.
   - `abi_version: u16` — نسخة ABI المستهدفة للتفعيل (يجب ان تكون 1 في الاصدار الاول).
   - `abi_hash: [u8; 32]` — hash ABI الكانوني للسياسة المستهدفة.
-  - `added_syscalls: Vec<u16>` — ارقام syscalls التي تصبح صالحة مع هذه النسخة.
-  - `added_pointer_types: Vec<u16>` — معرفات انواع المؤشرات المضافة بالترقية.
+  - `added_syscalls: Vec<u16>` — قائمة فروق محجوزة؛ ويجب ان تبقى فارغة في الاصدار الاول.
+  - `added_pointer_types: Vec<u16>` — قائمة فروق محجوزة؛ ويجب ان تبقى فارغة في الاصدار الاول.
   - `start_height: u64` — اول ارتفاع كتلة يسمح فيه بالتفعيل.
   - `end_height: u64` — الحد الاعلى الحصري لنافذة التفعيل.
   - `sbom_digests: Vec<RuntimeUpgradeSbomDigest>` — digests SBOM لادوات الترقية.
@@ -121,7 +121,7 @@ translation_last_reviewed: 2026-01-01
 
 Torii و CLI
 - Torii
-  - `GET /v1/runtime/abi/active` -> `{ active_versions: [u16], default_compile_target: u16 }` (implemented)
+  - `GET /v1/runtime/abi/active` -> `{ abi_version: u16 }` (implemented)
   - `GET /v1/runtime/abi/hash` -> `{ policy: "V1", abi_hash_hex: "<64-hex>" }` (implemented)
   - `GET /v1/runtime/upgrades` -> قائمة السجلات (implemented).
   - `POST /v1/runtime/upgrades/propose` -> يغلف `ProposeRuntimeUpgrade` (يعيد هيكل تعليمات; implemented).
@@ -137,7 +137,7 @@ Torii و CLI
 
 Core Query API
 - استعلام Norito مفرد (موقع):
-  - `FindActiveAbiVersions` يعيد بنية Norito `{ active_versions: [u16], default_compile_target: u16 }`.
+  - `FindAbiVersion` يعيد بنية Norito `{ abi_version: u16 }`.
   - راجع المثال: `docs/source/samples/find_active_abi_versions.md` (النوع/الحقول ومثال JSON).
 
 ملاحظات التنفيذ (v1 فقط)
@@ -157,7 +157,7 @@ Core Query API
   - انتاج `abi_version = 1` وادراج `abi_hash` الكانوني لــ v1 داخل manifests `.to`.
 
 Telemetry
-- اضافة gauge `runtime.active_abi_versions` و counter `runtime.upgrade_events_total{kind}`.
+- اضافة gauge `runtime.abi_version` و counter `runtime.upgrade_events_total{kind}`.
 
 اعتبارات الامان
 - فقط root/sudo يمكنه الاقتراح/التفعيل/الالغاء؛ يجب توقيع manifests بشكل صحيح.
