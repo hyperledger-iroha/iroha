@@ -10,13 +10,13 @@ use norito::codec::{Decode, Encode};
 
 pub use crate::block::consensus::{
     CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
-    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-    SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
-    SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-    SumeragiQcStatus, SumeragiStatusWire, SumeragiViewChangeCauseStatus,
-    SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-    SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-    SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+    SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+    SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+    SumeragiMembershipMismatchStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
+    SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRoundGapStatus,
+    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+    SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+    SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
 

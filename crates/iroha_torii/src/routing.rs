@@ -171,15 +171,16 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
-        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-        SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-        SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiNposTimeoutsStatus,
-        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
-        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRbcEvictedSession,
-        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitPipelineStatus,
+        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+        SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
+        SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
+        SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+        SumeragiMissingBlockFetchStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRoundGapStatus,
         SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
         SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
         SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
@@ -23972,6 +23973,73 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("last_updated_ms", snap.commit_quorum.last_updated_ms),
     ]);
+    let commit_pipeline = json_object(vec![
+        json_entry("last_total_ms", snap.commit_pipeline.last_total_ms),
+        json_entry(
+            "last_validation_ms",
+            snap.commit_pipeline.last_validation_ms,
+        ),
+        json_entry(
+            "last_qc_rebuild_ms",
+            snap.commit_pipeline.last_qc_rebuild_ms,
+        ),
+        json_entry("last_gate_ms", snap.commit_pipeline.last_gate_ms),
+        json_entry("last_finalize_ms", snap.commit_pipeline.last_finalize_ms),
+        json_entry(
+            "last_drain_results_ms",
+            snap.commit_pipeline.last_drain_results_ms,
+        ),
+        json_entry(
+            "last_drain_qc_verify_ms",
+            snap.commit_pipeline.last_drain_qc_verify_ms,
+        ),
+        json_entry(
+            "last_drain_persist_ms",
+            snap.commit_pipeline.last_drain_persist_ms,
+        ),
+        json_entry(
+            "last_drain_kura_store_ms",
+            snap.commit_pipeline.last_drain_kura_store_ms,
+        ),
+        json_entry(
+            "last_drain_state_apply_ms",
+            snap.commit_pipeline.last_drain_state_apply_ms,
+        ),
+        json_entry(
+            "last_drain_state_commit_ms",
+            snap.commit_pipeline.last_drain_state_commit_ms,
+        ),
+        json_entry("ema_total_ms", snap.commit_pipeline.ema_total_ms),
+        json_entry("ema_validation_ms", snap.commit_pipeline.ema_validation_ms),
+        json_entry("ema_gate_ms", snap.commit_pipeline.ema_gate_ms),
+        json_entry("ema_finalize_ms", snap.commit_pipeline.ema_finalize_ms),
+    ]);
+    let round_gap = json_object(vec![
+        json_entry(
+            "last_deliver_to_state_commit_ms",
+            snap.round_gap.last_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "last_state_commit_to_next_propose_ms",
+            snap.round_gap.last_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "last_deliver_to_next_propose_ms",
+            snap.round_gap.last_deliver_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_state_commit_ms",
+            snap.round_gap.ema_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "ema_state_commit_to_next_propose_ms",
+            snap.round_gap.ema_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_next_propose_ms",
+            snap.round_gap.ema_deliver_to_next_propose_ms,
+        ),
+    ]);
     let settlement = settlement_snapshot_value(&snap.settlement);
     let dedup_evictions = json_object(vec![
         json_entry(
@@ -25207,6 +25275,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("locked_qc", locked_qc),
         json_entry("commit_qc", commit_qc),
         json_entry("commit_quorum", commit_quorum),
+        json_entry("commit_pipeline", commit_pipeline),
+        json_entry("round_gap", round_gap),
         json_entry("tx_queue", tx_queue),
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
@@ -26961,6 +27031,35 @@ pub async fn handle_v1_sumeragi_status(
                 signatures_set_b: snap.commit_quorum.signatures_set_b,
                 signatures_required: snap.commit_quorum.signatures_required,
                 last_updated_ms: snap.commit_quorum.last_updated_ms,
+            },
+            commit_pipeline: SumeragiCommitPipelineStatus {
+                last_total_ms: snap.commit_pipeline.last_total_ms,
+                last_validation_ms: snap.commit_pipeline.last_validation_ms,
+                last_qc_rebuild_ms: snap.commit_pipeline.last_qc_rebuild_ms,
+                last_gate_ms: snap.commit_pipeline.last_gate_ms,
+                last_finalize_ms: snap.commit_pipeline.last_finalize_ms,
+                last_drain_results_ms: snap.commit_pipeline.last_drain_results_ms,
+                last_drain_qc_verify_ms: snap.commit_pipeline.last_drain_qc_verify_ms,
+                last_drain_persist_ms: snap.commit_pipeline.last_drain_persist_ms,
+                last_drain_kura_store_ms: snap.commit_pipeline.last_drain_kura_store_ms,
+                last_drain_state_apply_ms: snap.commit_pipeline.last_drain_state_apply_ms,
+                last_drain_state_commit_ms: snap.commit_pipeline.last_drain_state_commit_ms,
+                ema_total_ms: snap.commit_pipeline.ema_total_ms,
+                ema_validation_ms: snap.commit_pipeline.ema_validation_ms,
+                ema_gate_ms: snap.commit_pipeline.ema_gate_ms,
+                ema_finalize_ms: snap.commit_pipeline.ema_finalize_ms,
+            },
+            round_gap: SumeragiRoundGapStatus {
+                last_deliver_to_state_commit_ms: snap.round_gap.last_deliver_to_state_commit_ms,
+                last_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .last_state_commit_to_next_propose_ms,
+                last_deliver_to_next_propose_ms: snap.round_gap.last_deliver_to_next_propose_ms,
+                ema_deliver_to_state_commit_ms: snap.round_gap.ema_deliver_to_state_commit_ms,
+                ema_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .ema_state_commit_to_next_propose_ms,
+                ema_deliver_to_next_propose_ms: snap.round_gap.ema_deliver_to_next_propose_ms,
             },
             view_change_proof_accepted_total: snap.view_change_proof_accepted_total,
             view_change_proof_stale_total: snap.view_change_proof_stale_total,

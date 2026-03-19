@@ -733,7 +733,7 @@ pub struct SumeragiLaneGovernance {
 
 /// DA availability reason reported by `/v1/sumeragi/status`.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -757,7 +757,7 @@ pub enum SumeragiDaGateReason {
 
 /// Which DA availability condition was satisfied most recently.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -772,7 +772,7 @@ pub enum SumeragiDaGateSatisfaction {
 }
 
 /// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1599,6 +1599,87 @@ pub struct SumeragiCommitInflightStatus {
     pub resume_queue_depths: SumeragiWorkerQueueDepths,
 }
 
+/// Commit-pipeline timing snapshot exposed by `/v1/sumeragi/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiCommitPipelineStatus {
+    /// End-to-end time spent in the most recent commit-pipeline run.
+    #[norito(default)]
+    pub last_total_ms: u64,
+    /// Time spent validating/finalizing candidate blocks before gating.
+    #[norito(default)]
+    pub last_validation_ms: u64,
+    /// Time spent rebuilding cached QCs from votes.
+    #[norito(default)]
+    pub last_qc_rebuild_ms: u64,
+    /// Time spent in validation/availability gate checks.
+    #[norito(default)]
+    pub last_gate_ms: u64,
+    /// Time spent finalizing pending blocks into the commit worker.
+    #[norito(default)]
+    pub last_finalize_ms: u64,
+    /// Time spent draining finished commit results.
+    #[norito(default)]
+    pub last_drain_results_ms: u64,
+    /// Sum of QC verification subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_qc_verify_ms: u64,
+    /// Sum of persistence subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_persist_ms: u64,
+    /// Sum of Kura store subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_kura_store_ms: u64,
+    /// Sum of state-apply subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_state_apply_ms: u64,
+    /// Sum of state-commit subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_state_commit_ms: u64,
+    /// EMA of end-to-end commit-pipeline time.
+    #[norito(default)]
+    pub ema_total_ms: u64,
+    /// EMA of validation time.
+    #[norito(default)]
+    pub ema_validation_ms: u64,
+    /// EMA of gate time.
+    #[norito(default)]
+    pub ema_gate_ms: u64,
+    /// EMA of finalize time.
+    #[norito(default)]
+    pub ema_finalize_ms: u64,
+}
+
+/// DELIVER-to-next-proposal gap snapshot exposed by `/v1/sumeragi/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiRoundGapStatus {
+    /// Most recent elapsed time from first accepted DELIVER to local state commit.
+    #[norito(default)]
+    pub last_deliver_to_state_commit_ms: u64,
+    /// Most recent elapsed time from local state commit to pacemaker unblock.
+    #[norito(default)]
+    pub last_state_commit_to_next_propose_ms: u64,
+    /// Most recent elapsed time from first accepted DELIVER to pacemaker unblock.
+    #[norito(default)]
+    pub last_deliver_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-state-commit.
+    #[norito(default)]
+    pub ema_deliver_to_state_commit_ms: u64,
+    /// EMA of state-commit-to-next-propose.
+    #[norito(default)]
+    pub ema_state_commit_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-next-propose.
+    #[norito(default)]
+    pub ema_deliver_to_next_propose_ms: u64,
+}
+
 /// Latest commit-quorum signature tally exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -1956,6 +2037,12 @@ pub struct SumeragiStatusWire {
     /// Commit inflight diagnostics snapshot.
     #[norito(default)]
     pub commit_inflight: SumeragiCommitInflightStatus,
+    /// Commit-pipeline budget snapshot.
+    #[norito(default)]
+    pub commit_pipeline: SumeragiCommitPipelineStatus,
+    /// DELIVER-to-next-proposal gap snapshot.
+    #[norito(default)]
+    pub round_gap: SumeragiRoundGapStatus,
 }
 
 /// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.

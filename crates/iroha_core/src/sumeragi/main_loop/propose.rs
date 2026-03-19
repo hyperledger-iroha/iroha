@@ -1711,7 +1711,7 @@ impl Actor {
         });
         let active_pending = pending_votes_or_qc
             || blocking_pending > self.config.pacemaker.active_pending_soft_limit;
-        let rbc_backlog_summary = self.rbc_backlog_summary();
+        let rbc_backlog_summary = self.proposal_rbc_backlog_summary();
         let mut rbc_backlog = self.rbc_backlog_exceeds_pacemaker_soft_limits(rbc_backlog_summary);
         let queue_depths = status::worker_queue_depth_snapshot();
         let consensus_queue_backpressure = consensus_queue_backpressure(
@@ -2547,7 +2547,28 @@ impl Actor {
                     );
                     let committed_height = self.committed_height_snapshot();
                     let contiguous_frontier = height == committed_height.saturating_add(1);
-                    if contiguous_frontier {
+                    let same_slot_recovery_active = contiguous_frontier
+                        && self.frontier_recovery_quorum_timeout_same_height_recovery_active(
+                            height,
+                            view_idx,
+                            now,
+                            queue_depths,
+                        );
+                    if same_slot_recovery_active {
+                        let seeded =
+                            self.seed_frontier_recovery_for_quorum_timeout(height, view_idx, now);
+                        debug!(
+                            height,
+                            view = view_idx,
+                            queue_len = pending_queue_len,
+                            wait_age_ms,
+                            quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                            base_quorum_timeout_ms = quorum_timeout.as_millis(),
+                            timeout_streak,
+                            seeded_frontier_owner = seeded,
+                            "cached proposal slot quorum-timeout suppressed while same-slot frontier recovery remains active"
+                        );
+                    } else if contiguous_frontier {
                         warn!(
                             height,
                             view = view_idx,

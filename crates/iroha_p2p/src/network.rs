@@ -6133,6 +6133,24 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         self.peers.get_key_value(hub)
     }
 
+    fn relay_route_for_unconnected_post_target(&mut self, target: &PeerId) -> Option<PeerId> {
+        if !matches!(
+            self.relay_mode,
+            iroha_config::parameters::actual::RelayMode::Spoke
+                | iroha_config::parameters::actual::RelayMode::Assist
+        ) {
+            return None;
+        }
+        if self.peers.contains_key(target) {
+            return None;
+        }
+        let hub_id = self.ensure_hub_peer()?;
+        if &hub_id == target {
+            return None;
+        }
+        Some(hub_id)
+    }
+
     fn resolve_origin_peer(&self, origin: &PeerId, via: &Peer) -> Peer {
         self.address_book.get(origin).map_or_else(
             || Peer::new(via.address().clone(), origin.clone()),
@@ -6931,6 +6949,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let frame_for = |target: RelayTarget| {
             RelayMessage::new(origin.clone(), target, relay_ttl, priority, data.clone())
         };
+        if let Some(hub_id) = self.relay_route_for_unconnected_post_target(&peer_id) {
+            let frame = frame_for(RelayTarget::Direct(peer_id));
+            let _ = self.send_frame_to_peer(&hub_id, frame, topic);
+            return;
+        }
         if self.send_frame_to_peer(
             &peer_id,
             frame_for(RelayTarget::Direct(peer_id.clone())),
@@ -8711,6 +8734,53 @@ mod tests {
     }
 
     #[test]
+    fn relay_routes_unconnected_spoke_posts_via_configured_hub() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+
+        let hub_addr = socket_addr!(127.0.0.1:204);
+        let hub_id = PeerId::from(KeyPair::random().public_key().clone());
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+
+        network.relay_hub_addresses.push(hub_addr.clone());
+        network
+            .current_peers_addresses
+            .push((hub_id.clone(), hub_addr));
+        network.current_topology.insert(hub_id.clone());
+
+        assert_eq!(
+            network.relay_route_for_unconnected_post_target(&target),
+            Some(hub_id),
+            "spoke mode should route unknown direct targets through the selected hub"
+        );
+    }
+
+    #[test]
+    fn relay_keeps_direct_hub_posts_out_of_hub_reroute() {
+        let Some(mut network) = bare_network() else {
+            return;
+        };
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+
+        let hub_addr = socket_addr!(127.0.0.1:205);
+        let hub_id = PeerId::from(KeyPair::random().public_key().clone());
+
+        network.relay_hub_addresses.push(hub_addr.clone());
+        network
+            .current_peers_addresses
+            .push((hub_id.clone(), hub_addr));
+        network.current_topology.insert(hub_id.clone());
+
+        assert_eq!(
+            network.relay_route_for_unconnected_post_target(&hub_id),
+            None,
+            "posts addressed to the hub itself should stay on the direct path"
+        );
+    }
+
+    #[test]
     fn clear_low_buckets_removes_entries() {
         let peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let mut low = HashMap::new();
@@ -9239,6 +9309,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             this.send_frame_to_peer(target_id, frame, topic)
         };
 
+        if let Some(hub_id) = self.relay_route_for_unconnected_post_target(&peer_id) {
+            let _ = send_with_throttle(self, &hub_id, frame_for(RelayTarget::Direct(peer_id)));
+            return;
+        }
         if send_with_throttle(
             self,
             &peer_id,

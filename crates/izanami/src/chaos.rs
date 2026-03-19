@@ -2511,7 +2511,9 @@ fn strict_divergence_reference_height_from_samples(
         return 0;
     }
     heights.sort_unstable();
-    let index = tolerated_failures.min(heights.len().saturating_sub(1));
+    let index = heights
+        .len()
+        .saturating_sub(tolerated_failures.saturating_add(1));
     heights[index]
 }
 
@@ -2600,8 +2602,55 @@ struct SumeragiPhaseSnapshot {
     collect_precommit_ms: u64,
     collect_aggregator_ms: u64,
     commit_ms: u64,
+    propose_ema_ms: u64,
+    collect_da_ema_ms: u64,
+    collect_prevote_ema_ms: u64,
+    collect_precommit_ema_ms: u64,
+    collect_aggregator_ema_ms: u64,
+    commit_ema_ms: u64,
     pipeline_total_ms: u64,
     pipeline_total_ema_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SumeragiTimingSnapshot {
+    phases: SumeragiPhaseSnapshot,
+    effective_block_time_ms: u64,
+    effective_commit_time_ms: u64,
+    effective_commit_quorum_timeout_ms: u64,
+    effective_availability_timeout_ms: u64,
+    effective_pacemaker_interval_ms: u64,
+    commit_pipeline: SumeragiCommitPipelineSnapshot,
+    round_gap: SumeragiRoundGapSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SumeragiCommitPipelineSnapshot {
+    last_total_ms: u64,
+    last_validation_ms: u64,
+    last_qc_rebuild_ms: u64,
+    last_gate_ms: u64,
+    last_finalize_ms: u64,
+    last_drain_results_ms: u64,
+    last_drain_qc_verify_ms: u64,
+    last_drain_persist_ms: u64,
+    last_drain_kura_store_ms: u64,
+    last_drain_state_apply_ms: u64,
+    last_drain_state_commit_ms: u64,
+    ema_total_ms: u64,
+    ema_validation_ms: u64,
+    ema_gate_ms: u64,
+    ema_finalize_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SumeragiRoundGapSnapshot {
+    last_deliver_to_state_commit_ms: u64,
+    last_state_commit_to_next_propose_ms: u64,
+    last_deliver_to_next_propose_ms: u64,
+    ema_deliver_to_state_commit_ms: u64,
+    ema_state_commit_to_next_propose_ms: u64,
+    ema_deliver_to_next_propose_ms: u64,
 }
 
 fn parse_sumeragi_phase_snapshot(value: norito::json::Value) -> Option<SumeragiPhaseSnapshot> {
@@ -2619,12 +2668,89 @@ fn parse_sumeragi_phase_snapshot(value: norito::json::Value) -> Option<SumeragiP
         collect_precommit_ms: root.get("collect_precommit_ms")?.as_u64()?,
         collect_aggregator_ms: root.get("collect_aggregator_ms")?.as_u64()?,
         commit_ms: root.get("commit_ms")?.as_u64()?,
+        propose_ema_ms: ema.get("propose_ms")?.as_u64()?,
+        collect_da_ema_ms: ema.get("collect_da_ms")?.as_u64()?,
+        collect_prevote_ema_ms: ema.get("collect_prevote_ms")?.as_u64()?,
+        collect_precommit_ema_ms: ema.get("collect_precommit_ms")?.as_u64()?,
+        collect_aggregator_ema_ms: ema.get("collect_aggregator_ms")?.as_u64()?,
+        commit_ema_ms: ema.get("commit_ms")?.as_u64()?,
         pipeline_total_ms: root.get("pipeline_total_ms")?.as_u64()?,
         pipeline_total_ema_ms: ema.get("pipeline_total_ms")?.as_u64()?,
     })
 }
 
-async fn sample_sumeragi_phases(peers: &[NetworkPeer]) -> Result<SumeragiPhaseSnapshot, String> {
+fn parse_sumeragi_timing_snapshot(
+    phases: SumeragiPhaseSnapshot,
+    value: norito::json::Value,
+) -> Option<SumeragiTimingSnapshot> {
+    let norito::json::Value::Object(root) = value else {
+        return None;
+    };
+    let commit_pipeline = match root.get("commit_pipeline") {
+        Some(norito::json::Value::Object(value)) => value,
+        _ => return None,
+    };
+    let round_gap = match root.get("round_gap") {
+        Some(norito::json::Value::Object(value)) => value,
+        _ => return None,
+    };
+
+    Some(SumeragiTimingSnapshot {
+        phases,
+        effective_block_time_ms: root.get("effective_block_time_ms")?.as_u64()?,
+        effective_commit_time_ms: root.get("effective_commit_time_ms")?.as_u64()?,
+        effective_commit_quorum_timeout_ms: root
+            .get("effective_commit_quorum_timeout_ms")?
+            .as_u64()?,
+        effective_availability_timeout_ms: root
+            .get("effective_availability_timeout_ms")?
+            .as_u64()?,
+        effective_pacemaker_interval_ms: root.get("effective_pacemaker_interval_ms")?.as_u64()?,
+        commit_pipeline: SumeragiCommitPipelineSnapshot {
+            last_total_ms: commit_pipeline.get("last_total_ms")?.as_u64()?,
+            last_validation_ms: commit_pipeline.get("last_validation_ms")?.as_u64()?,
+            last_qc_rebuild_ms: commit_pipeline.get("last_qc_rebuild_ms")?.as_u64()?,
+            last_gate_ms: commit_pipeline.get("last_gate_ms")?.as_u64()?,
+            last_finalize_ms: commit_pipeline.get("last_finalize_ms")?.as_u64()?,
+            last_drain_results_ms: commit_pipeline.get("last_drain_results_ms")?.as_u64()?,
+            last_drain_qc_verify_ms: commit_pipeline.get("last_drain_qc_verify_ms")?.as_u64()?,
+            last_drain_persist_ms: commit_pipeline.get("last_drain_persist_ms")?.as_u64()?,
+            last_drain_kura_store_ms: commit_pipeline.get("last_drain_kura_store_ms")?.as_u64()?,
+            last_drain_state_apply_ms: commit_pipeline
+                .get("last_drain_state_apply_ms")?
+                .as_u64()?,
+            last_drain_state_commit_ms: commit_pipeline
+                .get("last_drain_state_commit_ms")?
+                .as_u64()?,
+            ema_total_ms: commit_pipeline.get("ema_total_ms")?.as_u64()?,
+            ema_validation_ms: commit_pipeline.get("ema_validation_ms")?.as_u64()?,
+            ema_gate_ms: commit_pipeline.get("ema_gate_ms")?.as_u64()?,
+            ema_finalize_ms: commit_pipeline.get("ema_finalize_ms")?.as_u64()?,
+        },
+        round_gap: SumeragiRoundGapSnapshot {
+            last_deliver_to_state_commit_ms: round_gap
+                .get("last_deliver_to_state_commit_ms")?
+                .as_u64()?,
+            last_state_commit_to_next_propose_ms: round_gap
+                .get("last_state_commit_to_next_propose_ms")?
+                .as_u64()?,
+            last_deliver_to_next_propose_ms: round_gap
+                .get("last_deliver_to_next_propose_ms")?
+                .as_u64()?,
+            ema_deliver_to_state_commit_ms: round_gap
+                .get("ema_deliver_to_state_commit_ms")?
+                .as_u64()?,
+            ema_state_commit_to_next_propose_ms: round_gap
+                .get("ema_state_commit_to_next_propose_ms")?
+                .as_u64()?,
+            ema_deliver_to_next_propose_ms: round_gap
+                .get("ema_deliver_to_next_propose_ms")?
+                .as_u64()?,
+        },
+    })
+}
+
+async fn sample_sumeragi_timing(peers: &[NetworkPeer]) -> Result<SumeragiTimingSnapshot, String> {
     let peer = peers
         .first()
         .cloned()
@@ -2635,8 +2761,13 @@ async fn sample_sumeragi_phases(peers: &[NetworkPeer]) -> Result<SumeragiPhaseSn
         let phases = client
             .get_sumeragi_phases_json()
             .map_err(|err| format!("failed to fetch sumeragi phases snapshot: {err}"))?;
-        parse_sumeragi_phase_snapshot(phases)
-            .ok_or_else(|| "phase payload missing expected fields".to_owned())
+        let phases = parse_sumeragi_phase_snapshot(phases)
+            .ok_or_else(|| "phase payload missing expected fields".to_owned())?;
+        let status = client
+            .get_sumeragi_status_json()
+            .map_err(|err| format!("failed to fetch sumeragi status snapshot: {err}"))?;
+        parse_sumeragi_timing_snapshot(phases, status)
+            .ok_or_else(|| "status payload missing expected timing fields".to_owned())
     })
     .await
     .map_err(|err| format!("phase sampling task failed: {err}"))?
@@ -2909,18 +3040,77 @@ async fn wait_for_target_blocks(
                     elapsed = ?now.duration_since(start),
                     "target block height reached"
                 );
-                match sample_sumeragi_phases(peers).await {
-                    Ok(phases) => {
+                match sample_sumeragi_timing(peers).await {
+                    Ok(snapshot) => {
                         info!(
                             target: "izanami::progress",
-                            phase_propose_ms = phases.propose_ms,
-                            phase_collect_da_ms = phases.collect_da_ms,
-                            phase_collect_prevote_ms = phases.collect_prevote_ms,
-                            phase_collect_precommit_ms = phases.collect_precommit_ms,
-                            phase_collect_aggregator_ms = phases.collect_aggregator_ms,
-                            phase_commit_ms = phases.commit_ms,
-                            phase_pipeline_total_ms = phases.pipeline_total_ms,
-                            phase_pipeline_total_ema_ms = phases.pipeline_total_ema_ms,
+                            phase_propose_ms = snapshot.phases.propose_ms,
+                            phase_collect_da_ms = snapshot.phases.collect_da_ms,
+                            phase_collect_prevote_ms = snapshot.phases.collect_prevote_ms,
+                            phase_collect_precommit_ms = snapshot.phases.collect_precommit_ms,
+                            phase_collect_aggregator_ms = snapshot.phases.collect_aggregator_ms,
+                            phase_commit_ms = snapshot.phases.commit_ms,
+                            phase_propose_ema_ms = snapshot.phases.propose_ema_ms,
+                            phase_collect_da_ema_ms = snapshot.phases.collect_da_ema_ms,
+                            phase_collect_prevote_ema_ms =
+                                snapshot.phases.collect_prevote_ema_ms,
+                            phase_collect_precommit_ema_ms =
+                                snapshot.phases.collect_precommit_ema_ms,
+                            phase_collect_aggregator_ema_ms =
+                                snapshot.phases.collect_aggregator_ema_ms,
+                            phase_commit_ema_ms = snapshot.phases.commit_ema_ms,
+                            phase_pipeline_total_ms = snapshot.phases.pipeline_total_ms,
+                            phase_pipeline_total_ema_ms = snapshot.phases.pipeline_total_ema_ms,
+                            effective_block_time_ms = snapshot.effective_block_time_ms,
+                            effective_commit_time_ms = snapshot.effective_commit_time_ms,
+                            effective_commit_quorum_timeout_ms =
+                                snapshot.effective_commit_quorum_timeout_ms,
+                            effective_availability_timeout_ms =
+                                snapshot.effective_availability_timeout_ms,
+                            effective_pacemaker_interval_ms =
+                                snapshot.effective_pacemaker_interval_ms,
+                            commit_pipeline_last_total_ms =
+                                snapshot.commit_pipeline.last_total_ms,
+                            commit_pipeline_last_validation_ms =
+                                snapshot.commit_pipeline.last_validation_ms,
+                            commit_pipeline_last_qc_rebuild_ms =
+                                snapshot.commit_pipeline.last_qc_rebuild_ms,
+                            commit_pipeline_last_gate_ms =
+                                snapshot.commit_pipeline.last_gate_ms,
+                            commit_pipeline_last_finalize_ms =
+                                snapshot.commit_pipeline.last_finalize_ms,
+                            commit_pipeline_last_drain_results_ms =
+                                snapshot.commit_pipeline.last_drain_results_ms,
+                            commit_pipeline_last_drain_qc_verify_ms =
+                                snapshot.commit_pipeline.last_drain_qc_verify_ms,
+                            commit_pipeline_last_drain_persist_ms =
+                                snapshot.commit_pipeline.last_drain_persist_ms,
+                            commit_pipeline_last_drain_kura_store_ms =
+                                snapshot.commit_pipeline.last_drain_kura_store_ms,
+                            commit_pipeline_last_drain_state_apply_ms =
+                                snapshot.commit_pipeline.last_drain_state_apply_ms,
+                            commit_pipeline_last_drain_state_commit_ms =
+                                snapshot.commit_pipeline.last_drain_state_commit_ms,
+                            commit_pipeline_ema_total_ms =
+                                snapshot.commit_pipeline.ema_total_ms,
+                            commit_pipeline_ema_validation_ms =
+                                snapshot.commit_pipeline.ema_validation_ms,
+                            commit_pipeline_ema_gate_ms =
+                                snapshot.commit_pipeline.ema_gate_ms,
+                            commit_pipeline_ema_finalize_ms =
+                                snapshot.commit_pipeline.ema_finalize_ms,
+                            round_gap_last_deliver_to_state_commit_ms =
+                                snapshot.round_gap.last_deliver_to_state_commit_ms,
+                            round_gap_last_state_commit_to_next_propose_ms =
+                                snapshot.round_gap.last_state_commit_to_next_propose_ms,
+                            round_gap_last_deliver_to_next_propose_ms =
+                                snapshot.round_gap.last_deliver_to_next_propose_ms,
+                            round_gap_ema_deliver_to_state_commit_ms =
+                                snapshot.round_gap.ema_deliver_to_state_commit_ms,
+                            round_gap_ema_state_commit_to_next_propose_ms =
+                                snapshot.round_gap.ema_state_commit_to_next_propose_ms,
+                            round_gap_ema_deliver_to_next_propose_ms =
+                                snapshot.round_gap.ema_deliver_to_next_propose_ms,
                             "sumeragi phase timing snapshot at target height"
                         );
                     }
@@ -2950,18 +3140,77 @@ async fn wait_for_target_blocks(
                     elapsed = ?now.duration_since(start),
                     "target block height reached"
                 );
-                match sample_sumeragi_phases(peers).await {
-                    Ok(phases) => {
+                match sample_sumeragi_timing(peers).await {
+                    Ok(snapshot) => {
                         info!(
                             target: "izanami::progress",
-                            phase_propose_ms = phases.propose_ms,
-                            phase_collect_da_ms = phases.collect_da_ms,
-                            phase_collect_prevote_ms = phases.collect_prevote_ms,
-                            phase_collect_precommit_ms = phases.collect_precommit_ms,
-                            phase_collect_aggregator_ms = phases.collect_aggregator_ms,
-                            phase_commit_ms = phases.commit_ms,
-                            phase_pipeline_total_ms = phases.pipeline_total_ms,
-                            phase_pipeline_total_ema_ms = phases.pipeline_total_ema_ms,
+                            phase_propose_ms = snapshot.phases.propose_ms,
+                            phase_collect_da_ms = snapshot.phases.collect_da_ms,
+                            phase_collect_prevote_ms = snapshot.phases.collect_prevote_ms,
+                            phase_collect_precommit_ms = snapshot.phases.collect_precommit_ms,
+                            phase_collect_aggregator_ms = snapshot.phases.collect_aggregator_ms,
+                            phase_commit_ms = snapshot.phases.commit_ms,
+                            phase_propose_ema_ms = snapshot.phases.propose_ema_ms,
+                            phase_collect_da_ema_ms = snapshot.phases.collect_da_ema_ms,
+                            phase_collect_prevote_ema_ms =
+                                snapshot.phases.collect_prevote_ema_ms,
+                            phase_collect_precommit_ema_ms =
+                                snapshot.phases.collect_precommit_ema_ms,
+                            phase_collect_aggregator_ema_ms =
+                                snapshot.phases.collect_aggregator_ema_ms,
+                            phase_commit_ema_ms = snapshot.phases.commit_ema_ms,
+                            phase_pipeline_total_ms = snapshot.phases.pipeline_total_ms,
+                            phase_pipeline_total_ema_ms = snapshot.phases.pipeline_total_ema_ms,
+                            effective_block_time_ms = snapshot.effective_block_time_ms,
+                            effective_commit_time_ms = snapshot.effective_commit_time_ms,
+                            effective_commit_quorum_timeout_ms =
+                                snapshot.effective_commit_quorum_timeout_ms,
+                            effective_availability_timeout_ms =
+                                snapshot.effective_availability_timeout_ms,
+                            effective_pacemaker_interval_ms =
+                                snapshot.effective_pacemaker_interval_ms,
+                            commit_pipeline_last_total_ms =
+                                snapshot.commit_pipeline.last_total_ms,
+                            commit_pipeline_last_validation_ms =
+                                snapshot.commit_pipeline.last_validation_ms,
+                            commit_pipeline_last_qc_rebuild_ms =
+                                snapshot.commit_pipeline.last_qc_rebuild_ms,
+                            commit_pipeline_last_gate_ms =
+                                snapshot.commit_pipeline.last_gate_ms,
+                            commit_pipeline_last_finalize_ms =
+                                snapshot.commit_pipeline.last_finalize_ms,
+                            commit_pipeline_last_drain_results_ms =
+                                snapshot.commit_pipeline.last_drain_results_ms,
+                            commit_pipeline_last_drain_qc_verify_ms =
+                                snapshot.commit_pipeline.last_drain_qc_verify_ms,
+                            commit_pipeline_last_drain_persist_ms =
+                                snapshot.commit_pipeline.last_drain_persist_ms,
+                            commit_pipeline_last_drain_kura_store_ms =
+                                snapshot.commit_pipeline.last_drain_kura_store_ms,
+                            commit_pipeline_last_drain_state_apply_ms =
+                                snapshot.commit_pipeline.last_drain_state_apply_ms,
+                            commit_pipeline_last_drain_state_commit_ms =
+                                snapshot.commit_pipeline.last_drain_state_commit_ms,
+                            commit_pipeline_ema_total_ms =
+                                snapshot.commit_pipeline.ema_total_ms,
+                            commit_pipeline_ema_validation_ms =
+                                snapshot.commit_pipeline.ema_validation_ms,
+                            commit_pipeline_ema_gate_ms =
+                                snapshot.commit_pipeline.ema_gate_ms,
+                            commit_pipeline_ema_finalize_ms =
+                                snapshot.commit_pipeline.ema_finalize_ms,
+                            round_gap_last_deliver_to_state_commit_ms =
+                                snapshot.round_gap.last_deliver_to_state_commit_ms,
+                            round_gap_last_state_commit_to_next_propose_ms =
+                                snapshot.round_gap.last_state_commit_to_next_propose_ms,
+                            round_gap_last_deliver_to_next_propose_ms =
+                                snapshot.round_gap.last_deliver_to_next_propose_ms,
+                            round_gap_ema_deliver_to_state_commit_ms =
+                                snapshot.round_gap.ema_deliver_to_state_commit_ms,
+                            round_gap_ema_state_commit_to_next_propose_ms =
+                                snapshot.round_gap.ema_state_commit_to_next_propose_ms,
+                            round_gap_ema_deliver_to_next_propose_ms =
+                                snapshot.round_gap.ema_deliver_to_next_propose_ms,
                             "sumeragi phase timing snapshot at target height"
                         );
                     }
@@ -4560,6 +4809,12 @@ mod tests {
                 "commit_ms": 66,
                 "pipeline_total_ms": 176,
                 "ema_ms": {
+                    "propose_ms": 12,
+                    "collect_da_ms": 23,
+                    "collect_prevote_ms": 34,
+                    "collect_precommit_ms": 45,
+                    "collect_aggregator_ms": 56,
+                    "commit_ms": 67,
                     "pipeline_total_ms": 123
                 }
             }"#,
@@ -4575,6 +4830,12 @@ mod tests {
                 collect_precommit_ms: 44,
                 collect_aggregator_ms: 55,
                 commit_ms: 66,
+                propose_ema_ms: 12,
+                collect_da_ema_ms: 23,
+                collect_prevote_ema_ms: 34,
+                collect_precommit_ema_ms: 45,
+                collect_aggregator_ema_ms: 56,
+                commit_ema_ms: 67,
                 pipeline_total_ms: 176,
                 pipeline_total_ema_ms: 123,
             }
@@ -4599,6 +4860,106 @@ mod tests {
             parse_sumeragi_phase_snapshot(json).is_none(),
             "phase snapshot parser should reject incomplete payloads"
         );
+    }
+
+    #[test]
+    fn parse_sumeragi_timing_snapshot_extracts_effective_windows() {
+        let phases = SumeragiPhaseSnapshot {
+            propose_ms: 11,
+            collect_da_ms: 22,
+            collect_prevote_ms: 33,
+            collect_precommit_ms: 44,
+            collect_aggregator_ms: 55,
+            commit_ms: 66,
+            propose_ema_ms: 12,
+            collect_da_ema_ms: 23,
+            collect_prevote_ema_ms: 34,
+            collect_precommit_ema_ms: 45,
+            collect_aggregator_ema_ms: 56,
+            commit_ema_ms: 67,
+            pipeline_total_ms: 176,
+            pipeline_total_ema_ms: 123,
+        };
+        let status = norito::json::from_str::<norito::json::Value>(
+            r#"{
+                "effective_block_time_ms": 100,
+                "effective_commit_time_ms": 200,
+                "effective_commit_quorum_timeout_ms": 700,
+                "effective_availability_timeout_ms": 700,
+                "effective_pacemaker_interval_ms": 100,
+                "commit_pipeline": {
+                    "last_total_ms": 81,
+                    "last_validation_ms": 21,
+                    "last_qc_rebuild_ms": 7,
+                    "last_gate_ms": 9,
+                    "last_finalize_ms": 17,
+                    "last_drain_results_ms": 12,
+                    "last_drain_qc_verify_ms": 1,
+                    "last_drain_persist_ms": 2,
+                    "last_drain_kura_store_ms": 3,
+                    "last_drain_state_apply_ms": 4,
+                    "last_drain_state_commit_ms": 5,
+                    "ema_total_ms": 77,
+                    "ema_validation_ms": 18,
+                    "ema_gate_ms": 8,
+                    "ema_finalize_ms": 15
+                },
+                "round_gap": {
+                    "last_deliver_to_state_commit_ms": 31,
+                    "last_state_commit_to_next_propose_ms": 12,
+                    "last_deliver_to_next_propose_ms": 43,
+                    "ema_deliver_to_state_commit_ms": 29,
+                    "ema_state_commit_to_next_propose_ms": 10,
+                    "ema_deliver_to_next_propose_ms": 39
+                }
+            }"#,
+        )
+        .expect("status json should parse");
+        assert_eq!(
+            parse_sumeragi_timing_snapshot(phases, status),
+            Some(SumeragiTimingSnapshot {
+                phases,
+                effective_block_time_ms: 100,
+                effective_commit_time_ms: 200,
+                effective_commit_quorum_timeout_ms: 700,
+                effective_availability_timeout_ms: 700,
+                effective_pacemaker_interval_ms: 100,
+                commit_pipeline: SumeragiCommitPipelineSnapshot {
+                    last_total_ms: 81,
+                    last_validation_ms: 21,
+                    last_qc_rebuild_ms: 7,
+                    last_gate_ms: 9,
+                    last_finalize_ms: 17,
+                    last_drain_results_ms: 12,
+                    last_drain_qc_verify_ms: 1,
+                    last_drain_persist_ms: 2,
+                    last_drain_kura_store_ms: 3,
+                    last_drain_state_apply_ms: 4,
+                    last_drain_state_commit_ms: 5,
+                    ema_total_ms: 77,
+                    ema_validation_ms: 18,
+                    ema_gate_ms: 8,
+                    ema_finalize_ms: 15,
+                },
+                round_gap: SumeragiRoundGapSnapshot {
+                    last_deliver_to_state_commit_ms: 31,
+                    last_state_commit_to_next_propose_ms: 12,
+                    last_deliver_to_next_propose_ms: 43,
+                    ema_deliver_to_state_commit_ms: 29,
+                    ema_state_commit_to_next_propose_ms: 10,
+                    ema_deliver_to_next_propose_ms: 39,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn parse_sumeragi_timing_snapshot_rejects_missing_sections() {
+        let phases = SumeragiPhaseSnapshot::default();
+        let status =
+            norito::json::from_str::<norito::json::Value>(r#"{"effective_block_time_ms": 100}"#)
+                .expect("status json should parse");
+        assert_eq!(parse_sumeragi_timing_snapshot(phases, status), None);
     }
 
     #[test]
@@ -5849,8 +6210,8 @@ mod tests {
         );
         assert_eq!(
             strict_divergence_reference_height_from_samples(vec![120, 149, 149, 149], 0),
-            120,
-            "healthy runs should include every peer in strict divergence reference"
+            149,
+            "strict divergence reference should anchor from the healthy quorum side even without tolerated failures"
         );
         assert_eq!(
             strict_divergence_reference_height_from_samples(vec![120, 120, 120, 149], 1),
@@ -5879,6 +6240,10 @@ mod tests {
         let heights_one_outlier = vec![120_u64, 149, 149, 149];
         let strict_reference_one =
             strict_divergence_reference_height_from_samples(heights_one_outlier.clone(), 1);
+        assert_eq!(
+            strict_reference_one, 149,
+            "single lagging outlier should still anchor from the healthy quorum side"
+        );
         let lagging_one =
             strict_divergence_lagging_peer_count(&heights_one_outlier, strict_reference_one, 16);
         assert_eq!(lagging_one, 1);
@@ -5890,12 +6255,23 @@ mod tests {
         let heights_two_outliers = vec![120_u64, 121, 149, 149];
         let strict_reference_two =
             strict_divergence_reference_height_from_samples(heights_two_outliers.clone(), 1);
+        assert_eq!(
+            strict_reference_two, 149,
+            "strict divergence reference should stay anchored to the healthy quorum side"
+        );
         let lagging_two =
             strict_divergence_lagging_peer_count(&heights_two_outliers, strict_reference_two, 16);
         assert_eq!(lagging_two, 2);
         assert!(
             lagging_two > tolerated_peer_failures(heights_two_outliers.len()),
             "strict divergence guard should activate once outliers exceed tolerated failures"
+        );
+        assert!(
+            should_enforce_strict_progress_timeout(
+                lagging_two,
+                tolerated_peer_failures(heights_two_outliers.len())
+            ),
+            "strict divergence guard should activate once lagging peers exceed tolerated failures"
         );
     }
 

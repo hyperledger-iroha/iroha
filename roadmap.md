@@ -1,6 +1,579 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-17
+Last updated: 2026-03-19
+
+Latest sync (2026-03-19 near-tip RBC roster promotion and commit-ready validation fast path):
+`crates/iroha_core/src/sumeragi/main_loop.rs` now promotes same-epoch / near-tip
+RBC session rosters from `Init` to authoritative `Derived` as soon as the
+payload becomes locally known, then immediately flushes stashed `READY` /
+`DELIVER` work. The near-tip commit path also now treats delivered RBC, cached
+commit QC, or accumulated commit votes as sufficient evidence to validate a
+pending block immediately instead of waiting behind proposal-evidence or a
+stale validation-inflight marker.
+
+Focused validation is green:
+`cargo test -p iroha_core --lib block_created_promotes_same_epoch_rbc_roster_and_flushes_stashed_ready_and_deliver -- --nocapture`,
+`cargo test -p iroha_core --lib validation_allows_near_tip_commit_votes_without_proposal_evidence -- --nocapture`,
+`cargo test -p iroha_core --lib validation_allows_near_tip_delivered_rbc_without_proposal_evidence -- --nocapture`,
+`cargo test -p iroha_core --lib handle_qc_supersedes_validation_inflight_on_commit_qc -- --nocapture`,
+`cargo test -p iroha_core --lib queue_backpressured -- --nocapture`,
+`cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_bypasses_queue_backpressure_for_active_pending -- --nocapture`,
+`cargo test -p iroha_core --lib proposal_backpressure_ignores_committed_tip_rbc_cleanup_backlog -- --nocapture`,
+`cargo test -p iroha_core --lib commit_pipeline_snapshot_tracks_last_and_ema_fields -- --nocapture`,
+`cargo test -p iroha_core --lib round_gap_snapshot_records_markers_in_order -- --nocapture`,
+`cargo test -p iroha_core --lib commit_outcome_kickstarts_next_proposal_and_records_round_gap -- --nocapture`,
+`cargo test -p izanami`,
+and
+`cargo build --release -p irohad --bin iroha3d -p izanami`.
+
+Fresh runtime signal from the rebuilt shared-host stable soaks:
+- NPoS log:
+  `/tmp/izanami_npos_soak_after_commit_ready_fix_20260319T134226Z.log`,
+  network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_wyDBZN`,
+  reached `strict_min_height=304` in `8.67 min` for a projected
+  `2104.0 blocks/hour`, but still hit a `10002ms` tail at height `302`;
+- permissioned log:
+  `/tmp/izanami_permissioned_soak_after_commit_ready_fix_20260319T135130Z.log`,
+  network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_8SABI5`,
+  reached `strict_min_height=412` in `11.17 min` for a projected
+  `2212.9 blocks/hour` with no `5s`/`10s` stall in that sampled window;
+- both reruns cleared the old RBC readiness / roster-unavailable signatures,
+  and the permissioned soak was no longer contaminated by trigger-workload
+  errors in the sampled run.
+
+Open issue after this cut:
+- the dominant remaining shared-host tail is now commit-quorum completion and
+  reassembly after the block is already pending, not `READY` starvation or
+  late near-tip validation;
+- preserved peer logs still show
+  `commit quorum missing past timeout; rescheduling block for reassembly`
+  with `votes=1/3` or `2/3`, zero receive-queue backlog, and rebroadcasted
+  vote/block-sync assists, so the next cut should instrument and shorten the
+  slowest-validator `commit vote accept -> quorum complete` path rather than
+  revisiting RBC roster derivation again.
+
+Latest sync (2026-03-18 commit-pipeline status and post-DELIVER proposal unblock):
+`/v1/sumeragi/status` now exposes `commit_pipeline` and `round_gap`, wiring the
+hidden post-DELIVER budget through the Sumeragi status layer, Torii JSON/Norito
+responses, and the Izanami healthy probe parser. The proposal-critical path was
+also shortened so committed-tip RBC cleanup backlog no longer blocks pacemaker
+readiness once `commit_with_certificate`, Kura durability, and local
+`state_commit` succeed; only deterministic durability/state transitions stay on
+the synchronous path.
+
+Focused validation is green:
+`cargo test -p iroha_core --lib proposal_backpressure_ignores_committed_tip_rbc_cleanup_backlog -- --nocapture`,
+`cargo test -p iroha_core --lib commit_pipeline_snapshot_tracks_last_and_ema_fields -- --nocapture`,
+`cargo test -p iroha_core --lib round_gap_snapshot_records_markers_in_order -- --nocapture`,
+`cargo test -p iroha_core --lib commit_outcome_kickstarts_next_proposal_and_records_round_gap -- --nocapture`,
+`cargo test -p iroha_torii --features telemetry --test sumeragi_status_endpoint sumeragi_status_endpoint_shape -- --nocapture`,
+and
+`cargo test -p izanami build_sumeragi_timing_snapshot_extracts_effective_windows -- --nocapture`.
+
+Validation gap after this cut:
+- the warmed 4-peer healthy NPoS probe has not been rerun yet on the new code,
+  so the fresh `commit_pipeline` / `round_gap` readout is still pending;
+- `cargo test -p iroha_core` was started but entered the broader package tail
+  after already surfacing a wider frontier/missing-QC failure cluster outside
+  the narrow status/commit-budget code paths changed here;
+- until that package-level `iroha_core` run is resolved/rerun, the full
+  `cargo test -p izanami` and
+  `cargo build --release -p irohad --bin iroha3d -p izanami` reruns remain
+  pending for this cut.
+
+Open issue after this cut:
+- rerun the warmed 4-peer healthy probe and compare `interval_p50_ms`,
+  `interval_p95_ms`, `phase_pipeline_total_ema_ms`, the new
+  `commit_pipeline` / `round_gap` fields, and the lingering
+  `commit quorum missing past timeout; rescheduling block for reassembly` /
+  `dropping block sync update missing commit-role quorum` counters;
+- use the new operator timings to decide whether the remaining healthy-path
+  loss is still dominated by `READY -> DELIVER`, late vote arrival, or some
+  other post-commit tail rather than revisiting P2P/topic routing again;
+- investigate the broader frontier/missing-QC `iroha_core` package failures
+  separately instead of mixing that work into this commit-budget/status cut
+  unless the root cause lands back in the synchronous commit path changes.
+
+Latest sync (2026-03-18 dedicated consensus-vote fast lane in P2P):
+`crates/iroha_p2p/src/peer.rs` now gives `Topic::Consensus` its own dedicated
+per-peer high sender and encrypted batch class, while `Control`,
+`ConsensusPayload`, and `ConsensusChunk` stay isolated and are scheduled in
+strict `Control -> Consensus -> ConsensusPayload -> ConsensusChunk` order with
+bounded fairness. `crates/iroha_p2p/src/network.rs` also routes spoke/assist
+posts for targets without a live direct session through the configured relay
+hub instead of deferring impossible direct reconnects.
+
+Focused validation is green:
+`cargo test -p iroha_p2p`
+and
+`cargo test -p iroha_core --lib emitted_precommit_vote_posts_bypass_background_queue -- --nocapture`
+plus
+`cargo build --release -p irohad --bin iroha3d -p izanami`.
+
+Fresh runtime signal from the rebuilt release probe:
+- preserved network:
+  `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_dPORC0`,
+- result: `44/44`, `elapsed=70.013524666s`, `interval_p50_ms=1667`,
+  `interval_p95_ms=2501`, `successes=71`, `failures=0`,
+- churn counters stayed mostly clean:
+  `dropping block sync update missing commit-role quorum=0`,
+  `stake quorum observed but block payload missing=0`,
+  but one `commit quorum missing past timeout; rescheduling block for
+  reassembly` still fired at height `6`.
+
+Open issue after this cut:
+- the dedicated vote lane keeps the run healthy, but it did not materially
+  change the healthy-path pace or remove the `2501ms` late tail;
+- sender-side reschedule ownership and high-lane queue competition are no
+  longer the only visible bottlenecks, so the next cut should instrument and
+  trim the remaining end-to-end `QcVote` emission/arrival gap and the immediate
+  `RBC DELIVER -> commit` path rather than revisit sender reschedule or topic
+  relabeling again.
+
+Latest sync (2026-03-18 initial RBC pacing behind BlockCreated):
+`crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now queues the initial
+`RbcInit` behind the already-posted `BlockCreated` path and leaves the first
+payload chunk in the outbound queue for the next flush instead of sending it
+immediately. This keeps the change sender-side and targets the exact healthy
+path where followers were entering `rbc_ready_chunks_pending` before the
+matching `BlockCreated` arrived.
+
+Focused regressions are green:
+`broadcast_rbc_session_plan_queues_single_chunk_behind_initial_init`
+and
+`rbc_outbound_chunk_budget_limits_per_tick`.
+
+Fresh preserved-runtime signal:
+- probe log:
+  `/tmp/izanami_npos_healthy_probe_init_trails_block_created_20260318T075100Z.log`,
+  network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_vzqxev`;
+- all four peers persisted `44` core blocks, clearing the `40` target even
+  though the top-level harness still fell into the known summary/reset bug;
+- compared with the earlier healthy baseline network
+  `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_04kaD1`:
+  - `BlockCreated -> READY(2)` improved `p50 359ms -> 313ms`,
+  - `BlockCreated -> RBC DELIVER` improved `p50 548ms -> 514ms`,
+  - `rbc_ready_chunks_pending -> received BlockCreated` improved
+    `p50 268ms -> 222ms`,
+  - earliest peer commit window `height 2 -> 40` improved from
+    `68.26s (~1.80s/block)` to `62.33s (~1.64s/block)`,
+  - sender recovery churn stayed flat-to-better:
+    `commit quorum missing past timeout` dropped from `1` to `0`,
+    frontier cleanup/rotate remained `0`,
+    sparse drop remained `0`.
+
+Open issue after this cut:
+- the long healthy-path tail is still present in `deliver -> commit certificate`
+  and the overall pace is still far from the `<= 1.0s/block` target;
+- `stake quorum observed but block payload missing` still appears at isolated
+  heights (`11`, `44`) without escalating into frontier cleanup/rotate.
+
+Latest sync (2026-03-18 healthy-path phase-EMA instrumentation and root-cause profile):
+`crates/izanami/src/chaos.rs` now logs the full `/v1/sumeragi/phases` EMA set
+plus the live `/v1/sumeragi/status` timing windows at target height, so warmed
+healthy probes can distinguish sender-recovery churn from the normal DA/commit
+pipeline.
+
+Focused regressions are green:
+`parse_sumeragi_phase_snapshot`
+and
+`build_sumeragi_timing_snapshot_extracts_effective_windows`.
+
+Fresh runtime signal from the preserved warmed healthy probes shows the
+remaining `~1.67s/block` gap is not load starvation and not sender recovery:
+- `tps=1` probe:
+  `/tmp/izanami_npos_healthy_probe_phase_ema_20260318T054247Z.log`,
+  network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_vjijnA`,
+  `120/120`, `p50=1673ms`, `p95=2503ms`, `pipeline_total_ema_ms=1126`;
+- `tps=5` comparison:
+  `/tmp/izanami_npos_healthy_probe_phase_ema_tps5_20260318T054247Z.log`,
+  network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_h4M1Ad`,
+  `60/60`, `p50=1667ms`, `p95=2503ms`, `pipeline_total_ema_ms=1079`.
+
+Preserved peer logs show the exact healthy-path cadence on committed heights:
+- proposal assembly is only `~120-170ms`,
+- the dominant residual cost is after proposal success:
+  - `~560ms` waiting for RBC READY quorum before DELIVER,
+  - then `~700-850ms` across commit-QC validation / rebuild, commit
+    certificate finalization, state commit, and Kura store,
+  - then the next proposal starts.
+
+Next work should target that healthy post-proposal path directly:
+- profile and trim RBC READY -> DELIVER latency on the contiguous frontier
+  without broadening sparse receive intake;
+- isolate the remaining isolated `missing payload after stake quorum` heights
+  from the normal healthy READY/DELIVER path and see whether they share the
+  same `BlockCreated` arrival lag or a separate validation/fetch gap;
+- profile commit-QC verification / rebuild / finalize / Kura-store timing in
+  the same healthy path and isolate which substage is consuming the extra
+  `~700-850ms`;
+- keep the sender-side late-frontier fixes intact; current probes no longer
+  justify touching recovery ownership or sparse intake policy for throughput.
+
+Latest sync (2026-03-18 first single-vote frontier quiet-window extension):
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now extends the first
+contiguous-frontier `1 / min_votes` resend quiet window up to at least one full
+`quorum_timeout`, so the old `height 62 / 105` one-vote late-frontier resend
+class no longer fires immediately after the legacy `400ms` settle window.
+
+Focused regressions are green:
+`reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_settle_window`,
+`reschedule_defers_first_single_vote_quorum_timeout_past_legacy_frontier_settle_window`,
+`contiguous_frontier_vote_backed_`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+and
+`reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress`.
+
+Fresh runtime signal from the preserved warmed probe
+(`/tmp/izanami_npos_healthy_probe_single_vote_quiet_window_keepdirs_20260318T000000Z.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_24jY7K`)
+shows the sender-side late-frontier tail is nearly gone:
+- persisted core block count: `124` on all four peers,
+- `commit reschedule`: `0`,
+- `payload missing QC`: `1` (height `92` on one peer),
+- `missing block dwell -> frontier recovery`: `0`,
+- `cached proposal slot stalled past quorum timeout`: `0`,
+- `cleanup`: `0`,
+- `rotate`: `0`,
+- `dropping block sync update missing commit-role quorum`: `0`.
+
+The remaining throughput gap is no longer dominated by sender-side recovery.
+Next work should pivot from late-frontier churn to healthy-path pace:
+- fix the `izanami` fatal-signal summary path so the warmed probe reports the
+  true `elapsed` / `interval_p50_ms` / `interval_p95_ms` instead of forcing
+  peer-log forensics after every run;
+- profile current healthy-path block cadence with preserved dirs and
+  summary/debug instrumentation to isolate whether the dominant residual cost is
+  worker drain, RBC hydrate / payload delivery, QC verification, or another
+  non-recovery phase;
+- keep the sparse receive policy and sender-side late-frontier ownership logic
+  unchanged unless a new runtime profile shows recovery churn returning.
+
+Latest sync (2026-03-18 same-slot fresh-fetch dwell suppression):
+`crates/iroha_core/src/sumeragi/main_loop.rs` and
+`crates/iroha_core/src/sumeragi/main_loop/qc.rs` now treat exact-slot deferred
+missing-payload QCs as active same-slot recovery, seed contiguous-frontier
+missing-payload owners create-only on commit-quorum fast recovery, and suppress
+frontier handoff when a same-slot missing-block fetch was just refreshed.
+
+Focused regressions are green:
+`retry_missing_block_requests_`,
+`frontier_recovery_suppresses_`,
+and
+`defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only`.
+
+Fresh runtime signal from the preserved warmed probe
+(`/tmp/izanami_npos_healthy_probe_fresh_fetch_suppression_20260317T214106Z.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_N60xZO`)
+shows the previous same-slot `missing block dwell -> frontier recovery` tail is
+gone:
+- persisted core block count: `122` on all four peers,
+- `commit reschedule`: `2`,
+- `payload missing QC`: `2`,
+- `missing block dwell -> frontier recovery`: `0`,
+- `cached proposal slot stalled past quorum timeout`: `0`,
+- `cleanup`: `0`,
+- `rotate`: `0`,
+- `dropping block sync update missing commit-role quorum`: `0`.
+
+The remaining sender-side tail is now narrow and early:
+- one-vote contiguous-frontier reschedules at heights `62` and `105`,
+- commit-QC-missing-payload warnings at heights `6` and `29`.
+
+The next minimal sender-side cut should target those two remaining classes
+without reintroducing dwell churn:
+- profile why the height `62/105` one-vote reschedule still stalls despite
+  empty queues and no cleanup / rotate activity,
+- inspect the exact follow-up sequence after QC-missing-payload at heights
+  `6/29` to see whether the remaining loss is fetch pacing or peer-side payload
+  availability, not frontier ownership.
+
+Latest sync (2026-03-17 cached-slot same-slot recovery suppression):
+`crates/iroha_core/src/sumeragi/main_loop/propose.rs` now suppresses
+contiguous-frontier cached-slot quorum-timeout escalation while same-slot
+recovery is still active, seeding the frontier owner create-only when missing
+and preserving any existing owner unchanged.
+
+Focused regressions are green:
+`pacemaker_suppresses_contiguous_cached_slot_stall_while_same_slot_missing_payload_recovery_is_active`,
+`pacemaker_cached_slot_stall_preserves_existing_frontier_owner_while_same_slot_missing_payload_recovery_is_active`,
+and the refreshed `pacemaker_cached_slot_` subset.
+
+Fresh runtime signal from the preserved warmed probe
+(`/tmp/izanami_npos_healthy_probe_cached_slot_same_slot_guard_20260317T205153Z.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_3stiMM`)
+shows the cached-slot `propose.rs` timeout class is gone:
+- persisted core block count: `124` on all four peers,
+- `cached proposal slot stalled past quorum timeout`: `0`,
+- `commit reschedule`: `3`,
+- `payload missing QC`: `2`,
+- `missing block dwell -> frontier recovery`: `2`,
+- `validation inflight exceeded fast timeout`: `1`,
+- `cleanup`: `0`,
+- `rotate`: `0`,
+- `dropping block sync update missing commit-role quorum`: `0`.
+
+The harness still loses its own summary path to the external fatal-signal bug,
+but the preserved peer state is enough to confirm that the cached-slot
+quorum-timeout path is no longer the dominant sender-side limiter.
+
+Latest sync (2026-03-17 exact-slot validation-inflight suppression):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs` now treat exact-slot
+pre-vote validation inflight as active same-slot recovery. Quorum-timeout
+cleanup / rotation stays suppressed while that validation is still live, and
+contiguous-frontier vote-backed quorum timeout no longer retransmits against an
+exact-slot validation task that is already in flight.
+
+Focused regressions are green:
+`frontier_recovery_suppresses_cleanup_while_same_slot_validation_inflight_remains_active`,
+`frontier_recovery_suppresses_rotation_while_same_slot_validation_inflight_remains_active`,
+`reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight`, and
+the broader `frontier_recovery_suppresses_` subset.
+
+Fresh runtime signal from the preserved warmed probe
+(`/tmp/izanami_npos_healthy_probe_validation_guard_detached_20260317T2335.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_bHSUWP`)
+shows the validation-inflight stall class is gone:
+- persisted core block count: `123` on all four peers,
+- `reschedule`: `19`,
+- `validation inflight exceeded fast timeout`: `0`,
+- `payload missing QC`: `0`,
+- `cleanup`: `0`,
+- `rotate`: `0`.
+
+The harness still lost its own summary path to an external fatal signal, but
+the preserved peer state is now good enough to confirm that the remaining loss
+is no longer same-slot cleanup churn or validation-worker lag.
+
+Latest sync (2026-03-17 near-quorum single-ingress backlog guard):
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now treats a single
+inbound `block_payload_rx` or `block_rx` item as active same-slot ingress for
+contiguous-frontier near-quorum resend, and
+`reschedule_near_quorum_vote_backed_defers_while_single_slot_ingress_backlogged`
+is green with the adjacent near-quorum reschedule subset.
+
+Fresh runtime signal from the clean detached warmed probe
+(`/tmp/izanami_npos_healthy_probe_near_quorum_ingress_guard_20260317T2350.log`,
+network `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_JkrD06`)
+did not improve the live profile:
+- persisted core block count: `125` on all four peers,
+- elapsed wall time from peer startup to clean shutdown: about `222.3s`,
+- `reschedule`: `19`,
+- `validation inflight exceeded fast timeout`: `0`,
+- `payload missing QC`: `2`,
+- `cleanup`: `0`,
+- `rotate`: `0`.
+
+This means the single-item near-quorum ingress threshold was not the dominant
+live bottleneck. The next target is the mixed residual sender tail:
+- one-vote resend with no queue backlog at heights such as `11`, `15`, `24`,
+  `25`, `39`, `54`, `77`, `87`, and `116`,
+- near-quorum resend with empty queues at heights such as `9`, `10`, `58`,
+  `73`, `80`, `90`, and `113`,
+- and payload-missing QC events at heights `78` and `87`.
+
+Latest sync (2026-03-17 same-slot missing-QC cleanup suppression):
+`crates/iroha_core/src/sumeragi/main_loop.rs` now keeps quorum-timeout frontier
+cleanup / rotation from firing while the exact slot still has active sender-side
+vote-backed recovery work even after queue backlog drains. The new guard covers
+recent actionable same-slot missing-QC fetches, buffered deferred
+`BlockSyncUpdate`s, and exact-slot vote/QC verification in flight; it does not
+change sparse receive intake, zero-vote drop semantics outside the existing
+paths, quorum thresholds, or retransmit targets.
+
+Focused regressions are green:
+`frontier_recovery_suppresses_cleanup_while_same_slot_missing_qc_request_remains_recent_without_backlog`,
+`frontier_recovery_suppresses_rotation_while_same_slot_deferred_block_sync_update_remains_buffered_without_backlog`,
+and the broader `frontier_recovery_suppresses_` subset.
+
+Fresh runtime signal from this cut is still pending:
+- release probe log:
+  `/tmp/izanami_npos_healthy_probe_same_slot_missing_qc_guard_20260317T183650Z.log`,
+- the warmed 4-peer healthy NPoS probe is still blocked in the release rebuild
+  (`cargo run -p izanami --release --locked ...`) while `iroha_data_model`
+  links, so there is no new runtime summary yet for the `83/105/115` tail.
+
+Latest sync (2026-03-17 bundle-gate partitioning + same-slot ingress zero-vote guard):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs` now separate
+round-recovery bundle reservations into `commit` and `non_commit` lanes, so
+short vote-backed `CommitQuorumReschedule` windows no longer consume the same
+per-height bundle slot used by range-pull expiry / payload-mismatch recovery.
+The zero-vote contiguous-frontier path also now suppresses `drop_pending=true`
+when same-slot ingress is still active with inbound block/RBC backlog even if
+the prior same-height dependency timestamp is stale, seeding `quorum_timeout`
+ownership create-only instead of discarding the slot. Sparse receive policy
+remains unchanged.
+
+Focused regressions are green:
+`round_recovery_bundle_window_gate_partitions_commit_and_non_commit_sources`,
+`round_recovery_bundle_window_gate_keeps_non_commit_sources_single_use_per_window`,
+`round_recovery_bundle_window_gate_allows_commit_reschedule_short_window_without_rearming_non_commit`,
+`round_recovery_bundle_window_gate_keeps_commit_reschedule_single_use_per_explicit_window`,
+`zero_vote_quorum_timeout_does_not_drop_while_same_slot_ingress_backlog_is_active_without_dependency_progress`,
+the broader `zero_vote_quorum_timeout_` subset, and
+`frontier_recovery_suppresses_`.
+
+Fresh runtime signal improved in shape but is still not a clean success:
+- warmed probes:
+  `/tmp/izanami_npos_healthy_probe_partitioned_bundle_gate_20260317T170146Z.log`
+  and `/tmp/izanami_npos_healthy_probe_same_slot_ingress_guard_20260317T171610Z.log`,
+- the earlier sparse-receive regression (`dropping block sync update missing
+  commit-role quorum`) disappeared from the live peer logs after the bundle-gate
+  partitioning,
+- the previous height-`49` zero-vote `drop_pending=true` + inbound backlog
+  hotspot also dropped out after the same-slot ingress guard,
+- but the warmed rerun still did not produce a clean `target block height
+  reached` / `120 / 120` summary; teardown happened with late client
+  connection-refused warnings while peer logs had only advanced into the
+  `70s/80s`,
+- the remaining tail is now dominated by vote-backed contiguous-frontier
+  reschedule at heights such as `47`, `59`, `72`, `74`, `83`, and `85`, plus
+  intermittent missing-payload/frontier-recovery events around heights `17`,
+  `30`, and `70`.
+
+Open work remains sender-side late-frontier pacing, but the next target is
+narrower again:
+- profile why warmed healthy runs can still tear down without a clean
+  `target block height reached` summary even when the visible sender-side tail
+  is reduced and sparse-drop warnings stay at zero,
+- trim the remaining vote-backed contiguous-frontier resend tail in the
+  `47/59/72/74/83/85` range without reopening zero-vote slot churn,
+- investigate the lingering payload/frontier recovery events around
+  `17/30/70`, including the cached-proposal stall path, while keeping sparse
+  receive policy and the new sender-only ownership guards intact.
+
+Latest sync (2026-03-17 same-slot frontier owner suppression):
+`crates/iroha_core/src/sumeragi/main_loop.rs` now preserves same-slot frontier
+ownership while inbound block/RBC ingress is still active and the active
+`(height, view)` retains owner state (cached hint/proposal, proposal-seen
+marker, pending/inflight state, exact-slot RBC state, or vote/QC evidence).
+Cleanup/rotate no longer clears `proposal_cache` / `proposals_seen` early and
+reopens the same frontier slot for a second hash while old-hash ingress is
+still draining. The guard was narrowed after regression testing so bare
+same-height missing requests do not suppress legitimate `missing_qc`
+stall-window rotation once the canonical reanchor window advances. Sparse
+receive policy remains unchanged.
+
+Focused regressions are green:
+`frontier_recovery_suppresses_cleanup_while_same_slot_ingress_remains_active`,
+`frontier_recovery_suppresses_rotation_while_same_slot_ingress_remains_active`,
+and the broader `frontier_stall_` subset, including
+`missing_qc_view_change_suppressed_without_frontier_stall_mode_when_reanchor_window_already_emitted`.
+
+Fresh warmed runtime signal improved materially on the final code:
+- rebuilt final release code via `cargo run -p izanami --release --locked -- ...`
+  reached `120 / 120` against `target_blocks=120` with
+  `/tmp/izanami_npos_healthy_probe_same_slot_owner_final_20260317T160430Z.log`,
+- preserved network dir:
+  `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_ttUl3e`,
+- `dropping block sync update missing commit-role quorum`: `0`,
+- `commit quorum missing ... rescheduling block for reassembly`: `36`
+  (`41 -> 36` vs the previous vote-count-gated sender-side run),
+- `applied unified frontier recovery cleanup`: `23` (`33 -> 23`),
+- `MissingQc|missing_qc`: `0` (`4 -> 0`),
+- `frontier recovery exhausted catch-up windows; rotating view`: `0`,
+- target-height elapsed is now `200.050s` (`~1.67s/block`) with
+  `interval_p95_ms=2501`, so throughput is materially better but still above
+  the `<= 1.0s/block` target,
+- the old dominant same-slot churn at heights `20` and `56` dropped out of the
+  main offenders, while height `66` fell to a minor `2` reschedules.
+
+Open work remains sender-side tail cleanup, but the hotspot moved again:
+- profile the remaining isolated quorum-timeout cleanup/reschedule cluster at
+  heights `83`, `90`, `105`, and `115` on the preserved final-code logs,
+- determine whether the remaining `2501ms` windows come from late zero-vote
+  cleanup, near-quorum resend timing, or another sender-owned frontier path,
+- keep the new same-slot owner guard and current sparse receive policy intact
+  while driving end-to-end pace toward `<= 1.0s/block`.
+
+Latest sync (2026-03-17 vote-count-gated sender-side rearm):
+`crates/iroha_core/src/sumeragi/main_loop/pending_block.rs` and
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now rearm
+vote-backed quorum retransmit only when the current vote count is higher than
+the vote count used by the last vote-backed resend. Generic pending progress
+(`touch_progress(...)`) no longer reopens sender-side commit-quorum retransmit,
+so RBC chunk/ready/deliver ingress and other non-vote activity stop acting as a
+hidden resend trigger. Sparse receive policy remains unchanged.
+
+Focused regressions are green:
+`vote_backed_reschedule_requires_progress_after_last_attempt`,
+`reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress`,
+`contiguous_frontier_vote_backed_`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window`, and
+`zero_vote_quorum_timeout_`.
+
+Fresh warmed runtime signal improved in shape, not pace:
+- rebuilt `iroha3d` + warmed 4-peer healthy NPoS probe reached `123 / 123`
+  against `target_blocks=120` with
+  `/tmp/izanami_npos_healthy_probe_vote_count_gate_20260317T145442Z.log`,
+- `dropping block sync update missing commit-role quorum`: `0`,
+- `commit quorum missing ... rescheduling block for reassembly`: `41`
+  (`47 -> 41` vs the prior sender-side cut),
+- `applied unified frontier recovery cleanup`: `33` (`43 -> 33`),
+- `MissingQc|missing_qc`: `4` (`8 -> 4`),
+- the late `90/113` same-height resend hotspot disappeared from this run,
+- but target-height elapsed is still `231.153s` (`~1.91s/block`) with
+  `interval_p95_ms=3336`, so the throughput target is still missed.
+
+Open work remains sender-side same-height candidate churn, now earlier and
+broader:
+- investigate why the dominant resend hotspot shifted to heights `56`, `20`,
+  and `66`, where multiple same-height candidates still appear across peers,
+- reduce zero-vote/vote-backed same-height candidate churn without broadening
+  sparse `BlockSyncUpdate` intake,
+- keep the new vote-count gate and current sparse receive policy intact while
+  driving end-to-end pace toward `<= 1.0s/block`.
+
+Latest sync (2026-03-17 conservative sender-side late-frontier cut):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+`crates/iroha_core/src/sumeragi/main_loop/commit.rs` now keep the sparse
+receive policy exactly as-is and tighten only sender-side pacing/ownership:
+vote-backed contiguous-frontier quorum reschedule uses a capped resend window
+(`rebroadcast_cooldown()` near quorum, `2 * rebroadcast_cooldown()` otherwise),
+commit-quorum bundle gating now keys off that explicit resend window, and the
+first ownerless zero-vote same-height backlog window now seeds
+`quorum_timeout` frontier ownership create-only instead of falling through the
+generic consensus-backlog deferral.
+
+Targeted regressions are green:
+`zero_vote_quorum_timeout_`,
+`contiguous_frontier_vote_backed_resend_window_tracks_vote_gap`,
+`contiguous_frontier_vote_backed_fast_resend_window_applies_only_when_clear`,
+`round_recovery_bundle_window_gate_allows_commit_reschedule_short_window_without_rearming_non_commit`,
+`round_recovery_bundle_window_gate_keeps_commit_reschedule_single_use_per_explicit_window`,
+`reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+`reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window`, and
+the sparse acceptance matrix remains unchanged
+(`block_sync_quorum_accepts_only_explicit_contiguous_frontier_sparse_recovery`,
+`block_sync_update_accepts_explicit_contiguous_frontier_requested_sparse_recovery`,
+`block_sync_update_accepts_partial_vote_sparse_recovery_for_explicit_missing_request`).
+
+Fresh runtime signal is mixed:
+- rebuilt `iroha3d` + warmed 4-peer healthy NPoS probe reached `122 / 122`
+  against `target_blocks=120` with
+  `/tmp/izanami_npos_healthy_probe_sender_side_cut_20260317T133523Z.log`,
+- `dropping block sync update missing commit-role quorum`: `0`,
+- no permanent late-frontier stall remained on this run,
+- but target-height elapsed was `231.299s` (`~1.91s/block`), above the
+  `<= 1.0s/block` target,
+- repeated late same-height churn is still visible around heights `90` and
+  `113`, with `commit quorum missing past timeout; rescheduling block for
+  reassembly` still appearing `47` times across preserved peer stdout logs.
+
+Open work remains sender-side late commit-quorum convergence, not sparse
+receive intake:
+- reduce repeated same-height vote-backed/quorum-timeout churn around the late
+  frontier without broadening sparse `BlockSyncUpdate` acceptance,
+- keep cleanup/rotation bounded while cutting the remaining `height=90/113`
+  resend/recovery loop shape,
+- recover end-to-end pace from `~1.91s/block` toward the `<= 1.0s/block`
+  target.
 
 Latest sync (2026-03-17 late contiguous-frontier sparse recovery):
 `crates/iroha_core/src/sumeragi/main_loop.rs`,

@@ -256,9 +256,14 @@ impl Actor {
             Err(outcome) => return outcome,
         };
 
-        let has_commit_qc =
-            pending.commit_qc_seen || self.pending_block_has_qc(hash, pending.height, pending.view);
-        if !has_commit_qc && !self.slot_has_proposal_evidence(pending.height, pending.view) {
+        let validation_priority_reason =
+            self.pending_block_validation_priority_reason(hash, &pending);
+        let has_commit_qc = pending.commit_qc_seen
+            || self.pending_block_has_commit_qc(hash, pending.height, pending.view);
+        if !has_commit_qc
+            && !self.slot_has_proposal_evidence(pending.height, pending.view)
+            && validation_priority_reason.is_none()
+        {
             debug!(
                 height = pending.height,
                 view = pending.view,
@@ -268,6 +273,14 @@ impl Actor {
             pending.validation_status = ValidationStatus::Pending;
             self.pending.pending_blocks.insert(hash, pending);
             return ValidationGateOutcome::Deferred;
+        } else if let Some(reason) = validation_priority_reason {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                reason,
+                "allowing validation before proposal evidence due to near-tip commit readiness"
+            );
         }
 
         if commit_topology.is_empty() {

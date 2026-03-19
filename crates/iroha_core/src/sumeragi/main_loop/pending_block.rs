@@ -73,6 +73,7 @@ pub(super) struct PendingBlock {
     pub(super) kura_persisted: bool,
     pub(super) aborted: bool,
     pub(super) last_quorum_reschedule: Option<Instant>,
+    last_quorum_reschedule_vote_count: usize,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
     last_block_sync_update: Option<BlockSyncUpdateState>,
     /// Timestamp of the latest availability/vote progress for quorum timeout gating.
@@ -103,6 +104,7 @@ impl PendingBlock {
             kura_persisted: false,
             aborted: false,
             last_quorum_reschedule: None,
+            last_quorum_reschedule_vote_count: 0,
             last_precommit_rebroadcast: None,
             last_block_sync_update: None,
             last_progress: now,
@@ -153,6 +155,7 @@ impl PendingBlock {
             self.validation_status = ValidationStatus::Pending;
             self.last_precommit_rebroadcast = None;
             self.last_quorum_reschedule = None;
+            self.last_quorum_reschedule_vote_count = 0;
             self.aborted = false;
             self.parent_state_root = None;
             self.post_state_root = None;
@@ -183,6 +186,7 @@ impl PendingBlock {
         self.reset_kura_retry();
         self.last_precommit_rebroadcast = None;
         self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
         self.parent_state_root = None;
         self.post_state_root = None;
         self.last_block_sync_update = None;
@@ -193,15 +197,26 @@ impl PendingBlock {
             .is_none_or(|last| now.saturating_duration_since(last) >= backoff)
     }
 
-    pub(super) fn vote_backed_reschedule_due(&self, now: Instant, backoff: Duration) -> bool {
+    pub(super) fn vote_backed_reschedule_due(
+        &self,
+        now: Instant,
+        backoff: Duration,
+        vote_count: usize,
+    ) -> bool {
         self.progress_age(now) >= backoff
             && self
                 .last_quorum_reschedule
-                .is_none_or(|last| self.last_progress > last)
+                .is_none_or(|_| vote_count > self.last_quorum_reschedule_vote_count)
     }
 
     pub(super) fn mark_quorum_reschedule(&mut self, now: Instant) {
         self.last_quorum_reschedule = Some(now);
+        self.last_quorum_reschedule_vote_count = 0;
+    }
+
+    pub(super) fn mark_vote_backed_quorum_reschedule(&mut self, now: Instant, vote_count: usize) {
+        self.last_quorum_reschedule = Some(now);
+        self.last_quorum_reschedule_vote_count = vote_count;
     }
 
     pub(super) fn recompute_gate(
@@ -514,31 +529,36 @@ mod tests {
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
         let now = Instant::now();
         let backoff = Duration::from_millis(1);
+        let initial_vote_count = 1;
 
         pending.touch_progress(now);
         assert!(
-            !pending.vote_backed_reschedule_due(now, backoff),
+            !pending.vote_backed_reschedule_due(now, backoff, initial_vote_count),
             "vote-backed reschedule should wait for stale progress even on the first attempt"
         );
 
         let first_due = now + backoff + Duration::from_millis(1);
         assert!(
-            pending.vote_backed_reschedule_due(first_due, backoff),
+            pending.vote_backed_reschedule_due(first_due, backoff, initial_vote_count),
             "first vote-backed reschedule should be allowed"
         );
 
-        pending.mark_quorum_reschedule(first_due);
+        pending.mark_vote_backed_quorum_reschedule(first_due, initial_vote_count);
         let later = first_due + backoff + Duration::from_millis(1);
         assert!(
-            !pending.vote_backed_reschedule_due(later, backoff),
-            "duplicate vote-backed reschedule should wait for real progress"
+            !pending.vote_backed_reschedule_due(later, backoff, initial_vote_count),
+            "duplicate vote-backed reschedule should wait for higher vote count"
         );
 
         pending.touch_progress(later);
         let later_still = later + backoff + Duration::from_millis(1);
         assert!(
-            pending.vote_backed_reschedule_due(later_still, backoff),
-            "fresh progress should rearm vote-backed reschedule"
+            !pending.vote_backed_reschedule_due(later_still, backoff, initial_vote_count),
+            "non-vote progress should not rearm vote-backed reschedule"
+        );
+        assert!(
+            pending.vote_backed_reschedule_due(later_still, backoff, initial_vote_count + 1),
+            "higher vote count should rearm vote-backed reschedule"
         );
     }
 }

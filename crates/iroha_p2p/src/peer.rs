@@ -1494,6 +1494,7 @@ pub mod handles {
     /// Per-topic senders for peer substreams.
     pub(super) struct TopicSenders<T> {
         pub(super) hi_consensus: post_channel::Sender<T>,
+        pub(super) hi_consensus_payload: post_channel::Sender<T>,
         pub(super) hi_consensus_chunk: post_channel::Sender<T>,
         pub(super) hi_control: post_channel::Sender<T>,
         pub(super) lo_block_sync: post_channel::Sender<T>,
@@ -1532,8 +1533,10 @@ pub mod handles {
 
             let topic = msg.topic();
             let sender = match topic {
-                crate::network::message::Topic::Consensus
-                | crate::network::message::Topic::ConsensusPayload => &self.senders.hi_consensus,
+                crate::network::message::Topic::Consensus => &self.senders.hi_consensus,
+                crate::network::message::Topic::ConsensusPayload => {
+                    &self.senders.hi_consensus_payload
+                }
                 crate::network::message::Topic::ConsensusChunk => &self.senders.hi_consensus_chunk,
                 crate::network::message::Topic::Control => &self.senders.hi_control,
                 crate::network::message::Topic::BlockSync => &self.senders.lo_block_sync,
@@ -1575,9 +1578,25 @@ pub mod handles {
             }
         }
 
+        #[derive(Clone, Debug, Decode, Encode)]
+        struct ConsensusPayloadMsg;
+
+        impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusPayloadMsg {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                norito::core::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
+        impl ClassifyTopic for ConsensusPayloadMsg {
+            fn topic(&self) -> Topic {
+                Topic::ConsensusPayload
+            }
+        }
+
         #[test]
         fn consensus_chunk_routes_to_high_queue() {
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
+            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
             let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
             let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
             let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
@@ -1589,6 +1608,7 @@ pub mod handles {
             let handle = PeerHandle {
                 senders: TopicSenders {
                     hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
                     hi_control: hi_control_tx,
                     lo_block_sync: lo_block_sync_tx,
@@ -1609,6 +1629,69 @@ pub mod handles {
             ));
             assert!(matches!(
                 hi_consensus_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                hi_consensus_payload_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(
+                lo_block_sync_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_tx_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_peer_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(lo_health_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(lo_other_rx.try_recv(), Err(TryRecvError::Empty)));
+        }
+
+        #[test]
+        fn consensus_payload_routes_to_dedicated_high_queue() {
+            let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
+            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
+            let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
+            let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
+            let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
+            let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(1);
+            let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(1);
+            let (lo_health_tx, mut lo_health_rx) = post_channel::channel(1);
+            let (lo_other_tx, mut lo_other_rx) = post_channel::channel(1);
+
+            let handle = PeerHandle {
+                senders: TopicSenders {
+                    hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
+                    hi_consensus_chunk: hi_consensus_chunk_tx,
+                    hi_control: hi_control_tx,
+                    lo_block_sync: lo_block_sync_tx,
+                    lo_tx_gossip: lo_tx_gossip_tx,
+                    lo_peer_gossip: lo_peer_gossip_tx,
+                    lo_health: lo_health_tx,
+                    lo_other: lo_other_tx,
+                },
+            };
+
+            handle
+                .post(ConsensusPayloadMsg)
+                .expect("consensus payload post should succeed");
+
+            assert!(matches!(
+                hi_consensus_payload_rx.try_recv(),
+                Ok(ConsensusPayloadMsg)
+            ));
+            assert!(matches!(
+                hi_consensus_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                hi_consensus_chunk_rx.try_recv(),
                 Err(TryRecvError::Empty)
             ));
             assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
@@ -1829,6 +1912,9 @@ mod run {
     const LOW_TOPIC_COUNT: usize = 5;
     const HI_BUDGET_RESET: u8 = 32;
     const HI_BUDGET_FALLBACK: u8 = 1;
+    const HI_CONTROL_BURST_MAX: u8 = 4;
+    const HI_CONSENSUS_BURST_MAX: u8 = 4;
+    const HI_PAYLOAD_BURST_MAX: u8 = 2;
     // Drain a few queued outbound posts per loop iteration to allow `MessageSender` to
     // batch multiple logical messages into fewer encrypted frames.
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
@@ -1836,6 +1922,14 @@ mod run {
     const INBOUND_SEND_WARN_MS: u64 = 250;
     const FORMAT_ERROR_BACKOFF_BASE_MS: u64 = 10;
     const FORMAT_ERROR_BACKOFF_MAX_MS: u64 = 200;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum HighTopic {
+        Control,
+        Consensus,
+        ConsensusPayload,
+        ConsensusChunk,
+    }
 
     fn low_topic_label(topic: LowTopic) -> &'static str {
         match topic {
@@ -1845,6 +1939,127 @@ mod run {
             LowTopic::Health => "low:health",
             LowTopic::Other => "low:other",
         }
+    }
+
+    fn high_topic_label(topic: HighTopic) -> &'static str {
+        match topic {
+            HighTopic::Control => "hi:control",
+            HighTopic::Consensus => "hi:consensus",
+            HighTopic::ConsensusPayload => "hi:consensus_payload",
+            HighTopic::ConsensusChunk => "hi:consensus_chunk",
+        }
+    }
+
+    fn note_high_topic_served(
+        control_burst: &mut u8,
+        consensus_burst: &mut u8,
+        payload_burst: &mut u8,
+        topic: HighTopic,
+    ) {
+        match topic {
+            HighTopic::Control => {
+                *control_burst = control_burst.saturating_add(1).min(HI_CONTROL_BURST_MAX);
+            }
+            HighTopic::Consensus => {
+                *control_burst = 0;
+                *consensus_burst = consensus_burst
+                    .saturating_add(1)
+                    .min(HI_CONSENSUS_BURST_MAX);
+            }
+            HighTopic::ConsensusPayload => {
+                *control_burst = 0;
+                *consensus_burst = 0;
+                *payload_burst = payload_burst.saturating_add(1).min(HI_PAYLOAD_BURST_MAX);
+            }
+            HighTopic::ConsensusChunk => {
+                *control_burst = 0;
+                *consensus_burst = 0;
+                *payload_burst = 0;
+            }
+        }
+    }
+
+    fn try_recv_high_data_fair<T>(
+        payload_burst: u8,
+        hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
+    ) -> Option<(HighTopic, T)> {
+        if payload_burst >= HI_PAYLOAD_BURST_MAX {
+            if let Some(m) = hi_consensus_chunk_rx.try_recv_now() {
+                return Some((HighTopic::ConsensusChunk, m));
+            }
+        }
+        if let Some(m) = hi_consensus_payload_rx.try_recv_now() {
+            return Some((HighTopic::ConsensusPayload, m));
+        }
+        hi_consensus_chunk_rx
+            .try_recv_now()
+            .map(|m| (HighTopic::ConsensusChunk, m))
+    }
+
+    fn try_recv_high_fair<T>(
+        control_burst: &mut u8,
+        consensus_burst: &mut u8,
+        payload_burst: &mut u8,
+        hi_control_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
+    ) -> Option<(HighTopic, T)> {
+        if *control_burst >= HI_CONTROL_BURST_MAX {
+            if let Some(m) = hi_consensus_rx.try_recv_now() {
+                note_high_topic_served(
+                    control_burst,
+                    consensus_burst,
+                    payload_burst,
+                    HighTopic::Consensus,
+                );
+                return Some((HighTopic::Consensus, m));
+            }
+            if let Some((topic, msg)) = try_recv_high_data_fair(
+                *payload_burst,
+                hi_consensus_payload_rx,
+                hi_consensus_chunk_rx,
+            ) {
+                note_high_topic_served(control_burst, consensus_burst, payload_burst, topic);
+                return Some((topic, msg));
+            }
+        }
+        if let Some(m) = hi_control_rx.try_recv_now() {
+            note_high_topic_served(
+                control_burst,
+                consensus_burst,
+                payload_burst,
+                HighTopic::Control,
+            );
+            return Some((HighTopic::Control, m));
+        }
+        if *consensus_burst >= HI_CONSENSUS_BURST_MAX {
+            if let Some((topic, msg)) = try_recv_high_data_fair(
+                *payload_burst,
+                hi_consensus_payload_rx,
+                hi_consensus_chunk_rx,
+            ) {
+                note_high_topic_served(control_burst, consensus_burst, payload_burst, topic);
+                return Some((topic, msg));
+            }
+        }
+        if let Some(m) = hi_consensus_rx.try_recv_now() {
+            note_high_topic_served(
+                control_burst,
+                consensus_burst,
+                payload_burst,
+                HighTopic::Consensus,
+            );
+            return Some((HighTopic::Consensus, m));
+        }
+        let next = try_recv_high_data_fair(
+            *payload_burst,
+            hi_consensus_payload_rx,
+            hi_consensus_chunk_rx,
+        )?;
+        note_high_topic_served(control_burst, consensus_burst, payload_burst, next.0);
+        Some(next)
     }
 
     fn bump_low_rr(low_rr: &mut u8, served_idx: usize) {
@@ -2047,6 +2262,8 @@ mod run {
 
             // Create per-topic substreams (bounded or unbounded depending on feature).
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(post_capacity);
+            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) =
+                post_channel::channel(post_capacity);
             let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) =
                 post_channel::channel(post_capacity);
             let (hi_control_tx, mut hi_control_rx) = post_channel::channel(post_capacity);
@@ -2059,6 +2276,7 @@ mod run {
             let ready_peer_handle = handles::PeerHandle {
                 senders: handles::TopicSenders {
                     hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
                     hi_control: hi_control_tx,
                     lo_block_sync: lo_block_sync_tx,
@@ -2148,6 +2366,9 @@ mod run {
             // low topics during sustained consensus traffic.
             let mut hi_budget: u8 = HI_BUDGET_RESET;
             let mut low_rr: u8 = 0;
+            let mut hi_control_burst: u8 = 0;
+            let mut hi_consensus_burst: u8 = 0;
+            let mut hi_payload_burst: u8 = 0;
             let mut format_error_streak: u32 = 0;
 
             loop {
@@ -2210,56 +2431,26 @@ mod run {
                 // I/O driver churn under load.
                 let mut drained_hi = 0usize;
                 while drained_hi < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
-                    let mut progressed = if let Some(m) = hi_consensus_rx.try_recv_now() {
-                        iroha_logger::trace!("Post message (hi:consensus/drain)");
-                        if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
-                        {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                        hi_budget = hi_budget.saturating_sub(1);
-                        drained_hi = drained_hi.saturating_add(1);
-                        true
-                    } else {
-                        false
+                    let Some((topic, msg)) = try_recv_high_fair(
+                        &mut hi_control_burst,
+                        &mut hi_consensus_burst,
+                        &mut hi_payload_burst,
+                        &mut hi_control_rx,
+                        &mut hi_consensus_rx,
+                        &mut hi_consensus_payload_rx,
+                        &mut hi_consensus_chunk_rx,
+                    ) else {
+                        break;
                     };
-                    if hi_budget == 0 {
+                    iroha_logger::trace!("Post message ({}/drain)", high_topic_label(topic));
+                    if let Err(error) =
+                        message_sender_hi.prepare_message(&Message::Data(msg), Priority::High)
+                    {
+                        iroha_logger::error!(%error, "Failed to encrypt message.");
                         break;
                     }
-
-                    if let Some(m) = hi_consensus_chunk_rx.try_recv_now() {
-                        iroha_logger::trace!("Post message (hi:consensus_chunk/drain)");
-                        if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
-                        {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                        hi_budget = hi_budget.saturating_sub(1);
-                        drained_hi = drained_hi.saturating_add(1);
-                        progressed = true;
-                    }
-                    if hi_budget == 0 {
-                        break;
-                    }
-
-                    if let Some(m) = hi_control_rx.try_recv_now() {
-                        iroha_logger::trace!("Post message (hi:control/drain)");
-                        if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
-                        {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                        hi_budget = hi_budget.saturating_sub(1);
-                        drained_hi = drained_hi.saturating_add(1);
-                        progressed = true;
-                    }
-
-                    if !progressed {
-                        break;
-                    }
+                    hi_budget = hi_budget.saturating_sub(1);
+                    drained_hi = drained_hi.saturating_add(1);
                 }
 
                 let mut drained_lo = 0usize;
@@ -2340,9 +2531,47 @@ mod run {
                         );
                         break;
                     }
+                    msg = hi_control_rx.recv(), if hi_budget > 0 => {
+                        if let Some(m) = msg {
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::Control,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Control));
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
+                            hi_budget = hi_budget.saturating_sub(1);
+                        }
+                    }
                     msg = hi_consensus_rx.recv(), if hi_budget > 0 => {
                         if let Some(m) = msg {
-                            iroha_logger::trace!("Post message (hi:consensus)");
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::Consensus,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Consensus));
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
+                            hi_budget = hi_budget.saturating_sub(1);
+                        }
+                    }
+                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0 => {
+                        if let Some(m) = msg {
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::ConsensusPayload,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusPayload));
                             if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
@@ -2352,17 +2581,13 @@ mod run {
                     }
                     msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0 => {
                         if let Some(m) = msg {
-                            iroha_logger::trace!("Post message (hi:consensus_chunk)");
-                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                            hi_budget = hi_budget.saturating_sub(1);
-                        }
-                    }
-                    msg = hi_control_rx.recv(), if hi_budget > 0 => {
-                        if let Some(m) = msg {
-                            iroha_logger::trace!("Post message (hi:control)");
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::ConsensusChunk,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusChunk));
                             if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
@@ -3014,8 +3239,12 @@ mod run {
         encrypted: Vec<u8>,
         /// Reusable buffers for framing outbound messages.
         frame_pool: Vec<BytesMut>,
-        /// Queue of encrypted messages waiting to be sent (high priority).
-        queue_high: VecDeque<BytesMut>,
+        /// Queues of encrypted high-priority frames by scheduling class.
+        queue_high_control: VecDeque<BytesMut>,
+        queue_high_consensus: VecDeque<BytesMut>,
+        queue_high_consensus_payload: VecDeque<BytesMut>,
+        queue_high_consensus_chunk: VecDeque<BytesMut>,
+        queue_high_other: VecDeque<BytesMut>,
         /// Queue of encrypted messages waiting to be sent (low priority).
         queue_low: VecDeque<BytesMut>,
         /// In-flight coalesced bytes currently being written to the socket.
@@ -3023,11 +3252,19 @@ mod run {
         batch_offset: usize,
         /// Maximum payload size accepted per encrypted frame
         max_frame_bytes: usize,
+        /// Number of consecutive control frames emitted before giving consensus/data a turn.
+        high_control_burst: usize,
+        /// Number of consecutive consensus frames emitted before giving payload/chunk a turn.
+        high_consensus_burst: usize,
+        /// Number of consecutive payload frames emitted before giving chunk a turn.
+        high_payload_burst: usize,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HighBatchClass {
         Control,
+        Consensus,
+        ConsensusPayload,
         ConsensusChunk,
         Other,
     }
@@ -3035,6 +3272,8 @@ mod run {
     fn classify_high_batch(topic: Topic) -> HighBatchClass {
         match topic {
             Topic::Control => HighBatchClass::Control,
+            Topic::Consensus => HighBatchClass::Consensus,
+            Topic::ConsensusPayload => HighBatchClass::ConsensusPayload,
             Topic::ConsensusChunk => HighBatchClass::ConsensusChunk,
             _ => HighBatchClass::Other,
         }
@@ -3046,6 +3285,9 @@ mod run {
         const MAX_BATCH_FRAMES: usize = 16;
         const MAX_BATCH_BYTES: usize = 64 * 1024;
         const MAX_BATCH_HI_BURST: usize = 4;
+        const MAX_BATCH_CONTROL_BURST: usize = 4;
+        const MAX_BATCH_CONSENSUS_BURST: usize = 4;
+        const MAX_BATCH_PAYLOAD_BURST: usize = 2;
         const MAX_PLAINTEXT_MSGS_HI: usize = 16;
         const MAX_PLAINTEXT_MSGS_LO: usize = 32;
         const MAX_PLAINTEXT_BYTES_HI: usize = 64 * 1024;
@@ -3070,11 +3312,18 @@ mod run {
                 plain_low_msgs: 0,
                 encrypted: Vec::with_capacity(capacity),
                 frame_pool: Vec::new(),
-                queue_high: VecDeque::new(),
+                queue_high_control: VecDeque::new(),
+                queue_high_consensus: VecDeque::new(),
+                queue_high_consensus_payload: VecDeque::new(),
+                queue_high_consensus_chunk: VecDeque::new(),
+                queue_high_other: VecDeque::new(),
                 queue_low: VecDeque::new(),
                 batch: BytesMut::with_capacity(batch_capacity),
                 batch_offset: 0,
                 max_frame_bytes,
+                high_control_burst: 0,
+                high_consensus_burst: 0,
+                high_payload_burst: 0,
             }
         }
 
@@ -3101,7 +3350,7 @@ mod run {
                     // Control traffic should not be delayed behind other high batches.
                     if class == HighBatchClass::Control {
                         self.flush_plain_high()?;
-                        self.enqueue_current_buffer(Priority::High)?;
+                        self.enqueue_current_buffer(Priority::High, Some(class))?;
                         return Ok(());
                     }
 
@@ -3120,7 +3369,7 @@ mod run {
 
                     // If the single message exceeds the high cap, still send it as its own frame.
                     if self.plain_high.is_empty() && msg_len > cap {
-                        self.enqueue_current_buffer(Priority::High)?;
+                        self.enqueue_current_buffer(Priority::High, Some(class))?;
                         return Ok(());
                     }
 
@@ -3137,7 +3386,7 @@ mod run {
                     }
 
                     if self.plain_low.is_empty() && msg_len > cap {
-                        self.enqueue_current_buffer(Priority::Low)?;
+                        self.enqueue_current_buffer(Priority::Low, None)?;
                         return Ok(());
                     }
 
@@ -3182,7 +3431,11 @@ mod run {
             self.batch_offset < self.batch.len()
                 || !self.plain_high.is_empty()
                 || !self.plain_low.is_empty()
-                || !self.queue_high.is_empty()
+                || !self.queue_high_control.is_empty()
+                || !self.queue_high_consensus.is_empty()
+                || !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+                || !self.queue_high_other.is_empty()
                 || !self.queue_low.is_empty()
         }
 
@@ -3190,8 +3443,11 @@ mod run {
             if self.plain_high.is_empty() {
                 return Ok(());
             }
+            let class = self
+                .plain_high_class
+                .expect("high plaintext batch must track its scheduling class");
             let plaintext = core::mem::take(&mut self.plain_high);
-            match self.enqueue_encrypted(&plaintext, Priority::High) {
+            match self.enqueue_encrypted(&plaintext, Priority::High, Some(class)) {
                 Ok(()) => {
                     let mut plaintext = plaintext;
                     plaintext.clear();
@@ -3212,7 +3468,7 @@ mod run {
                 return Ok(());
             }
             let plaintext = core::mem::take(&mut self.plain_low);
-            match self.enqueue_encrypted(&plaintext, Priority::Low) {
+            match self.enqueue_encrypted(&plaintext, Priority::Low, None) {
                 Ok(()) => {
                     let mut plaintext = plaintext;
                     plaintext.clear();
@@ -3230,9 +3486,13 @@ mod run {
         /// Enqueue currently encoded message bytes from `self.buffer`.
         ///
         /// Keeps the original bytes intact when encryption/framing fails.
-        fn enqueue_current_buffer(&mut self, priority: Priority) -> Result<(), Error> {
+        fn enqueue_current_buffer(
+            &mut self,
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+        ) -> Result<(), Error> {
             let plaintext = core::mem::take(&mut self.buffer);
-            match self.enqueue_encrypted(&plaintext, priority) {
+            match self.enqueue_encrypted(&plaintext, priority, high_class) {
                 Ok(()) => {
                     let mut plaintext = plaintext;
                     plaintext.clear();
@@ -3246,7 +3506,12 @@ mod run {
             }
         }
 
-        fn enqueue_encrypted(&mut self, plaintext: &[u8], priority: Priority) -> Result<(), Error> {
+        fn enqueue_encrypted(
+            &mut self,
+            plaintext: &[u8],
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+        ) -> Result<(), Error> {
             let encrypted = self
                 .cryptographer
                 .encrypt_into(plaintext, &mut self.encrypted)?;
@@ -3265,10 +3530,149 @@ mod run {
             frame.put_u32(size as u32);
             frame.put_slice(encrypted);
             match priority {
-                Priority::High => self.queue_high.push_back(frame),
+                Priority::High => match high_class.unwrap_or(HighBatchClass::Other) {
+                    HighBatchClass::Control => self.queue_high_control.push_back(frame),
+                    HighBatchClass::Consensus => self.queue_high_consensus.push_back(frame),
+                    HighBatchClass::ConsensusPayload => {
+                        self.queue_high_consensus_payload.push_back(frame);
+                    }
+                    HighBatchClass::ConsensusChunk => {
+                        self.queue_high_consensus_chunk.push_back(frame);
+                    }
+                    HighBatchClass::Other => self.queue_high_other.push_back(frame),
+                },
                 Priority::Low => self.queue_low.push_back(frame),
             }
             Ok(())
+        }
+
+        fn next_high_background_class(&self) -> Option<HighBatchClass> {
+            if self.high_payload_burst >= Self::MAX_BATCH_PAYLOAD_BURST
+                && !self.queue_high_consensus_chunk.is_empty()
+            {
+                return Some(HighBatchClass::ConsensusChunk);
+            }
+            if !self.queue_high_consensus_payload.is_empty() {
+                return Some(HighBatchClass::ConsensusPayload);
+            }
+            if !self.queue_high_consensus_chunk.is_empty() {
+                return Some(HighBatchClass::ConsensusChunk);
+            }
+            None
+        }
+
+        fn next_high_batch_class(&self) -> Option<HighBatchClass> {
+            let non_control_pending = !self.queue_high_consensus.is_empty()
+                || !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+                || !self.queue_high_other.is_empty();
+            if !self.queue_high_control.is_empty()
+                && (!non_control_pending || self.high_control_burst < Self::MAX_BATCH_CONTROL_BURST)
+            {
+                return Some(HighBatchClass::Control);
+            }
+
+            let background_pending = !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty();
+            if !self.queue_high_consensus.is_empty()
+                && (!background_pending
+                    || self.high_consensus_burst < Self::MAX_BATCH_CONSENSUS_BURST)
+            {
+                return Some(HighBatchClass::Consensus);
+            }
+
+            if let Some(class) = self.next_high_background_class() {
+                return Some(class);
+            }
+
+            if !self.queue_high_control.is_empty() {
+                return Some(HighBatchClass::Control);
+            }
+            if !self.queue_high_consensus.is_empty() {
+                return Some(HighBatchClass::Consensus);
+            }
+            if !self.queue_high_other.is_empty() {
+                return Some(HighBatchClass::Other);
+            }
+            None
+        }
+
+        fn high_queue_len(&self, class: HighBatchClass) -> usize {
+            match class {
+                HighBatchClass::Control => self.queue_high_control.front().map_or(0, BytesMut::len),
+                HighBatchClass::Consensus => {
+                    self.queue_high_consensus.front().map_or(0, BytesMut::len)
+                }
+                HighBatchClass::ConsensusPayload => self
+                    .queue_high_consensus_payload
+                    .front()
+                    .map_or(0, BytesMut::len),
+                HighBatchClass::ConsensusChunk => self
+                    .queue_high_consensus_chunk
+                    .front()
+                    .map_or(0, BytesMut::len),
+                HighBatchClass::Other => self.queue_high_other.front().map_or(0, BytesMut::len),
+            }
+        }
+
+        fn pop_high_frame(&mut self, class: HighBatchClass) -> BytesMut {
+            match class {
+                HighBatchClass::Control => self
+                    .queue_high_control
+                    .pop_front()
+                    .expect("selected control queue must contain a frame"),
+                HighBatchClass::Consensus => self
+                    .queue_high_consensus
+                    .pop_front()
+                    .expect("selected consensus queue must contain a frame"),
+                HighBatchClass::ConsensusPayload => self
+                    .queue_high_consensus_payload
+                    .pop_front()
+                    .expect("selected payload queue must contain a frame"),
+                HighBatchClass::ConsensusChunk => self
+                    .queue_high_consensus_chunk
+                    .pop_front()
+                    .expect("selected chunk queue must contain a frame"),
+                HighBatchClass::Other => self
+                    .queue_high_other
+                    .pop_front()
+                    .expect("selected high-other queue must contain a frame"),
+            }
+        }
+
+        fn note_high_batch_sent(&mut self, class: HighBatchClass) {
+            match class {
+                HighBatchClass::Control => {
+                    self.high_control_burst = self
+                        .high_control_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_CONTROL_BURST);
+                }
+                HighBatchClass::Consensus => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = self
+                        .high_consensus_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_CONSENSUS_BURST);
+                }
+                HighBatchClass::ConsensusPayload => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = 0;
+                    self.high_payload_burst = self
+                        .high_payload_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_PAYLOAD_BURST);
+                }
+                HighBatchClass::ConsensusChunk => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = 0;
+                    self.high_payload_burst = 0;
+                }
+                HighBatchClass::Other => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = 0;
+                }
+            }
         }
 
         fn fill_batch(&mut self) {
@@ -3280,26 +3684,33 @@ mod run {
             let mut hi_burst = 0usize;
 
             while frames_added < Self::MAX_BATCH_FRAMES {
-                let take_low = hi_burst >= Self::MAX_BATCH_HI_BURST && !self.queue_low.is_empty();
-                let take_high = !take_low && !self.queue_high.is_empty();
-                let take_low = !take_high && !self.queue_low.is_empty();
-                if !(take_high || take_low) {
+                let force_low = hi_burst >= Self::MAX_BATCH_HI_BURST && !self.queue_low.is_empty();
+                let next_high = if force_low {
+                    None
+                } else {
+                    self.next_high_batch_class()
+                };
+                let take_low = force_low || (next_high.is_none() && !self.queue_low.is_empty());
+                if next_high.is_none() && !take_low {
                     break;
                 }
 
-                let queue = if take_high {
-                    &mut self.queue_high
+                let frame_len = if let Some(class) = next_high {
+                    self.high_queue_len(class)
                 } else {
-                    &mut self.queue_low
+                    self.queue_low.front().map_or(0, BytesMut::len)
                 };
-                let frame_len = queue.front().map_or(0, BytesMut::len);
                 if frames_added > 0
                     && self.batch.len().saturating_add(frame_len) > Self::MAX_BATCH_BYTES
                 {
                     break;
                 }
 
-                let mut frame = queue.pop_front().expect("queue.front checked");
+                let mut frame = if let Some(class) = next_high {
+                    self.pop_high_frame(class)
+                } else {
+                    self.queue_low.pop_front().expect("queue.front checked")
+                };
                 self.batch.extend_from_slice(&frame);
                 frame.clear();
                 if self.frame_pool.len() < Self::FRAME_POOL_MAX {
@@ -3307,7 +3718,8 @@ mod run {
                 }
 
                 frames_added = frames_added.saturating_add(1);
-                if take_high {
+                if let Some(class) = next_high {
+                    self.note_high_batch_sent(class);
                     hi_burst = hi_burst.saturating_add(1);
                 } else {
                     hi_burst = 0;
@@ -3434,6 +3846,31 @@ mod run {
         impl ClassifyTopic for Blob {}
 
         impl<'a> ncore::DecodeFromSlice<'a> for Blob {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
+        #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
+        enum RoutedMsg {
+            Control(u8),
+            Consensus(u8),
+            ConsensusPayload(u8),
+            ConsensusChunk(u8),
+        }
+
+        impl ClassifyTopic for RoutedMsg {
+            fn topic(&self) -> Topic {
+                match self {
+                    Self::Control(_) => Topic::Control,
+                    Self::Consensus(_) => Topic::Consensus,
+                    Self::ConsensusPayload(_) => Topic::ConsensusPayload,
+                    Self::ConsensusChunk(_) => Topic::ConsensusChunk,
+                }
+            }
+        }
+
+        impl<'a> ncore::DecodeFromSlice<'a> for RoutedMsg {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
@@ -3611,6 +4048,132 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_schedules_control_consensus_payload_then_chunk() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[10u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for msg in [
+                RoutedMsg::ConsensusPayload(1),
+                RoutedMsg::ConsensusChunk(2),
+                RoutedMsg::Consensus(3),
+                RoutedMsg::Control(4),
+            ] {
+                sender
+                    .prepare_message(&Message::Data(msg), Priority::High)
+                    .expect("prepare routed message");
+                sender.flush_plain_high().expect("flush routed batch");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::Control(4),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::ConsensusPayload(1),
+                    RoutedMsg::ConsensusChunk(2),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_high_lane_fairness_drains_payload_and_chunk_under_consensus() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[11u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for id in 1..=9 {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+                sender.flush_plain_high().expect("flush consensus");
+            }
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusPayload(10)),
+                    Priority::High,
+                )
+                .expect("prepare payload");
+            sender.flush_plain_high().expect("flush payload");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusChunk(11)),
+                    Priority::High,
+                )
+                .expect("prepare chunk");
+            sender.flush_plain_high().expect("flush chunk");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::Consensus(1),
+                    RoutedMsg::Consensus(2),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::Consensus(4),
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::Consensus(5),
+                    RoutedMsg::Consensus(6),
+                    RoutedMsg::Consensus(7),
+                    RoutedMsg::Consensus(8),
+                    RoutedMsg::ConsensusChunk(11),
+                    RoutedMsg::Consensus(9),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
         async fn message_reader_decodes_batched_encrypted_frame() {
             let buffer = Arc::new(Mutex::new(Vec::new()));
             let writer = CollectingWrite {
@@ -3775,6 +4338,148 @@ mod run {
 
             assert!(msg.is_none());
             assert_eq!(hi_budget, HI_BUDGET_FALLBACK);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn high_lane_consensus_bypasses_payload_and_chunk_posts() {
+            let (control_tx, mut control_rx) = post_channel::channel(8);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
+            let (payload_tx, mut payload_rx) = post_channel::channel(8);
+            let (chunk_tx, mut chunk_rx) = post_channel::channel(8);
+            let _ = control_tx;
+
+            payload_tx.send("payload").await.expect("queue payload");
+            chunk_tx.send("chunk").await.expect("queue chunk");
+            consensus_tx
+                .send("consensus")
+                .await
+                .expect("queue consensus");
+
+            let mut consensus_burst = 0u8;
+            let mut payload_burst = 0u8;
+            let mut control_burst = 0u8;
+
+            let first = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("first high message");
+            let second = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("second high message");
+            let third = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("third high message");
+
+            assert_eq!(first, (HighTopic::Consensus, "consensus"));
+            assert_eq!(second, (HighTopic::ConsensusPayload, "payload"));
+            assert_eq!(third, (HighTopic::ConsensusChunk, "chunk"));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn high_lane_payload_and_chunk_progress_under_sustained_consensus() {
+            let (control_tx, mut control_rx) = post_channel::channel(16);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel(16);
+            let (payload_tx, mut payload_rx) = post_channel::channel(16);
+            let (chunk_tx, mut chunk_rx) = post_channel::channel(16);
+            let _ = control_tx;
+
+            for id in 1..=9 {
+                consensus_tx
+                    .send(format!("c{id}"))
+                    .await
+                    .expect("queue consensus");
+            }
+            payload_tx
+                .send(String::from("payload"))
+                .await
+                .expect("queue payload");
+            chunk_tx
+                .send(String::from("chunk"))
+                .await
+                .expect("queue chunk");
+
+            let mut consensus_burst = 0u8;
+            let mut payload_burst = 0u8;
+            let mut control_burst = 0u8;
+            let mut served = Vec::new();
+            while let Some(item) = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            ) {
+                served.push(item);
+            }
+
+            let expected = vec![
+                (HighTopic::Consensus, String::from("c1")),
+                (HighTopic::Consensus, String::from("c2")),
+                (HighTopic::Consensus, String::from("c3")),
+                (HighTopic::Consensus, String::from("c4")),
+                (HighTopic::ConsensusPayload, String::from("payload")),
+                (HighTopic::Consensus, String::from("c5")),
+                (HighTopic::Consensus, String::from("c6")),
+                (HighTopic::Consensus, String::from("c7")),
+                (HighTopic::Consensus, String::from("c8")),
+                (HighTopic::ConsensusChunk, String::from("chunk")),
+                (HighTopic::Consensus, String::from("c9")),
+            ];
+            assert_eq!(served, expected);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn high_lane_control_priority_remains_unchanged() {
+            let (control_tx, mut control_rx) = post_channel::channel(8);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
+            let (payload_tx, mut payload_rx) = post_channel::channel(8);
+            let (chunk_tx, mut chunk_rx) = post_channel::channel(8);
+
+            payload_tx.send("payload").await.expect("queue payload");
+            chunk_tx.send("chunk").await.expect("queue chunk");
+            consensus_tx
+                .send("consensus")
+                .await
+                .expect("queue consensus");
+            control_tx.send("control").await.expect("queue control");
+
+            let mut consensus_burst = 0u8;
+            let mut payload_burst = 0u8;
+            let mut control_burst = 0u8;
+            let first = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("first high message");
+
+            assert_eq!(first, (HighTopic::Control, "control"));
         }
 
         #[test]
