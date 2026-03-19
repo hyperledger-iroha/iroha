@@ -2,6 +2,142 @@
 
 Last updated: 2026-03-18
 
+## 2026-03-18 Follow-up: deterministic BFV acceleration landed, and the workspace lint/compile gates are green
+- Replaced the old scalar-only BFV multiplication baseline in
+  `crates/iroha_crypto/src/fhe_bfv.rs` with a deterministic CRT-NTT backend
+  behind the new default `bfv-accel` feature from
+  `crates/iroha_crypto/Cargo.toml` and the root `Cargo.toml` cfg allow-list:
+  - `BfvParameters::convolution_backend()` now reports whether a parameter set
+    runs on the scalar schoolbook fallback or the accelerated CRT-NTT path.
+  - BFV multiplication now dispatches to exact-arithmetic CRT-NTT when the
+    parameter set is supported, while preserving identical outputs through the
+    scalar fallback on unsupported shapes or when `bfv-accel` is disabled.
+- Updated the BFV/identifier docs in
+  `docs/source/universal_accounts_guide.md` to describe the new default
+  deterministic acceleration path and the fallback behavior.
+- Closed the workspace validation blockers that surfaced during the full lint
+  sweep:
+  - removed a duplicate websocket test definition in
+    `crates/iroha_telemetry/src/ws.rs`,
+  - cleaned up strict-clippy issues in
+    `crates/iroha_data_model/src/{account/address/compliance_vectors.rs,consensus.rs,identifier.rs,nexus/relay.rs}`,
+  - fixed the unused receiver / duplicate-noop-arm issues in
+    `crates/iroha_config/src/parameters/actual.rs` and
+    `crates/iroha_executor/src/default/isi/multisig/transaction.rs`,
+  - removed a duplicated bench runtime definition in
+    `crates/iroha_core/benches/validation.rs`.
+- Validation:
+  - `cargo test -p iroha_crypto bfv -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test --workspace --no-run` (pass)
+  - `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings` (pass)
+
+## 2026-03-18 Follow-up: BFV SDK envelopes now roundtrip into Torii with the shared fixture
+- Fixed the BFV identifier envelope schema hash in
+  `javascript/iroha_js/src/toriiClient.js`,
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`, and
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/IdentifierBfvEnvelopeBuilder.java`:
+  - SDK builders now frame `BfvIdentifierCiphertext` using Rust Norito's
+    fully qualified type name
+    `iroha_crypto::fhe_bfv::BfvIdentifierCiphertext` instead of the bare short
+    schema label, which was the cause of the Torii-side schema mismatch.
+- Tightened the Torii BFV integration test in
+  `crates/iroha_torii/src/lib.rs`:
+  - `identifier_resolve_accepts_bfv_encrypted_input` now submits the exact
+    shared SDK ciphertext fixture bytes for `string#retail` instead of
+    generating encrypted input on the Rust side.
+  - added a guard that the shared SDK BFV public parameters still derive from
+    the Rust resolver seed for that namespace.
+- Updated the deterministic SDK fixtures in
+  `javascript/iroha_js/test/toriiClient.identifier.test.js`,
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`, and
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  so all three SDKs and Torii now assert the same Rust-compatible wire bytes.
+- Validation:
+  - `cargo test -p iroha_torii identifier_resolve_accepts_bfv_encrypted_input --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js javascript/iroha_js/test/normalizers.test.js` (pass)
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+
+## 2026-03-18 Follow-up: SDKs now build BFV identifier ciphertext envelopes locally
+- Extended the JS SDK in
+  `javascript/iroha_js/src/{toriiClient.js,index.js}`:
+  - added `encryptIdentifierInputForPolicy(policy, input, { seed | seedHex })`,
+  - extended `buildIdentifierRequestForPolicy(...)` with
+    `{ input, encrypt: true }` so wallets can derive BFV `encrypted_input`
+    locally from published policy parameters,
+  - now parses `decomposition_base_log` from policy BFV metadata.
+- Extended the Swift SDK in
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`:
+  - added BFV public-parameter parity for `decompositionBaseLog`,
+  - added `ToriiIdentifierPolicySummary.encryptInput(...)`,
+    `.encryptedRequest(input:...)`, and
+    `ToriiIdentifierLookupRequest.encrypted(policy:input:...)`,
+  - added a deterministic pure-Swift BFV envelope builder that emits framed
+    Norito `BfvIdentifierCiphertext` bytes.
+- Extended the Android SDK in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/`:
+  - added `IdentifierBfvEnvelopeBuilder`,
+  - added BFV public-parameter parity for `decompositionBaseLog`,
+  - added `IdentifierPolicySummary.encryptInput(...)` and
+    `.encryptedRequestFromInput(...)`,
+  - added `IdentifierResolveRequest.encryptedFromInput(...)`.
+- Updated focused SDK tests in
+  `javascript/iroha_js/test/toriiClient.identifier.test.js`,
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`, and
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  to lock deterministic BFV envelope output against a shared seeded fixture.
+- Updated `docs/source/universal_accounts_guide.md` to document the new local
+  BFV envelope helpers across JS, Swift, and Android.
+- Validation:
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js javascript/iroha_js/test/normalizers.test.js` (pass)
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+
+## 2026-03-18 Follow-up: identifier receipts now have a query surface, and SDKs can verify them client-side
+- Extended the identifier receipt path in
+  `crates/iroha_data_model/src/identifier.rs`,
+  `crates/iroha_core/src/state.rs`, and
+  `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`:
+  - `IdentifierResolutionReceipt` now exposes canonical
+    `payload_bytes()` for receipt-signature consumers.
+  - Torii resolve and claim-receipt responses now return the canonical signed
+    payload as both `signature_payload_hex` and `signature_payload`.
+  - Torii now exposes `GET /v1/identifiers/receipts/{receipt_hash}` so
+    wallets, operators, and tests can fetch the persisted
+    `IdentifierClaimRecord` bound to a deterministic receipt hash.
+- Extended the JS SDK in
+  `javascript/iroha_js/src/{toriiClient.js,index.js}`:
+  - added `ToriiClient.getIdentifierClaimByReceiptHash(...)`,
+  - added `getIdentifierBfvPublicParameters(policy)` for decoded BFV metadata,
+  - added `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })`,
+  - added `verifyIdentifierResolutionReceipt(receipt, policy)`.
+- Extended the Swift SDK in
+  `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`:
+  - added `ToriiIdentifierLookupRequest`,
+  - added policy-bound request builders on `ToriiIdentifierPolicySummary`,
+  - added `ToriiIdentifierResolutionReceipt.verifySignature(using:)`,
+  - added `ToriiClient.getIdentifierClaimByReceiptHash(_)`.
+- Extended the Android SDK in
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/`:
+  - added `IdentifierResolveRequest`,
+  - added structured BFV/public-parameter and signed-payload models,
+  - added `IdentifierReceiptVerifier`,
+  - added `HttpClientTransport.getIdentifierClaimByReceiptHash(...)`,
+  - added `IdentifierResolutionReceipt.verifySignature(policy)`.
+- Updated `docs/source/universal_accounts_guide.md` to document the new
+  receipt-lookup route, signed payload fields, and SDK verification/request
+  helpers.
+- Validation:
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js javascript/iroha_js/test/normalizers.test.js` (pass)
+  - `swift test --filter 'ToriiClientTests/test.*Identifier'` (pass)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` (pass)
+  - `CARGO_INCREMENTAL=0 cargo check -p iroha_data_model -p iroha_core -p iroha_torii` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
+
 ## 2026-03-18 Follow-up: broader Swift and Android harness paths are green again
 - Unblocked the full Swift `ToriiClientTests` class in
   `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift` by relaxing Torii account-id
@@ -896,9 +1032,9 @@ Last updated: 2026-03-18
 ## 2026-03-15 Follow-up: address canonicalisation path-helper regression fix
 - Fixed `integration_tests/tests/address_canonicalisation.rs` helper paths used by account/explorer
   path-surface tests:
-  - `account_endpoint_url(...)` now targets `/v1/accounts/...` (was accidentally switched to `/v2/...`).
+  - `account_endpoint_url(...)` now targets `/v1/accounts/...`.
   - `explorer_account_qr_url(...)` now targets `/v1/explorer/accounts/.../qr`
-    (was accidentally switched to `/v2/...`).
+    with the same `/v1` handler prefix.
 - This restores expected handler dispatch so malformed literals are validated by route handlers
   (`400 Bad Request`) and canonical I105 account/explorer requests succeed (`200 OK`) instead of
   hitting `404 Not Found`.
@@ -2176,7 +2312,7 @@ Last updated: 2026-03-18
   - `cargo test -p iroha_cli --test cli_smoke --no-run` (pass)
   - `cargo test -p iroha_cli --test cli_smoke address_convert_json_summary_contains_i105_and_canonical_hex -- --nocapture` (pass)
   - `cargo test -p iroha_cli --test cli_smoke address_audit_supports_csv_output -- --nocapture` (pass)
-  - `cd javascript/iroha_js && IROHA_JS_ALLOW_UNVERIFIED_NATIVE=1 node --test --test-name-pattern "getExplorerAccountQr ignores payload address_format field" test/toriiClient.test.js` (pass)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "getExplorerAccountQr ignores payload address_format field" test/toriiClient.test.js` (pass)
 
 ## 2026-03-11 Repository-Wide Token Cleanup (Android + CLI + Docs + Tooling)
 - Removed remaining legacy account-literal token usage across non-portal docs, Android SDK/sample surfaces, CLI docs/tests, Torii client helper docs, and tooling text paths.

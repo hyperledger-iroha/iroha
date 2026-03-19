@@ -27,8 +27,12 @@ export {
   extractPipelineStatusKind,
   decodePdpCommitmentHeader,
   buildConnectWebSocketUrl,
+  encryptIdentifierInputForPolicy,
+  buildIdentifierRequestForPolicy,
   buildRbcSampleRequest,
+  getIdentifierBfvPublicParameters,
   openConnectWebSocket,
+  verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {

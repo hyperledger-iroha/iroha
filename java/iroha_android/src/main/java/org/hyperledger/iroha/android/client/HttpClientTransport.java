@@ -218,17 +218,56 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, IdentifierJsonParser::parsePolicyList, "identifier policy list");
   }
 
+  /** Fetches a persisted identifier claim by its deterministic receipt hash. */
+  public CompletableFuture<Optional<IdentifierClaimRecord>> getIdentifierClaimByReceiptHash(
+      final String receiptHash) {
+    final String normalizedReceiptHash = normalizeHex32(receiptHash, "receiptHash");
+    final TransportRequest request =
+        buildJsonGetRequest(
+            "/v1/identifiers/receipts/" + encodePathSegment(normalizedReceiptHash), Map.of());
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseClaimRecord, "identifier claim lookup");
+  }
+
+  /** Resolves an identifier using a typed request wrapper. */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
+      final IdentifierResolveRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        encodeJsonBody(
+            buildIdentifierResolvePayload(
+                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+    final TransportRequest request = buildJsonPostRequest("/v1/identifiers/resolve", body);
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier resolve");
+  }
+
   /**
    * Resolves a hidden identifier by posting either a plaintext input or BFV ciphertext hex to
    * `/v1/identifiers/resolve`.
    */
   public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
       final String policyId, final String input, final String encryptedInputHex) {
+    return resolveIdentifier(buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
+  }
+
+  /** Issues a claim receipt using a typed request wrapper. */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
+      final String accountId, final IdentifierResolveRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final String normalizedAccountId = normalizeNonBlank(accountId, "accountId");
     final byte[] body =
-        encodeJsonBody(buildIdentifierResolvePayload(policyId, input, encryptedInputHex));
-    final TransportRequest request = buildJsonPostRequest("/v1/identifiers/resolve", body);
+        encodeJsonBody(
+            buildIdentifierResolvePayload(
+                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+    final TransportRequest request =
+        buildJsonPostRequest(
+            "/v1/accounts/"
+                + encodePathSegment(normalizedAccountId)
+                + "/identifiers/claim-receipt",
+            body);
     return fetchJsonAllowingNotFound(
-        request, IdentifierJsonParser::parseResolutionReceipt, "identifier resolve");
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt");
   }
 
   /**
@@ -240,17 +279,8 @@ public final class HttpClientTransport implements IrohaClient {
       final String policyId,
       final String input,
       final String encryptedInputHex) {
-    final String normalizedAccountId = normalizeNonBlank(accountId, "accountId");
-    final byte[] body =
-        encodeJsonBody(buildIdentifierResolvePayload(policyId, input, encryptedInputHex));
-    final TransportRequest request =
-        buildJsonPostRequest(
-            "/v1/accounts/"
-                + encodePathSegment(normalizedAccountId)
-                + "/identifiers/claim-receipt",
-            body);
-    return fetchJsonAllowingNotFound(
-        request, IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt");
+    return issueIdentifierClaimReceipt(
+        accountId, buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
   }
 
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
@@ -1112,7 +1142,23 @@ public final class HttpClientTransport implements IrohaClient {
         .getBytes(StandardCharsets.UTF_8);
   }
 
-  private static Map<String, Object> buildIdentifierResolvePayload(
+  static IdentifierResolveRequest buildIdentifierResolveRequest(
+      final String policyId, final String input, final String encryptedInputHex) {
+    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null
+            ? null
+            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of input or encryptedInputHex must be provided");
+    }
+    return normalizedInput != null
+        ? IdentifierResolveRequest.plaintext(policyId, normalizedInput)
+        : IdentifierResolveRequest.encrypted(policyId, normalizedEncryptedInput);
+  }
+
+  static Map<String, Object> buildIdentifierResolvePayload(
       final String policyId, final String input, final String encryptedInputHex) {
     final String normalizedPolicyId = normalizeNonBlank(policyId, "policyId");
     final String normalizedInput = normalizeOptionalNonBlank(input, "input");
@@ -1132,11 +1178,11 @@ public final class HttpClientTransport implements IrohaClient {
     return payload;
   }
 
-  private static String normalizeOptionalNonBlank(final String value, final String field) {
+  static String normalizeOptionalNonBlank(final String value, final String field) {
     return value == null ? null : normalizeNonBlank(value, field);
   }
 
-  private static String normalizeNonBlank(final String value, final String field) {
+  static String normalizeNonBlank(final String value, final String field) {
     final String trimmed = Objects.requireNonNull(value, field + " must not be null").trim();
     if (trimmed.isEmpty()) {
       throw new IllegalArgumentException(field + " must not be blank");
@@ -1144,7 +1190,7 @@ public final class HttpClientTransport implements IrohaClient {
     return trimmed;
   }
 
-  private static String normalizeEvenLengthHex(final String value, final String field) {
+  static String normalizeEvenLengthHex(final String value, final String field) {
     String trimmed = normalizeNonBlank(value, field);
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       trimmed = trimmed.substring(2);
@@ -1163,5 +1209,13 @@ public final class HttpClientTransport implements IrohaClient {
       }
     }
     return trimmed.toLowerCase();
+  }
+
+  static String normalizeHex32(final String value, final String field) {
+    final String normalized = normalizeEvenLengthHex(value, field);
+    if (normalized.length() != 64) {
+      throw new IllegalArgumentException(field + " must contain 64 hex characters");
+    }
+    return normalized;
   }
 }

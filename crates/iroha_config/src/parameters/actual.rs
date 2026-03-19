@@ -2724,6 +2724,10 @@ impl LaneConfigEntry {
     /// across all lanes.
     #[must_use]
     pub fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
+        debug_assert!(
+            !self.merge_segment.is_empty(),
+            "lane config entries always carry a stable merge segment label",
+        );
         root.as_ref().join("merge_ledger").join("universal.log")
     }
 }

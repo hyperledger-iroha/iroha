@@ -137,7 +137,7 @@ pub struct PreviousRosterEvidence {
     pub block_hash: HashOf<crate::block::BlockHeader>,
     /// Signed validator checkpoint for the referenced block.
     pub validator_checkpoint: ValidatorSetCheckpoint,
-    /// Optional NPoS stake snapshot aligned to the validator set.
+    /// Optional `NPoS` stake snapshot aligned to the validator set.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<CommitStakeSnapshot>,

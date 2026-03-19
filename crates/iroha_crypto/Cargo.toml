@@ -11,9 +11,10 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["std", "rand", "json", "ecc-batch"]
+default = ["std", "rand", "json", "ecc-batch", "bfv-accel"]
 std = []
 json = ["norito/json", "mv"]
+bfv-accel = []
 # Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.
 # Implementation lives in `signature::gost` (Streebog hashing + TC26 curves).
 gost = ["dep:once_cell", "dep:num-bigint", "dep:num-traits", "dep:streebog", "dep:crypto-bigint", "dep:subtle"]

@@ -56,6 +56,11 @@ pub enum IdentifierNormalization {
 
 impl IdentifierNormalization {
     /// Canonicalize an external identifier string according to this mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentifierNormalizationError`] when the trimmed input is empty or when the
+    /// selected normalization mode rejects the supplied format.
     pub fn normalize(self, raw: &str) -> Result<String, IdentifierNormalizationError> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -290,33 +295,6 @@ pub mod prelude {
     };
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn identifier_policy_id_roundtrip() {
-        let id: IdentifierPolicyId = "phone#retail".parse().expect("valid policy id");
-        assert_eq!(id.to_string(), "phone#retail");
-    }
-
-    #[test]
-    fn phone_normalization_strips_formatting() {
-        let normalized = IdentifierNormalization::PhoneE164
-            .normalize(" +1 (555) 123-4567 ")
-            .expect("phone should normalize");
-        assert_eq!(normalized, "+15551234567");
-    }
-
-    #[test]
-    fn email_normalization_lowercases_and_trims() {
-        let normalized = IdentifierNormalization::EmailAddress
-            .normalize(" Alice.Example@Example.COM ")
-            .expect("email should normalize");
-        assert_eq!(normalized, "alice.example@example.com");
-    }
-}
-
 fn normalize_phone_e164(raw: &str) -> Result<String, IdentifierNormalizationError> {
     let compact: String = raw
         .chars()
@@ -364,4 +342,31 @@ fn normalize_account_number(raw: &str) -> Result<String, IdentifierNormalization
         ));
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifier_policy_id_roundtrip() {
+        let id: IdentifierPolicyId = "phone#retail".parse().expect("valid policy id");
+        assert_eq!(id.to_string(), "phone#retail");
+    }
+
+    #[test]
+    fn phone_normalization_strips_formatting() {
+        let normalized = IdentifierNormalization::PhoneE164
+            .normalize(" +1 (555) 123-4567 ")
+            .expect("phone should normalize");
+        assert_eq!(normalized, "+15551234567");
+    }
+
+    #[test]
+    fn email_normalization_lowercases_and_trims() {
+        let normalized = IdentifierNormalization::EmailAddress
+            .normalize(" Alice.Example@Example.COM ")
+            .expect("email should normalize");
+        assert_eq!(normalized, "alice.example@example.com");
+    }
 }

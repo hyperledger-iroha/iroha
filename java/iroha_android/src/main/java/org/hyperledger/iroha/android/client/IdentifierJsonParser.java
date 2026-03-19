@@ -35,6 +35,13 @@ public final class IdentifierJsonParser {
               requiredString(item.get("backend"), "identifier policy list.items[" + i + "].backend"),
               optionalString(item.get("input_encryption")),
               optionalString(item.get("input_encryption_public_parameters")),
+              item.get("input_encryption_public_parameters_decoded") == null
+                  ? null
+                  : parseBfvPublicParameters(
+                      expectObject(
+                          item.get("input_encryption_public_parameters_decoded"),
+                          "identifier policy list.items[" + i + "].input_encryption_public_parameters_decoded"),
+                      "identifier policy list.items[" + i + "].input_encryption_public_parameters_decoded"),
               optionalString(item.get("note"))));
     }
     final long total =
@@ -64,7 +71,38 @@ public final class IdentifierJsonParser {
             ? asOptionalLong(root.get("expires_at_ms"), "identifier resolution receipt.expires_at_ms")
             : null,
         requiredString(root.get("backend"), "identifier resolution receipt.backend"),
-        requiredString(root.get("signature"), "identifier resolution receipt.signature"));
+        requiredString(root.get("signature"), "identifier resolution receipt.signature"),
+        canonicalizeHex(
+            requiredString(
+                root.get("signature_payload_hex"),
+                "identifier resolution receipt.signature_payload_hex"),
+            "identifier resolution receipt.signature_payload_hex"),
+        parseResolutionPayload(
+            expectObject(
+                root.get("signature_payload"),
+                "identifier resolution receipt.signature_payload"),
+            "identifier resolution receipt.signature_payload"));
+  }
+
+  public static IdentifierClaimRecord parseClaimRecord(final byte[] payload) {
+    final Map<String, Object> root =
+        expectObject(parse(payload, "identifier claim record"), "identifier claim record");
+    return new IdentifierClaimRecord(
+        requiredString(root.get("policy_id"), "identifier claim record.policy_id"),
+        canonicalizeOpaque(
+            requiredString(root.get("opaque_id"), "identifier claim record.opaque_id"),
+            "identifier claim record.opaque_id"),
+        canonicalizeHex32(
+            requiredString(root.get("receipt_hash"), "identifier claim record.receipt_hash"),
+            "identifier claim record.receipt_hash"),
+        UaidLiteral.canonicalize(
+            requiredString(root.get("uaid"), "identifier claim record.uaid"),
+            "identifier claim record.uaid"),
+        requiredString(root.get("account_id"), "identifier claim record.account_id"),
+        asLong(root.get("verified_at_ms"), "identifier claim record.verified_at_ms"),
+        root.containsKey("expires_at_ms")
+            ? asOptionalLong(root.get("expires_at_ms"), "identifier claim record.expires_at_ms")
+            : null);
   }
 
   private static Object parse(final byte[] payload, final String context) {
@@ -158,5 +196,71 @@ public final class IdentifierJsonParser {
       throw new IllegalArgumentException(context + " must contain 64 hex characters");
     }
     return trimmed.toLowerCase(Locale.ROOT);
+  }
+
+  private static String canonicalizeHex(final String value, final String context) {
+    Objects.requireNonNull(context, "context");
+    String trimmed = Objects.requireNonNull(value, context + " must not be null").trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(context + " must not be blank");
+    }
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      trimmed = trimmed.substring(2);
+    }
+    if ((trimmed.length() & 1) == 1 || !trimmed.matches("(?i)[0-9a-f]+")) {
+      throw new IllegalArgumentException(context + " must contain an even number of hex characters");
+    }
+    return trimmed.toLowerCase(Locale.ROOT);
+  }
+
+  private static IdentifierBfvPublicParameters parseBfvPublicParameters(
+      final Map<String, Object> root, final String context) {
+    final Map<String, Object> parameters =
+        expectObject(root.get("parameters"), context + ".parameters");
+    final Map<String, Object> publicKey =
+        expectObject(root.get("public_key"), context + ".public_key");
+    return new IdentifierBfvPublicParameters(
+        new IdentifierBfvPublicParameters.Parameters(
+            asLong(parameters.get("polynomial_degree"), context + ".parameters.polynomial_degree"),
+            asLong(parameters.get("plaintext_modulus"), context + ".parameters.plaintext_modulus"),
+            asLong(
+                parameters.get("ciphertext_modulus"),
+                context + ".parameters.ciphertext_modulus"),
+            Math.toIntExact(
+                asLong(
+                    parameters.get("decomposition_base_log"),
+                    context + ".parameters.decomposition_base_log"))),
+        new IdentifierBfvPublicParameters.PublicKey(
+            asLongList(publicKey.get("b"), context + ".public_key.b"),
+            asLongList(publicKey.get("a"), context + ".public_key.a")),
+        Math.toIntExact(asLong(root.get("max_input_bytes"), context + ".max_input_bytes")));
+  }
+
+  private static IdentifierResolutionPayload parseResolutionPayload(
+      final Map<String, Object> root, final String context) {
+    return new IdentifierResolutionPayload(
+        requiredString(root.get("policy_id"), context + ".policy_id"),
+        canonicalizeOpaque(
+            requiredString(root.get("opaque_id"), context + ".opaque_id"),
+            context + ".opaque_id"),
+        canonicalizeHex32(
+            requiredString(root.get("receipt_hash"), context + ".receipt_hash"),
+            context + ".receipt_hash"),
+        UaidLiteral.canonicalize(
+            requiredString(root.get("uaid"), context + ".uaid"), context + ".uaid"),
+        requiredString(root.get("account_id"), context + ".account_id"),
+        asLong(root.get("resolved_at_ms"), context + ".resolved_at_ms"),
+        root.containsKey("expires_at_ms")
+            ? asOptionalLong(root.get("expires_at_ms"), context + ".expires_at_ms")
+            : null);
+  }
+
+  private static List<Long> asLongList(final Object value, final String path) {
+    final List<Object> values = asArrayOrEmpty(value, path);
+    final List<Long> normalized = new ArrayList<>(values.size());
+    for (int index = 0; index < values.size(); index++) {
+      normalized.add(asLong(values.get(index), path + "[" + index + "]"));
+    }
+    return normalized;
   }
 }

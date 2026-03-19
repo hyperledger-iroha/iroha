@@ -12,6 +12,7 @@ public final class IdentifierPolicySummary {
   private final String backend;
   private final String inputEncryption;
   private final String inputEncryptionPublicParameters;
+  private final IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded;
   private final String note;
 
   public IdentifierPolicySummary(
@@ -23,6 +24,7 @@ public final class IdentifierPolicySummary {
       final String backend,
       final String inputEncryption,
       final String inputEncryptionPublicParameters,
+      final IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded,
       final String note) {
     this.policyId = Objects.requireNonNull(policyId, "policyId");
     this.owner = Objects.requireNonNull(owner, "owner");
@@ -32,6 +34,7 @@ public final class IdentifierPolicySummary {
     this.backend = Objects.requireNonNull(backend, "backend");
     this.inputEncryption = inputEncryption;
     this.inputEncryptionPublicParameters = inputEncryptionPublicParameters;
+    this.inputEncryptionPublicParametersDecoded = inputEncryptionPublicParametersDecoded;
     this.note = note;
   }
 
@@ -67,7 +70,35 @@ public final class IdentifierPolicySummary {
     return inputEncryptionPublicParameters;
   }
 
+  public IdentifierBfvPublicParameters inputEncryptionPublicParametersDecoded() {
+    return inputEncryptionPublicParametersDecoded;
+  }
+
   public String note() {
     return note;
+  }
+
+  public IdentifierResolveRequest plaintextRequest(final String input) {
+    return IdentifierResolveRequest.plaintext(this, input);
+  }
+
+  public IdentifierResolveRequest encryptedRequest(final String encryptedInputHex) {
+    return IdentifierResolveRequest.encrypted(this, encryptedInputHex);
+  }
+
+  public String encryptInput(final String input) {
+    return IdentifierBfvEnvelopeBuilder.encrypt(this, input, null);
+  }
+
+  public String encryptInput(final String input, final byte[] seed) {
+    return IdentifierBfvEnvelopeBuilder.encrypt(this, input, seed);
+  }
+
+  public IdentifierResolveRequest encryptedRequestFromInput(final String input) {
+    return IdentifierResolveRequest.encryptedFromInput(this, input);
+  }
+
+  public IdentifierResolveRequest encryptedRequestFromInput(final String input, final byte[] seed) {
+    return IdentifierResolveRequest.encryptedFromInput(this, input, seed);
   }
 }

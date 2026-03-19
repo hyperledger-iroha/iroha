@@ -59,8 +59,9 @@ Current Torii routes:
 | Route | Purpose |
 |-------|---------|
 | `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters and the required `normalization` mode for encrypted client-side input. |
-| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint then derives the `opaque:` handle and returns a signed receipt that `ClaimIdentifier` can submit on-chain. |
-| `POST /v1/identifiers/resolve` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint resolves the identifier into `{ opaque_id, receipt_hash, uaid, account_id, signature }` when an active claim exists. |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint then derives the `opaque:` handle and returns a signed receipt that `ClaimIdentifier` can submit on-chain, including both the raw `signature_payload_hex` and the parsed `signature_payload`. |
+| `POST /v1/identifiers/resolve` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint resolves the identifier into `{ opaque_id, receipt_hash, uaid, account_id, signature }` when an active claim exists, and also returns the canonical signed payload as `{ signature_payload_hex, signature_payload }`. |
+| `GET /v1/identifiers/receipts/{receipt_hash}` | Looks up the persisted `IdentifierClaimRecord` bound to a deterministic receipt hash so operators and SDKs can audit claim ownership or diagnose replay / mismatch failures without scanning the full identifier index. |
 
 Current SDK support:
 
@@ -68,22 +69,53 @@ Current SDK support:
   canonicalizers for `exact`, `lowercase_trimmed`, `phone_e164`,
   `email_address`, and `account_number`.
 - `ToriiClient.listIdentifierPolicies()` lists policy metadata, including BFV
-  input-encryption metadata when the policy publishes it.
+  input-encryption metadata when the policy publishes it, plus a decoded
+  BFV parameter object via `input_encryption_public_parameters_decoded`.
+- `getIdentifierBfvPublicParameters(policy)` and
+  `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })` help
+  JS callers consume published BFV metadata and build policy-aware request
+  bodies without reimplementing policy-id and normalization rules.
+- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` and
+  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true })` now let
+  JS wallets construct the full BFV Norito ciphertext envelope locally from
+  published policy parameters instead of shipping prebuilt ciphertext hex.
 - `ToriiClient.resolveIdentifier({ policyId, input | encryptedInput })`
   resolves a hidden identifier and returns the signed receipt payload,
-  including `receipt_hash`.
+  including `receipt_hash`, `signature_payload_hex`, and
+  `signature_payload`.
 - `ToriiClient.issueIdentifierClaimReceipt(accountId, { policyId, input |
   encryptedInput })` issues the signed receipt needed by `ClaimIdentifier`.
+- `verifyIdentifierResolutionReceipt(receipt, policy)` verifies the returned
+  receipt against the policy resolver key on the client side, and
+  `ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)` fetches the
+  persisted claim record for later audit/debug flows.
 - `IrohaSwift.ToriiClient` now exposes `listIdentifierPolicies()`,
-  `resolveIdentifier(policyId:input:encryptedInputHex:)`, and
+  `resolveIdentifier(policyId:input:encryptedInputHex:)`,
   `issueIdentifierClaimReceipt(accountId:policyId:input:encryptedInputHex:)`,
-  plus `ToriiIdentifierNormalization` for the same phone/email/account-number
+  and `getIdentifierClaimByReceiptHash(_)`, plus
+  `ToriiIdentifierNormalization` for the same phone/email/account-number
   canonicalization modes.
+- `ToriiIdentifierLookupRequest` and the
+  `ToriiIdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` helpers provide the typed Swift request surface for
+  resolve and claim-receipt calls, and Swift policies can now derive the BFV
+  ciphertext locally via `encryptInput(...)` / `encryptedRequest(input:...)`.
+- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` validates that
+  the top-level receipt fields match the signed payload and verifies the
+  resolver signature client-side before submission.
 - `HttpClientTransport` in the Android SDK now exposes
   `listIdentifierPolicies()`, `resolveIdentifier(policyId, input,
-  encryptedInputHex)`, and `issueIdentifierClaimReceipt(accountId, policyId,
-  input, encryptedInputHex)`, plus `IdentifierNormalization` for the same
-  canonicalization rules.
+  encryptedInputHex)`, `issueIdentifierClaimReceipt(accountId, policyId,
+  input, encryptedInputHex)`, and `getIdentifierClaimByReceiptHash(...)`,
+  plus `IdentifierNormalization` for the same canonicalization rules.
+- `IdentifierResolveRequest` and the
+  `IdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` helpers provide the typed Android request surface,
+  while `IdentifierPolicySummary.encryptInput(...)` /
+  `.encryptedRequestFromInput(...)` derive the BFV ciphertext envelope
+  locally from published policy parameters.
+  `IdentifierResolutionReceipt.verifySignature(policy)` verifies the returned
+  resolver signature client-side.
 
 Current instruction set:
 
@@ -96,7 +128,10 @@ Two backends now exist in `iroha_crypto::ram_lfe`:
 
 - the historical commitment-bound `HKDF-SHA3-512` PRF, and
 - a BFV-backed secret affine evaluator that consumes BFV-encrypted identifier
-  slots directly.
+  slots directly. When `iroha_crypto` is built with the default
+  `bfv-accel` feature, BFV ring multiplication uses an exact deterministic
+  CRT-NTT backend internally; disabling that feature falls back to the
+  scalar schoolbook path with identical outputs.
 
 Torii uses the backend published by the policy commitment. When the BFV backend
 is active, plaintext requests are normalized then encrypted server-side before

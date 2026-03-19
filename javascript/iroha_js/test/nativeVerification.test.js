@@ -52,7 +52,6 @@ test("getNativeBinding falls back to JS when checksum mismatches", async () => {
   const warnings = [];
   console.warn = (...args) => warnings.push(args.join(" "));
   const previousOverride = process.env.IROHA_JS_NATIVE_DIR;
-  const previousAllowUnverified = process.env.IROHA_JS_ALLOW_UNVERIFIED_NATIVE;
   const previousDisable = process.env.IROHA_JS_DISABLE_NATIVE;
 
   try {
@@ -71,18 +70,12 @@ test("getNativeBinding falls back to JS when checksum mismatches", async () => {
       );
       process.env.IROHA_JS_NATIVE_DIR = dir;
       delete process.env.IROHA_JS_DISABLE_NATIVE;
-      delete process.env.IROHA_JS_ALLOW_UNVERIFIED_NATIVE;
       const binding = getNativeBinding();
       assert.equal(binding, null);
       assert(warnings.some((line) => line.includes("checksum mismatch")));
     });
   } finally {
     process.env.IROHA_JS_NATIVE_DIR = previousOverride;
-    if (previousAllowUnverified === undefined) {
-      delete process.env.IROHA_JS_ALLOW_UNVERIFIED_NATIVE;
-    } else {
-      process.env.IROHA_JS_ALLOW_UNVERIFIED_NATIVE = previousAllowUnverified;
-    }
     if (previousDisable === undefined) {
       delete process.env.IROHA_JS_DISABLE_NATIVE;
     } else {

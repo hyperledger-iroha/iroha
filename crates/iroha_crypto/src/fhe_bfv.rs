@@ -9,10 +9,12 @@
 //! - ciphertext-by-ciphertext multiplication with relinearization,
 //! - and a compact affine-circuit evaluator over scalar ciphertext inputs.
 //!
-//! The implementation is intentionally scalar and schoolbook. It is a
-//! correctness-first baseline suitable for deterministic tests and higher-level
-//! protocol prototyping. It is not an accelerated production backend.
-//! TODO: add NTT/SIMD acceleration once the public API and transcript layout are stable.
+//! The implementation keeps a deterministic scalar fallback for every path.
+//! When the `bfv-accel` feature is enabled, polynomial multiplication switches
+//! to an exact CRT-NTT backend over NTT-friendly helper primes and then folds
+//! the linear product back into the negacyclic BFV ring. This keeps observable
+//! outputs identical across hardware while substantially reducing the cost of
+//! ciphertext multiplication for the parameter sets used by identifier lookup.
 
 use std::{fmt, string::String, vec::Vec};
 
@@ -32,6 +34,47 @@ const IDENTIFIER_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.keygen
 const IDENTIFIER_SLOT_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.slot.v1";
 
 type Polynomial = Vec<u64>;
+
+#[cfg(feature = "bfv-accel")]
+#[derive(Clone, Copy, Debug)]
+struct NttPrime {
+    modulus: u64,
+    primitive_root: u64,
+    max_power_of_two: u32,
+}
+
+#[cfg(feature = "bfv-accel")]
+const CRT_NTT_PRIMES: [NttPrime; 4] = [
+    NttPrime {
+        modulus: 4_293_918_721,
+        primitive_root: 19,
+        max_power_of_two: 20,
+    },
+    NttPrime {
+        modulus: 4_292_804_609,
+        primitive_root: 3,
+        max_power_of_two: 16,
+    },
+    NttPrime {
+        modulus: 4_292_149_249,
+        primitive_root: 14,
+        max_power_of_two: 16,
+    },
+    NttPrime {
+        modulus: 4_292_018_177,
+        primitive_root: 5,
+        max_power_of_two: 16,
+    },
+];
+
+/// Polynomial multiplication backend selected for BFV ring products.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BfvConvolutionBackend {
+    /// Textbook schoolbook negacyclic multiplication.
+    ScalarSchoolbook,
+    /// Exact CRT-NTT negacyclic multiplication.
+    CrtNtt,
+}
 
 /// BFV parameter set.
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
@@ -69,7 +112,10 @@ impl BfvParameters {
                 "ciphertext_modulus must be greater than plaintext_modulus".to_owned(),
             ));
         }
-        if self.ciphertext_modulus % self.plaintext_modulus != 0 {
+        if !self
+            .ciphertext_modulus
+            .is_multiple_of(self.plaintext_modulus)
+        {
             return Err(BfvError::InvalidParameters(
                 "ciphertext_modulus must be divisible by plaintext_modulus".to_owned(),
             ));
@@ -86,10 +132,36 @@ impl BfvParameters {
             max_raw_coefficient.saturating_mul(u128::from(self.plaintext_modulus));
         if max_scaled_coefficient > i128::MAX as u128 {
             return Err(BfvError::InvalidParameters(
-                "parameter set exceeds the scalar BFV baseline overflow bounds".to_owned(),
+                "parameter set exceeds the deterministic BFV exact-arithmetic overflow bounds"
+                    .to_owned(),
             ));
         }
         Ok(())
+    }
+
+    /// Report the polynomial-convolution backend used for BFV ring products.
+    #[must_use]
+    pub fn convolution_backend(&self) -> BfvConvolutionBackend {
+        #[cfg(feature = "bfv-accel")]
+        {
+            let required_log = self
+                .degree()
+                .checked_mul(2)
+                .expect("degree overflow")
+                .ilog2();
+            if self
+                .degree()
+                .checked_mul(2)
+                .expect("degree overflow")
+                .is_power_of_two()
+                && CRT_NTT_PRIMES
+                    .iter()
+                    .all(|prime| prime.max_power_of_two >= required_log)
+            {
+                return BfvConvolutionBackend::CrtNtt;
+            }
+        }
+        BfvConvolutionBackend::ScalarSchoolbook
     }
 
     fn degree(&self) -> usize {
@@ -484,7 +556,13 @@ pub fn multiply_ciphertexts(
         ),
     );
     let raw_c2 = scale_after_multiplication(params, &poly_mul_raw(params, &lhs.c1, &rhs.c1));
-    relinearize(params, relinearization_key, &raw_c0, &raw_c1, &raw_c2)
+    Ok(relinearize(
+        params,
+        relinearization_key,
+        &raw_c0,
+        &raw_c1,
+        &raw_c2,
+    ))
 }
 
 /// Evaluate a public affine circuit over scalar ciphertext inputs.
@@ -841,7 +919,7 @@ fn relinearize(
     c0: &[u64],
     c1: &[u64],
     c2: &[u64],
-) -> Result<BfvCiphertext, BfvError> {
+) -> BfvCiphertext {
     let digits = decompose_poly(params, c2);
     let mut out0 = c0.to_vec();
     let mut out1 = c1.to_vec();
@@ -849,7 +927,7 @@ fn relinearize(
         out0 = poly_add_mod(params, &out0, &poly_mul_mod(params, digit_poly, &entry.b));
         out1 = poly_add_mod(params, &out1, &poly_mul_mod(params, digit_poly, &entry.a));
     }
-    Ok(BfvCiphertext { c0: out0, c1: out1 })
+    BfvCiphertext { c0: out0, c1: out1 }
 }
 
 fn decompose_poly(params: &BfvParameters, poly: &[u64]) -> Vec<Polynomial> {
@@ -928,6 +1006,14 @@ fn poly_mul_mod(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Polynomial 
 }
 
 fn poly_mul_raw(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
+    #[cfg(feature = "bfv-accel")]
+    if matches!(params.convolution_backend(), BfvConvolutionBackend::CrtNtt) {
+        return poly_mul_raw_crt_ntt(params, lhs, rhs);
+    }
+    poly_mul_raw_scalar(params, lhs, rhs)
+}
+
+fn poly_mul_raw_scalar(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     let n = params.degree();
     let mut acc = vec![0_i128; n];
     for (i, &left) in lhs.iter().enumerate() {
@@ -944,8 +1030,203 @@ fn poly_mul_raw(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
     acc
 }
 
+#[cfg(feature = "bfv-accel")]
+fn poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
+    let n = params.degree();
+    let linear = convolve_linear_crt_ntt(lhs, rhs);
+    let mut folded = vec![0_i128; n];
+    for (index, slot) in folded.iter_mut().enumerate() {
+        let low = i128::try_from(linear[index]).expect("linear coefficient fits into i128");
+        let high = i128::try_from(linear[index + n]).expect("linear coefficient fits into i128");
+        *slot = low - high;
+    }
+    folded
+}
+
+#[cfg(feature = "bfv-accel")]
+fn convolve_linear_crt_ntt(lhs: &[u64], rhs: &[u64]) -> Vec<u128> {
+    let len = lhs
+        .len()
+        .checked_mul(2)
+        .expect("NTT convolution length overflow");
+    let mut residues = Vec::with_capacity(CRT_NTT_PRIMES.len());
+    for prime in CRT_NTT_PRIMES {
+        residues.push(convolve_linear_mod_prime(lhs, rhs, len, prime));
+    }
+    (0..len)
+        .map(|index| {
+            let coeffs = [
+                residues[0][index],
+                residues[1][index],
+                residues[2][index],
+                residues[3][index],
+            ];
+            garner_reconstruct_u128(&coeffs, &CRT_NTT_PRIMES)
+        })
+        .collect()
+}
+
+#[cfg(feature = "bfv-accel")]
+fn convolve_linear_mod_prime(lhs: &[u64], rhs: &[u64], len: usize, prime: NttPrime) -> Vec<u64> {
+    let modulus = prime.modulus;
+    let mut lhs_ntt = vec![0_u64; len];
+    let mut rhs_ntt = vec![0_u64; len];
+    for (slot, &coefficient) in lhs_ntt.iter_mut().zip(lhs) {
+        *slot = coefficient % modulus;
+    }
+    for (slot, &coefficient) in rhs_ntt.iter_mut().zip(rhs) {
+        *slot = coefficient % modulus;
+    }
+    ntt_in_place(&mut lhs_ntt, prime, false);
+    ntt_in_place(&mut rhs_ntt, prime, false);
+    for (left, right) in lhs_ntt.iter_mut().zip(&rhs_ntt) {
+        *left = mul_mod_prime(*left, *right, modulus);
+    }
+    ntt_in_place(&mut lhs_ntt, prime, true);
+    lhs_ntt
+}
+
+#[cfg(feature = "bfv-accel")]
+fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) {
+    bit_reverse_permute(values);
+    let len = values.len();
+    let modulus = prime.modulus;
+    let root = root_for_length(prime, len);
+    let root = if invert {
+        mod_inv_prime(root, modulus)
+    } else {
+        root
+    };
+
+    let mut stage_len = 2_usize;
+    while stage_len <= len {
+        let step = mod_pow_prime(root, (len / stage_len) as u64, modulus);
+        for chunk in values.chunks_exact_mut(stage_len) {
+            let (lo, hi) = chunk.split_at_mut(stage_len / 2);
+            let mut twiddle = 1_u64;
+            for (left, right) in lo.iter_mut().zip(hi.iter_mut()) {
+                let product = mul_mod_prime(*right, twiddle, modulus);
+                let left_value = *left;
+                *left = add_mod_prime(left_value, product, modulus);
+                *right = sub_mod_prime(left_value, product, modulus);
+                twiddle = mul_mod_prime(twiddle, step, modulus);
+            }
+        }
+        stage_len <<= 1;
+    }
+
+    if invert {
+        let inv_len = mod_inv_prime(
+            u64::try_from(len).expect("NTT length fits into u64"),
+            modulus,
+        );
+        for value in values {
+            *value = mul_mod_prime(*value, inv_len, modulus);
+        }
+    }
+}
+
+#[cfg(feature = "bfv-accel")]
+fn root_for_length(prime: NttPrime, len: usize) -> u64 {
+    let log_len = len.ilog2();
+    assert!(
+        len.is_power_of_two() && log_len <= prime.max_power_of_two,
+        "unsupported NTT length {len} for modulus {}",
+        prime.modulus
+    );
+    mod_pow_prime(
+        prime.primitive_root,
+        (prime.modulus - 1) / u64::try_from(len).expect("NTT length fits into u64"),
+        prime.modulus,
+    )
+}
+
+#[cfg(feature = "bfv-accel")]
+fn bit_reverse_permute(values: &mut [u64]) {
+    let bits = values.len().ilog2();
+    for index in 0..values.len() {
+        let reversed = index.reverse_bits() >> (usize::BITS - bits);
+        if reversed > index {
+            values.swap(index, reversed);
+        }
+    }
+}
+
+#[cfg(feature = "bfv-accel")]
+fn garner_reconstruct_u128(residues: &[u64], primes: &[NttPrime]) -> u128 {
+    let mut mixed = vec![0_u64; residues.len()];
+    for (index, (&residue, prime)) in residues.iter().zip(primes).enumerate() {
+        let mut coefficient = residue;
+        for (prior, prior_prime) in mixed[..index].iter().zip(primes.iter()) {
+            coefficient = mul_mod_prime(
+                sub_mod_prime(coefficient, *prior, prime.modulus),
+                mod_inv_prime(prior_prime.modulus % prime.modulus, prime.modulus),
+                prime.modulus,
+            );
+        }
+        mixed[index] = coefficient;
+    }
+    let mut value = 0_u128;
+    let mut weight = 1_u128;
+    for (index, coefficient) in mixed.iter().enumerate() {
+        value = value
+            .checked_add(u128::from(*coefficient) * weight)
+            .expect("CRT reconstruction fits into u128");
+        if index + 1 != mixed.len() {
+            weight = weight
+                .checked_mul(u128::from(primes[index].modulus))
+                .expect("CRT basis fits into u128");
+        }
+    }
+    value
+}
+
+#[cfg(feature = "bfv-accel")]
+fn add_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+    let sum = lhs + rhs;
+    if sum >= modulus || sum < lhs {
+        sum.wrapping_sub(modulus)
+    } else {
+        sum
+    }
+}
+
+#[cfg(feature = "bfv-accel")]
+fn sub_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+    if lhs >= rhs {
+        lhs - rhs
+    } else {
+        lhs + modulus - rhs
+    }
+}
+
+#[cfg(feature = "bfv-accel")]
+fn mul_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+    u64::try_from((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
+        .expect("reduced prime-field product fits into u64")
+}
+
+#[cfg(feature = "bfv-accel")]
+fn mod_pow_prime(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
+    let mut result = 1_u64;
+    while exponent != 0 {
+        if exponent & 1 == 1 {
+            result = mul_mod_prime(result, base, modulus);
+        }
+        base = mul_mod_prime(base, base, modulus);
+        exponent >>= 1;
+    }
+    result
+}
+
+#[cfg(feature = "bfv-accel")]
+fn mod_inv_prime(value: u64, modulus: u64) -> u64 {
+    mod_pow_prime(value, modulus - 2, modulus)
+}
+
 fn add_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    ((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus)) as u64
+    u64::try_from((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
+        .expect("reduced ciphertext sum fits into u64")
 }
 
 fn sub_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
@@ -953,7 +1234,8 @@ fn sub_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
 }
 
 fn mul_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    ((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus)) as u64
+    u64::try_from((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
+        .expect("reduced ciphertext product fits into u64")
 }
 
 fn mod_q(value: i128, modulus: u64) -> u64 {
@@ -1134,6 +1416,30 @@ mod tests {
     }
 
     #[test]
+    fn reports_selected_convolution_backend() {
+        let params = params();
+        #[cfg(feature = "bfv-accel")]
+        assert_eq!(params.convolution_backend(), BfvConvolutionBackend::CrtNtt);
+        #[cfg(not(feature = "bfv-accel"))]
+        assert_eq!(
+            params.convolution_backend(),
+            BfvConvolutionBackend::ScalarSchoolbook
+        );
+    }
+
+    #[cfg(feature = "bfv-accel")]
+    #[test]
+    fn crt_ntt_negacyclic_product_matches_scalar_baseline() {
+        let params = sample_identifier_parameters();
+        let lhs = sample_uniform_poly(&params, &mut derive_rng(b"bfv-crt-ntt-lhs", b"lhs"));
+        let rhs = sample_uniform_poly(&params, &mut derive_rng(b"bfv-crt-ntt-rhs", b"rhs"));
+        assert_eq!(
+            poly_mul_raw_crt_ntt(&params, &lhs, &rhs),
+            poly_mul_raw_scalar(&params, &lhs, &rhs)
+        );
+    }
+
+    #[test]
     fn rejects_parameter_sets_that_overflow_scalar_accumulators() {
         let params = BfvParameters {
             polynomial_degree: 32_768,
@@ -1144,7 +1450,8 @@ mod tests {
         assert_eq!(
             params.validate(),
             Err(BfvError::InvalidParameters(
-                "parameter set exceeds the scalar BFV baseline overflow bounds".to_owned(),
+                "parameter set exceeds the deterministic BFV exact-arithmetic overflow bounds"
+                    .to_owned(),
             ))
         );
     }

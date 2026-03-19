@@ -80,8 +80,8 @@ impl VisitExecute for MultisigPropose {
             Ok(existing) if now_ms(executor) < existing.expires_at_ms => {
                 deny!(executor, "multisig proposal duplicates")
             }
-            Ok(_) => {}
-            Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::MetadataKey(
+            Ok(_)
+            | Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::MetadataKey(
                 _,
             )))) => {}
             Err(err) => deny!(executor, err),

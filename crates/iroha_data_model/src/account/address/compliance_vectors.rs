@@ -330,7 +330,7 @@ fn mutate_last_char(input: &str, replacement: char) -> String {
         .last_mut()
         .expect("address strings are non-empty for compliance vectors");
     if *last == replacement {
-        *last = if replacement != '1' { '1' } else { '2' };
+        *last = if replacement == '1' { '2' } else { '1' };
     } else {
         *last = replacement;
     }
@@ -343,10 +343,10 @@ fn find_i105_checksum_mismatch(
 ) -> (String, AccountAddressError) {
     for candidate in BASE58_ALPHABET.chars() {
         let mutated = mutate_last_char(input, candidate);
-        if let Err(err) = AccountAddress::from_i105_for_discriminant(&mutated, expected_prefix) {
-            if matches!(err, AccountAddressError::ChecksumMismatch) {
-                return (mutated, err);
-            }
+        if let Err(err) = AccountAddress::from_i105_for_discriminant(&mutated, expected_prefix)
+            && matches!(err, AccountAddressError::ChecksumMismatch)
+        {
+            return (mutated, err);
         }
     }
     panic!("failed to derive deterministic I105 checksum-mismatch vector");
@@ -361,10 +361,10 @@ fn find_i105_default_checksum_mismatch(input: &str) -> (String, AccountAddressEr
         .chain(BASE58_ALPHABET.chars())
     {
         let mutated = mutate_last_char(input, candidate);
-        if let Err(err) = AccountAddress::from_i105(&mutated) {
-            if matches!(err, AccountAddressError::ChecksumMismatch) {
-                return (mutated, err);
-            }
+        if let Err(err) = AccountAddress::from_i105(&mutated)
+            && matches!(err, AccountAddressError::ChecksumMismatch)
+        {
+            return (mutated, err);
         }
     }
     panic!("failed to derive deterministic i105-default checksum-mismatch vector");

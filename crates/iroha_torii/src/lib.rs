@@ -13585,7 +13585,10 @@ async fn handler_identifier_resolve(
                 err.to_string(),
             ))
         })?;
-    json_ok(identifier_receipt_response(&receipt, draft.backend.as_str())?)
+    json_ok(identifier_receipt_response(
+        &receipt,
+        draft.backend.as_str(),
+    )?)
 }
 
 #[cfg(feature = "app_api")]
@@ -13638,7 +13641,10 @@ async fn handler_identifier_claim_receipt(
                 err.to_string(),
             ))
         })?;
-    json_ok(identifier_receipt_response(&receipt, draft.backend.as_str())?)
+    json_ok(identifier_receipt_response(
+        &receipt,
+        draft.backend.as_str(),
+    )?)
 }
 
 #[cfg(feature = "app_api")]
@@ -22073,8 +22079,8 @@ mod tests {
     use http_body_util::BodyExt as _;
     use iroha_config::parameters::actual;
     use iroha_crypto::{
-        BfvParameters, Hash, KeyPair, SignatureOf, bfv_affine_policy_commitment,
-        derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
+        BfvIdentifierPublicParameters, BfvParameters, BfvPublicKey, Hash, KeyPair, SignatureOf,
+        bfv_affine_policy_commitment, derive_identifier_key_material_from_seed,
     };
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
@@ -22166,6 +22172,63 @@ mod tests {
             plaintext_modulus: 256,
             decomposition_base_log: 12,
         }
+    }
+
+    fn shared_sdk_identifier_bfv_public_parameters(
+        policy_id: &IdentifierPolicyId,
+    ) -> BfvIdentifierPublicParameters {
+        let parameters = BfvParameters {
+            polynomial_degree: 8,
+            ciphertext_modulus: 16_777_216,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        };
+        let expected = BfvIdentifierPublicParameters {
+            parameters,
+            public_key: BfvPublicKey {
+                a: vec![
+                    3_503_246, 2_379_264, 12_091_019, 30_169, 15_804_162, 8_155_629, 2_418_997,
+                    3_003_107,
+                ],
+                b: vec![
+                    11_472_226, 15_791_131, 10_301_391, 6_321_610, 502_045, 1_948_157, 5_332_249,
+                    12_641_494,
+                ],
+            },
+            max_input_bytes: 3,
+        };
+        let (derived, _, _) = derive_identifier_key_material_from_seed(
+            &expected.parameters,
+            expected.max_input_bytes,
+            b"resolver-secret",
+            &policy_id.to_string().into_bytes(),
+        )
+        .expect("derive shared SDK BFV public parameters");
+        assert_eq!(
+            derived, expected,
+            "shared SDK BFV fixture drifted from the Rust key-derivation path"
+        );
+        expected
+    }
+
+    fn sample_identifier_policy_with_public_parameters(
+        owner: &AccountId,
+        signer: &KeyPair,
+        policy_id: &IdentifierPolicyId,
+        normalization: IdentifierNormalization,
+        public_parameters: &BfvIdentifierPublicParameters,
+    ) -> IdentifierPolicy {
+        IdentifierPolicy::new(
+            policy_id.clone(),
+            owner.clone(),
+            normalization,
+            bfv_affine_policy_commitment(
+                b"resolver-secret",
+                norito::to_bytes(public_parameters).expect("encode BFV parameters"),
+            )
+            .expect("policy commitment"),
+            signer.public_key().clone(),
+        )
     }
 
     fn seed_proof_record_at_height(
@@ -22789,7 +22852,10 @@ mod tests {
         );
         assert_eq!(dto.signature_payload.policy_id.to_string(), dto.policy_id);
         assert_eq!(dto.signature_payload.opaque_id.to_string(), dto.opaque_id);
-        assert_eq!(dto.signature_payload.receipt_hash.to_string(), dto.receipt_hash);
+        assert_eq!(
+            dto.signature_payload.receipt_hash.to_string(),
+            dto.receipt_hash
+        );
         assert_eq!(dto.signature_payload.uaid.to_string(), dto.uaid);
         assert_eq!(dto.signature_payload.account_id.to_string(), dto.account_id);
     }
@@ -22806,9 +22872,16 @@ mod tests {
         let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
         let mut app = mk_app_state_for_tests_with_world(world);
 
-        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let policy_id: IdentifierPolicyId = "string#retail".parse().expect("policy id");
         let signer = KeyPair::random();
-        let policy = sample_identifier_policy(&authority, &signer, &policy_id);
+        let public_parameters = shared_sdk_identifier_bfv_public_parameters(&policy_id);
+        let policy = sample_identifier_policy_with_public_parameters(
+            &authority,
+            &signer,
+            &policy_id,
+            IdentifierNormalization::Exact,
+            &public_parameters,
+        );
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
         resolver.register_policy_runtime(
             policy_id.clone(),
@@ -22820,7 +22893,7 @@ mod tests {
             .expect("unique app")
             .identifier_resolver = Some(resolver.clone());
 
-        let input = "+15551234567";
+        let input = "ab";
         let draft = resolver.derive(&policy, input).expect("derive opaque id");
         let receipt = resolver
             .issue_claim_receipt(&policy, &draft, uaid, authority.clone())
@@ -22847,17 +22920,41 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
-        let public_parameters =
-            identifier_resolution::decode_bfv_public_parameters(&policy).expect("decode params");
-        let encrypted_input = encrypt_identifier_from_seed(
-            &public_parameters,
-            b"+15551234567",
-            b"identifier-resolve-encrypted-request",
+        let encrypted_input = concat!(
+            "4e525430000035a9bf76d68dbb0c35a9bf76d68dbb0c00b0040000000000007f6fd892e2754925",
+            "00a804000000000000040000000000000020010000000000008800000000000000080000000000",
+            "000008000000000000002bab6f00000000000800000000000000440e930000000000080000000000",
+            "00005b2502000000000008000000000000004a671400000000000800000000000000bc3e26000000",
+            "00000800000000000000413d86000000000008000000000000005619f80000000000080000000000",
+            "0000bd73fa0000000000880000000000000008000000000000000800000000000000ee8843000000",
+            "00000800000000000000dd21b100000000000800000000000000fe7c520000000000080000000000",
+            "00001639a5000000000008000000000000006a979d00000000000800000000000000ddd443000000",
+            "0000080000000000000051086700000000000800000000000000ef13ae0000000000200100000000",
+            "0000880000000000000008000000000000000800000000000000776dc80000000000080000000000",
+            "000093060d0000000000080000000000000033077500000000000800000000000000ddc419000000",
+            "0000080000000000000062ea230000000000080000000000000056ef0b0000000000080000000000",
+            "0000ab52d500000000000800000000000000e9457c00000000008800000000000000080000000000",
+            "00000800000000000000f2214200000000000800000000000000c9edcf0000000000080000000000",
+            "00001dfb5a00000000000800000000000000d16e640000000000080000000000000016ec0f000000",
+            "000008000000000000003dee83000000000008000000000000006e7efa0000000000080000000000",
+            "0000c1fbbc0000000000200100000000000088000000000000000800000000000000080000000000",
+            "000066c74d00000000000800000000000000c9c04900000000000800000000000000f01e87000000",
+            "00000800000000000000aed22c000000000008000000000000006121980000000000080000000000",
+            "000036ac8d00000000000800000000000000d143930000000000080000000000000089206d000000",
+            "0000880000000000000008000000000000000800000000000000417ded0000000000080000000000",
+            "0000d79c33000000000008000000000000009f332d0000000000080000000000000091fe57000000",
+            "00000800000000000000533de8000000000008000000000000005db9df0000000000080000000000",
+            "0000a8c213000000000008000000000000006e03c200000000002001000000000000880000000000",
+            "00000800000000000000080000000000000003d656000000000008000000000000005d8745000000",
+            "00000800000000000000567ab30000000000080000000000000007272f0000000000080000000000",
+            "0000ff6d0a00000000000800000000000000077467000000000008000000000000006d1c1a000000",
+            "00000800000000000000704fc1000000000088000000000000000800000000000000080000000000",
+            "00002f884f0000000000080000000000000041b0a000000000000800000000000000cbf92a000000",
+            "00000800000000000000574872000000000008000000000000006090920000000000080000000000",
+            "0000f5f5dc00000000000800000000000000445a3a00000000000800000000000000999f68000000",
+            "0000"
         )
-        .expect("encrypt identifier");
-        let encrypted_input = hex::encode_upper(
-            norito::to_bytes(&encrypted_input).expect("encode encrypted identifier"),
-        );
+        .to_owned();
 
         let response = handler_identifier_resolve(
             State(app),
@@ -23049,14 +23146,11 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
-        let response = handler_identifier_receipt_lookup(
-            State(app),
-            HeaderMap::new(),
-            AxPath(receipt_hash),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response =
+            handler_identifier_receipt_lookup(State(app), HeaderMap::new(), AxPath(receipt_hash))
+                .await
+                .expect("handler should succeed")
+                .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())

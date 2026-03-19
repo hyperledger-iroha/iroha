@@ -150,6 +150,10 @@ pub enum RamLfeError {
 /// Runtime evaluator interface for hidden-function services.
 pub trait Evaluator: Send + Sync {
     /// Evaluate a request against the supplied policy commitment.
+    ///
+    /// # Errors
+    /// Returns [`RamLfeError`] when the request, commitment, or backend
+    /// evaluation fails validation.
     fn evaluate(
         &self,
         commitment: &PolicyCommitment,
@@ -158,6 +162,9 @@ pub trait Evaluator: Send + Sync {
 }
 
 /// Construct the commitment record for the built-in HKDF-SHA3-512 backend.
+///
+/// # Errors
+/// Returns [`RamLfeError`] when the secret or public transcript is invalid.
 pub fn policy_commitment(
     secret: &[u8],
     public_parameters: Vec<u8>,
@@ -166,6 +173,9 @@ pub fn policy_commitment(
 }
 
 /// Construct the commitment record for the BFV secret affine backend.
+///
+/// # Errors
+/// Returns [`RamLfeError`] when the secret or public transcript is invalid.
 pub fn bfv_affine_policy_commitment(
     secret: &[u8],
     public_parameters: Vec<u8>,
@@ -195,6 +205,10 @@ fn build_policy_commitment(
 }
 
 /// Evaluate a request using the commitment-bound HKDF-SHA3-512 backend.
+///
+/// # Errors
+/// Returns [`RamLfeError`] when the secret, commitment, request, or backend
+/// transcript fails validation.
 pub fn evaluate_commitment(
     secret: &[u8],
     commitment: &PolicyCommitment,
@@ -277,7 +291,7 @@ fn evaluate_bfv_affine(
         secret,
         &request.associated_data,
     )
-    .map_err(map_bfv_error)?;
+    .map_err(|err| map_bfv_error(&err))?;
     if derived_public_parameters != public_parameters {
         return Err(RamLfeError::CommitmentMismatch);
     }
@@ -289,7 +303,7 @@ fn evaluate_bfv_affine(
     let circuit = derive_secret_affine_circuit(secret, &public_parameters, commitment, request)?;
     let outputs =
         evaluate_affine_circuit(&public_parameters.parameters, &circuit, &ciphertext.slots)
-            .map_err(map_bfv_error)?;
+            .map_err(|err| map_bfv_error(&err))?;
     let output_bytes = decrypt_affine_outputs(&public_parameters, &secret_key, &outputs)?;
     let opaque_id = Hash::new(
         [
@@ -332,7 +346,9 @@ fn decode_bfv_public_parameters(
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
     let public_parameters: BfvIdentifierPublicParameters =
         norito::core::NoritoDeserialize::deserialize(archived);
-    public_parameters.validate().map_err(map_bfv_error)?;
+    public_parameters
+        .validate()
+        .map_err(|err| map_bfv_error(&err))?;
     Ok(public_parameters)
 }
 
@@ -366,7 +382,7 @@ fn derive_secret_affine_circuit(
     let circuit = BfvAffineCircuit { weights, bias };
     circuit
         .validate(&public_parameters.parameters, input_count)
-        .map_err(map_bfv_error)?;
+        .map_err(|err| map_bfv_error(&err))?;
     Ok(circuit)
 }
 
@@ -379,7 +395,7 @@ fn decrypt_affine_outputs(
         .iter()
         .map(|output| {
             let plaintext = decrypt(&public_parameters.parameters, secret_key, output)
-                .map_err(map_bfv_error)?;
+                .map_err(|err| map_bfv_error(&err))?;
             if plaintext
                 .iter()
                 .skip(1)
@@ -395,7 +411,7 @@ fn decrypt_affine_outputs(
         .collect()
 }
 
-fn map_bfv_error(err: BfvError) -> RamLfeError {
+fn map_bfv_error(err: &BfvError) -> RamLfeError {
     RamLfeError::Bfv(err.to_string())
 }
 

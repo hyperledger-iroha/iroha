@@ -1,6 +1,5 @@
 //! Benchmarks for transaction signing, acceptance, validation, and block signing.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![allow(clippy::all)]
 #![allow(clippy::disallowed_types)] // benches use HashSet internally for metrics
 use std::sync::{Arc, LazyLock};
 
@@ -24,14 +23,6 @@ static STARTER_DOMAIN: LazyLock<DomainId> = LazyLock::new(|| "start".parse().unw
 static STARTER_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(KeyPair::random);
 static STARTER_ID: LazyLock<AccountId> =
     LazyLock::new(|| AccountId::new(STARTER_KEYPAIR.public_key().clone()));
-
-// Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
-static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed building the Runtime")
-});
 
 // Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {

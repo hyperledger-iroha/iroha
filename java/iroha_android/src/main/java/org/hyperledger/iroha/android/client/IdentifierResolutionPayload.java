@@ -2,8 +2,8 @@ package org.hyperledger.iroha.android.client;
 
 import java.util.Objects;
 
-/** Resolution receipt returned by identifier resolve and claim-receipt endpoints. */
-public final class IdentifierResolutionReceipt {
+/** Canonical payload covered by an identifier-resolution receipt signature. */
+public final class IdentifierResolutionPayload {
   private final String policyId;
   private final String opaqueId;
   private final String receiptHash;
@@ -11,23 +11,15 @@ public final class IdentifierResolutionReceipt {
   private final String accountId;
   private final long resolvedAtMs;
   private final Long expiresAtMs;
-  private final String backend;
-  private final String signature;
-  private final String signaturePayloadHex;
-  private final IdentifierResolutionPayload signaturePayload;
 
-  public IdentifierResolutionReceipt(
+  public IdentifierResolutionPayload(
       final String policyId,
       final String opaqueId,
       final String receiptHash,
       final String uaid,
       final String accountId,
       final long resolvedAtMs,
-      final Long expiresAtMs,
-      final String backend,
-      final String signature,
-      final String signaturePayloadHex,
-      final IdentifierResolutionPayload signaturePayload) {
+      final Long expiresAtMs) {
     this.policyId = Objects.requireNonNull(policyId, "policyId");
     this.opaqueId = Objects.requireNonNull(opaqueId, "opaqueId");
     this.receiptHash = Objects.requireNonNull(receiptHash, "receiptHash");
@@ -35,10 +27,6 @@ public final class IdentifierResolutionReceipt {
     this.accountId = Objects.requireNonNull(accountId, "accountId");
     this.resolvedAtMs = resolvedAtMs;
     this.expiresAtMs = expiresAtMs;
-    this.backend = Objects.requireNonNull(backend, "backend");
-    this.signature = Objects.requireNonNull(signature, "signature");
-    this.signaturePayloadHex = Objects.requireNonNull(signaturePayloadHex, "signaturePayloadHex");
-    this.signaturePayload = Objects.requireNonNull(signaturePayload, "signaturePayload");
   }
 
   public String policyId() {
@@ -67,25 +55,5 @@ public final class IdentifierResolutionReceipt {
 
   public Long expiresAtMs() {
     return expiresAtMs;
-  }
-
-  public String backend() {
-    return backend;
-  }
-
-  public String signature() {
-    return signature;
-  }
-
-  public String signaturePayloadHex() {
-    return signaturePayloadHex;
-  }
-
-  public IdentifierResolutionPayload signaturePayload() {
-    return signaturePayload;
-  }
-
-  public boolean verifySignature(final IdentifierPolicySummary policy) {
-    return IdentifierReceiptVerifier.verify(this, policy);
   }
 }
