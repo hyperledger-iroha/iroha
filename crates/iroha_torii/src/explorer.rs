@@ -800,7 +800,10 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Log
             } else if any.downcast_ref::<RegisterOfflineAllowance>().is_some() {
                 ExplorerInstructionKind::RegisterOfflineAllowance
-            } else if any.downcast_ref::<SubmitOfflineToOnlineTransfer>().is_some() {
+            } else if any
+                .downcast_ref::<SubmitOfflineToOnlineTransfer>()
+                .is_some()
+            {
                 ExplorerInstructionKind::SubmitOfflineToOnlineTransfer
             } else {
                 ExplorerInstructionKind::Custom
