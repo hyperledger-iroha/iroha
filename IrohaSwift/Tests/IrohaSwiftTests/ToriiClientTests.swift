@@ -2347,6 +2347,7 @@ final class ToriiClientTests: XCTestCase {
                                                     assetDefinitionId: "norito:4e52543000000011",
                                                     amount: "-10",
                                                     direction: .outgoing,
+                                                    kind: "Transfer",
                                                     transferIndex: 0)
         XCTAssertEqual(outgoing.signedAmount(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), "-10")
 
@@ -2361,6 +2362,7 @@ final class ToriiClientTests: XCTestCase {
                                                     assetDefinitionId: "norito:4e52543000000011",
                                                     amount: "+10",
                                                     direction: .incoming,
+                                                    kind: "Transfer",
                                                     transferIndex: 0)
         XCTAssertEqual(incoming.signedAmount(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"), "+10")
     }
@@ -2416,6 +2418,250 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(summaries[1].transferIndex, 1)
         XCTAssertEqual(summaries[0].id, "hash1|0|0")
         XCTAssertEqual(summaries[1].id, "hash1|0|1")
+    }
+
+    // MARK: - Mint / Burn instruction parsing
+
+    func testExplorerMintInstructionParsedAsSummary() throws {
+        // Real Mint response from Iroha explorer API
+        let json = """
+        {
+            "pagination":{"page":1,"per_page":20,"total_pages":1,"total_items":1},
+            "items":[{
+                "authority":"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "created_at":"2026-03-17T14:07:35.576Z",
+                "kind":"Mint",
+                "r#box":{
+                    "json":{
+                        "encoded":"deadbeef",
+                        "kind":"Mint",
+                        "payload":{
+                            "value":{
+                                "destination":"norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200060100000000000020667b6370371bf6005a00000000000000000000004e0000000000000046000000000000006564303132303934323044383243323235364432463331383133413538453933453144443332463531453436334134424135353839313534414141393443373537434541383390000000000000000100000000000000be0100000000000000f501000000000000003c01000000000000001c0100000000000000cd0100000000000000170100000000000000490100000000000000e10100000000000000800100000000000000df0100000000000000ba0100000000000000d601000000000000005101000000000000009b0100000000000000fd010000000000000066040000000000000000000000",
+                                "object":"500"
+                            },
+                            "variant":"Asset"
+                        },
+                        "wire_id":"iroha_data_model::isi::mint_burn::MintBox"
+                    }
+                },
+                "transaction_hash":"9bca4ad18474058cbbad5bbc49e5e11cf58d90fc28b094ac8f8963a5116fdff5",
+                "transaction_status":"Committed",
+                "block":17,
+                "index":0
+            }]
+        }
+        """
+        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        XCTAssertEqual(page.items.count, 1)
+
+        let item = page.items[0]
+        XCTAssertEqual(item.kind, "Mint")
+
+        // transferDetails() should parse Mint payloads
+        let details = item.transferDetails()
+        XCTAssertNotNil(details, "transferDetails() should parse Mint instructions")
+
+        // Generate summaries relative to the mint recipient
+        let accountId = "sorauﾛ1PhfNeｽﾕｼ3ﾒﾂヰﾐSy4ｱｱ3iWｾｳﾑﾘSﾗVpnｾnｹgvSｴPﾎWKNTYW"
+        let summaries = page.transferSummaries(relativeTo: accountId)
+        XCTAssertEqual(summaries.count, 1, "Mint should produce exactly 1 summary")
+
+        let summary = summaries[0]
+        XCTAssertEqual(summary.kind, "Mint")
+        XCTAssertEqual(summary.amount, "500")
+        XCTAssertEqual(summary.direction, .incoming, "Mint should always be incoming")
+        XCTAssertEqual(summary.status, "Committed")
+        XCTAssertEqual(summary.transactionHash, "9bca4ad18474058cbbad5bbc49e5e11cf58d90fc28b094ac8f8963a5116fdff5")
+        // assetDefinitionId should be decoded from ConstVec<u8> to "aid:<hex>" format
+        XCTAssertEqual(summary.assetDefinitionId, "aid:bef53c1ccd1749e180dfbad6519bfd66",
+                       "assetDefinitionId should be decoded to aid: format")
+        // receiverAccountId should be extracted from the norito asset ID
+        XCTAssertFalse(summary.receiverAccountId.isEmpty, "receiverAccountId should not be empty")
+        print("[TEST] Mint summary assetDefinitionId = \(summary.assetDefinitionId)")
+        print("[TEST] Mint summary receiverAccountId = \(summary.receiverAccountId)")
+        print("[TEST] Mint summary senderAccountId = \(summary.senderAccountId)")
+    }
+
+    func testAssetDefinitionIdFromLiteralWithRealMintDestination() {
+        let literal = "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200060100000000000020667b6370371bf6005a00000000000000000000004e0000000000000046000000000000006564303132303934323044383243323235364432463331383133413538453933453144443332463531453436334134424135353839313534414141393443373537434541383390000000000000000100000000000000be0100000000000000f501000000000000003c01000000000000001c0100000000000000cd0100000000000000170100000000000000490100000000000000e10100000000000000800100000000000000df0100000000000000ba0100000000000000d601000000000000005101000000000000009b0100000000000000fd010000000000000066040000000000000000000000"
+
+        let hex = String(literal.dropFirst("norito:".count))
+        guard let bytes = Data(hexString: hex), let frame = noritoDecodeFrame(bytes) else {
+            XCTFail("Failed to decode norito frame")
+            return
+        }
+        let payload = frame.payload
+        print("[TEST] payload size = \(payload.count)")
+
+        // Read field by field
+        var reader = OfflineNoritoReader(data: payload)
+        let accountField = try! reader.readField()
+        print("[TEST] account field size = \(accountField.count)")
+        // Decode account string from account field
+        var accountReader = OfflineNoritoReader(data: accountField)
+        let tag = try! accountReader.readUInt32LE()
+        let stringField = try! accountReader.readField()
+        let accountString = try! OfflineNorito.decodeString(stringField)
+        print("[TEST] account controller tag = \(tag)")
+        print("[TEST] account raw string = \(accountString)")
+        // Try full accountId decode
+        let decoded = OfflineNorito.accountIdFromAssetIdPayload(bytes)
+        print("[TEST] accountIdFromAssetIdPayload = \(decoded ?? "nil")")
+        print("[TEST] offset after account = \(reader.offset)")
+        let remaining = payload.count - reader.offset
+        print("[TEST] remaining = \(remaining)")
+        let next32 = payload[reader.offset..<min(reader.offset + 32, payload.count)]
+        print("[TEST] next 32 bytes = \(next32.map { String(format: "%02x", $0) }.joined())")
+
+        // Try readField for definition
+        do {
+            let defField = try reader.readField()
+            print("[TEST] def field size = \(defField.count)")
+            print("[TEST] def field hex = \(defField.map { String(format: "%02x", $0) }.joined())")
+            if defField.count == 16 {
+                print("[TEST] aid:\(defField.map { String(format: "%02x", $0) }.joined())")
+            }
+        } catch {
+            print("[TEST] readField failed: \(error)")
+            // Dump bytes at current offset
+            let dump = payload[reader.offset..<payload.count]
+            print("[TEST] all remaining bytes (\(dump.count)): \(dump.map { String(format: "%02x", $0) }.joined())")
+        }
+    }
+
+    func testExplorerBurnInstructionParsedAsSummary() throws {
+        let json = """
+        {
+            "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
+            "items":[{
+                "authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "created_at":"2025-06-01T10:00:00Z",
+                "kind":"Burn",
+                "r#box":{
+                    "json":{
+                        "encoded":"00",
+                        "kind":"Burn",
+                        "payload":{
+                            "value":{
+                                "destination":"norito:4e52543000000011",
+                                "object":"25"
+                            },
+                            "variant":"Asset"
+                        },
+                        "wire_id":"iroha_data_model::isi::mint_burn::BurnBox"
+                    }
+                },
+                "transaction_hash":"burn_hash_1",
+                "transaction_status":"Committed",
+                "block":5,
+                "index":0
+            }]
+        }
+        """
+        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        XCTAssertEqual(page.items.count, 1)
+
+        let item = page.items[0]
+        XCTAssertEqual(item.kind, "Burn")
+
+        let details = item.transferDetails()
+        XCTAssertNotNil(details, "transferDetails() should parse Burn instructions")
+
+        let summaries = page.transferSummaries(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(summaries.count, 1, "Burn should produce exactly 1 summary")
+
+        let summary = summaries[0]
+        XCTAssertEqual(summary.kind, "Burn")
+        XCTAssertEqual(summary.amount, "25")
+        XCTAssertEqual(summary.direction, .outgoing, "Burn should always be outgoing")
+        print("[TEST] Burn summary assetDefinitionId = \(summary.assetDefinitionId)")
+    }
+
+    func testExplorerMixedKindsAllParsed() throws {
+        // Page with Transfer + Mint + unknown kind — all parseable ones should be included
+        let json = """
+        {
+            "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":3},
+            "items":[
+                {
+                    "authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                    "created_at":"2025-01-01T00:00:00Z",
+                    "kind":"Transfer",
+                    "r#box":{
+                        "json":{
+                            "kind":"Transfer",
+                            "payload":{
+                                "variant":"Asset",
+                                "value":{
+                                    "source":"norito:4e52543000000011",
+                                    "destination":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                                    "object":"10"
+                                }
+                            },
+                            "wire_id":"10",
+                            "encoded":"beef"
+                        }
+                    },
+                    "transaction_hash":"transfer_hash",
+                    "transaction_status":"Committed",
+                    "block":1,
+                    "index":0
+                },
+                {
+                    "authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                    "created_at":"2025-01-02T00:00:00Z",
+                    "kind":"Mint",
+                    "r#box":{
+                        "json":{
+                            "encoded":"00",
+                            "kind":"Mint",
+                            "payload":{
+                                "value":{
+                                    "destination":"norito:4e52543000000011",
+                                    "object":"100"
+                                },
+                                "variant":"Asset"
+                            },
+                            "wire_id":"MintBox"
+                        }
+                    },
+                    "transaction_hash":"mint_hash",
+                    "transaction_status":"Committed",
+                    "block":2,
+                    "index":0
+                },
+                {
+                    "authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                    "created_at":"2025-01-03T00:00:00Z",
+                    "kind":"SetKeyValue",
+                    "r#box":{
+                        "json":{
+                            "encoded":"00",
+                            "kind":"SetKeyValue",
+                            "payload":{
+                                "variant":"Domain",
+                                "value":{"key":"foo","value":"bar"}
+                            },
+                            "wire_id":"SetKeyValueBox"
+                        }
+                    },
+                    "transaction_hash":"skv_hash",
+                    "transaction_status":"Committed",
+                    "block":3,
+                    "index":0
+                }
+            ]
+        }
+        """
+        let page = try JSONDecoder().decode(ToriiExplorerInstructionsPage.self, from: Data(json.utf8))
+        XCTAssertEqual(page.items.count, 3, "All 3 items should decode")
+
+        let summaries = page.transferSummaries()
+        // Transfer + Mint should parse, SetKeyValue should be skipped
+        XCTAssertEqual(summaries.count, 2, "Transfer + Mint should produce summaries, SetKeyValue should be skipped")
+        XCTAssertEqual(summaries[0].kind, "Transfer")
+        XCTAssertEqual(summaries[1].kind, "Mint")
     }
 
     @available(iOS 15.0, macOS 12.0, *)

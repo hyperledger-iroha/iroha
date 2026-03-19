@@ -364,12 +364,65 @@ extension OfflineNorito {
     /// Decode the `AssetDefinitionId` component from a full Norito `AssetId` payload.
     ///
     /// Binary layout: `[account_field][definition_field]`
-    /// where definition = `[domain_field][name_field]`.
+    /// The definition field contains either:
+    /// - `[domain_field][name_field]` (legacy layout)
+    /// - ConstVec<u8> encoding of 16-byte UUID: `{[u64=1][u8]}*16` (current Iroha layout)
     static func decodeAssetDefinitionIdFromAssetId(_ data: Data) throws -> (name: String, domain: String) {
         var reader = OfflineNoritoReader(data: data)
         _ = try reader.readField() // skip account
         let defData = try reader.readField()
-        return try decodeAssetDefinitionIdDirect(defData)
+        // Try legacy [domain][name] layout first
+        if let result = try? decodeAssetDefinitionIdDirect(defData) {
+            return result
+        }
+        // Try ConstVec<u8> layout: 16 bytes encoded as {[u64=1][u8]}*16 = 144 bytes
+        if defData.count == 144, let aidBytes = try? decodeFixedBytes(defData), aidBytes.count == 16 {
+            // Return as "aid:<hex>" which can be matched by MoneyFactory
+            let hex = aidBytes.map { String(format: "%02x", $0) }.joined()
+            return (name: "aid:\(hex)", domain: "")
+        }
+        throw OfflineNoritoDecodingError.invalidField("cannot decode AssetDefinitionId from \(defData.count) bytes")
+    }
+
+    /// Extract account ID string from a full Norito `AssetId` payload.
+    ///
+    /// The account field layout: `[u32 controller_tag][field(string)]`
+    /// where the string is the I105-encoded account identifier.
+    public static func accountIdFromAssetIdPayload(_ data: Data) -> String? {
+        guard let payload = try? {
+            var bytes = data
+            if let frame = noritoDecodeFrame(data) {
+                bytes = frame.payload
+            } else if bytes.count > 40,
+                      bytes[0] == 0x4E, bytes[1] == 0x52, bytes[2] == 0x54, bytes[3] == 0x30 {
+                bytes = Data(bytes.dropFirst(40))
+            }
+            return bytes
+        }() else { return nil }
+
+        do {
+            var reader = OfflineNoritoReader(data: payload)
+            let accountData = try reader.readField()
+            // Account: [u32 tag][field(string)]
+            var accountReader = OfflineNoritoReader(data: accountData)
+            _ = try accountReader.readUInt32LE() // controller tag
+            let stringField = try accountReader.readField()
+            let multihash = try decodeString(stringField)
+            // Convert multihash "ed0120<hex>" to I105 format.
+            // Multihash layout: "ed" (algorithm) + "0120" (varint + length) + 64 hex chars (32 bytes key)
+            let mhLower = multihash.lowercased()
+            if mhLower.hasPrefix("ed0120"), multihash.count == 70 {
+                let keyHex = String(multihash.dropFirst(6))
+                if let keyBytes = Data(hexString: keyHex),
+                   let address = try? AccountAddress.fromAccount(publicKey: keyBytes, algorithm: "ed25519"),
+                   let i105 = try? address.toI105Default() {
+                    return i105
+                }
+            }
+            return multihash
+        } catch {
+            return nil
+        }
     }
 
     /// Decode a `norito:hex` asset ID literal to `name#domain` asset definition ID.
@@ -385,13 +438,18 @@ extension OfflineNorito {
         let hex = String(trimmed.dropFirst("norito:".count))
         guard !hex.isEmpty, hex.count.isMultiple(of: 2),
               var bytes = Data(hexString: hex) else { return nil }
-        // Strip NRT header if present
-        if bytes.count > 40,
-           bytes[0] == 0x4E, bytes[1] == 0x52, bytes[2] == 0x54, bytes[3] == 0x30 {
+        // Use proper frame parsing if NRT header present
+        if let frame = noritoDecodeFrame(bytes) {
+            bytes = frame.payload
+        } else if bytes.count > 40,
+                  bytes[0] == 0x4E, bytes[1] == 0x52, bytes[2] == 0x54, bytes[3] == 0x30 {
             bytes = Data(bytes.dropFirst(40))
         }
         // Try full AssetId first (account + definition), then bare AssetDefinitionId
         if let (name, domain) = try? decodeAssetDefinitionIdFromAssetId(bytes) {
+            if name.hasPrefix("aid:") {
+                return name // Already in canonical "aid:<hex>" format
+            }
             return "\(name)#\(domain)"
         }
         if let (name, domain) = try? decodeAssetDefinitionIdDirect(bytes) {

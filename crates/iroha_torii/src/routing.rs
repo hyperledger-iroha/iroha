@@ -15136,6 +15136,19 @@ fn instruction_matches_account_id(
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
         return rewards.reward_asset().account() == expected;
     }
+    // Offline instructions: match by participant account.
+    {
+        use iroha_data_model::isi::offline::{
+            RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer,
+        };
+        if let Some(reg) = any.downcast_ref::<RegisterOfflineAllowance>() {
+            return reg.certificate.controller == *expected;
+        }
+        if let Some(submit) = any.downcast_ref::<SubmitOfflineToOnlineTransfer>() {
+            return submit.transfer.receiver == *expected
+                || submit.transfer.deposit_account == *expected;
+        }
+    }
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
         if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
             return match multisig {

@@ -1174,7 +1174,7 @@ public struct ToriiExplorerPaginationMeta: Decodable, Sendable, Equatable {
 
 /// Instruction payload wrapper returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionBox: Decodable, Sendable, Equatable {
-    public let scale: String
+    public let scale: String?
     public let json: ToriiJSONValue
 }
 
@@ -1319,13 +1319,15 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
     public let status: String
     public let authority: String
     public let instructionIndex: UInt32
-    /// Index of the transfer entry within the instruction payload (0 for single-asset transfers).
-    public let transferIndex: UInt32
     public let senderAccountId: String
     public let receiverAccountId: String
     public let assetDefinitionId: String
     public let amount: String
     public let direction: ToriiExplorerTransferDirection
+    /// The instruction kind from the explorer API (e.g. "Transfer", "Mint", "Burn").
+    public let kind: String
+    /// Index of the transfer entry within the instruction payload (0 for single-asset transfers).
+    public let transferIndex: UInt32
 
     public var isIncoming: Bool {
         direction == .incoming
@@ -1459,6 +1461,7 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
                 assetDefinitionId: String,
                 amount: String,
                 direction: ToriiExplorerTransferDirection,
+                kind: String = "Transfer",
                 transferIndex: UInt32 = 0) {
         self.transactionHash = transactionHash
         self.block = block
@@ -1466,12 +1469,13 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
         self.status = status
         self.authority = authority
         self.instructionIndex = instructionIndex
-        self.transferIndex = transferIndex
         self.senderAccountId = senderAccountId
         self.receiverAccountId = receiverAccountId
         self.assetDefinitionId = assetDefinitionId
         self.amount = amount
         self.direction = direction
+        self.kind = kind
+        self.transferIndex = transferIndex
     }
 }
 
@@ -1516,12 +1520,21 @@ public enum ToriiExplorerTransferDetails: Sendable, Equatable {
 
 public extension ToriiExplorerInstructionItem {
     /// Extract transfer details from the instruction payload when possible.
+    /// Supports Transfer, Mint, and Burn instruction kinds.
     func transferDetails() -> ToriiExplorerTransferDetails? {
-        let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedKind.lowercased() == "transfer" else {
+        let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalizedKind {
+        case "transfer":
+            return ToriiExplorerTransferDetails.parse(from: box.json)
+        case "mint", "burn":
+            return ToriiExplorerTransferDetails.parseMintBurn(from: box.json)
+        case "registerofflineallowance":
+            return ToriiExplorerTransferDetails.parseOfflineAllowance(from: box.json)
+        case "submitofflinetoonlinetransfer":
+            return ToriiExplorerTransferDetails.parseOfflineSettlement(from: box.json)
+        default:
             return nil
         }
-        return ToriiExplorerTransferDetails.parse(from: box.json)
     }
 }
 
@@ -1660,9 +1673,22 @@ public extension ToriiExplorerTransferRecord {
                 return []
             }
             let receiver = asset.destinationAccountId
-            let direction = ToriiExplorerTransferSummary.direction(sender: sender,
+            let normalizedKind = instruction.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let direction: ToriiExplorerTransferDirection
+            switch normalizedKind {
+            case "mint":
+                direction = .incoming
+            case "burn":
+                direction = .outgoing
+            case "registerofflineallowance":
+                direction = .outgoing // online → offline (top-up)
+            case "submitofflinetoonlinetransfer":
+                direction = .incoming // offline → online (settlement)
+            default:
+                direction = ToriiExplorerTransferSummary.direction(sender: sender,
                                                                     receiver: receiver,
                                                                     relativeTo: relativeAccount)
+            }
             return [
                 ToriiExplorerTransferSummary(transactionHash: instruction.transactionHash,
                                              block: instruction.block,
@@ -1675,6 +1701,7 @@ public extension ToriiExplorerTransferRecord {
                                              assetDefinitionId: assetDefinition,
                                              amount: asset.amount,
                                              direction: direction,
+                                             kind: instruction.kind,
                                              transferIndex: 0),
             ]
         case .assetBatch(let entries):
@@ -1693,6 +1720,7 @@ public extension ToriiExplorerTransferRecord {
                                                     assetDefinitionId: entry.assetDefinitionId,
                                                     amount: entry.amount,
                                                     direction: direction,
+                                                    kind: instruction.kind,
                                                     transferIndex: UInt32(offset))
             }
         }
@@ -1907,6 +1935,91 @@ extension ToriiExplorerTransferDetails {
         default:
             return nil
         }
+    }
+
+    /// Parse Mint/Burn payloads. These have `destination` (an asset id) and `object` (amount)
+    /// but no `source` field (unlike Transfer).
+    fileprivate static func parseMintBurn(from json: ToriiJSONValue) -> ToriiExplorerTransferDetails? {
+        guard let payload = payloadObject(from: json) else {
+            return nil
+        }
+        guard let variantRaw = stringValue(payload["variant"]) else {
+            return nil
+        }
+        let variant = variantRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard variant == "asset" else {
+            return nil
+        }
+        guard let value = payload["value"], case let .object(map) = value else {
+            return nil
+        }
+        guard let destination = stringValue(map["destination"]),
+              let amount = stringValue(map["object"]) else {
+            return nil
+        }
+        // For Mint/Burn the destination is a full norito-encoded asset ID.
+        // Use pure-Swift decoders to extract asset definition ID and account ID.
+        let humanReadableDefinition = OfflineNorito.assetDefinitionIdFromLiteral(destination)
+        let pureSwiftAccount: String? = {
+            let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.lowercased().hasPrefix("norito:") else { return nil }
+            let hex = String(trimmed.dropFirst("norito:".count))
+            guard !hex.isEmpty, hex.count.isMultiple(of: 2),
+                  let bytes = Data(hexString: hex) else { return nil }
+            return OfflineNorito.accountIdFromAssetIdPayload(bytes)
+        }()
+        let (fallbackDefinition, nativeBridgeAccount) = parseAssetId(destination)
+        let definition = humanReadableDefinition ?? fallbackDefinition
+        let accountId = pureSwiftAccount ?? nativeBridgeAccount ?? ""
+        let details = ToriiExplorerTransferAsset(sourceAssetId: destination,
+                                                  destinationAccountId: accountId,
+                                                  amount: amount,
+                                                  senderAccountId: nil,
+                                                  assetDefinitionId: definition)
+        return .asset(details)
+    }
+
+    /// Parse RegisterOfflineAllowance payload.
+    /// JSON: `{ variant: "RegisterOfflineAllowance", value: { controller, amount, asset, ... } }`
+    fileprivate static func parseOfflineAllowance(from json: ToriiJSONValue) -> ToriiExplorerTransferDetails? {
+        guard let payload = payloadObject(from: json) else { return nil }
+        guard let value = payload["value"], case let .object(map) = value else { return nil }
+        guard let amount = stringValue(map["amount"]),
+              let controller = stringValue(map["controller"]) else { return nil }
+        let assetDefinitionId = extractAssetDefinitionId(from: map["asset"])
+        let details = ToriiExplorerTransferAsset(sourceAssetId: "",
+                                                  destinationAccountId: controller,
+                                                  amount: amount,
+                                                  senderAccountId: controller,
+                                                  assetDefinitionId: assetDefinitionId)
+        return .asset(details)
+    }
+
+    /// Parse SubmitOfflineToOnlineTransfer payload.
+    /// JSON: `{ variant: "SubmitOfflineToOnlineTransfer", value: { receiver, deposit_account, claimed_delta, asset, ... } }`
+    fileprivate static func parseOfflineSettlement(from json: ToriiJSONValue) -> ToriiExplorerTransferDetails? {
+        guard let payload = payloadObject(from: json) else { return nil }
+        guard let value = payload["value"], case let .object(map) = value else { return nil }
+        guard let claimedDelta = stringValue(map["claimed_delta"]) else { return nil }
+        let receiver = stringValue(map["receiver"]) ?? ""
+        let depositAccount = stringValue(map["deposit_account"]) ?? ""
+        let assetDefinitionId = extractAssetDefinitionId(from: map["asset"])
+        let details = ToriiExplorerTransferAsset(sourceAssetId: "",
+                                                  destinationAccountId: depositAccount,
+                                                  amount: claimedDelta,
+                                                  senderAccountId: receiver,
+                                                  assetDefinitionId: assetDefinitionId)
+        return .asset(details)
+    }
+
+    /// Extract asset definition ID from a norito-encoded asset JSON value.
+    fileprivate static func extractAssetDefinitionId(from assetValue: ToriiJSONValue?) -> String? {
+        guard let assetValue else { return nil }
+        // The asset field is a norito-encoded AssetId literal
+        if case let .string(literal) = assetValue {
+            return OfflineNorito.assetDefinitionIdFromLiteral(literal) ?? literal
+        }
+        return stringValue(assetValue)
     }
 
     fileprivate static func payloadObject(from json: ToriiJSONValue) -> [String: ToriiJSONValue]? {
