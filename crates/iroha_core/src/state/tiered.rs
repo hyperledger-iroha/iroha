@@ -2947,6 +2947,8 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountRekeyRecord>();
             total = total.saturating_add(self.label.measured_bytes_extra());
+            total = total.saturating_add(self.active_account_id.measured_bytes_extra());
+            total = total.saturating_add(self.previous_account_ids.measured_bytes_extra());
             total = total.saturating_add(self.active_signatory.measured_bytes_extra());
             total = total.saturating_add(self.previous_signatories.measured_bytes_extra());
             total

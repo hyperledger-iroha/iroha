@@ -3,8 +3,8 @@ use crate::isi::governance;
 use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
-        endorsement, identifier, kaigi, nexus, offline, oracle, repo, runtime_upgrade, settlement,
-        smart_contract_code, social, sorafs, space_directory,
+        endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade,
+        settlement, smart_contract_code, social, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -118,6 +118,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<domain_link::BindAccountAlias>,
     InstructionRegistry::register::<domain_link::SetAccountLabel>,
     InstructionRegistry::register::<domain_link::UnlinkAccountDomain>,
+    InstructionRegistry::register::<ram_lfe::RegisterRamLfeProgramPolicy>,
+    InstructionRegistry::register::<ram_lfe::ActivateRamLfeProgramPolicy>,
+    InstructionRegistry::register::<ram_lfe::DeactivateRamLfeProgramPolicy>,
     InstructionRegistry::register::<identifier::RegisterIdentifierPolicy>,
     InstructionRegistry::register::<identifier::ActivateIdentifierPolicy>,
     InstructionRegistry::register::<identifier::ClaimIdentifier>,
@@ -267,6 +270,15 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
         registry.register_with_id::<domain_link::SetAccountLabel>("identity::SetAccountLabel");
     registry = registry
         .register_with_id::<domain_link::UnlinkAccountDomain>("identity::UnlinkAccountDomain");
+    registry = registry.register_with_id::<ram_lfe::RegisterRamLfeProgramPolicy>(
+        "identity::RegisterRamLfeProgramPolicy",
+    );
+    registry = registry.register_with_id::<ram_lfe::ActivateRamLfeProgramPolicy>(
+        "identity::ActivateRamLfeProgramPolicy",
+    );
+    registry = registry.register_with_id::<ram_lfe::DeactivateRamLfeProgramPolicy>(
+        "identity::DeactivateRamLfeProgramPolicy",
+    );
     registry = registry.register_with_id::<identifier::RegisterIdentifierPolicy>(
         "identity::RegisterIdentifierPolicy",
     );

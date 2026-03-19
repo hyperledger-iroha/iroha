@@ -1,2 +1,6 @@
 **/target
 Dockerfile*
+artifacts
+build
+dist
+tmp

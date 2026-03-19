@@ -72,6 +72,15 @@ pub struct DataspaceAxtPolicy {
     pub current_slot: u64,
 }
 
+fn parse_json_numeric_field(field: &njson::Value) -> Result<Numeric, VMError> {
+    match field {
+        njson::Value::String(raw) => raw.parse::<Numeric>().map_err(|_| VMError::DecodeError),
+        njson::Value::Number(njson::native::Number::I64(value)) => Ok(Numeric::from(*value)),
+        njson::Value::Number(njson::native::Number::U64(value)) => Ok(Numeric::from(*value)),
+        _ => Err(VMError::DecodeError),
+    }
+}
+
 impl DataspaceAxtPolicy {
     fn to_model_entry(&self) -> AxtPolicyEntry {
         AxtPolicyEntry {
@@ -3447,7 +3456,8 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_JSON_GET_NAME
             | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
             | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
-            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
+            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC => {
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
@@ -3522,8 +3532,9 @@ impl IVMHost for WsvHost {
                     }
                     crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let acct = ScopedAccountId::parse_encoded(raw)
-                            .map_err(|_| VMError::DecodeError)?;
+                        let acct = iroha_data_model::account::AccountId::parse_encoded(raw)
+                            .map_err(|_| VMError::DecodeError)?
+                            .into_account_id();
                         let body = norito::to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
                         out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
@@ -3564,6 +3575,21 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
                         out.extend_from_slice(&bytes);
                         let h: [u8; 32] = CryptoHash::new(&bytes).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_NUMERIC => {
+                        let numeric = parse_json_numeric_field(field)?;
+                        let body =
+                            norito::to_bytes(&numeric).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);

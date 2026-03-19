@@ -1,6 +1,113 @@
 # Status
 
-Last updated: 2026-03-18
+Last updated: 2026-03-19
+
+## 2026-03-19 Follow-up: generic hidden-program RAM-LFE program-policy foundations now exist in `iroha_crypto`, `iroha_data_model`, `iroha_core`, and the identifier Torii path
+- Extended `crates/iroha_crypto/src/ram_lfe.rs` from an identifier-only
+  programmed BFV path into a program-aware hidden RAM-LFE substrate:
+  - programmed BFV public parameters now publish a hidden-program digest,
+    verification mode, optional proof verifier metadata, and the public
+    RAM-FHE execution profile,
+  - the programmed evaluator now executes an explicit canonical
+    branchless `HiddenRamFheProgram` instruction tape instead of deriving an
+    implicit program from the resolver secret,
+  - generic output hashing is now separated from identifier-facing hash
+    derivation so identifier receipts can deterministically bind to the generic
+    execution output hash.
+- Added generic RAM-LFE on-chain types in
+  `crates/iroha_data_model/src/{ram_lfe.rs,identifier.rs,isi/ram_lfe.rs}`:
+  - new `RamLfeProgramId`, `RamLfeProgramPolicy`,
+    `RamLfeExecutionReceiptPayload`, and `RamLfeExecutionReceipt`,
+  - new RAM-LFE program-policy ISIs for register/activate/deactivate,
+  - renamed the generic public surface from `ram_fhe` to `ram_lfe` so
+    policy/receipt abstractions use LFE terminology while BFV-specific
+    execution metadata stays explicitly FHE-scoped,
+  - identifier policies now reference a `program_id` instead of embedding an
+    inline commitment and resolver public key,
+  - identifier receipts now carry a nested generic execution payload plus an
+    optional signature/proof attachment.
+- Wired RAM-LFE program policies into world state and identifier claim
+  verification in `crates/iroha_core/src/{state.rs,smartcontracts/isi/mod.rs,smartcontracts/isi/{ram_lfe.rs,identifier.rs}}`:
+  - world state now stores RAM-LFE program policies separately from identifier
+    policies and claims,
+  - identifier claims now resolve the referenced program policy, validate the
+    published hidden-program digest / backend / verification mode against the
+    nested execution receipt payload, and verify either:
+    - signed identifier receipts, or
+    - proof-carrying execution receipts bound to the execution payload hash via
+      the existing Halo2 envelope stack.
+- Updated Torii's identifier resolver plumbing in
+  `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs}` so the identifier
+  app endpoints now build receipts from the referenced RAM-LFE program policy
+  rather than the legacy inline identifier policy commitment.
+- Updated docs in
+  `docs/source/universal_accounts_guide.md`,
+  `crates/iroha_crypto/src/ram_lfe.rs`, and
+  `crates/iroha_crypto/src/fhe_bfv.rs` so they explicitly distinguish:
+  - RAM-LFE as the outer policy/commitment/receipt abstraction, and
+  - BFV / RAM-FHE as the encrypted execution backend and its public profile
+    metadata.
+- Validation so far:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_crypto` (pass)
+  - `cargo check -p iroha_data_model` (pass)
+  - `cargo check -p iroha_core` (pass)
+  - `cargo check -p iroha_torii` (pass)
+  - `cargo test -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test -p iroha_core identifier_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib --no-run` (pass)
+  - `cargo test -p iroha_torii identifier_ -- --nocapture` (pass)
+- Remaining work in this tranche:
+  - rename Torii runtime config from `torii.identifier_resolver` to the generic
+    `torii.ram_lfe` shape and key runtime material by `program_id`,
+  - add the generic Torii RAM-LFE execute/list/verify routes and their OpenAPI
+    descriptions,
+  - migrate JS/Swift/Android clients to the generic RAM-LFE policy/receipt
+    shapes and add client-side signed/proof verification for the generic API,
+  - broaden validation from compile gates to the targeted and workspace test
+    suites once the remaining API/config migration is in place.
+
+## 2026-03-19 Follow-up: `ram_lfe` now has an instruction-driven programmed BFV backend with a published RAM-FHE profile
+- Extended `crates/iroha_crypto/src/ram_lfe.rs` with a third identifier
+  evaluator backend:
+  - `BfvProgrammedSha3_256V1` (`bfv-programmed-sha3-256-v1`) now supplements
+    the historical HKDF-backed PRF and the earlier BFV affine evaluator.
+  - the new path derives a hidden per-step RAM-style instruction trace from the
+    resolver secret and commitment transcript, executes that program over BFV
+    registers and ciphertext memory lanes, then hashes the canonicalized lane
+    outputs into the deterministic `opaque_id` and `receipt_hash`.
+  - programmed policies now enforce a stronger BFV ciphertext-modulus floor
+    than the affine path because the RAM backend uses ciphertext-ciphertext
+    multiplication.
+  - programmed policy commitments now canonicalize BFV public parameters into a
+    `BfvProgrammedPublicParameters` bundle that publishes the stable
+    `BfvRamProgramProfile`; legacy raw BFV parameter payloads are upgraded onto
+    that bundle when the commitment is rebuilt.
+- Threaded the new backend through Torii in
+  `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,openapi.rs}`:
+  - plaintext identifier resolution now server-encrypts into BFV for both BFV
+    backends,
+  - affine encrypted identifier resolution still evaluates client ciphertexts
+    directly,
+  - programmed encrypted identifier resolution now canonicalizes decrypted input
+    back onto the resolver's deterministic BFV envelope before executing the
+    RAM program so semantically equivalent ciphertexts produce the same receipt,
+  - `GET /v1/identifier-policies` now exposes `ram_fhe_profile` for programmed
+    policies and the static OpenAPI schema documents the new profile object and
+    canonicalized encrypted-input mode,
+  - added focused Torii coverage for deterministic receipt derivation and
+    plaintext/encrypted parity plus end-to-end account binding with the
+    programmed backend.
+- Updated `docs/source/universal_accounts_guide.md` so the UAID identifier
+  guide documents all three current `ram_lfe` backends and the new programmed
+  BFV path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_crypto ram_lfe -- --nocapture` (pass)
+  - `cargo test -p iroha_torii identifier_ --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
+  - `cargo check -p iroha_crypto -p iroha_torii` (pass)
+  - `cargo clippy -p iroha_crypto -p iroha_torii --all-targets -- -D warnings` (pass)
 
 ## 2026-03-18 Follow-up: deterministic BFV acceleration landed, and the workspace lint/compile gates are green
 - Replaced the old scalar-only BFV multiplication baseline in
@@ -3872,3 +3979,9 @@ Last updated: 2026-03-18
   - `cargo test -p integration_tests --test mod nexus::runtime_dataspace_registration_perf::runtime_nexus_registration_reports_lane_lifecycle_costs -- --nocapture`
   - `cargo test -p integration_tests --test mod triggers::by_call_trigger::trigger_in_genesis -- --nocapture`
   - `cargo test -p integration_tests --test mod triggers::by_call_trigger::call_execute_trigger_with_args -- --nocapture`
+
+## 2026-03-19 JSON Numeric Trigger ABI
+- Added `JSON_GET_NUMERIC` (`0x7F`) to the ABI v1 syscall surface so Kotodama by-call triggers can read decimal `Numeric` values directly from trigger JSON args without routing amount construction through middleware.
+- Implemented the syscall in `CoreHost`, `WsvHost`, and the `iroha_core` codec-host forwarding path.
+- Added Kotodama semantic/IR/compiler support for `json_get_numeric(ev, name("amount"))`, typed as `Amount`, plus ABI/host regression tests and syscall docs updates.
+- Intended use: direct on-chain settlement-style triggers such as SBP issuance swap can now consume `"0.00001"` style amounts from `ExecuteTrigger` args and feed them into `transfer_asset(...)` unchanged.

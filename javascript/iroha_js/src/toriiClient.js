@@ -6055,6 +6055,140 @@ export class ToriiClient {
   }
 
   /**
+   * Propose a contract call through a multisig authority (`POST /v1/contracts/call/multisig/propose`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async proposeMultisigContractCall(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "proposeMultisigContractCall");
+    const payload = normalizeMultisigContractCallProposeRequest(request);
+    const response = await this._request("POST", "/v1/contracts/call/multisig/propose", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig contract propose endpoint returned no payload");
+    }
+    return normalizeMultisigContractCallResponse(
+      body,
+      "multisig contract propose response",
+    );
+  }
+
+  /**
+   * Approve a multisig contract call proposal (`POST /v1/contracts/call/multisig/approve`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async approveMultisigContractCall(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "approveMultisigContractCall");
+    const payload = normalizeMultisigContractCallApproveRequest(request);
+    const response = await this._request("POST", "/v1/contracts/call/multisig/approve", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200, 202]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig contract approve endpoint returned no payload");
+    }
+    return normalizeMultisigContractCallResponse(
+      body,
+      "multisig contract approve response",
+    );
+  }
+
+  /**
+   * Resolve the current multisig spec through an alias-aware selector (`POST /v1/multisig/spec`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getMultisigSpec(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getMultisigSpec");
+    const payload = normalizeMultisigSelectorOnlyRequest(request, "getMultisigSpec request");
+    const response = await this._request("POST", "/v1/multisig/spec", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig spec endpoint returned no payload");
+    }
+    return normalizeMultisigSpecResponse(body);
+  }
+
+  /**
+   * List nonterminal multisig proposals for a selector (`POST /v1/multisig/proposals/list`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async listMultisigProposals(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "listMultisigProposals");
+    const payload = normalizeMultisigSelectorOnlyRequest(
+      request,
+      "listMultisigProposals request",
+    );
+    const response = await this._request("POST", "/v1/multisig/proposals/list", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig proposals list endpoint returned no payload");
+    }
+    return normalizeMultisigProposalsListResponse(body);
+  }
+
+  /**
+   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/get`).
+   * @param {object} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getMultisigProposal(request = {}, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
+    const payload = normalizeMultisigProposalLookupRequest(request);
+    const response = await this._request("POST", "/v1/multisig/proposals/get", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("multisig proposal get endpoint returned no payload");
+    }
+    return normalizeMultisigProposalGetResponse(body);
+  }
+
+  /**
    * Fetch on-chain contract manifest by code hash (`GET /v1/contracts/code/{hash}`).
    * @param {string} codeHashHex
    * @returns {Promise<ContractManifestRecord | null>}
@@ -16848,6 +16982,370 @@ function normalizeContractCallResponse(payload) {
             record.entrypoint,
             "contractCall response.entrypoint",
           ),
+  };
+}
+
+function normalizeMultisigAccountSelector(input, context) {
+  const record = ensureRecord(input, context);
+  const multisigAccountId = pickOverride(
+    record,
+    "multisig_account_id",
+    "multisigAccountId",
+  );
+  const multisigAccountAlias = pickOverride(
+    record,
+    "multisig_account_alias",
+    "multisigAccountAlias",
+  );
+  const hasAccountId = multisigAccountId !== undefined && multisigAccountId !== null;
+  const hasAlias = multisigAccountAlias !== undefined && multisigAccountAlias !== null;
+  if (hasAccountId === hasAlias) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires exactly one of multisig_account_id or multisig_account_alias`,
+      normalizeErrorPath(context),
+    );
+  }
+  if (hasAccountId) {
+    return {
+      multisig_account_id: ToriiClient._normalizeAccountId(
+        multisigAccountId,
+        `${context}.multisig_account_id`,
+      ),
+    };
+  }
+  return {
+    multisig_account_alias: normalizeMultisigAccountAliasLiteral(
+      multisigAccountAlias,
+      `${context}.multisig_account_alias`,
+    ),
+  };
+}
+
+function normalizeMultisigAccountAliasLiteral(value, context) {
+  const alias = requireNonEmptyString(value, context).trim();
+  const parts = alias.split("@");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must use label@domain form`,
+      normalizeErrorPath(context),
+    );
+  }
+  if (/\s/.test(alias)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not contain whitespace`,
+      normalizeErrorPath(context),
+    );
+  }
+  return alias;
+}
+
+function hasDetachedPrivateKeyInput(record) {
+  return (
+    pickOverride(record, "private_key", "privateKey") !== undefined ||
+    pickOverride(record, "private_key_multihash", "privateKeyMultihash") !== undefined ||
+    pickOverride(record, "private_key_hex", "privateKeyHex") !== undefined ||
+    pickOverride(record, "private_key_bytes", "privateKeyBytes") !== undefined
+  );
+}
+
+function normalizeOptionalDetachedPrivateKey(record, context) {
+  if (!hasDetachedPrivateKeyInput(record)) {
+    return null;
+  }
+  return resolveAuthorityPrivateKey(record, context);
+}
+
+function normalizeMultisigSelectorOnlyRequest(input, context) {
+  return normalizeMultisigAccountSelector(input, context);
+}
+
+function normalizeMultisigContractCallProposeRequest(input) {
+  const record = ensureRecord(input, "proposeMultisigContractCall request");
+  const selector = normalizeMultisigAccountSelector(
+    record,
+    "proposeMultisigContractCall request",
+  );
+  const payload = {
+    ...selector,
+    signer_account_id: ToriiClient._normalizeAccountId(
+      record.signer_account_id ?? record.signerAccountId,
+      "proposeMultisigContractCall request.signer_account_id",
+    ),
+    namespace: requireNonEmptyString(
+      record.namespace,
+      "proposeMultisigContractCall request.namespace",
+    ),
+    contract_id: requireNonEmptyString(
+      record.contract_id ?? record.contractId,
+      "proposeMultisigContractCall request.contract_id",
+    ),
+    entrypoint: requireNonEmptyString(
+      record.entrypoint,
+      "proposeMultisigContractCall request.entrypoint",
+    ),
+  };
+  const privateKey = normalizeOptionalDetachedPrivateKey(
+    record,
+    "proposeMultisigContractCall request",
+  );
+  if (privateKey !== null) {
+    payload.private_key = privateKey;
+  }
+  const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeHex32String(
+      publicKeyHex,
+      "proposeMultisigContractCall request.public_key_hex",
+    );
+  }
+  const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeRequiredBase64Payload(
+      signatureB64,
+      "proposeMultisigContractCall request.signature_b64",
+    );
+  }
+  const creationTimeMs = pickOverride(record, "creation_time_ms", "creationTimeMs");
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
+      creationTimeMs,
+      "proposeMultisigContractCall request.creation_time_ms",
+      { allowZero: true },
+    );
+  }
+  if (record.payload !== undefined) {
+    payload.payload = cloneJsonValue(
+      record.payload,
+      "proposeMultisigContractCall request.payload",
+    );
+  }
+  const gasAssetId = pickOverride(record, "gas_asset_id", "gasAssetId");
+  if (gasAssetId !== undefined && gasAssetId !== null) {
+    payload.gas_asset_id = ToriiClient._normalizeAssetId(
+      gasAssetId,
+      "proposeMultisigContractCall request.gas_asset_id",
+    );
+  }
+  const feeSponsor = pickOverride(record, "fee_sponsor", "feeSponsor");
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    payload.fee_sponsor = ToriiClient._normalizeAccountId(
+      feeSponsor,
+      "proposeMultisigContractCall request.fee_sponsor",
+    );
+  }
+  const gasLimit = pickOverride(record, "gas_limit", "gasLimit");
+  if (gasLimit !== undefined && gasLimit !== null) {
+    payload.gas_limit = ToriiClient._normalizeUnsignedInteger(
+      gasLimit,
+      "proposeMultisigContractCall request.gas_limit",
+      { allowZero: false },
+    );
+  }
+  return payload;
+}
+
+function normalizeMultisigContractCallApproveRequest(input) {
+  const record = ensureRecord(input, "approveMultisigContractCall request");
+  const selector = normalizeMultisigAccountSelector(
+    record,
+    "approveMultisigContractCall request",
+  );
+  const payload = {
+    ...selector,
+    signer_account_id: ToriiClient._normalizeAccountId(
+      record.signer_account_id ?? record.signerAccountId,
+      "approveMultisigContractCall request.signer_account_id",
+    ),
+  };
+  const privateKey = normalizeOptionalDetachedPrivateKey(
+    record,
+    "approveMultisigContractCall request",
+  );
+  if (privateKey !== null) {
+    payload.private_key = privateKey;
+  }
+  const publicKeyHex = pickOverride(record, "public_key_hex", "publicKeyHex");
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeHex32String(
+      publicKeyHex,
+      "approveMultisigContractCall request.public_key_hex",
+    );
+  }
+  const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeRequiredBase64Payload(
+      signatureB64,
+      "approveMultisigContractCall request.signature_b64",
+    );
+  }
+  const creationTimeMs = pickOverride(record, "creation_time_ms", "creationTimeMs");
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = ToriiClient._normalizeUnsignedInteger(
+      creationTimeMs,
+      "approveMultisigContractCall request.creation_time_ms",
+      { allowZero: true },
+    );
+  }
+  const proposalId = pickOverride(record, "proposal_id", "proposalId");
+  if (proposalId !== undefined && proposalId !== null) {
+    payload.proposal_id = requireNonEmptyString(
+      proposalId,
+      "approveMultisigContractCall request.proposal_id",
+    );
+  }
+  const instructionsHash = pickOverride(
+    record,
+    "instructions_hash",
+    "instructionsHash",
+  );
+  if (instructionsHash !== undefined && instructionsHash !== null) {
+    payload.instructions_hash = normalizeHex32String(
+      instructionsHash,
+      "approveMultisigContractCall request.instructions_hash",
+    );
+  }
+  if (!payload.proposal_id && !payload.instructions_hash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "approveMultisigContractCall request requires proposal_id or instructions_hash",
+      "approveMultisigContractCall.request",
+    );
+  }
+  return payload;
+}
+
+function normalizeMultisigContractCallResponse(
+  payload,
+  context = "multisig contract call response",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    ok: Boolean(record.ok),
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    submitted: optionalBoolean(record.submitted, `${context}.submitted`),
+    proposal_id: optionalString(record.proposal_id, `${context}.proposal_id`),
+    instructions_hash:
+      record.instructions_hash === undefined || record.instructions_hash === null
+        ? null
+        : normalizeHex32String(record.instructions_hash, `${context}.instructions_hash`),
+    executed_tx_hash_hex:
+      record.executed_tx_hash_hex === undefined || record.executed_tx_hash_hex === null
+        ? null
+        : normalizeHex32String(
+            record.executed_tx_hash_hex,
+            `${context}.executed_tx_hash_hex`,
+          ),
+    creation_time_ms:
+      record.creation_time_ms === undefined || record.creation_time_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            record.creation_time_ms,
+            `${context}.creation_time_ms`,
+            { allowZero: true },
+          ),
+    signing_message_b64: normalizeOptionalBase64Payload(
+      record.signing_message_b64,
+      `${context}.signing_message_b64`,
+    ),
+  };
+}
+
+function normalizeMultisigSpecResponse(payload, context = "multisig spec response") {
+  const record = ensureRecord(payload, context);
+  return {
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    spec: cloneJsonValue(record.spec, `${context}.spec`),
+  };
+}
+
+function normalizeMultisigProposalEntry(payload, context) {
+  const record = ensureRecord(payload, context);
+  return {
+    proposal_id: requireNonEmptyString(record.proposal_id, `${context}.proposal_id`),
+    instructions_hash: normalizeHex32String(
+      record.instructions_hash,
+      `${context}.instructions_hash`,
+    ),
+    proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+  };
+}
+
+function normalizeMultisigProposalsListResponse(
+  payload,
+  context = "multisig proposals list response",
+) {
+  const record = ensureRecord(payload, context);
+  const proposalsValue = record.proposals;
+  if (!Array.isArray(proposalsValue)) {
+    throw new TypeError(`${context}.proposals must be an array`);
+  }
+  return {
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    proposals: proposalsValue.map((entry, index) =>
+      normalizeMultisigProposalEntry(entry, `${context}.proposals[${index}]`),
+    ),
+  };
+}
+
+function normalizeMultisigProposalLookupRequest(input) {
+  const record = ensureRecord(input, "getMultisigProposal request");
+  const payload = normalizeMultisigAccountSelector(record, "getMultisigProposal request");
+  const proposalId = pickOverride(record, "proposal_id", "proposalId");
+  if (proposalId !== undefined && proposalId !== null) {
+    payload.proposal_id = requireNonEmptyString(
+      proposalId,
+      "getMultisigProposal request.proposal_id",
+    );
+  }
+  const instructionsHash = pickOverride(
+    record,
+    "instructions_hash",
+    "instructionsHash",
+  );
+  if (instructionsHash !== undefined && instructionsHash !== null) {
+    payload.instructions_hash = normalizeHex32String(
+      instructionsHash,
+      "getMultisigProposal request.instructions_hash",
+    );
+  }
+  if (!payload.proposal_id && !payload.instructions_hash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "getMultisigProposal request requires proposal_id or instructions_hash",
+      "getMultisigProposal.request",
+    );
+  }
+  return payload;
+}
+
+function normalizeMultisigProposalGetResponse(
+  payload,
+  context = "multisig proposal get response",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    resolved_multisig_account_id: ToriiClient._normalizeAccountId(
+      record.resolved_multisig_account_id,
+      `${context}.resolved_multisig_account_id`,
+    ),
+    proposal_id: requireNonEmptyString(record.proposal_id, `${context}.proposal_id`),
+    instructions_hash: normalizeHex32String(
+      record.instructions_hash,
+      `${context}.instructions_hash`,
+    ),
+    proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
   };
 }
 

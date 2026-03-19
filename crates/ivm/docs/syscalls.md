@@ -389,6 +389,7 @@ but they must not change the host ABI.
 | 0x7C | JSON_GET_NFT_ID | - | - | - |
 | 0x7D | JSON_GET_BLOB_HEX | - | - | - |
 | 0x7E | VRF_EPOCH_SEED | - | - | - |
+| 0x7F | JSON_GET_NUMERIC | - | - | - |
 | 0x90 | SM3_HASH | - | - | - |
 | 0x91 | SM2_VERIFY | - | - | - |
 | 0x92 | SM4_GCM_SEAL | - | - | - |

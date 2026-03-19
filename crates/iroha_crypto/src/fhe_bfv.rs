@@ -1,4 +1,5 @@
-//! Deterministic BFV baseline for homomorphic scalar evaluation.
+//! Deterministic BFV (Brakerski/Fan-Vercauteren) baseline for homomorphic
+//! scalar evaluation.
 //!
 //! This module implements the textbook integer-arithmetic BFV scheme over the
 //! negacyclic ring `Z_q[x] / (x^n + 1)` with:

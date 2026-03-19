@@ -1347,6 +1347,8 @@ pub mod nexus;
 pub mod offline;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
+/// Generic RAM-LFE program-policy instructions.
+pub mod ram_lfe;
 /// Registration-related instructions (accounts, assets, domains, etc.).
 pub mod register;
 /// Instruction registries shared across instruction families.
@@ -1386,6 +1388,7 @@ pub use mint_burn::*;
 pub use nexus::*;
 pub use offline::*;
 pub use oracle::*;
+pub use ram_lfe::*;
 pub use register::*;
 pub use repo::*;
 pub use settlement::*;
@@ -2166,6 +2169,9 @@ pub mod prelude {
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
         nexus::SetLaneRelayEmergencyValidators,
+        ram_lfe::{
+            ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
+        },
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementFailureRecord,

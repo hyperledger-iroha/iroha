@@ -92,6 +92,7 @@ use iroha_data_model::{
     permission::{Permission, Permissions},
     prelude::*,
     query::error::{FindError, QueryExecutionFail},
+    ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
     repo::{RepoAgreement, RepoAgreementId},
     role::RoleId,
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
@@ -344,6 +345,7 @@ macro_rules! build_world_block {
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
+            ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
             identifier_claims: $state.identifier_claims.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
@@ -474,6 +476,7 @@ macro_rules! build_world_transaction {
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
+            ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
             identifier_claims: $state.identifier_claims.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
@@ -1281,6 +1284,8 @@ pub struct World {
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry keyed by program identifier.
+    pub(crate) ram_lfe_program_policies: Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry keyed by `(kind, business_rule)`.
     pub(crate) identifier_policies: Storage<IdentifierPolicyId, IdentifierPolicy>,
     /// Active identifier claims keyed by opaque identifier.
@@ -1614,6 +1619,8 @@ pub struct WorldBlock<'world> {
     pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry.
+    pub(crate) ram_lfe_program_policies: StorageBlock<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageBlock<'world, IdentifierPolicyId, IdentifierPolicy>,
     /// Active identifier claims keyed by opaque identifier.
@@ -2058,6 +2065,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry.
+    pub(crate) ram_lfe_program_policies:
+        StorageTransaction<'block, 'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies:
         StorageTransaction<'block, 'world, IdentifierPolicyId, IdentifierPolicy>,
@@ -2611,6 +2621,8 @@ pub struct WorldView<'world> {
     pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry.
+    pub(crate) ram_lfe_program_policies: StorageView<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageView<'world, IdentifierPolicyId, IdentifierPolicy>,
     /// Active identifier claims keyed by opaque identifier.
@@ -7498,6 +7510,91 @@ mod storage_migration_tests {
     }
 
     #[test]
+    fn account_rekey_rebuild_backfills_alias_bound_multisig_accounts() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let label = AccountLabel::new(domain_id, "cbdc".parse::<Name>().expect("label name"));
+        let member_a = iroha_data_model::account::MultisigMember::new(
+            KeyPair::random().public_key().clone(),
+            1,
+        )
+        .expect("multisig member");
+        let member_b = iroha_data_model::account::MultisigMember::new(
+            KeyPair::random().public_key().clone(),
+            1,
+        )
+        .expect("multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(2, vec![member_a, member_b])
+            .expect("multisig policy");
+        let account_id = AccountId::new_multisig(policy);
+        let details =
+            AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+
+        world
+            .rebuild_account_alias_index()
+            .expect("alias index rebuild should succeed");
+        world
+            .rebuild_account_rekey_records()
+            .expect("rekey record rebuild should backfill multisig aliases");
+
+        let records = world.account_rekey_records.view();
+        let record = records
+            .get(&label)
+            .expect("rekey record should be backfilled");
+        assert_eq!(record.active_account_id, account_id);
+        assert!(record.active_signatory.is_none());
+        assert!(record.previous_account_ids.is_empty());
+        assert!(record.previous_signatories.is_empty());
+    }
+
+    #[test]
+    fn account_rekey_rebuild_repoints_stale_records_to_current_alias_binding() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let label = AccountLabel::new(domain_id, "treasury".parse::<Name>().expect("label name"));
+        let first_id = AccountId::new(KeyPair::random().public_key().clone());
+        let second_key = KeyPair::random();
+        let second_id = AccountId::new(second_key.public_key().clone());
+
+        let first_details = AccountDetails::new(Metadata::default(), None, None, Vec::new());
+        let second_details =
+            AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        world
+            .accounts
+            .insert(first_id.clone(), AccountValue::new(first_details));
+        world
+            .accounts
+            .insert(second_id.clone(), AccountValue::new(second_details));
+        world.account_rekey_records.insert(
+            label.clone(),
+            AccountRekeyRecord::new(label.clone(), first_id.clone()),
+        );
+
+        world
+            .rebuild_account_alias_index()
+            .expect("alias index rebuild should succeed");
+        world
+            .rebuild_account_rekey_records()
+            .expect("rekey record rebuild should repoint stale records");
+
+        let records = world.account_rekey_records.view();
+        let record = records
+            .get(&label)
+            .expect("rekey record should survive rebuild");
+        assert_eq!(record.active_account_id, second_id);
+        assert_eq!(record.previous_account_ids, vec![first_id]);
+        assert_eq!(
+            record.active_signatory,
+            Some(second_key.public_key().clone())
+        );
+    }
+
+    #[test]
     fn opaque_id_index_rejects_missing_uaid() {
         let mut world = World::default();
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
@@ -9604,6 +9701,9 @@ impl World {
             .rebuild_account_alias_index()
             .expect("duplicate account alias in world constructor");
         world
+            .rebuild_account_rekey_records()
+            .expect("invalid account rekey state in world constructor");
+        world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
         world.rebuild_asset_definition_indexes();
@@ -9791,6 +9891,72 @@ impl World {
             index.insert(label.clone(), account_id.clone());
         }
         self.account_aliases = index.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
+        let mut records = BTreeMap::new();
+        let existing_records: Vec<_> = self
+            .account_rekey_records
+            .view()
+            .iter()
+            .map(|(label, record)| (label.clone(), record.clone()))
+            .collect();
+        let existing_bindings: Vec<_> = self
+            .account_aliases
+            .view()
+            .iter()
+            .map(|(label, account_id)| (label.clone(), account_id.clone()))
+            .collect();
+        let view = self.accounts.view();
+
+        for (label, record) in existing_records {
+            if record.label != label {
+                return Err(format!(
+                    "Account rekey record {label:?} stores mismatched label {:?}",
+                    record.label
+                ));
+            }
+            if account_label_is_pii(&label) {
+                return Err(format!(
+                    "Account rekey record {label:?} looks like raw PII; use UAID/opaque identifiers"
+                ));
+            }
+            if let Some(existing) = records.get(&label) {
+                if existing != &record {
+                    return Err(format!(
+                        "Account rekey record {label:?} already bound to a different record"
+                    ));
+                }
+                continue;
+            }
+            records.insert(label, record);
+        }
+
+        for (label, account_id) in existing_bindings {
+            if view.get(&account_id).is_none() {
+                return Err(format!(
+                    "Account rekey record {label:?} references missing account {account_id}"
+                ));
+            }
+            let record = match records.remove(&label) {
+                Some(record) if record.active_account_id == account_id => record,
+                Some(record) => record.repoint_to_account(account_id.clone()),
+                None => AccountRekeyRecord::new(label.clone(), account_id.clone()),
+            };
+            records.insert(label, record);
+        }
+
+        for (label, record) in &records {
+            if view.get(&record.active_account_id).is_none() {
+                return Err(format!(
+                    "Account rekey record {label:?} references missing account {}",
+                    record.active_account_id
+                ));
+            }
+        }
+
+        self.account_rekey_records = records.into_iter().collect();
         Ok(())
     }
 
@@ -10037,6 +10203,7 @@ impl World {
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             opaque_uaids: self.opaque_uaids.view(),
+            ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
             identifier_claims: self.identifier_claims.view(),
             account_rekey_records: self.account_rekey_records.view(),
@@ -10188,10 +10355,22 @@ pub trait WorldReadOnly {
     fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
+    /// Global RAM-LFE program policy registry (read-only).
+    fn ram_lfe_program_policies(
+        &self,
+    ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy>;
     /// Global identifier policy registry (read-only).
     fn identifier_policies(&self) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy>;
     /// Active identifier claims keyed by opaque identifier (read-only).
     fn identifier_claims(&self) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord>;
+
+    /// Iterate registered identifier policies.
+    #[inline]
+    fn ram_lfe_program_policies_iter(&self) -> impl Iterator<Item = &RamLfeProgramPolicy> {
+        self.ram_lfe_program_policies()
+            .iter()
+            .map(|(_, policy)| policy)
+    }
 
     /// Iterate registered identifier policies.
     #[inline]
@@ -10952,6 +11131,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
                 &self.opaque_uaids
             }
+            fn ram_lfe_program_policies(
+                &self,
+            ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy> {
+                &self.ram_lfe_program_policies
+            }
             fn identifier_policies(
                 &self,
             ) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy> {
@@ -11516,6 +11700,7 @@ impl<'world> WorldBlock<'world> {
             uaid_accounts,
             account_aliases,
             opaque_uaids,
+            ram_lfe_program_policies,
             identifier_policies,
             identifier_claims,
             account_rekey_records,
@@ -11729,6 +11914,7 @@ impl<'world> WorldBlock<'world> {
         assets.commit();
         identifier_claims.commit();
         identifier_policies.commit();
+        ram_lfe_program_policies.commit();
         account_rekey_records.commit();
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
@@ -12504,6 +12690,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             uaid_accounts,
             account_aliases,
             opaque_uaids,
+            ram_lfe_program_policies,
             identifier_policies,
             identifier_claims,
             account_rekey_records,
@@ -12692,6 +12879,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         nfts.apply();
         identifier_claims.apply();
         identifier_policies.apply();
+        ram_lfe_program_policies.apply();
         account_rekey_records.apply();
         asset_metadata.apply();
         assets.apply();
@@ -23665,7 +23853,7 @@ impl StateTransaction<'_, '_> {
     /// Returns the trigger sequence on success, or the rejection reason on failure.
     pub(crate) fn execute_data_triggers_dfs(
         &mut self,
-        authority: &AccountId,
+        _outer_authority: &AccountId,
     ) -> TransactionResultInner {
         if self.world.triggers.data_triggers().is_empty() {
             // No data triggers registered; drop buffered events to keep memory bounded.
@@ -23688,7 +23876,7 @@ impl StateTransaction<'_, '_> {
             if max_depth < depth {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
             }
-            let executable = {
+            let (executable, trigger_authority) = {
                 let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
                     warn!(
                         trigger_id = %trg_id,
@@ -23718,10 +23906,11 @@ impl StateTransaction<'_, '_> {
                     continue;
                 }
 
-                action.executable().clone()
+                (action.executable().clone(), action.authority().clone())
             };
 
-            let step = self.execute_trigger(&trg_id, authority, &executable, event, None)?;
+            let step =
+                self.execute_trigger(&trg_id, &trigger_authority, &executable, event, None)?;
 
             let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
             stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
@@ -23780,15 +23969,15 @@ impl StateTransaction<'_, '_> {
         }))
     }
 
-    fn trigger_args_from_event(event: &EventBox) -> Json {
+    fn trigger_args_from_event(&self, event: &EventBox) -> Json {
         match event {
             EventBox::ExecuteTrigger(ev) => ev.args().clone(),
-            EventBox::Data(shared) => Self::trigger_args_from_data_event(shared.as_ref()),
+            EventBox::Data(shared) => self.trigger_args_from_data_event(shared.as_ref()),
             _ => Json::default(),
         }
     }
 
-    fn trigger_args_from_data_event(event: &data_pre::DataEvent) -> Json {
+    fn trigger_args_from_data_event(&self, event: &data_pre::DataEvent) -> Json {
         use data_pre::{AccountEvent, AssetEvent, DataEvent, DomainEvent};
 
         let mut payload = norito::json!({
@@ -23797,7 +23986,6 @@ impl StateTransaction<'_, '_> {
         });
 
         if let DataEvent::Domain(DomainEvent::Account(account_event)) = event {
-            let account_domain = account_event.origin_domain().to_string();
             let AccountEvent::Asset(asset_event) = account_event else {
                 return Json::from(payload);
             };
@@ -23810,6 +23998,13 @@ impl StateTransaction<'_, '_> {
             let asset_id = changed.asset();
             let amount_str = changed.amount().to_string();
             let asset_definition_id = asset_id.definition().to_string();
+            let linked_domains = self.world.domains_for_subject(asset_id.account());
+            let account_domain = linked_domains
+                .iter()
+                .map(ToString::to_string)
+                .find(|domain| matches!(domain.as_str(), "hbl" | "ubl" | "sbp"))
+                .or_else(|| linked_domains.first().map(ToString::to_string))
+                .unwrap_or_else(|| account_event.origin_domain().to_string());
             let asset_definition_name = (!asset_id.definition().is_opaque_canonical())
                 .then(|| asset_id.definition().name().as_ref().to_owned());
             let asset_definition_domain = (!asset_id.definition().is_opaque_canonical())
@@ -23895,7 +24090,7 @@ impl StateTransaction<'_, '_> {
             ),
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
-                    let trigger_args = Self::trigger_args_from_event(&event);
+                    let trigger_args = self.trigger_args_from_event(&event);
                     let bytecode = bytecode.clone();
                     let summary = {
                         let mut cache = self.ivm_cache.lock();
@@ -24614,6 +24809,7 @@ pub(crate) mod deserialize {
         let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
         let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
+        let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
@@ -24708,6 +24904,7 @@ pub(crate) mod deserialize {
             uaid_accounts: Storage::default(),
             account_aliases,
             opaque_uaids: Storage::default(),
+            ram_lfe_program_policies,
             identifier_policies,
             identifier_claims,
             account_rekey_records,
@@ -24837,6 +25034,12 @@ pub(crate) mod deserialize {
             .rebuild_account_alias_index()
             .map_err(|message| json::Error::InvalidField {
                 field: "account_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_account_rekey_records()
+            .map_err(|message| json::Error::InvalidField {
+                field: "account_rekey_records".into(),
                 message,
             })?;
         world
@@ -25581,6 +25784,50 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    #[test]
+    fn trigger_args_from_asset_event_use_destination_account_domain() {
+        let recipient_domain: DomainId = "sbp".parse().unwrap();
+        let asset_domain: DomainId = "cbuae".parse().unwrap();
+        let (subject, _) = gen_account_in("sbp");
+        let recipient = subject.to_account_id(recipient_domain.clone());
+        let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
+        let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        Register::domain(Domain::new(recipient_domain.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(recipient.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
+            data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+                asset: asset_id,
+                amount: Numeric::from(1_u32),
+            })),
+        ));
+
+        let args = stx.trigger_args_from_data_event(&event);
+        let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
+        let obj = payload.as_object().expect("trigger args object");
+
+        assert_eq!(obj.get("account_domain"), Some(&norito::json!("sbp")));
+        assert_eq!(
+            obj.get("account_id"),
+            Some(&norito::json!(subject.to_string()))
+        );
+        assert_eq!(
+            obj.get("asset_definition_id"),
+            Some(&norito::json!(asset_definition.to_string()))
+        );
     }
 
     #[test]
@@ -36050,6 +36297,186 @@ mod tests {
     }
 
     #[test]
+    fn execute_called_trigger_accepts_staged_mint_like_json_args() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use ivm::KotodamaCompiler;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "staged_mint_like".parse().unwrap();
+        let src = r#"
+            seiyaku StagedMintRequest {
+              state int MintRequestNextSequence;
+              state MintRequestSequenceById: Map<Name, int>;
+              state MintRequestSequences: Map<int, int>;
+              state MintRequestRequestIds: Map<int, Name>;
+              state MintRequestFiIds: Map<int, Name>;
+              state MintRequestFiAuthorities: Map<int, AccountId>;
+              state MintRequestToAccounts: Map<int, AccountId>;
+              state MintRequestAmounts: Map<int, int>;
+              state MintRequestRequestedBy: Map<int, Json>;
+              state MintRequestStates: Map<int, int>;
+              state MintRequestCreatedAt: Map<int, int>;
+              state MintRequestExpiresAt: Map<int, int>;
+              state MintRequestFinalizedAt: Map<int, int>;
+              state MintRequestCanceledAt: Map<int, int>;
+
+              fn update_record(sequence: int,
+                               request_id: Name,
+                               fi_id: Name,
+                               fi_multisig_account_id: AccountId,
+                               to_account_id: AccountId,
+                               amount_i64: int,
+                               requested_by_actor_id: Json,
+                               state_code: int,
+                               created_at_ms: int,
+                               expires_at_ms: int,
+                               finalized_at_ms: int,
+                               canceled_at_ms: int) {
+                MintRequestSequences[sequence] = sequence;
+                MintRequestRequestIds[sequence] = request_id;
+                MintRequestFiIds[sequence] = fi_id;
+                MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
+                MintRequestToAccounts[sequence] = to_account_id;
+                MintRequestAmounts[sequence] = amount_i64;
+                MintRequestRequestedBy[sequence] = requested_by_actor_id;
+                MintRequestStates[sequence] = state_code;
+                MintRequestCreatedAt[sequence] = created_at_ms;
+                MintRequestExpiresAt[sequence] = expires_at_ms;
+                MintRequestFinalizedAt[sequence] = finalized_at_ms;
+                MintRequestCanceledAt[sequence] = canceled_at_ms;
+              }
+
+              #[access(read="*", write="*")]
+              kotoage fn run() {
+                let ev = trigger_event();
+                let action_key = name("action");
+                let request_id_key = name("request_id");
+                let fi_id_key = name("fi_id");
+                let to_account_id_key = name("to_account_id");
+                let amount_i64_key = name("amount_i64");
+                let requested_by_actor_id_key = name("requested_by_actor_id");
+                let created_at_ms_key = name("created_at_ms");
+                let expires_at_ms_key = name("expires_at_ms");
+
+                let action = json_get_name(ev, action_key);
+
+                if (action == name("create")) {
+                  let request_id = json_get_name(ev, request_id_key);
+                  assert(!contains(MintRequestSequenceById, request_id), "mint request already exists");
+
+                  let sequence = MintRequestNextSequence + 1;
+                  let fi_id = json_get_name(ev, fi_id_key);
+                  let to_account_id = json_get_account_id(ev, to_account_id_key);
+                  let amount_i64 = json_get_int(ev, amount_i64_key);
+                  let requested_by_actor_id = json_get_json(ev, requested_by_actor_id_key);
+                  let created_at_ms = json_get_int(ev, created_at_ms_key);
+                  let expires_at_ms = json_get_int(ev, expires_at_ms_key);
+
+                  MintRequestNextSequence = sequence;
+                  MintRequestSequenceById[request_id] = sequence;
+                  update_record(sequence,
+                                request_id,
+                                fi_id,
+                                to_account_id,
+                                to_account_id,
+                                amount_i64,
+                                requested_by_actor_id,
+                                0,
+                                created_at_ms,
+                                expires_at_ms,
+                                0,
+                                0);
+                  return;
+                }
+
+                assert(false, "unsupported staged mint action");
+              }
+            }
+        "#;
+        let program = KotodamaCompiler::new()
+            .compile_source(&src)
+            .expect("compile staged-mint-like contract");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 1;
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&BOB_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Grant::account_permission(
+                Permission::new("staged_mint_request_run".into(), Json::new(())),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(bytecode),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let mut state_block = state.block(block2.as_ref().header());
+            let mut stx = state_block.transaction();
+            let args_json = format!(
+                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"aid:2e3d34beb8a84239b3d9590770f1189e","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"hbl","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@hbl","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
+                (*BOB_ID).to_string()
+            );
+            let event = ExecuteTriggerEvent {
+                trigger_id: trigger_id.clone(),
+                authority: ALICE_ID.clone(),
+                args: Json::from_string_unchecked(args_json),
+            };
+            eprintln!("before execute_called_trigger");
+            stx.execute_called_trigger(&trigger_id, &event)
+                .expect("staged-mint-like trigger should accept live create args");
+            eprintln!("after execute_called_trigger");
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+    }
+
+    #[test]
     fn detached_execute_called_trigger_failure_rolls_back_state() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -38214,6 +38641,93 @@ mod tests {
 
         stx.apply();
         state_block.commit().unwrap();
+    }
+
+    #[test]
+    fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+        let flag_key: Name = "trigger_authority".parse().unwrap();
+        let trigger_id: TriggerId = "data_trigger_registered_authority".parse().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new("wonderland".parse().unwrap()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&BOB_ID))
+                .execute(&BOB_ID, &mut stx)
+                .unwrap();
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let data_trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    vec![InstructionBox::from(SetKeyValue::account(
+                        BOB_ID.clone(),
+                        flag_key.clone(),
+                        Json::from(norito::json!("ok")),
+                    ))],
+                    Repeats::Exactly(1),
+                    BOB_ID.clone(),
+                    data_pre::DataEventFilter::Asset(
+                        data_pre::AssetEventFilter::new().for_asset(asset_id.clone()),
+                    ),
+                ),
+            );
+            Register::trigger(data_trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Mint::asset_numeric(1_u32, asset_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let steps = stx
+                .execute_data_triggers_dfs(&ALICE_ID)
+                .expect("data trigger should run under its registered authority");
+            assert_eq!(steps.len(), 1, "expected one data trigger execution");
+
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let flag_value = state
+            .view()
+            .world
+            .map_account(&BOB_ID, |account| {
+                account.value().metadata().get(&flag_key).cloned()
+            })
+            .unwrap();
+        assert_eq!(flag_value, Some(Json::from(norito::json!("ok"))));
     }
 
     #[test]

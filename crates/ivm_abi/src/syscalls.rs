@@ -156,6 +156,11 @@ pub const SYSCALL_JSON_GET_ACCOUNT_ID: u32 = 0x7B;
 pub const SYSCALL_JSON_GET_NFT_ID: u32 = 0x7C;
 /// Args: r10 = &Json, r11 = &Name key -> r10 = &Blob (INPUT pointer)
 pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
+/// Args: r10 = &Json, r11 = &Name key -> r10 = &NoritoBytes(Numeric) (INPUT pointer)
+///
+/// Accepts JSON string numerics (for example `"0.00001"`) and integer JSON numbers.
+/// Floating-point JSON numbers are rejected to keep the ABI deterministic.
+pub const SYSCALL_JSON_GET_NUMERIC: u32 = 0x7F;
 
 /// Build a state path from a base Name and an integer key: returns a new `&Name` TLV
 /// in INPUT with the canonical form "<base>/<key>" (decimal).
@@ -411,6 +416,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_JSON_GET_ACCOUNT_ID,
             SYSCALL_JSON_GET_NFT_ID,
             SYSCALL_JSON_GET_BLOB_HEX,
+            SYSCALL_JSON_GET_NUMERIC,
         ]);
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
@@ -655,6 +661,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_GET_ACCOUNT_ID => "JSON_GET_ACCOUNT_ID",
         SYSCALL_JSON_GET_NFT_ID => "JSON_GET_NFT_ID",
         SYSCALL_JSON_GET_BLOB_HEX => "JSON_GET_BLOB_HEX",
+        SYSCALL_JSON_GET_NUMERIC => "JSON_GET_NUMERIC",
         SYSCALL_SCHEMA_ENCODE => "SCHEMA_ENCODE",
         SYSCALL_SCHEMA_DECODE => "SCHEMA_DECODE",
         SYSCALL_SCHEMA_INFO => "SCHEMA_INFO",

@@ -1,9 +1,4 @@
-//! Prototype helpers for decoupling logical account identity from the active signatory.
-//!
-//! These types are not wired into the runtime yet—they capture the migration surface for
-//! implementing `RotateAccountSignatory` without breaking existing account identifiers.
-//!
-//! See `docs/source/isi_extension_plan.md` for the execution plan tied to these types.
+//! Stable account rekey metadata for tracking alias-backed account continuity.
 
 use std::{io::Cursor, vec::Vec};
 
@@ -11,7 +6,7 @@ use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use super::{Account, DomainId, Name};
+use super::{Account, AccountId, DomainId, Name};
 
 /// Stable account label that survives signatory rotation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
@@ -44,7 +39,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountLabel {
     }
 }
 
-/// Prototype record that tracks an account label and its active signatory.
+/// Record that tracks the active concrete account behind a stable account label.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -54,9 +49,19 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountLabel {
 pub struct AccountRekeyRecord {
     /// Stable label under which the account is addressed.
     pub label: AccountLabel,
-    /// Current signatory public key.
-    pub active_signatory: PublicKey,
-    /// Historical signatories retained for audit trails.
+    /// Current concrete account id behind the stable label.
+    pub active_account_id: AccountId,
+    /// Historical concrete account ids retained for continuity and audit trails.
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    pub previous_account_ids: Vec<AccountId>,
+    /// Current single-key signatory when the active account is directly key-controlled.
+    ///
+    /// Multisig-controlled accounts do not expose a single signatory, so this remains `None`
+    /// for alias-backed multisig identities.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub active_signatory: Option<PublicKey>,
+    /// Historical single-key signatories retained for audit trails.
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub previous_signatories: Vec<PublicKey>,
 }
@@ -68,23 +73,48 @@ impl AccountRekeyRecord {
     #[must_use]
     pub fn from_account(account: &Account) -> Option<Self> {
         let label = account.label()?.clone();
-        let signatory = account.try_signatory()?.clone();
-        Some(Self {
-            label,
-            active_signatory: signatory,
-            previous_signatories: Vec::new(),
-        })
+        Some(Self::new(label, account.id.clone()))
     }
 
-    /// Plan a rotation to a new signatory, returning the staged record.
+    /// Bootstrap a rekey record for an arbitrary alias binding.
     #[must_use]
-    pub fn rotate_to(&self, next_signatory: PublicKey) -> Self {
-        let mut previous = self.previous_signatories.clone();
-        previous.push(self.active_signatory.clone());
+    pub fn new(label: AccountLabel, active_account_id: AccountId) -> Self {
+        Self {
+            label,
+            active_signatory: active_account_id.try_signatory().cloned(),
+            active_account_id,
+            previous_account_ids: Vec::new(),
+            previous_signatories: Vec::new(),
+        }
+    }
+
+    /// Repoint the stable label to a new concrete account and retain the previous controller ids.
+    #[must_use]
+    pub fn repoint_to_account(&self, next_account_id: AccountId) -> Self {
+        if self.active_account_id == next_account_id {
+            return self.clone();
+        }
+
+        let mut previous_account_ids = self.previous_account_ids.clone();
+        previous_account_ids.push(self.active_account_id.clone());
+
+        let mut previous_signatories = self.previous_signatories.clone();
+        if let Some(active_signatory) = self.active_signatory.as_ref() {
+            previous_signatories.push(active_signatory.clone());
+        }
+
         Self {
             label: self.label.clone(),
-            active_signatory: next_signatory,
-            previous_signatories: previous,
+            active_account_id: next_account_id.clone(),
+            previous_account_ids,
+            active_signatory: next_account_id.try_signatory().cloned(),
+            previous_signatories,
         }
+    }
+
+    /// Plan a rotation to a new signatory-backed account, returning the staged record.
+    #[must_use]
+    pub fn rotate_to(&self, next_signatory: PublicKey) -> Self {
+        self.repoint_to_account(AccountId::new(next_signatory))
     }
 }

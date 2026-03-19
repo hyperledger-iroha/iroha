@@ -50,6 +50,26 @@ pub mod isi {
         lease_expiry_ms.map(|expiry| expiry.saturating_add(ASSET_ALIAS_GRACE_MS))
     }
 
+    fn upsert_account_rekey_record(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        label: &AccountLabel,
+        account: &AccountId,
+    ) {
+        let record = match state_transaction
+            .world
+            .account_rekey_records
+            .get(label)
+            .cloned()
+        {
+            Some(record) => record.repoint_to_account(account.clone()),
+            None => AccountRekeyRecord::new(label.clone(), account.clone()),
+        };
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(label.clone(), record);
+    }
+
     fn ensure_asset_definition_human_fields(
         asset_definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
@@ -2425,10 +2445,6 @@ pub mod isi {
                         .world
                         .account_aliases
                         .remove(label.clone());
-                    state_transaction
-                        .world
-                        .account_rekey_records
-                        .remove(label.clone());
                 }
             }
             if existing_alias_binding.is_none()
@@ -2444,16 +2460,13 @@ pub mod isi {
                     )
                     .into());
                 }
-                state_transaction
-                    .world
-                    .account_rekey_records
-                    .remove(label.clone());
             }
 
             state_transaction
                 .world
                 .account_aliases
                 .insert(label.clone(), account.clone());
+            upsert_account_rekey_record(state_transaction, &label, &account);
 
             let already_linked = state_transaction
                 .world
@@ -2545,10 +2558,6 @@ pub mod isi {
                         .world
                         .account_aliases
                         .remove(label.clone());
-                    state_transaction
-                        .world
-                        .account_rekey_records
-                        .remove(label.clone());
                 }
             }
             if existing_label.as_ref() != Some(&label)
@@ -2564,10 +2573,6 @@ pub mod isi {
                     )
                     .into());
                 }
-                state_transaction
-                    .world
-                    .account_rekey_records
-                    .remove(label.clone());
             }
 
             if let Some(previous_label) = existing_label.as_ref() {
@@ -2589,17 +2594,7 @@ pub mod isi {
                 .world
                 .account_aliases
                 .insert(label.clone(), account.clone());
-
-            if let Some(signatory) = account.try_signatory() {
-                state_transaction.world.account_rekey_records.insert(
-                    label.clone(),
-                    AccountRekeyRecord {
-                        label: label.clone(),
-                        active_signatory: signatory.clone(),
-                        previous_signatories: Vec::new(),
-                    },
-                );
-            }
+            upsert_account_rekey_record(state_transaction, &label, &account);
 
             let already_linked = state_transaction
                 .world
@@ -3233,7 +3228,7 @@ mod tests {
     }
 
     #[test]
-    fn set_account_label_binds_existing_multisig_account_without_rekey_record() {
+    fn set_account_label_binds_existing_multisig_account_with_rekey_record() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -3268,9 +3263,18 @@ mod tests {
             Some(&account_id),
             "multisig alias index should be inserted"
         );
+        let rekey_record = tx
+            .world
+            .account_rekey_records
+            .get(&account_label)
+            .expect("multisig aliases should create rekey records");
+        assert_eq!(
+            rekey_record.active_account_id, account_id,
+            "rekey record should point at the multisig account"
+        );
         assert!(
-            tx.world.account_rekey_records.get(&account_label).is_none(),
-            "multisig accounts should not create single-key rekey records"
+            rekey_record.active_signatory.is_none(),
+            "multisig rekey records should not invent a single-key signatory"
         );
         assert_eq!(
             tx.world
@@ -3359,8 +3363,17 @@ mod tests {
             .get(&alias)
             .expect("single-key repoint should refresh the rekey record");
         assert_eq!(
+            rekey_record.active_account_id, second_id,
+            "rekey record should follow the replacement account"
+        );
+        assert_eq!(
+            rekey_record.previous_account_ids,
+            vec![first_id],
+            "rekey record should retain the prior concrete account"
+        );
+        assert_eq!(
             rekey_record.active_signatory,
-            second_keypair.public_key().clone(),
+            Some(second_keypair.public_key().clone()),
             "rekey record should follow the replacement account"
         );
     }
@@ -3488,16 +3501,31 @@ mod tests {
             Some(&account_id),
             "issuance alias should resolve to the same multisig account"
         );
-        assert!(
-            tx.world.account_rekey_records.get(&banking_label).is_none(),
-            "multisig alias binding should not create single-key rekey records"
+        let banking_record = tx
+            .world
+            .account_rekey_records
+            .get(&banking_label)
+            .expect("banking alias should create a rekey record");
+        assert_eq!(
+            banking_record.active_account_id, account_id,
+            "banking rekey record should resolve to the multisig account"
         );
         assert!(
-            tx.world
-                .account_rekey_records
-                .get(&issuance_label)
-                .is_none(),
-            "multisig alias binding should not create single-key rekey records"
+            banking_record.active_signatory.is_none(),
+            "multisig alias records should not expose a single-key signatory"
+        );
+        let issuance_record = tx
+            .world
+            .account_rekey_records
+            .get(&issuance_label)
+            .expect("issuance alias should create a rekey record");
+        assert_eq!(
+            issuance_record.active_account_id, account_id,
+            "issuance rekey record should resolve to the multisig account"
+        );
+        assert!(
+            issuance_record.active_signatory.is_none(),
+            "multisig alias records should not expose a single-key signatory"
         );
         assert!(
             tx.world

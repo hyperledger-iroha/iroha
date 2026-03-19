@@ -95,6 +95,7 @@ fn abi_syscall_list_matches_golden() {
         S::SYSCALL_JSON_GET_NFT_ID,
         S::SYSCALL_JSON_GET_BLOB_HEX,
         S::SYSCALL_VRF_EPOCH_SEED,
+        S::SYSCALL_JSON_GET_NUMERIC,
         S::SYSCALL_SM3_HASH,
         S::SYSCALL_SM2_VERIFY,
         S::SYSCALL_SM4_GCM_SEAL,

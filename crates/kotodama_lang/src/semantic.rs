@@ -3188,6 +3188,23 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Int,
                     })
                 }
+                "json_get_numeric" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_numeric expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Amount,
+                    })
+                }
                 "json_get_json" => {
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
@@ -5536,6 +5553,15 @@ mod tests {
         )
         .expect("parse trigger_event");
         analyze(&program).expect("trigger_event should type-check");
+    }
+
+    #[test]
+    fn json_get_numeric_accepts_trigger_amounts() {
+        let program = parse(
+            "fn f() { let ev = trigger_event(); let _amount: Amount = json_get_numeric(ev, name(\"amount\")); }",
+        )
+        .expect("parse json_get_numeric");
+        analyze(&program).expect("json_get_numeric should type-check");
     }
 
     #[test]

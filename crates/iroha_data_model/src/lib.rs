@@ -127,6 +127,8 @@ pub mod proof;
 pub mod qr_stream;
 /// Query builders, predicates, and parameter types.
 pub mod query;
+/// Generic hidden-program RAM-LFE program policies and receipts.
+pub mod ram_lfe;
 /// Repo agreement descriptors and governance knobs.
 pub mod repo;
 /// Role-based access control definitions.
@@ -360,6 +362,7 @@ pub mod prelude {
         peer::prelude::*,
         permission::prelude::*,
         query::prelude::*,
+        ram_lfe::prelude::*,
         repo::prelude::*,
         role::prelude::*,
         sns::prelude::*,

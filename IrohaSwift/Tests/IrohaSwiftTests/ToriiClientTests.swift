@@ -7376,6 +7376,225 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    func testProposeMultisigContractCallEncodesAliasSelector() {
+        let expectation = expectation(description: "propose multisig contract call")
+        let proposalId = String(repeating: "a", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/call/multisig/propose")
+            XCTAssertEqual(request.httpMethod, "POST")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@hbl")
+            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["namespace"] as? String, "apps")
+            XCTAssertEqual(json["contract_id"] as? String, "mint")
+            XCTAssertEqual(json["entrypoint"] as? String, "execute")
+            XCTAssertEqual(json["gas_limit"] as? Int, 5)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigContractCallProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl"),
+            signerAccountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            namespace: "apps",
+            contractId: "mint",
+            entrypoint: "execute",
+            payload: .object(["amount": .string("10")]),
+            gasAssetId: "norito:4e52543000000011",
+            feeSponsor: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            gasLimit: 5
+        )
+        makeClient().proposeMultisigContractCall(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertTrue(response.ok)
+                XCTAssertEqual(response.resolvedMultisigAccountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                XCTAssertEqual(response.proposalId, proposalId)
+                XCTAssertEqual(response.instructionsHash, proposalId)
+                XCTAssertEqual(response.creationTimeMs, 123)
+                XCTAssertEqual(response.signingMessageB64, "AQ==")
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testApproveMultisigContractCallEncodesConcreteSelector() {
+        let expectation = expectation(description: "approve multisig contract call")
+        let proposalId = String(repeating: "b", count: 64)
+        let txHash = String(repeating: "c", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/call/multisig/approve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["multisig_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            XCTAssertEqual(json["proposal_id"] as? String, proposalId)
+            XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","executed_tx_hash_hex":"\(txHash)"}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigContractCallApproveRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            signerAccountId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            signatureB64: "AQ==",
+            proposalId: proposalId
+        )
+        makeClient().approveMultisigContractCall(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertTrue(response.ok)
+                XCTAssertEqual(response.proposalId, proposalId)
+                XCTAssertEqual(response.executedTxHashHex, txHash)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testGetMultisigSpecDecodesResolvedAccount() {
+        let expectation = expectation(description: "multisig spec")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/spec")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@ubl")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","spec":{"quorum":2,"transaction_ttl_ms":60000}}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigSpecRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@ubl")
+        )
+        makeClient().getMultisigSpec(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertEqual(response.resolvedMultisigAccountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                XCTAssertEqual(response.spec["quorum"], .number(2))
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testListMultisigProposalsDecodesEntries() {
+        let expectation = expectation(description: "multisig proposals list")
+        let proposalId = String(repeating: "d", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl"]}}]}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposalsListRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl")
+        )
+        makeClient().listMultisigProposals(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertEqual(response.proposals.count, 1)
+                XCTAssertEqual(response.proposals.first?.proposalId, proposalId)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testGetMultisigProposalDecodesProposalLookup() {
+        let expectation = expectation(description: "multisig proposal get")
+        let proposalId = String(repeating: "e", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["instructions_hash"] as? String, proposalId)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl","operator2@hbl"]}}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigProposalGetRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl"),
+            instructionsHash: proposalId
+        )
+        makeClient().getMultisigProposal(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertEqual(response.proposalId, proposalId)
+                XCTAssertEqual(response.instructionsHash, proposalId)
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {
+        let selector = ToriiMultisigAccountSelector(
+            multisigAccountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            multisigAccountAlias: "cbdc@hbl"
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(selector)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("exactly one"))
+        }
+    }
+
     func testFetchContractCodeBytesDecodesResponse() {
         let expectation = expectation(description: "fetch code bytes")
         let codeHash = String(repeating: "2", count: 64)

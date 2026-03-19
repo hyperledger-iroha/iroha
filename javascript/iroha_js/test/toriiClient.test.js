@@ -14904,6 +14904,201 @@ test("callContract rejects unsupported option fields", async () => {
   );
 });
 
+test("proposeMultisigContractCall posts alias selector and normalizes response", async () => {
+  let captured;
+  const responsePayload = {
+    ok: true,
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    submitted: false,
+    proposal_id: "a".repeat(64),
+    instructions_hash: "a".repeat(64),
+    creation_time_ms: 123456,
+    signing_message_b64: "AQ==",
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.proposeMultisigContractCall({
+    multisigAccountAlias: "cbdc@hbl",
+    signerAccountId: FIXTURE_ALICE_ID,
+    namespace: "apps",
+    contractId: "mint",
+    entrypoint: "execute",
+    payload: { amount: "10" },
+    gasAssetId: FIXTURE_ASSET_ID_D,
+    feeSponsor: FIXTURE_BOB_ID,
+    gasLimit: 5,
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body, {
+    multisig_account_alias: "cbdc@hbl",
+    signer_account_id: FIXTURE_ALICE_ID,
+    namespace: "apps",
+    contract_id: "mint",
+    entrypoint: "execute",
+    payload: { amount: "10" },
+    gas_asset_id: FIXTURE_ASSET_ID_D,
+      fee_sponsor: FIXTURE_BOB_ID,
+      gas_limit: 5,
+  });
+  assert.deepEqual(result, {
+    ...responsePayload,
+    executed_tx_hash_hex: null,
+  });
+});
+
+test("approveMultisigContractCall posts concrete selector and normalizes response", async () => {
+  let captured;
+  const responsePayload = {
+    ok: true,
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    submitted: true,
+    proposal_id: "b".repeat(64),
+    instructions_hash: "b".repeat(64),
+    executed_tx_hash_hex: "c".repeat(64),
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.approveMultisigContractCall({
+    multisigAccountId: FIXTURE_ALICE_ID,
+    signerAccountId: FIXTURE_BOB_ID,
+    proposalId: "b".repeat(64),
+    signatureB64: "AQ==",
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/approve`);
+  const body = JSON.parse(captured.init.body);
+  assert.deepEqual(body, {
+    multisig_account_id: FIXTURE_ALICE_ID,
+    signer_account_id: FIXTURE_BOB_ID,
+      proposal_id: "b".repeat(64),
+      signature_b64: "AQ==",
+  });
+  assert.deepEqual(result, {
+    ...responsePayload,
+    creation_time_ms: null,
+    signing_message_b64: null,
+  });
+});
+
+test("getMultisigSpec posts selector and returns raw spec payload", async () => {
+  let captured;
+  const responsePayload = {
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    spec: {
+      signatories: [FIXTURE_ALICE_ID, FIXTURE_BOB_ID],
+      quorum: 2,
+      transaction_ttl_ms: 60000,
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getMultisigSpec({
+    multisig_account_alias: "cbdc@ubl",
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/spec`);
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    multisig_account_alias: "cbdc@ubl",
+  });
+  assert.deepEqual(result, responsePayload);
+});
+
+test("listMultisigProposals decodes proposal entries", async () => {
+  const responsePayload = {
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    proposals: [
+      {
+        proposal_id: "d".repeat(64),
+        instructions_hash: "d".repeat(64),
+        proposal: {
+          approvals: [FIXTURE_ALICE_ID],
+          proposed_at_ms: 42,
+        },
+      },
+    ],
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: responsePayload,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const result = await client.listMultisigProposals({
+    multisigAccountAlias: "cbdc@hbl",
+  });
+  assert.deepEqual(result, responsePayload);
+});
+
+test("getMultisigProposal resolves by instructions hash", async () => {
+  let captured;
+  const responsePayload = {
+    resolved_multisig_account_id: FIXTURE_ALICE_ID,
+    proposal_id: "e".repeat(64),
+    instructions_hash: "e".repeat(64),
+    proposal: {
+      approvals: [FIXTURE_ALICE_ID, FIXTURE_BOB_ID],
+      proposed_at_ms: 43,
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: responsePayload,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getMultisigProposal({
+    multisigAccountAlias: "cbdc@hbl",
+    instructionsHash: "e".repeat(64),
+  });
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    multisig_account_alias: "cbdc@hbl",
+    instructions_hash: "e".repeat(64),
+  });
+  assert.deepEqual(result, responsePayload);
+});
+
+test("getMultisigSpec rejects selectors that set both account id and alias", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not be invoked");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.getMultisigSpec({
+        multisigAccountId: FIXTURE_ALICE_ID,
+        multisigAccountAlias: "cbdc@hbl",
+      }),
+    /requires exactly one of multisig_account_id or multisig_account_alias/,
+  );
+});
+
 test("getContractManifest returns normalized payload", async () => {
   const fetchImpl = async () =>
     createResponse({

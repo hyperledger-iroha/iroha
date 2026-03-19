@@ -49,16 +49,42 @@ UAIDs are now the anchor for a second identity layer:
 - Policies can now publish BFV input-encryption parameters through
   `PolicyCommitment.public_parameters`. When present, Torii advertises them on
   `GET /v1/identifier-policies`, and clients may submit BFV-wrapped input
-  instead of plaintext.
+  instead of plaintext. Programmed policies wrap the BFV parameters in a
+  canonical `BfvProgrammedPublicParameters` bundle that also publishes the
+  public `ram_fhe_profile`; legacy raw BFV payloads are upgraded onto that
+  canonical bundle when the commitment is rebuilt.
 - The identifier routes go through the same Torii access-token and rate-limit
   checks as other app-facing endpoints. They are not a bypass around normal
   API policy.
+
+## 1.2 Terminology
+
+The naming split is intentional:
+
+- `ram_lfe` is the outer hidden-function abstraction. It covers policy
+  registration, commitments, public metadata, execution receipts, and
+  verification mode.
+- `BFV` is the Brakerski/Fan-Vercauteren homomorphic encryption scheme used by
+  some `ram_lfe` backends to evaluate encrypted input.
+- `ram_fhe_profile` is BFV-specific metadata, not a second name for the whole
+  feature. It describes the programmed BFV execution machine that wallets and
+  verifiers must target when a policy uses the programmed backend.
+
+In concrete terms:
+
+- `RamLfeProgramPolicy` and `RamLfeExecutionReceipt` are LFE-layer types.
+- `BfvParameters`, `BfvCiphertext`, `BfvProgrammedPublicParameters`, and
+  `BfvRamProgramProfile` are FHE-layer types.
+- `HiddenRamFheProgram` and `HiddenRamFheInstruction` are internal names for
+  the hidden BFV program executed by the programmed backend. They stay on the
+  FHE side because they describe the encrypted execution mechanism rather than
+  the outer policy or receipt abstraction.
 
 Current Torii routes:
 
 | Route | Purpose |
 |-------|---------|
-| `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters and the required `normalization` mode for encrypted client-side input. |
+| `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters, the required `normalization` mode for encrypted client-side input, and `ram_fhe_profile` for programmed BFV policies. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint then derives the `opaque:` handle and returns a signed receipt that `ClaimIdentifier` can submit on-chain, including both the raw `signature_payload_hex` and the parsed `signature_payload`. |
 | `POST /v1/identifiers/resolve` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint resolves the identifier into `{ opaque_id, receipt_hash, uaid, account_id, signature }` when an active claim exists, and also returns the canonical signed payload as `{ signature_payload_hex, signature_payload }`. |
 | `GET /v1/identifiers/receipts/{receipt_hash}` | Looks up the persisted `IdentifierClaimRecord` bound to a deterministic receipt hash so operators and SDKs can audit claim ownership or diagnose replay / mismatch failures without scanning the full identifier index. |
@@ -71,6 +97,10 @@ Current SDK support:
 - `ToriiClient.listIdentifierPolicies()` lists policy metadata, including BFV
   input-encryption metadata when the policy publishes it, plus a decoded
   BFV parameter object via `input_encryption_public_parameters_decoded`.
+  Programmed policies also expose the decoded `ram_fhe_profile`. That field is
+  intentionally BFV-scoped: it lets wallets verify the expected register
+  count, lane count, canonicalization mode, and minimum ciphertext modulus for
+  the programmed FHE backend before encrypting client-side input.
 - `getIdentifierBfvPublicParameters(policy)` and
   `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })` help
   JS callers consume published BFV metadata and build policy-aware request
@@ -124,19 +154,33 @@ Current instruction set:
 - `ClaimIdentifier` (receipt-bound; raw `opaque_id` claims are rejected)
 - `RevokeIdentifier`
 
-Two backends now exist in `iroha_crypto::ram_lfe`:
+Three backends now exist in `iroha_crypto::ram_lfe`:
 
 - the historical commitment-bound `HKDF-SHA3-512` PRF, and
 - a BFV-backed secret affine evaluator that consumes BFV-encrypted identifier
   slots directly. When `iroha_crypto` is built with the default
   `bfv-accel` feature, BFV ring multiplication uses an exact deterministic
   CRT-NTT backend internally; disabling that feature falls back to the
-  scalar schoolbook path with identical outputs.
+  scalar schoolbook path with identical outputs, and
+- a BFV-backed secret programmed evaluator that derives an instruction-driven
+  RAM-style execution trace over encrypted registers and ciphertext memory
+  lanes before deriving the opaque identifier and receipt hash. The programmed
+  backend now requires a stronger BFV modulus floor than the affine path, and
+  its public parameters are published in a canonical bundle that includes the
+  RAM-FHE execution profile consumed by wallets and verifiers.
+
+Here BFV means the Brakerski/Fan-Vercauteren FHE scheme implemented in
+`crates/iroha_crypto/src/fhe_bfv.rs`. It is the encrypted-execution mechanism
+used by the affine and programmed backends, not the name of the outer hidden
+function abstraction.
 
 Torii uses the backend published by the policy commitment. When the BFV backend
 is active, plaintext requests are normalized then encrypted server-side before
-evaluation, while BFV `encrypted_input` requests are evaluated directly and must
-already be normalized client-side.
+evaluation. BFV `encrypted_input` requests for the affine backend are evaluated
+directly and must already be normalized client-side; the programmed backend
+canonicalizes encrypted input back onto the resolver's deterministic BFV
+envelope before executing the secret RAM program so receipt hashes remain
+stable across semantically equivalent ciphertexts.
 
 ## 2. Deriving and verifying UAIDs
 

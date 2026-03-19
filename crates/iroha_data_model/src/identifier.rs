@@ -2,7 +2,7 @@
 
 use std::{fmt, str::FromStr, string::String, vec::Vec};
 
-use iroha_crypto::{Hash, PolicyCommitment, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Hash, PublicKey, Signature, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -10,6 +10,8 @@ use crate::{
     account::{AccountId, OpaqueAccountId},
     name::Name,
     nexus::UniversalAccountId,
+    proof::ProofBox,
+    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
 };
 
 /// Error returned while parsing [`IdentifierPolicyId`] literals.
@@ -135,10 +137,8 @@ pub struct IdentifierPolicy {
     pub owner: AccountId,
     /// Canonicalization mode applied before hidden-function derivation.
     pub normalization: IdentifierNormalization,
-    /// Public commitment to the hidden derivation policy.
-    pub commitment: PolicyCommitment,
-    /// Public key that signs identifier resolution receipts.
-    pub resolver_public_key: PublicKey,
+    /// Referenced generic RAM-LFE program policy.
+    pub program_id: RamLfeProgramId,
     /// Whether the policy is active for new claims and resolutions.
     pub active: bool,
     /// Optional human-readable note.
@@ -154,15 +154,13 @@ impl IdentifierPolicy {
         id: IdentifierPolicyId,
         owner: AccountId,
         normalization: IdentifierNormalization,
-        commitment: PolicyCommitment,
-        resolver_public_key: PublicKey,
+        program_id: RamLfeProgramId,
     ) -> Self {
         Self {
             id,
             owner,
             normalization,
-            commitment,
-            resolver_public_key,
+            program_id,
             active: false,
             note: None,
         }
@@ -208,24 +206,16 @@ pub struct IdentifierClaimRecord {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct IdentifierResolutionReceipt {
-    /// Policy namespace used for the resolution.
-    pub policy_id: IdentifierPolicyId,
-    /// Opaque identifier derived by the hidden-function resolver.
-    pub opaque_id: OpaqueAccountId,
-    /// Hidden-function receipt hash covering the evaluation transcript.
-    pub receipt_hash: Hash,
-    /// UAID reached by the opaque identifier.
-    pub uaid: UniversalAccountId,
-    /// Canonical account currently bound to the UAID.
-    pub account_id: AccountId,
-    /// Resolution timestamp in milliseconds since Unix epoch.
-    pub resolved_at_ms: u64,
-    /// Optional expiry timestamp for the receipt.
+    /// Canonical payload covered by the attestation.
+    pub payload: IdentifierResolutionReceiptPayload,
+    /// Resolver signature over the canonical receipt payload in signed mode.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
-    pub expires_at_ms: Option<u64>,
-    /// Resolver signature over the canonical receipt payload.
-    pub signature: Signature,
+    pub signature: Option<Signature>,
+    /// Proof attachment over the canonical receipt payload in proof mode.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub proof: Option<ProofBox>,
 }
 
 /// Canonical payload covered by an identifier-resolution receipt signature.
@@ -237,6 +227,8 @@ pub struct IdentifierResolutionReceipt {
 pub struct IdentifierResolutionReceiptPayload {
     /// Policy namespace used for the resolution.
     pub policy_id: IdentifierPolicyId,
+    /// Generic RAM-LFE execution receipt payload.
+    pub execution: RamLfeExecutionReceiptPayload,
     /// Opaque identifier derived by the hidden-function resolver.
     pub opaque_id: OpaqueAccountId,
     /// Hidden-function receipt hash covering the evaluation transcript.
@@ -245,27 +237,13 @@ pub struct IdentifierResolutionReceiptPayload {
     pub uaid: UniversalAccountId,
     /// Canonical account currently bound to the UAID.
     pub account_id: AccountId,
-    /// Resolution timestamp in milliseconds since Unix epoch.
-    pub resolved_at_ms: u64,
-    /// Optional expiry timestamp for the receipt.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub expires_at_ms: Option<u64>,
 }
 
 impl IdentifierResolutionReceipt {
     /// Return the canonical signed payload view of this receipt.
     #[must_use]
     pub fn payload(&self) -> IdentifierResolutionReceiptPayload {
-        IdentifierResolutionReceiptPayload {
-            policy_id: self.policy_id.clone(),
-            opaque_id: self.opaque_id,
-            receipt_hash: self.receipt_hash,
-            uaid: self.uaid,
-            account_id: self.account_id.clone(),
-            resolved_at_ms: self.resolved_at_ms,
-            expires_at_ms: self.expires_at_ms,
-        }
+        self.payload.clone()
     }
 
     /// Encode the canonical signed payload bytes used by resolver signatures.
@@ -276,13 +254,29 @@ impl IdentifierResolutionReceipt {
         norito::to_bytes(&self.payload())
     }
 
+    /// Resolution timestamp in milliseconds since Unix epoch.
+    #[must_use]
+    pub const fn resolved_at_ms(&self) -> u64 {
+        self.payload.execution.executed_at_ms
+    }
+
+    /// Optional expiry timestamp for the receipt.
+    #[must_use]
+    pub const fn expires_at_ms(&self) -> Option<u64> {
+        self.payload.execution.expires_at_ms
+    }
+
     /// Verify the receipt signature against the provided public key.
     ///
     /// # Errors
     /// Returns the underlying signature verification error when the signature is invalid.
     pub fn verify(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
-        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(self.signature.clone())
-            .verify(public_key, &self.payload())
+        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(
+            self.signature.clone().ok_or(iroha_crypto::Error::Other(
+                "identifier receipt is missing a signature".to_owned(),
+            ))?,
+        )
+        .verify(public_key, &self.payload)
     }
 }
 

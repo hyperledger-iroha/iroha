@@ -18,13 +18,19 @@ FROM --platform=$BUILDPLATFORM rust:alpine as xx-build
 WORKDIR /app
 COPY --from=xx / /
 
-# NOTE: `git` for `VERGEN_GIT_SHA`; `clang` for `xx-cargo`
-RUN apk add mold git clang jq
+# NOTE: `git` for `VERGEN_GIT_SHA`; `clang` for `xx-cargo`;
+# `clang21-libclang` for bindgen users such as zstd-sys.
+RUN apk add mold git clang clang21-libclang jq
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml .
 COPY crates crates
 COPY data_model data_model
 COPY integration_tests integration_tests
+COPY mochi mochi
+COPY python python
+COPY tools tools
+COPY vendor vendor
+COPY xtask xtask
 # FIX: needed for `VERGEN_GIT_SHA`; prefer to pass `GIT_SHA` explicitly
 COPY .git .git
 # PERF: Cache mounts as in https://github.com/tonistiigi/xx#rust

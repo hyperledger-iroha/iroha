@@ -1433,7 +1433,9 @@ mod tests {
         let record =
             rekey::AccountRekeyRecord::from_account(&account).expect("label must be present");
         assert_eq!(record.label, label);
-        assert_eq!(record.active_signatory, signatory);
+        assert_eq!(record.active_account_id, account_id);
+        assert_eq!(record.active_signatory, Some(signatory));
+        assert!(record.previous_account_ids.is_empty());
         assert!(record.previous_signatories.is_empty());
     }
 
@@ -1464,14 +1466,22 @@ mod tests {
         assert!(account_id.try_signatory().is_none());
 
         let account = Account {
-            id: account_id,
+            id: account_id.clone(),
             metadata: Metadata::default(),
-            label: None,
+            label: Some(rekey::AccountLabel::new(
+                "wonderland".parse().expect("domain id"),
+                "vault".parse::<Name>().expect("label"),
+            )),
             uaid: None,
             opaque_ids: Vec::new(),
             linked_domains: BTreeSet::new(),
         };
         assert!(account.try_signatory().is_none());
+        let record = rekey::AccountRekeyRecord::from_account(&account).expect("record");
+        assert_eq!(record.active_account_id, account_id);
+        assert!(record.active_signatory.is_none());
+        assert!(record.previous_account_ids.is_empty());
+        assert!(record.previous_signatories.is_empty());
     }
 
     #[test]

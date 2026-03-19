@@ -1,6 +1,103 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-18
+Last updated: 2026-03-19
+
+Latest sync (2026-03-19 generic hidden-program RAM-LFE program-policy foundation):
+`crates/iroha_crypto/src/ram_lfe.rs`,
+`crates/iroha_data_model/src/{ram_lfe.rs,identifier.rs,isi/ram_lfe.rs}`,
+`crates/iroha_core/src/{state.rs,smartcontracts/isi/mod.rs,smartcontracts/isi/{ram_lfe.rs,identifier.rs}}`,
+and
+`crates/iroha_torii/src/{identifier_resolution.rs,lib.rs}`
+now cover the on-chain and receipt-verification half of the requested RAM-LFE
+generalization:
+
+- programmed BFV policies now publish canonical RAM-FHE public parameters with
+  a hidden-program digest, verification mode, and optional proof verifier
+  metadata,
+- the generic public surface now consistently uses `ram_lfe` naming, while the
+  BFV backend keeps `ram_fhe` terminology only for execution-profile internals,
+- the UA guide and crypto module docs now spell out that BFV means the
+  Brakerski/Fan-Vercauteren FHE backend, while RAM-LFE names the outer
+  commitment/policy/receipt abstraction,
+- the generic `RamLfeProgramPolicy` registry exists on-chain and identifier
+  policies now reference `program_id` instead of carrying inline commitment
+  material,
+- identifier claim verification now resolves the referenced program policy and
+  validates the nested generic execution receipt payload before accepting a
+  claim,
+- Torii's identifier receipt path now consumes the referenced RAM-LFE program
+  policy instead of the removed inline identifier commitment fields.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo check -p iroha_crypto`
+- `cargo check -p iroha_data_model`
+- `cargo check -p iroha_core`
+- `cargo check -p iroha_torii`
+- `cargo test -p iroha_crypto ram_lfe -- --nocapture`
+- `cargo test -p iroha_core identifier_ -- --nocapture`
+- `cargo test -p iroha_torii --lib --no-run`
+- `cargo test -p iroha_torii identifier_ -- --nocapture`
+
+Open work for this slice now remains:
+- rename `torii.identifier_resolver` to `torii.ram_lfe`, move runtime material
+  to `program_id`-keyed entries, and carry the generic signer/proof runtime
+  material there,
+- add the generic Torii RAM-LFE routes:
+  - `GET /v1/ram-lfe/program-policies`
+  - `POST /v1/ram-lfe/programs/{program_id}/execute`
+  - `POST /v1/ram-lfe/receipts/verify`
+- extend `openapi.rs` and the JS/Swift/Android SDKs to the generic
+  RAM-LFE policy/receipt schema, including generic BFV request builders and
+  signed/proof receipt verification,
+- run the targeted Rust tests for the new program-policy and identifier-claim
+  flows, then the broader workspace validation sweep when the multi-hour budget
+  is available.
+
+Latest sync (2026-03-19 programmed BFV `ram_lfe` backend + public RAM-FHE profile):
+`crates/iroha_crypto/src/ram_lfe.rs`,
+`crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,openapi.rs}`,
+and
+`docs/source/universal_accounts_guide.md`
+close the old "BFV-protected input transport + affine-only evaluator" gap in
+the UAID identifier slice:
+
+- `ram_lfe` now exposes three backends instead of two:
+  - `hkdf-sha3-512-prf-v1`,
+  - `bfv-affine-sha3-256-v1`, and
+  - `bfv-programmed-sha3-256-v1`.
+- The new programmed backend derives a secret RAM-style instruction trace and
+  executes it over encrypted registers plus ciphertext memory lanes before
+  deriving the `opaque_id` and `receipt_hash`.
+- Programmed policies now require a higher BFV ciphertext modulus than the
+  affine path because the RAM program uses ciphertext-ciphertext
+  multiplication.
+- Programmed policies now publish a canonical `BfvProgrammedPublicParameters`
+  bundle with an explicit `BfvRamProgramProfile`, and Torii surfaces that
+  profile as `ram_fhe_profile` on `GET /v1/identifier-policies` so wallets can
+  verify the expected register count, lane count, canonicalization mode, and
+  modulus floor before building encrypted requests.
+- Torii resolution and claim-receipt flows now run plaintext requests through
+  the programmed backend directly, while programmed `encrypted_input` requests
+  are canonicalized back onto the resolver's deterministic BFV envelope before
+  execution so receipt hashes stay stable across semantically equivalent
+  ciphertexts.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_crypto ram_lfe -- --nocapture`
+- `cargo test -p iroha_torii identifier_ --lib -- --nocapture`
+- `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture`
+- `cargo check -p iroha_crypto -p iroha_torii`
+- `cargo clippy -p iroha_crypto -p iroha_torii --all-targets -- -D warnings`
+
+Open work for this slice now remains:
+- eventually `cargo test --workspace` when the several-hour budget is available,
+- keep extending deterministic BFV acceleration into feature-gated
+  hardware-specific SIMD/Metal/CUDA paths without changing transcript layout,
+- if the product goal moves beyond the current identifier resolver shape, define
+  a richer programmed/private-function model explicitly instead of treating the
+  new backend as a generic arbitrary RAM-FHE machine.
 
 Latest sync (2026-03-18 BFV acceleration + workspace lint closure):
 `crates/iroha_crypto/src/fhe_bfv.rs`,
@@ -2685,6 +2782,9 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 
 ## Multisig Admission Follow-up
 1. Add an end-to-end integration test that proves an unregistered signatory can successfully complete `MultisigPropose`/`MultisigApprove` against a live multi-peer network (not just unit-level admission/execution slices).
+
+## Trigger ABI Follow-up
+1. Deploy and validate the new `json_get_numeric` trigger path in downstream SBP issuance-swap contracts, then add a multi-peer integration test that executes a by-call trigger carrying decimal `Numeric` args through to `transfer_asset(...)`.
 
 ## Query Performance Follow-up
 1. Re-run `snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch` on an isolated host/profile and lock acceptance on stable repeated samples (current host shows large Criterion noise spikes).

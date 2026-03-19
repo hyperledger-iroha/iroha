@@ -1,11 +1,13 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use iroha_crypto::{Hash, PublicKey};
+use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, PointerType, VMError,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, Name, PermissionToken,
         ScopedAccountId, WsvHost,
     },
     syscalls,
@@ -202,4 +204,46 @@ fn test_mint_syscall_permission() {
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint syscall failed");
+}
+
+#[test]
+fn test_json_get_numeric_reads_decimal_strings() {
+    let domain: DomainId = "domain".parse().expect("domain");
+    let public_key: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+            .parse()
+            .expect("public key");
+    let scoped_subject = test_account(domain, public_key);
+    let host = WsvHost::new_with_subject(
+        MockWorldStateView::new(),
+        AccountId::from(&scoped_subject),
+        HashMap::new(),
+    );
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+
+    let json = Json::from_str_norito(r#"{"amount":"0.00001"}"#).expect("json");
+    let json_payload = norito::to_bytes(&json).expect("encode json");
+    let key_payload =
+        norito::to_bytes(&Name::from_str("amount").expect("name")).expect("encode key");
+    let json_ptr = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Json as u16, &json_payload))
+        .expect("alloc json");
+    let key_ptr = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Name as u16, &key_payload))
+        .expect("alloc key");
+
+    vm.set_register(10, json_ptr);
+    vm.set_register(11, key_ptr);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_NUMERIC as u8]);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("json_get_numeric syscall failed");
+
+    let tlv = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("numeric tlv");
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode numeric");
+    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
 }

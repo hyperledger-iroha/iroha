@@ -214,6 +214,18 @@ impl JsonKeyCodec for crate::identifier::IdentifierPolicyId {
     }
 }
 
+impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse::<crate::ram_lfe::RamLfeProgramId>()
+            .map_err(|err| json::Error::Message(err.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mv::json::JsonKeyCodec;

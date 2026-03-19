@@ -720,6 +720,35 @@ seiyaku NegTest {
     }
 
     #[test]
+    fn json_get_numeric_emits_numeric_syscall() {
+        let src = r#"
+seiyaku JsonNumericTest {
+  meta { abi_version: 1; }
+  kotoage fn run() permission(Admin) {
+    let ev = trigger_event();
+    let _amount: Amount = json_get_numeric(ev, name("amount"));
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile json_get_numeric");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_JSON_GET_NUMERIC as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected JSON_GET_NUMERIC syscall in compiled code"
+        );
+    }
+
+    #[test]
     fn detect_vector_usage_includes_vector_gated_crypto_ops() {
         let ops = [
             instruction::wide::crypto::SHA256BLOCK,
@@ -5140,6 +5169,48 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_I64 as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetNumeric { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_NUMERIC; move r10
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_NUMERIC as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
