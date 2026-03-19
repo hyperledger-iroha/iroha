@@ -7137,6 +7137,17 @@ const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
 const MULTISIG_PROPOSAL_METADATA_PREFIX: &str = "multisig/proposals/";
 
 #[cfg(feature = "app_api")]
+fn multisig_account_state_contract_key(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Name {
+    Name::from_str(&format!(
+        "multisig/account/{}",
+        HashOf::new(multisig_account_id)
+    ))
+    .expect("multisig account state contract key")
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_not_found_error() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
@@ -7213,11 +7224,32 @@ fn load_multisig_spec(
     })?;
     let key =
         Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("static multisig spec metadata key");
-    let value = account.metadata().get(&key).cloned().ok_or_else(|| {
-        multisig_selector_validation_error(format!(
+    if let Some(value) = account.metadata().get(&key).cloned() {
+        return decode_multisig_spec_from_metadata(value);
+    }
+
+    let storage = world.smart_contract_state();
+    let contract_key = multisig_account_state_contract_key(multisig_account_id);
+    let Some(bytes) = storage.get(contract_key.as_ref()) else {
+        return Err(multisig_selector_validation_error(format!(
             "resolved account is not a multisig authority: {multisig_account_id}"
+        )));
+    };
+    let account_state = norito::decode_from_bytes::<
+        iroha_executor_data_model::isi::multisig::MultisigAccountState,
+    >(bytes)
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid native multisig account state on account: {err}"
         ))
     })?;
+    Ok(account_state.spec)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_multisig_spec_from_metadata(
+    value: IrohaJson,
+) -> Result<iroha_executor_data_model::isi::multisig::MultisigSpec> {
     value.try_into_any_norito().map_err(|err| {
         conversion_error(format!("invalid multisig spec metadata on account: {err}"))
     })
@@ -7472,7 +7504,9 @@ mod multisig_selector_tests {
         permission, prelude as dm,
         query::error::QueryExecutionFail,
     };
-    use iroha_executor_data_model::isi::multisig::{MultisigProposalValue, MultisigSpec};
+    use iroha_executor_data_model::isi::multisig::{
+        MultisigAccountState, MultisigProposalValue, MultisigSpec,
+    };
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
@@ -7856,6 +7890,72 @@ mod multisig_selector_tests {
         .expect_err("non-multisig alias must fail");
         let message = expect_conversion(err);
         assert!(message.contains("resolved account is not a multisig authority"));
+    }
+
+    #[tokio::test]
+    async fn multisig_spec_falls_back_to_contract_state_when_metadata_is_missing() {
+        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let label_name: Name = "cbdc".parse().expect("label");
+
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let signer_one_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_one.public_key().clone());
+        let signer_two_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_two.public_key().clone());
+
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let multisig_id = dm::ScopedAccountId::new_multisig(domain_id.clone(), policy);
+        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([
+                (signer_one_id.clone().into(), 1_u8),
+                (signer_two_id.clone().into(), 1_u8),
+            ]),
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+
+        let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name.clone());
+        let authority = signer_one_id.account().clone();
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let multisig_account = Account::new(multisig_id)
+            .with_label(Some(label))
+            .build(&authority);
+        let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
+        let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
+
+        let mut world = World::with(
+            [domain],
+            [multisig_account, signer_one_account, signer_two_account],
+            [],
+        );
+        let account_state =
+            MultisigAccountState::new(multisig_account_id.clone(), domain_id.clone(), spec.clone());
+        world.smart_contract_state.insert(
+            multisig_account_state_contract_key(&multisig_account_id),
+            norito::to_bytes(&account_state).expect("encode account state"),
+        );
+
+        let state = build_state(world);
+        let JsonBody(response) = handle_post_multisig_spec(
+            state,
+            NoritoJson(MultisigSpecRequestDto {
+                selector: alias_selector(&format!("{label_name}@{domain_id}")),
+            }),
+        )
+        .await
+        .expect("contract-state fallback should resolve spec");
+
+        assert_eq!(response.resolved_multisig_account_id, multisig_account_id);
+        assert_eq!(response.spec, spec);
     }
 
     #[tokio::test]
