@@ -6,7 +6,6 @@
 //! snapshots used by the TUI.
 
 use std::{
-    collections::HashMap,
     io::Read,
     time::{Duration, Instant},
 };
@@ -99,17 +98,27 @@ pub struct StatusPayload {
     pub txs_approved: Option<u64>,
     pub txs_rejected: Option<u64>,
     pub queue_size: Option<u64>,
-    pub uptime: Option<u64>,
+    pub uptime: Option<Uptime>,
     pub view_changes: Option<u64>,
     #[allow(dead_code)]
     pub governance: Option<json::Value>,
     pub crypto: Option<CryptoStatusPayload>,
 }
 
+#[derive(Debug, Clone, JsonDeserialize, Default)]
+pub struct Uptime {
+    pub secs: u64,
+    pub nanos: u32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MetricsSnapshot {
+    pub block_height: Option<u64>,
+    pub block_height_non_empty: Option<u64>,
+    pub tx_accepted: Option<u64>,
+    pub tx_rejected: Option<u64>,
+    pub tx_queue_depth: Option<u64>,
     pub gas_used: Option<u64>,
-    pub fee_units: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +222,7 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
         notices.push(notice.clone());
     }
 
-    let status = status_result.ok().and_then(|info| info.payload);
+    let mut status = status_result.ok().and_then(|info| info.payload);
     if let Some(crypto) = status.as_ref().and_then(|payload| payload.crypto.as_ref()) {
         if crypto
             .sm_helpers_available
@@ -242,6 +251,22 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
             MetricsSnapshot::default()
         }
     };
+
+    if let Some(ref mut status) = status {
+        status.blocks = status.blocks.or(metrics.block_height);
+
+        status.blocks_non_empty =
+            status.blocks_non_empty.or(metrics.block_height_non_empty);
+
+        status.txs_approved =
+            status.txs_approved.or(metrics.tx_accepted);
+
+        status.txs_rejected =
+            status.txs_rejected.or(metrics.tx_rejected);
+
+        status.queue_size =
+            status.queue_size.or(metrics.tx_queue_depth);
+    }
 
     PeerUpdate {
         index,
@@ -373,22 +398,43 @@ fn read_body_with_limit<R: Read>(mut reader: R, limit: usize) -> Result<(Vec<u8>
 }
 
 fn parse_prometheus_metrics(text: &str) -> MetricsSnapshot {
-    let mut values: HashMap<&str, u64> = HashMap::new();
+    let mut snap = MetricsSnapshot::default();
+
     for line in text.lines() {
         let line = line.trim();
+
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some((key, value)) = line.split_once(' ')
-            && let Ok(parsed) = value.parse::<u64>()
-        {
-            values.insert(key, parsed);
+
+        if let Some(v) = line.strip_prefix("txs{type=\"accepted\"} ") {
+            snap.tx_accepted = v.parse().ok();
+            continue;
+        }
+
+        if let Some(v) = line.strip_prefix("txs{type=\"rejected\"} ") {
+            snap.tx_rejected = v.parse().ok();
+            continue;
+        }
+
+        let Some((key, value)) = line.split_once(' ') else {
+            continue;
+        };
+
+        let Ok(v) = value.parse::<u64>() else {
+            continue;
+        };
+
+        match key {
+            "block_height" => snap.block_height = Some(v),
+            "block_height_non_empty" => snap.block_height_non_empty = Some(v),
+            "block_gas_used" => snap.gas_used = Some(v),
+            "sumeragi_tx_queue_depth" => snap.tx_queue_depth = Some(v),
+            _ => {}
         }
     }
-    MetricsSnapshot {
-        gas_used: values.get("block_gas_used").copied(),
-        fee_units: values.get("block_fee_total_units").copied(),
-    }
+
+    snap
 }
 
 pub struct StubCluster {
@@ -446,7 +492,7 @@ fn stub_status_payload(peer_index: usize, total_peers: usize) -> StatusPayload {
         txs_approved: Some(320 + peer_index as u64 * 4),
         txs_rejected: Some(peer_index as u64),
         queue_size: Some((peer_index as u64) % 3),
-        uptime: Some(1),
+        uptime: Some(Uptime { secs: 1, nanos: 0 }),
         view_changes: Some(0),
         governance: None,
         crypto: None,
@@ -456,7 +502,8 @@ fn stub_status_payload(peer_index: usize, total_peers: usize) -> StatusPayload {
 fn stub_metrics_snapshot(peer_index: usize) -> MetricsSnapshot {
     MetricsSnapshot {
         gas_used: Some(100 + peer_index as u64 * 17),
-        fee_units: Some(50 + peer_index as u64 * 7),
+        ..Default::default()
+
     }
 }
 

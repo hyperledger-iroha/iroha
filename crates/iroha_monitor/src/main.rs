@@ -1507,14 +1507,15 @@ fn render_focus_panel(frame: &mut ratatui::Frame<'_>, area: ratatui::layout::Rec
                 "Uptime {}  Gas {}  Fees {}",
                 status
                     .uptime
-                    .map_or_else(|| "-".to_string(), |value| format!("{value} s")),
+                    .as_ref()
+                    .map_or_else(|| "-".to_string(), |value| format!("{} s", value.secs)),
                 snapshot
                     .metrics
                     .gas_used
                     .map_or_else(|| "-".to_string(), compact_u64),
                 snapshot
                     .metrics
-                    .fee_units
+                    .gas_used
                     .map_or_else(|| "-".to_string(), compact_u64),
             )));
         }
@@ -1611,10 +1612,10 @@ fn collect_summary(app: &AppState) -> SummaryStats {
                 online += 1;
             }
             if let Some(status) = &snapshot.status {
-                blocks += status.blocks.unwrap_or(0);
-                non_empty += status.blocks_non_empty.unwrap_or(0);
-                approved += status.txs_approved.unwrap_or(0);
-                rejected += status.txs_rejected.unwrap_or(0);
+                blocks = blocks.max(status.blocks.unwrap_or(0));
+                non_empty = non_empty.max(status.blocks_non_empty.unwrap_or(0));
+                approved = approved.max(status.txs_approved.unwrap_or(0));
+                rejected = rejected.max(status.txs_rejected.unwrap_or(0));
                 queue += status.queue_size.unwrap_or(0);
                 reported = reported.max(status.peers.unwrap_or(0));
             }
@@ -1697,8 +1698,8 @@ fn peer_note(slot: &PeerSlot) -> String {
             if let Some(view_changes) = status.view_changes {
                 return format!("view changes {view_changes}");
             }
-            if let Some(uptime) = status.uptime {
-                return format!("uptime {uptime} s");
+            if let Some(uptime) = &status.uptime {
+                return format!("uptime {} s", uptime.secs);
             }
         }
         return "nominal".to_string();
