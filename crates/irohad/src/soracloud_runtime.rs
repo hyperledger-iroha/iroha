@@ -15,171 +15,30 @@ use std::{
 };
 
 use eyre::WrapErr;
-use iroha_core::state::{State, StateView};
+use iroha_core::soracloud_runtime::{
+    SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
+    SoracloudLocalReadRequest, SoracloudLocalReadResponse,
+    SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
+    SoracloudRuntime, SoracloudRuntimeApartmentPlan, SoracloudRuntimeArtifactPlan,
+    SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
+    SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle, SoracloudRuntimeRevisionRole,
+    SoracloudRuntimeServicePlan, SoracloudRuntimeSnapshot,
+};
+use iroha_core::state::{State, StateView, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    block::BlockHeader,
-    prelude::Name,
     soracloud::{
-        AgentApartmentManifestV1, SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1,
-        SoraArtifactKindV1, SoraDeploymentBundleV1, SoraServiceDeploymentStateV1,
-        SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
-        SoraTrainingJobRecordV1, SoraContainerRuntimeV1,
+        SoraAgentApartmentRecordV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
+        SoraDeploymentBundleV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
+        SoraServiceHandlerClassV1, SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1,
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use mv::storage::StorageReadOnly;
-use norito::{
-    derive::{JsonDeserialize, JsonSerialize},
-    json::JsonSerialize as _,
-};
 use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 
 const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
-const RUNTIME_SNAPSHOT_SCHEMA_VERSION: u16 = 1;
-
-/// Distinguishes the local runtime role of a materialized service revision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-enum SoracloudRuntimeRevisionRole {
-    /// The currently active deployment revision.
-    Active,
-    /// A canary candidate revision that must be materialized during rollout.
-    CanaryCandidate,
-}
-
-/// Node-local mailbox materialization metadata for a handler.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub(crate) struct SoracloudRuntimeMailboxPlan {
-    /// Stable handler identifier.
-    pub handler_name: String,
-    /// Stable logical queue name.
-    pub queue_name: String,
-    /// Maximum retained pending messages.
-    pub max_pending_messages: u32,
-    /// Maximum message size.
-    pub max_message_bytes: u64,
-    /// Retention bound for queued messages.
-    pub retention_blocks: u32,
-}
-
-/// Node-local hydration/materialization metadata for a referenced artifact.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub(crate) struct SoracloudRuntimeArtifactPlan {
-    /// Artifact class.
-    pub kind: SoraArtifactKindV1,
-    /// Content-addressed artifact digest.
-    pub artifact_hash: String,
-    /// Logical artifact path inside the service revision.
-    pub artifact_path: String,
-    /// Optional consuming handler.
-    pub handler_name: Option<String>,
-    /// Local cache path where the runtime manager expects the artifact.
-    pub local_cache_path: String,
-    /// Whether the artifact is already present in the node-local cache.
-    pub available_locally: bool,
-}
-
-/// Node-local materialization plan for one active service revision.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub(crate) struct SoracloudRuntimeServicePlan {
-    /// Service identifier.
-    pub service_name: String,
-    /// Materialized revision/version.
-    pub service_version: String,
-    /// Whether this revision is the active one or a rollout candidate.
-    pub role: SoracloudRuntimeRevisionRole,
-    /// Requested traffic percentage for this revision.
-    pub traffic_percent: u8,
-    /// Runtime target.
-    pub runtime: SoraContainerRuntimeV1,
-    /// Bundle digest.
-    pub bundle_hash: String,
-    /// Bundle path declared by the container manifest.
-    pub bundle_path: String,
-    /// Entrypoint declared by the container manifest.
-    pub entrypoint: String,
-    /// Node-local cache path for the executable bundle.
-    pub bundle_cache_path: String,
-    /// Whether the bundle is already present locally.
-    pub bundle_available_locally: bool,
-    /// Current deployment process generation when known for this revision.
-    pub process_generation: Option<u64>,
-    /// Current runtime health projection.
-    pub health_status: SoraServiceHealthStatusV1,
-    /// Current runtime load projection.
-    pub load_factor_bps: u16,
-    /// Pending mailbox count reported for this revision.
-    pub reported_pending_mailbox_messages: u32,
-    /// Pending mailbox messages currently stored in authoritative state.
-    pub authoritative_pending_mailbox_messages: u32,
-    /// Active rollout handle when this revision is part of a canary rollout.
-    pub rollout_handle: Option<String>,
-    /// Local directory where the revision plan is materialized.
-    pub materialization_dir: String,
-    /// Declared replicated handler mailboxes.
-    pub mailboxes: Vec<SoracloudRuntimeMailboxPlan>,
-    /// Referenced artifacts that still need local hydration.
-    pub artifacts: Vec<SoracloudRuntimeArtifactPlan>,
-}
-
-/// Node-local materialization plan for an active agent apartment.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub(crate) struct SoracloudRuntimeApartmentPlan {
-    /// Apartment identifier.
-    pub apartment_name: String,
-    /// Canonical manifest hash.
-    pub manifest_hash: String,
-    /// Current runtime status.
-    pub status: SoraAgentRuntimeStatusV1,
-    /// Current process generation.
-    pub process_generation: u64,
-    /// Audit sequence when the lease expires.
-    pub lease_expires_sequence: u64,
-    /// Audit sequence of the most recent observed activity.
-    pub last_active_sequence: u64,
-    /// Node-local directory where the apartment plan is materialized.
-    pub materialization_dir: String,
-    /// Number of pending wallet approvals.
-    pub pending_wallet_request_count: u32,
-    /// Number of queued mailbox messages.
-    pub pending_mailbox_message_count: u32,
-    /// Remaining autonomy budget.
-    pub autonomy_budget_remaining_units: u64,
-    /// Number of explicitly approved autonomy artifacts.
-    pub approved_artifact_count: u32,
-    /// Number of recorded autonomy runs.
-    pub autonomy_run_count: u32,
-    /// Number of revoked policy capabilities.
-    pub revoked_policy_capability_count: u32,
-}
-
-/// Persisted snapshot of node-local Soracloud runtime materialization state.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-pub(crate) struct SoracloudRuntimeSnapshot {
-    /// Schema version for the local runtime snapshot format.
-    pub schema_version: u16,
-    /// Height of the authoritative state view used to build this snapshot.
-    pub observed_height: u64,
-    /// Latest committed block hash at snapshot time, when present.
-    pub observed_block_hash: Option<String>,
-    /// Materialized active service revisions grouped by service name then version.
-    pub services: BTreeMap<String, BTreeMap<String, SoracloudRuntimeServicePlan>>,
-    /// Materialized active agent apartments keyed by apartment name.
-    pub apartments: BTreeMap<String, SoracloudRuntimeApartmentPlan>,
-}
-
-impl Default for SoracloudRuntimeSnapshot {
-    fn default() -> Self {
-        Self {
-            schema_version: RUNTIME_SNAPSHOT_SCHEMA_VERSION,
-            observed_height: 0,
-            observed_block_hash: None,
-            services: BTreeMap::new(),
-            apartments: BTreeMap::new(),
-        }
-    }
-}
 
 /// Runtime-manager configuration derived from node storage settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,6 +81,97 @@ impl SoracloudRuntimeManagerHandle {
     #[must_use]
     pub fn state_dir(&self) -> PathBuf {
         self.state_dir.as_ref().clone()
+    }
+}
+
+impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
+    fn snapshot(&self) -> SoracloudRuntimeSnapshot {
+        SoracloudRuntimeManagerHandle::snapshot(self)
+    }
+
+    fn state_dir(&self) -> PathBuf {
+        SoracloudRuntimeManagerHandle::state_dir(self)
+    }
+}
+
+impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
+    fn execute_local_read(
+        &self,
+        _request: SoracloudLocalReadRequest,
+    ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+        Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "local read execution has not been implemented in the embedded runtime manager yet",
+        ))
+    }
+
+    fn execute_ordered_mailbox(
+        &self,
+        request: SoracloudOrderedMailboxExecutionRequest,
+    ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError> {
+        let handler_class = request
+            .handler
+            .as_ref()
+            .map(|handler| handler.class)
+            .unwrap_or(SoraServiceHandlerClassV1::Update);
+        let failure = request.handler.is_none();
+        let health_status = if failure {
+            SoraServiceHealthStatusV1::Degraded
+        } else {
+            SoraServiceHealthStatusV1::Healthy
+        };
+        let outcome_label = if failure { "missing_handler" } else { "synthetic_ok" };
+        let result_commitment = mailbox_result_commitment(
+            request.mailbox_message.message_id,
+            request.deployment.service_name.as_ref(),
+            &request.deployment.current_service_version,
+            request.mailbox_message.to_handler.as_ref(),
+            outcome_label,
+            request.execution_sequence,
+        );
+        let receipt_id = mailbox_receipt_id(
+            request.mailbox_message.message_id,
+            request.deployment.service_name.as_ref(),
+            &request.deployment.current_service_version,
+            request.execution_sequence,
+            outcome_label,
+        );
+        let runtime_state = Some(updated_runtime_state(
+            request.runtime_state.clone(),
+            &request,
+            health_status,
+        ));
+
+        Ok(SoracloudOrderedMailboxExecutionResult {
+            state_mutations: Vec::new(),
+            outbound_mailbox_messages: Vec::new(),
+            runtime_state,
+            runtime_receipt: SoraRuntimeReceiptV1 {
+                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                receipt_id,
+                service_name: request.deployment.service_name,
+                service_version: request.deployment.current_service_version,
+                handler_name: request.mailbox_message.to_handler.clone(),
+                handler_class,
+                request_commitment: request.mailbox_message.payload_commitment,
+                result_commitment,
+                certified_by: SoraCertifiedResponsePolicyV1::None,
+                emitted_sequence: request.execution_sequence,
+                mailbox_message_id: Some(request.mailbox_message.message_id),
+                journal_artifact_hash: None,
+                checkpoint_artifact_hash: None,
+            },
+        })
+    }
+
+    fn execute_apartment(
+        &self,
+        _request: SoracloudApartmentExecutionRequest,
+    ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError> {
+        Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "apartment execution has not been implemented in the embedded runtime manager yet",
+        ))
     }
 }
 
@@ -424,10 +374,14 @@ fn build_runtime_snapshot(
     let world = view.world();
 
     for (service_name, deployment) in world.soracloud_service_deployments().iter() {
-        let service_name = service_name.to_string();
+        let service_name_key = service_name.clone();
+        let service_name = service_name_key.to_string();
         let versions = collect_active_versions(deployment);
-        let runtime_state = world.soracloud_service_runtime().get(service_name.parse::<Name>().as_ref().unwrap_or_else(|_| unreachable!()));
-        let authoritative_pending = authoritative_mailbox_counts(world.soracloud_mailbox_messages());
+        let runtime_state = world.soracloud_service_runtime().get(&service_name_key);
+        let authoritative_pending = authoritative_mailbox_counts(
+            world.soracloud_mailbox_messages(),
+            world.soracloud_runtime_receipts(),
+        );
 
         let mut version_plans = BTreeMap::new();
         for (service_version, role, traffic_percent) in versions {
@@ -512,7 +466,7 @@ fn build_runtime_snapshot(
         .collect();
 
     Ok(SoracloudRuntimeSnapshot {
-        schema_version: RUNTIME_SNAPSHOT_SCHEMA_VERSION,
+        schema_version: SoracloudRuntimeSnapshot::default().schema_version,
         observed_height: u64::try_from(view.height()).unwrap_or(u64::MAX),
         observed_block_hash: view.latest_block_hash().map(|hash| hash.to_string()),
         services,
@@ -619,13 +573,87 @@ fn collect_active_versions(
 
 fn authoritative_mailbox_counts(
     messages: &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1>,
+    receipts: &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1>,
 ) -> BTreeMap<String, u32> {
+    let consumed: BTreeSet<Hash> = receipts
+        .iter()
+        .filter_map(|(_receipt_id, receipt)| receipt.mailbox_message_id)
+        .collect();
     let mut counts = BTreeMap::new();
     for (_, message) in messages.iter() {
+        if consumed.contains(&message.message_id) {
+            continue;
+        }
         let entry = counts.entry(message.to_service.to_string()).or_insert(0u32);
         *entry = entry.saturating_add(1);
     }
     counts
+}
+
+fn mailbox_result_commitment(
+    message_id: Hash,
+    service_name: &str,
+    service_version: &str,
+    handler_name: &str,
+    outcome_label: &str,
+    execution_sequence: u64,
+) -> Hash {
+    Hash::new(
+        format!(
+            "soracloud:runtime-result:{message_id}:{service_name}:{service_version}:{handler_name}:{outcome_label}:{execution_sequence}"
+        )
+        .as_bytes(),
+    )
+}
+
+fn mailbox_receipt_id(
+    message_id: Hash,
+    service_name: &str,
+    service_version: &str,
+    execution_sequence: u64,
+    outcome_label: &str,
+) -> Hash {
+    Hash::new(
+        format!(
+            "soracloud:runtime-receipt:{message_id}:{service_name}:{service_version}:{execution_sequence}:{outcome_label}"
+        )
+        .as_bytes(),
+    )
+}
+
+fn synthetic_runtime_state(
+    request: &SoracloudOrderedMailboxExecutionRequest,
+    health_status: SoraServiceHealthStatusV1,
+) -> iroha_data_model::soracloud::SoraServiceRuntimeStateV1 {
+    iroha_data_model::soracloud::SoraServiceRuntimeStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+        service_name: request.deployment.service_name.clone(),
+        active_service_version: request.deployment.current_service_version.clone(),
+        health_status,
+        load_factor_bps: 0,
+        materialized_bundle_hash: request.bundle.container.bundle_hash,
+        rollout_handle: request
+            .deployment
+            .active_rollout
+            .as_ref()
+            .map(|rollout| rollout.rollout_handle.clone()),
+        pending_mailbox_message_count: request.authoritative_pending_mailbox_messages,
+        last_receipt_id: None,
+    }
+}
+
+fn updated_runtime_state(
+    runtime_state: Option<iroha_data_model::soracloud::SoraServiceRuntimeStateV1>,
+    request: &SoracloudOrderedMailboxExecutionRequest,
+    health_status: SoraServiceHealthStatusV1,
+) -> iroha_data_model::soracloud::SoraServiceRuntimeStateV1 {
+    let mut runtime_state =
+        runtime_state.unwrap_or_else(|| synthetic_runtime_state(request, health_status));
+    runtime_state.health_status = health_status;
+    runtime_state.pending_mailbox_message_count = request
+        .authoritative_pending_mailbox_messages
+        .saturating_sub(1);
+    runtime_state
 }
 
 fn hash_cache_name(hash: Hash) -> String {
@@ -710,7 +738,7 @@ where
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path must have a parent"))?;
     fs::create_dir_all(parent)?;
-    let payload = norito::json::to_string(value)
+    let payload = norito::json::to_json(value)
         .map_err(|error| io::Error::other(format!("serialize json: {error}")))?;
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, payload)?;
@@ -723,7 +751,7 @@ mod tests {
     //! Tests for the embedded Soracloud runtime manager.
 
     use super::*;
-    use std::{num::{NonZeroU16, NonZeroU64}, sync::Arc};
+    use std::sync::Arc;
 
     use eyre::Result;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
@@ -732,9 +760,9 @@ mod tests {
         soracloud::{
             AgentApartmentManifestV1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
             SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-            SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1, SoraCertifiedResponsePolicyV1,
-            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraServiceDeploymentStateV1,
-            SoraServiceHealthStatusV1, SoraServiceRuntimeStateV1,
+            SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1,
+            SoraDeploymentBundleV1, SoraServiceDeploymentStateV1, SoraServiceHealthStatusV1,
+            SoraServiceRuntimeStateV1,
         },
     };
 
@@ -778,7 +806,7 @@ mod tests {
             checkpoint_count: 0,
             persistent_state: SoraAgentPersistentStateV1 {
                 total_bytes: 0,
-                keys: BTreeMap::new(),
+                key_sizes: BTreeMap::new(),
             },
             revoked_policy_capabilities: BTreeSet::from(["wallet.sign".to_string()]),
             pending_wallet_requests: BTreeMap::new(),

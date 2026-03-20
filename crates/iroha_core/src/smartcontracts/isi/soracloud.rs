@@ -25,8 +25,9 @@ use iroha_data_model::{
         SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraModelArtifactActionV1,
         SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelRegistryV1,
         SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraRolloutStageV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraServiceStateEntryV1,
+        SoraRolloutStageV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceDeploymentStateV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
         SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTrainingJobActionV1,
         SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
         encode_agent_artifact_allow_provenance_payload,
@@ -511,7 +512,7 @@ fn verify_model_weight_rollback_provenance(
     Ok(())
 }
 
-fn next_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
+pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -> u64 {
     [
         state_transaction
             .world
@@ -546,6 +547,13 @@ fn next_soracloud_audit_sequence(state_transaction: &StateTransaction<'_, '_>) -
             .soracloud_agent_apartment_audit_events
             .iter()
             .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        state_transaction
+            .world
+            .soracloud_runtime_receipts
+            .iter()
+            .map(|(_receipt_id, receipt)| receipt.emitted_sequence)
             .max()
             .unwrap_or(0),
     ]
@@ -928,7 +936,7 @@ fn load_admitted_bundle(
         })
 }
 
-fn load_active_bundle(
+pub(crate) fn load_active_bundle(
     state_transaction: &StateTransaction<'_, '_>,
     service_name: &iroha_data_model::name::Name,
 ) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), InstructionExecutionError> {
@@ -950,6 +958,115 @@ fn load_active_bundle(
     Ok((deployment, bundle))
 }
 
+pub(crate) fn write_soracloud_runtime_state(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    state: SoraServiceRuntimeStateV1,
+) -> Result<(), InstructionExecutionError> {
+    state
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    let Some(deployment) = state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&state.service_name)
+    else {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("service `{}` is not deployed", state.service_name).into(),
+        ));
+    };
+    if deployment.current_service_version != state.active_service_version {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{}` runtime state version `{}` does not match the active deployment `{}`",
+                state.service_name,
+                state.active_service_version,
+                deployment.current_service_version
+            )
+            .into(),
+        ));
+    }
+    state_transaction
+        .world
+        .soracloud_service_runtime
+        .insert(state.service_name.clone(), state);
+    Ok(())
+}
+
+pub(crate) fn write_soracloud_mailbox_message(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    message: SoraServiceMailboxMessageV1,
+) -> Result<(), InstructionExecutionError> {
+    message
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    if state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&message.to_service)
+        .is_none()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "destination service `{}` is not deployed",
+                message.to_service
+            )
+            .into(),
+        ));
+    }
+    state_transaction
+        .world
+        .soracloud_mailbox_messages
+        .insert(message.message_id, message);
+    Ok(())
+}
+
+pub(crate) fn write_soracloud_runtime_receipt(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    receipt: SoraRuntimeReceiptV1,
+) -> Result<(), InstructionExecutionError> {
+    receipt
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    load_admitted_bundle(
+        state_transaction,
+        &receipt.service_name,
+        &receipt.service_version,
+    )?;
+    if let Some(message_id) = receipt.mailbox_message_id
+        && state_transaction
+            .world
+            .soracloud_mailbox_messages
+            .get(&message_id)
+            .is_none()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("mailbox message `{message_id}` has not been recorded").into(),
+        ));
+    }
+
+    if let Some(mut runtime_state) = state_transaction
+        .world
+        .soracloud_service_runtime
+        .get(&receipt.service_name)
+        .cloned()
+    {
+        runtime_state.last_receipt_id = Some(receipt.receipt_id);
+        runtime_state
+            .validate()
+            .map_err(|err| invalid_parameter(err.to_string()))?;
+        state_transaction
+            .world
+            .soracloud_service_runtime
+            .insert(runtime_state.service_name.clone(), runtime_state);
+    }
+
+    state_transaction
+        .world
+        .soracloud_runtime_receipts
+        .insert(receipt.receipt_id, receipt);
+    Ok(())
+}
+
 fn derive_state_mutation_commitment(
     service_name: &str,
     binding_name: &str,
@@ -967,6 +1084,165 @@ fn derive_state_mutation_commitment(
         encryption,
         governance_tx_hash,
     )))
+}
+
+/// Apply an authoritative Soracloud service-state mutation using the active binding contract.
+///
+/// The `linkage_hash` is persisted in the service-state row's `governance_tx_hash` field.
+/// Ordered runtime execution reuses deterministic receipt identifiers here in v1 so the
+/// write-back remains reconstructible from authoritative records without adding a parallel store.
+pub(crate) fn apply_soracloud_state_mutation(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    service_name: &iroha_data_model::name::Name,
+    binding_name: &iroha_data_model::name::Name,
+    state_key: &str,
+    operation: SoraStateMutationOperationV1,
+    payload_bytes: Option<u64>,
+    payload_commitment: Option<Hash>,
+    encryption: SoraStateEncryptionV1,
+    linkage_hash: Hash,
+    sequence: u64,
+) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), InstructionExecutionError> {
+    if state_key.trim().is_empty() {
+        return Err(invalid_parameter("state_key must not be empty"));
+    }
+    if !state_key.starts_with('/') {
+        return Err(invalid_parameter("state_key must start with '/'"));
+    }
+
+    let (deployment, bundle) = load_active_bundle(state_transaction, service_name)?;
+    let binding = bundle
+        .service
+        .state_bindings
+        .iter()
+        .find(|binding| binding.binding_name == *binding_name)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("binding `{binding_name}` is not declared for service `{service_name}`")
+                    .into(),
+            )
+        })?;
+
+    if binding.encryption != encryption {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "binding `{binding_name}` requires {:?} encryption",
+                binding.encryption
+            )
+            .into(),
+        ));
+    }
+    if !state_key.starts_with(&binding.key_prefix) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "state key `{state_key}` is outside binding prefix `{}`",
+                binding.key_prefix
+            )
+            .into(),
+        ));
+    }
+
+    let state_entry_key = (
+        service_name.as_ref().to_owned(),
+        binding_name.as_ref().to_owned(),
+        state_key.to_owned(),
+    );
+    let existing_entry = state_transaction
+        .world
+        .soracloud_service_state_entries
+        .get(&state_entry_key)
+        .cloned();
+    let existing_size = existing_entry
+        .as_ref()
+        .map_or(0, |entry| entry.payload_bytes.get());
+    let (binding_total_bytes, _binding_key_count) =
+        binding_state_totals(state_transaction, service_name, binding_name);
+
+    match operation {
+        SoraStateMutationOperationV1::Upsert => {
+            if binding.mutability == iroha_data_model::soracloud::SoraStateMutabilityV1::ReadOnly {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("binding `{binding_name}` is read-only").into(),
+                ));
+            }
+            let value_size_bytes = payload_bytes.ok_or_else(|| {
+                invalid_parameter("payload_bytes is required for upsert mutations")
+            })?;
+            let payload_bytes = std::num::NonZeroU64::new(value_size_bytes).ok_or_else(|| {
+                invalid_parameter("payload_bytes must be greater than zero for upsert mutations")
+            })?;
+            let payload_commitment = payload_commitment.ok_or_else(|| {
+                invalid_parameter("payload_commitment is required for upsert mutations")
+            })?;
+            if value_size_bytes > binding.max_item_bytes.get() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "payload_bytes {value_size_bytes} exceeds binding max_item_bytes {}",
+                        binding.max_item_bytes
+                    )
+                    .into(),
+                ));
+            }
+            if binding.mutability == iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly
+                && existing_size > 0
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "binding `{binding_name}` is append-only; key `{state_key}` already exists"
+                    )
+                    .into(),
+                ));
+            }
+            let tentative_total = binding_total_bytes
+                .saturating_sub(existing_size)
+                .saturating_add(value_size_bytes);
+            if tentative_total > binding.max_total_bytes.get() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "binding `{binding_name}` max_total_bytes {} would be exceeded",
+                        binding.max_total_bytes
+                    )
+                    .into(),
+                ));
+            }
+
+            record_service_state_entry(
+                state_transaction,
+                SoraServiceStateEntryV1 {
+                    schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: deployment.current_service_version.clone(),
+                    binding_name: binding_name.clone(),
+                    state_key: state_key.to_owned(),
+                    encryption,
+                    payload_bytes,
+                    payload_commitment,
+                    last_update_sequence: sequence,
+                    governance_tx_hash: linkage_hash,
+                    source_action: SoraServiceLifecycleActionV1::StateMutation,
+                },
+            )?;
+        }
+        SoraStateMutationOperationV1::Delete => {
+            if payload_bytes.is_some() || payload_commitment.is_some() {
+                return Err(invalid_parameter(
+                    "delete mutations must not provide payload_bytes or payload_commitment",
+                ));
+            }
+            if binding.mutability != iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("binding `{binding_name}` does not allow deletes").into(),
+                ));
+            }
+            state_transaction
+                .world
+                .soracloud_service_state_entries
+                .remove(state_entry_key);
+        }
+    }
+
+    Ok((deployment, bundle))
 }
 
 fn build_rollout_state(
@@ -1504,169 +1780,58 @@ impl Execute for isi::MutateSoracloudState {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
+        let isi::MutateSoracloudState {
+            service_name,
+            binding_name,
+            state_key,
+            operation,
+            value_size_bytes,
+            encryption,
+            governance_tx_hash,
+            provenance,
+        } = self;
         require_soracloud_permission(authority, state_transaction)?;
         verify_state_mutation_provenance(
             authority,
-            &self.service_name,
-            &self.binding_name,
-            &self.state_key,
-            self.operation,
-            self.value_size_bytes,
-            self.encryption,
-            self.governance_tx_hash,
-            &self.provenance,
+            &service_name,
+            &binding_name,
+            &state_key,
+            operation,
+            value_size_bytes,
+            encryption,
+            governance_tx_hash,
+            &provenance,
         )?;
 
-        if self.state_key.trim().is_empty() {
-            return Err(invalid_parameter("state_key must not be empty"));
-        }
-        if !self.state_key.starts_with('/') {
-            return Err(invalid_parameter("state_key must start with '/'"));
-        }
-
         let sequence = next_soracloud_audit_sequence(state_transaction);
-        let (deployment, bundle) = load_active_bundle(state_transaction, &self.service_name)?;
-        let binding = bundle
-            .service
-            .state_bindings
-            .iter()
-            .find(|binding| binding.binding_name == self.binding_name)
-            .cloned()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "binding `{}` is not declared for service `{}`",
-                        self.binding_name, self.service_name
-                    )
-                    .into(),
-                )
-            })?;
-
-        if binding.encryption != self.encryption {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "binding `{}` requires {:?} encryption",
-                    self.binding_name, binding.encryption
-                )
-                .into(),
-            ));
-        }
-        if !self.state_key.starts_with(&binding.key_prefix) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "state key `{}` is outside binding prefix `{}`",
-                    self.state_key, binding.key_prefix
-                )
-                .into(),
-            ));
-        }
-
-        let state_entry_key = (
-            self.service_name.as_ref().to_owned(),
-            self.binding_name.as_ref().to_owned(),
-            self.state_key.clone(),
-        );
-        let existing_entry = state_transaction
-            .world
-            .soracloud_service_state_entries
-            .get(&state_entry_key)
-            .cloned();
-        let existing_size = existing_entry
-            .as_ref()
-            .map_or(0, |entry| entry.payload_bytes.get());
-        let (binding_total_bytes, _binding_key_count) =
-            binding_state_totals(state_transaction, &self.service_name, &self.binding_name);
-
-        match self.operation {
+        let payload_commitment = match operation {
             SoraStateMutationOperationV1::Upsert => {
-                if binding.mutability
-                    == iroha_data_model::soracloud::SoraStateMutabilityV1::ReadOnly
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!("binding `{}` is read-only", self.binding_name).into(),
-                    ));
-                }
-                let value_size_bytes = self.value_size_bytes.ok_or_else(|| {
+                let payload_bytes = value_size_bytes.ok_or_else(|| {
                     invalid_parameter("value_size_bytes is required for upsert mutations")
                 })?;
-                let payload_bytes =
-                    std::num::NonZeroU64::new(value_size_bytes).ok_or_else(|| {
-                        invalid_parameter(
-                            "value_size_bytes must be greater than zero for upsert mutations",
-                        )
-                    })?;
-                if value_size_bytes > binding.max_item_bytes.get() {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "value_size_bytes {value_size_bytes} exceeds binding max_item_bytes {}",
-                            binding.max_item_bytes
-                        )
-                        .into(),
-                    ));
-                }
-                if binding.mutability
-                    == iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly
-                    && existing_size > 0
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "binding `{}` is append-only; key `{}` already exists",
-                            self.binding_name, self.state_key
-                        )
-                        .into(),
-                    ));
-                }
-                let tentative_total = binding_total_bytes
-                    .saturating_sub(existing_size)
-                    .saturating_add(value_size_bytes);
-                if tentative_total > binding.max_total_bytes.get() {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "binding `{}` max_total_bytes {} would be exceeded",
-                            self.binding_name, binding.max_total_bytes
-                        )
-                        .into(),
-                    ));
-                }
-
-                record_service_state_entry(
-                    state_transaction,
-                    SoraServiceStateEntryV1 {
-                        schema_version: SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-                        service_name: self.service_name.clone(),
-                        service_version: deployment.current_service_version.clone(),
-                        binding_name: self.binding_name.clone(),
-                        state_key: self.state_key.clone(),
-                        encryption: self.encryption,
-                        payload_bytes,
-                        payload_commitment: derive_state_mutation_commitment(
-                            self.service_name.as_ref(),
-                            self.binding_name.as_ref(),
-                            &self.state_key,
-                            value_size_bytes,
-                            self.encryption,
-                            self.governance_tx_hash,
-                        ),
-                        last_update_sequence: sequence,
-                        governance_tx_hash: self.governance_tx_hash,
-                        source_action: SoraServiceLifecycleActionV1::StateMutation,
-                    },
-                )?;
+                Some(derive_state_mutation_commitment(
+                    service_name.as_ref(),
+                    binding_name.as_ref(),
+                    &state_key,
+                    payload_bytes,
+                    encryption,
+                    governance_tx_hash,
+                ))
             }
-            SoraStateMutationOperationV1::Delete => {
-                if binding.mutability
-                    != iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!("binding `{}` does not allow deletes", self.binding_name).into(),
-                    ));
-                }
-                state_transaction
-                    .world
-                    .soracloud_service_state_entries
-                    .remove(state_entry_key);
-            }
-        }
+            SoraStateMutationOperationV1::Delete => None,
+        };
+        let (deployment, bundle) = apply_soracloud_state_mutation(
+            state_transaction,
+            &service_name,
+            &binding_name,
+            &state_key,
+            operation,
+            value_size_bytes,
+            payload_commitment,
+            encryption,
+            governance_tx_hash,
+            sequence,
+        )?;
 
         record_audit_event(
             state_transaction,
@@ -1674,14 +1839,14 @@ impl Execute for isi::MutateSoracloudState {
                 schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
                 sequence,
                 action: SoraServiceLifecycleActionV1::StateMutation,
-                service_name: self.service_name,
+                service_name,
                 from_version: None,
                 to_version: deployment.current_service_version,
                 service_manifest_hash: bundle.service_manifest_hash(),
                 container_manifest_hash: bundle.container_manifest_hash(),
-                governance_tx_hash: Some(self.governance_tx_hash),
-                binding_name: Some(self.binding_name),
-                state_key: Some(self.state_key),
+                governance_tx_hash: Some(governance_tx_hash),
+                binding_name: Some(binding_name),
+                state_key: Some(state_key),
                 rollout_handle: None,
                 policy_name: None,
                 policy_snapshot_hash: None,
@@ -1689,7 +1854,7 @@ impl Execute for isi::MutateSoracloudState {
                 consent_evidence_hash: None,
                 break_glass: None,
                 break_glass_reason: None,
-                signer: self.provenance.signer,
+                signer: provenance.signer,
             },
         )
     }
@@ -4529,34 +4694,7 @@ impl Execute for isi::SetSoracloudRuntimeState {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_soracloud_permission(authority, state_transaction)?;
-        self.state
-            .validate()
-            .map_err(|err| invalid_parameter(err.to_string()))?;
-        let Some(deployment) = state_transaction
-            .world
-            .soracloud_service_deployments
-            .get(&self.state.service_name)
-        else {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("service `{}` is not deployed", self.state.service_name).into(),
-            ));
-        };
-        if deployment.current_service_version != self.state.active_service_version {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "service `{}` runtime state version `{}` does not match the active deployment `{}`",
-                    self.state.service_name,
-                    self.state.active_service_version,
-                    deployment.current_service_version
-                )
-                .into(),
-            ));
-        }
-        state_transaction
-            .world
-            .soracloud_service_runtime
-            .insert(self.state.service_name.clone(), self.state);
-        Ok(())
+        write_soracloud_runtime_state(state_transaction, self.state)
     }
 }
 
@@ -4567,28 +4705,7 @@ impl Execute for isi::RecordSoracloudMailboxMessage {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_soracloud_permission(authority, state_transaction)?;
-        self.message
-            .validate()
-            .map_err(|err| invalid_parameter(err.to_string()))?;
-        if state_transaction
-            .world
-            .soracloud_service_deployments
-            .get(&self.message.to_service)
-            .is_none()
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "destination service `{}` is not deployed",
-                    self.message.to_service
-                )
-                .into(),
-            ));
-        }
-        state_transaction
-            .world
-            .soracloud_mailbox_messages
-            .insert(self.message.message_id, self.message);
-        Ok(())
+        write_soracloud_mailbox_message(state_transaction, self.message)
     }
 }
 
@@ -4599,47 +4716,7 @@ impl Execute for isi::RecordSoracloudRuntimeReceipt {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_soracloud_permission(authority, state_transaction)?;
-        self.receipt
-            .validate()
-            .map_err(|err| invalid_parameter(err.to_string()))?;
-        load_admitted_bundle(
-            state_transaction,
-            &self.receipt.service_name,
-            &self.receipt.service_version,
-        )?;
-        if let Some(message_id) = self.receipt.mailbox_message_id
-            && state_transaction
-                .world
-                .soracloud_mailbox_messages
-                .get(&message_id)
-                .is_none()
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("mailbox message `{message_id}` has not been recorded").into(),
-            ));
-        }
-
-        if let Some(mut runtime_state) = state_transaction
-            .world
-            .soracloud_service_runtime
-            .get(&self.receipt.service_name)
-            .cloned()
-        {
-            runtime_state.last_receipt_id = Some(self.receipt.receipt_id);
-            runtime_state
-                .validate()
-                .map_err(|err| invalid_parameter(err.to_string()))?;
-            state_transaction
-                .world
-                .soracloud_service_runtime
-                .insert(runtime_state.service_name.clone(), runtime_state);
-        }
-
-        state_transaction
-            .world
-            .soracloud_runtime_receipts
-            .insert(self.receipt.receipt_id, self.receipt);
-        Ok(())
+        write_soracloud_runtime_receipt(state_transaction, self.receipt)
     }
 }
 

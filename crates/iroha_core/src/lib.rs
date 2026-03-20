@@ -129,6 +129,8 @@ pub mod settlement;
 pub mod smartcontracts;
 /// World state snapshots.
 pub mod snapshot;
+/// Shared Soracloud runtime snapshot types and traits.
+pub mod soracloud_runtime;
 /// SoraNet relay incentive calculator and treasury helpers.
 pub mod soranet_incentives;
 /// In-memory state and view types.

@@ -17620,7 +17620,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
 pub async fn handle_v1_transactions_history_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
-    _telemetry: MaybeTelemetry,
+    telemetry: MaybeTelemetry,
     visibility: TxHistoryVisibilityScope,
     allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {

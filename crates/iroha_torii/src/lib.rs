@@ -210,6 +210,7 @@ use iroha_core::{
     prelude::*,
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue},
+    soracloud_runtime::SharedSoracloudRuntimeHandle,
     state::{
         BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
         TransactionsReadOnly, WorldReadOnly,
@@ -1070,10 +1071,9 @@ struct AppState {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
     #[cfg(feature = "app_api")]
     sns_registry: Arc<sns::Registry>,
-    #[cfg(feature = "app_api")]
-    soracloud_registry: Arc<soracloud::Registry>,
 }
 
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
@@ -7995,6 +7995,153 @@ async fn handler_metrics(
     routing::handle_metrics(&app.telemetry, nexus_enabled).await
 }
 
+#[cfg(all(feature = "telemetry", feature = "app_api"))]
+fn soracloud_runtime_status_sections(
+    app: &SharedAppState,
+) -> (
+    norito::json::Value,
+    norito::json::Value,
+    norito::json::Value,
+) {
+    let Some(runtime) = app.soracloud_runtime.as_ref() else {
+        return (
+            json_object(vec![
+                json_entry("mode", "embedded_runtime_manager"),
+                json_entry("status", "unavailable"),
+                json_entry(
+                    "message",
+                    "embedded Soracloud runtime manager is not attached to this Torii process",
+                ),
+            ]),
+            json_object(vec![json_entry("enabled", false)]),
+            json_object(vec![json_entry("available", false)]),
+        );
+    };
+
+    let snapshot = runtime.snapshot();
+    let state_dir = runtime.state_dir().display().to_string();
+
+    let mut service_revisions = 0_u64;
+    let mut healthy_services = 0_u64;
+    let mut hydrating_services = 0_u64;
+    let mut degraded_services = 0_u64;
+    let mut unavailable_services = 0_u64;
+    let mut max_load_factor_bps = 0_u16;
+    let mut reported_pending_mailbox_messages = 0_u64;
+    let mut authoritative_pending_mailbox_messages = 0_u64;
+    let mut bundle_cache_misses = 0_u64;
+    let mut artifact_cache_misses = 0_u64;
+
+    for revisions in snapshot.services.values() {
+        for plan in revisions.values() {
+            service_revisions = service_revisions.saturating_add(1);
+            match plan.health_status {
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy => {
+                    healthy_services = healthy_services.saturating_add(1);
+                }
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Hydrating => {
+                    hydrating_services = hydrating_services.saturating_add(1);
+                }
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Degraded => {
+                    degraded_services = degraded_services.saturating_add(1);
+                }
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable => {
+                    unavailable_services = unavailable_services.saturating_add(1);
+                }
+            }
+            max_load_factor_bps = max_load_factor_bps.max(plan.load_factor_bps);
+            reported_pending_mailbox_messages = reported_pending_mailbox_messages
+                .saturating_add(u64::from(plan.reported_pending_mailbox_messages));
+            authoritative_pending_mailbox_messages = authoritative_pending_mailbox_messages
+                .saturating_add(u64::from(plan.authoritative_pending_mailbox_messages));
+            if !plan.bundle_available_locally {
+                bundle_cache_misses = bundle_cache_misses.saturating_add(1);
+            }
+            artifact_cache_misses = artifact_cache_misses.saturating_add(
+                u64::try_from(
+                    plan.artifacts
+                        .iter()
+                        .filter(|artifact| !artifact.available_locally)
+                        .count(),
+                )
+                .unwrap_or(u64::MAX),
+            );
+        }
+    }
+
+    let apartment_count = u64::try_from(snapshot.apartments.len()).unwrap_or(u64::MAX);
+    let mut running_apartments = 0_u64;
+    let mut expired_apartments = 0_u64;
+    for apartment in snapshot.apartments.values() {
+        match apartment.status {
+            iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running => {
+                running_apartments = running_apartments.saturating_add(1);
+            }
+            iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::LeaseExpired => {
+                expired_apartments = expired_apartments.saturating_add(1);
+            }
+        }
+    }
+
+    let status = if service_revisions == 0 && apartment_count == 0 {
+        "idle"
+    } else if unavailable_services > 0 || expired_apartments > 0 {
+        "unavailable"
+    } else if hydrating_services > 0 || degraded_services > 0 {
+        "degraded"
+    } else {
+        "healthy"
+    };
+    let message = match status {
+        "idle" => "no active Soracloud services or apartments are materialized on this node",
+        "unavailable" => "embedded runtime manager reports unavailable service or apartment state",
+        "degraded" => "embedded runtime manager reports hydrating or degraded workloads",
+        _ => "embedded runtime manager reports healthy hosted workloads",
+    };
+
+    let service_health = json_object(vec![
+        json_entry("mode", "embedded_runtime_manager"),
+        json_entry("status", status),
+        json_entry("message", message),
+        json_entry("observed_height", snapshot.observed_height),
+        json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
+        json_entry("state_dir", state_dir.clone()),
+        json_entry("service_revisions", service_revisions),
+        json_entry("healthy_service_revisions", healthy_services),
+        json_entry("hydrating_service_revisions", hydrating_services),
+        json_entry("degraded_service_revisions", degraded_services),
+        json_entry("unavailable_service_revisions", unavailable_services),
+        json_entry("apartments", apartment_count),
+        json_entry("running_apartments", running_apartments),
+        json_entry("expired_apartments", expired_apartments),
+    ]);
+    let runtime_pressure = json_object(vec![
+        json_entry("enabled", true),
+        json_entry("state_dir", state_dir.clone()),
+        json_entry("observed_height", snapshot.observed_height),
+        json_entry("service_revisions", service_revisions),
+        json_entry("apartments", apartment_count),
+        json_entry("max_load_factor_bps", max_load_factor_bps),
+        json_entry(
+            "reported_pending_mailbox_messages",
+            reported_pending_mailbox_messages,
+        ),
+        json_entry(
+            "authoritative_pending_mailbox_messages",
+            authoritative_pending_mailbox_messages,
+        ),
+        json_entry("bundle_cache_misses", bundle_cache_misses),
+        json_entry("artifact_cache_misses", artifact_cache_misses),
+    ]);
+    let runtime_manager = json_object(vec![
+        json_entry("available", true),
+        json_entry("state_dir", state_dir),
+        json_entry("snapshot", snapshot),
+    ]);
+
+    (service_health, runtime_pressure, runtime_manager)
+}
+
 #[cfg(feature = "telemetry")]
 async fn handler_soracloud_status(
     State(app): State<SharedAppState>,
@@ -8116,67 +8263,11 @@ async fn handler_soracloud_status(
     ]);
 
     #[cfg(feature = "app_api")]
-    let (service_health, storage_pressure) = {
-        if app.sorafs_node.is_enabled() {
-            let schedulers = app.sorafs_node.schedulers();
-            let telemetry = schedulers.telemetry_snapshot();
-            let utilisation = schedulers.utilisation_snapshot();
-            let degraded = utilisation.fetch_utilisation_bps >= 9_000
-                || utilisation.pin_queue_utilisation_bps >= 9_000
-                || utilisation.por_utilisation_bps >= 9_000
-                || telemetry.por_samples_failed > 0;
-            let status = if degraded { "degraded" } else { "healthy" };
-            (
-                json_object(vec![
-                    json_entry("mode", "sorafs_runtime"),
-                    json_entry("status", status),
-                    json_entry(
-                        "message",
-                        "runtime host integration pending; exposing SoraFS health as baseline",
-                    ),
-                ]),
-                json_object(vec![
-                    json_entry("enabled", true),
-                    json_entry("bytes_used", telemetry.bytes_used),
-                    json_entry("bytes_capacity", telemetry.bytes_capacity),
-                    json_entry(
-                        "pin_queue_depth",
-                        u64::try_from(telemetry.pin_queue_depth).unwrap_or(u64::MAX),
-                    ),
-                    json_entry(
-                        "fetch_inflight",
-                        u64::try_from(telemetry.fetch_inflight).unwrap_or(u64::MAX),
-                    ),
-                    json_entry(
-                        "por_inflight",
-                        u64::try_from(telemetry.por_inflight).unwrap_or(u64::MAX),
-                    ),
-                    json_entry("por_samples_failed_total", telemetry.por_samples_failed),
-                    json_entry("fetch_utilisation_bps", utilisation.fetch_utilisation_bps),
-                    json_entry(
-                        "pin_queue_utilisation_bps",
-                        utilisation.pin_queue_utilisation_bps,
-                    ),
-                    json_entry("por_utilisation_bps", utilisation.por_utilisation_bps),
-                ]),
-            )
-        } else {
-            (
-                json_object(vec![
-                    json_entry("mode", "local_only"),
-                    json_entry("status", "not_configured"),
-                    json_entry(
-                        "message",
-                        "SoraFS node runtime is disabled; no hosted service health is available",
-                    ),
-                ]),
-                json_object(vec![json_entry("enabled", false)]),
-            )
-        }
-    };
+    let (service_health, runtime_pressure, runtime_manager) =
+        soracloud_runtime_status_sections(&app);
 
     #[cfg(not(feature = "app_api"))]
-    let (service_health, storage_pressure) = (
+    let (service_health, runtime_pressure) = (
         json_object(vec![
             json_entry("mode", "app_api_disabled"),
             json_entry("status", "unavailable"),
@@ -8195,7 +8286,7 @@ async fn handler_soracloud_status(
         json_entry("queue_saturated", backpressure.is_saturated()),
         json_entry("high_load_threshold", high_load_threshold),
         json_entry("high_load", high_load),
-        json_entry("storage", storage_pressure),
+        json_entry("runtime", runtime_pressure),
     ]);
     let failed_admissions = json_object(vec![
         json_entry("total", failed_admission_total),
@@ -8213,6 +8304,7 @@ async fn handler_soracloud_status(
         json_entry("routing", routing),
         json_entry("resource_pressure", resource_pressure),
         json_entry("failed_admissions", failed_admissions),
+        json_entry("runtime_manager", runtime_manager),
         json_entry("control_plane", json_value(&control_plane)),
     ]);
 
@@ -15097,6 +15189,38 @@ pub struct Torii {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
+}
+
+/// Optional runtime-owned Torii dependencies that are not present in all embeddings.
+#[derive(Clone)]
+pub struct ToriiRuntimeDeps {
+    telemetry: routing::MaybeTelemetry,
+    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
+}
+
+impl ToriiRuntimeDeps {
+    /// Construct runtime dependencies from the resolved telemetry handle.
+    #[must_use]
+    pub fn new(telemetry: routing::MaybeTelemetry) -> Self {
+        Self {
+            telemetry,
+            soracloud_runtime: None,
+        }
+    }
+
+    /// Attach the embedded Soracloud runtime-manager handle.
+    #[must_use]
+    pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntimeHandle) -> Self {
+        self.soracloud_runtime = Some(runtime);
+        self
+    }
+}
+
+impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
+    fn from(telemetry: routing::MaybeTelemetry) -> Self {
+        Self::new(telemetry)
+    }
 }
 
 impl Torii {
@@ -16848,8 +16972,11 @@ impl Torii {
         da_receipt_signer: KeyPair,
         online_peers: OnlinePeersProvider,
         sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-        telemetry: routing::MaybeTelemetry,
+        runtime_deps: impl Into<ToriiRuntimeDeps>,
     ) -> Self {
+        let runtime_deps = runtime_deps.into();
+        let telemetry = runtime_deps.telemetry.clone();
+        let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         routing::debug_match_flag::set_from_config(config.debug_match_filters);
         routing::set_app_query_limits(routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
@@ -17357,6 +17484,7 @@ impl Torii {
             offline_issuer,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
+            soracloud_runtime,
         }
     }
 
@@ -17636,19 +17764,9 @@ impl Torii {
             offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
+            soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
-            #[cfg(feature = "app_api")]
-            soracloud_registry: Arc::new({
-                #[cfg(test)]
-                {
-                    soracloud::Registry::default()
-                }
-                #[cfg(not(test))]
-                {
-                    soracloud::Registry::with_default_persistence()
-                }
-            }),
         });
 
         #[cfg(feature = "app_api")]
@@ -17687,8 +17805,8 @@ impl Torii {
             &app_state.sorafs_chunk_range_overrides,
             &app_state.offline_issuer,
             &app_state.uaid_onboarding,
+            &app_state.soracloud_runtime,
             &app_state.sns_registry,
-            &app_state.soracloud_registry,
         );
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -19629,10 +19747,9 @@ pub(crate) mod tests_runtime_handlers {
             offline_issuer: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
+            soracloud_runtime: None,
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
-            #[cfg(feature = "app_api")]
-            soracloud_registry: Arc::new(soracloud::Registry::default()),
             rbc_sampling_enabled: false,
             rbc_sampling_store_dir: None,
             rbc_sampling_max_samples: 0,
@@ -21484,7 +21601,98 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn soracloud_status_handler_returns_snapshot_sections() {
-        let app = mk_app_state_for_tests();
+        #[derive(Clone)]
+        struct TestSoracloudRuntimeHandle {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
+            state_dir: PathBuf,
+        }
+
+        impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestSoracloudRuntimeHandle {
+            fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+                self.snapshot.clone()
+            }
+
+            fn state_dir(&self) -> PathBuf {
+                self.state_dir.clone()
+            }
+        }
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            let mut services = std::collections::BTreeMap::new();
+            services.insert(
+                "web_portal".to_string(),
+                std::collections::BTreeMap::from([(
+                    "1.0.0".to_string(),
+                    iroha_core::soracloud_runtime::SoracloudRuntimeServicePlan {
+                        service_name: "web_portal".to_string(),
+                        service_version: "1.0.0".to_string(),
+                        role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
+                        traffic_percent: 100,
+                        runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
+                        bundle_hash: "hash:bundle".to_string(),
+                        bundle_path: "service.to".to_string(),
+                        entrypoint: "start".to_string(),
+                        bundle_cache_path: "/tmp/soracloud/runtime/web_portal/1.0.0/service.to"
+                            .to_string(),
+                        bundle_available_locally: true,
+                        process_generation: Some(7),
+                        health_status:
+                            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+                        load_factor_bps: 2_500,
+                        reported_pending_mailbox_messages: 2,
+                        authoritative_pending_mailbox_messages: 3,
+                        rollout_handle: None,
+                        materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0".to_string(),
+                        mailboxes: vec![],
+                        artifacts: vec![
+                            iroha_core::soracloud_runtime::SoracloudRuntimeArtifactPlan {
+                                kind: iroha_data_model::soracloud::SoraArtifactKindV1::Bundle,
+                                artifact_hash: "hash:artifact".to_string(),
+                                artifact_path: "public/index.html".to_string(),
+                                handler_name: Some("asset".to_string()),
+                                local_cache_path:
+                                    "/tmp/soracloud/cache/hash-artifact/public-index.html"
+                                        .to_string(),
+                                available_locally: false,
+                            },
+                        ],
+                    },
+                )]),
+            );
+
+            let apartments = std::collections::BTreeMap::from([(
+                "ops_agent".to_string(),
+                iroha_core::soracloud_runtime::SoracloudRuntimeApartmentPlan {
+                    apartment_name: "ops_agent".to_string(),
+                    manifest_hash: "hash:manifest".to_string(),
+                    status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
+                    process_generation: 3,
+                    lease_expires_sequence: 90,
+                    last_active_sequence: 88,
+                    materialization_dir: "/tmp/soracloud/runtime/apartments/ops_agent".to_string(),
+                    pending_wallet_request_count: 1,
+                    pending_mailbox_message_count: 4,
+                    autonomy_budget_remaining_units: 120,
+                    approved_artifact_count: 2,
+                    autonomy_run_count: 5,
+                    revoked_policy_capability_count: 1,
+                },
+            )]);
+
+            state.soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
+                snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+                    schema_version: 1,
+                    observed_height: 42,
+                    observed_block_hash: Some("hash:block".to_string()),
+                    services,
+                    apartments,
+                },
+                state_dir: PathBuf::from("/tmp/soracloud/runtime"),
+            }));
+        }
+
         let response = super::handler_soracloud_status(State(app), HeaderMap::new(), None)
             .await
             .expect("soracloud status should succeed");
@@ -21537,6 +21745,23 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(norito::json::Value::as_object)
                 .is_some(),
             "control_plane section should be present"
+        );
+        #[cfg(feature = "app_api")]
+        assert_eq!(
+            payload
+                .get("service_health")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|value| value.get("mode"))
+                .and_then(norito::json::Value::as_str),
+            Some("embedded_runtime_manager")
+        );
+        #[cfg(feature = "app_api")]
+        assert!(
+            payload
+                .get("runtime_manager")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "runtime_manager section should be present"
         );
     }
 

@@ -5386,6 +5386,9 @@ pub struct State {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Shared pipeline worker pool snapshot (derived from pipeline config).
     pipeline_parallelism: PipelineParallelism,
+    /// Optional shared Soracloud runtime handle used for replicated mailbox execution.
+    soracloud_runtime:
+        parking_lot::RwLock<Option<crate::soracloud_runtime::SharedSoracloudRuntime>>,
     /// Stateless validation cache shared across blocks.
     stateless_validation_cache: parking_lot::Mutex<StatelessValidationCache>,
     /// Cached confidential feature digest for proposal assembly.
@@ -5457,6 +5460,8 @@ pub struct StateBlock<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
+    /// Optional shared Soracloud runtime handle used for ordered mailbox execution.
+    pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     /// Cached snapshot of account identifiers for this block.
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Pipeline execution preferences for this block.
@@ -14248,6 +14253,20 @@ impl State {
         self.nexus.read().clone()
     }
 
+    /// Install or clear the shared Soracloud runtime handle used by core execution paths.
+    pub fn set_soracloud_runtime(
+        &self,
+        runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
+    ) {
+        *self.soracloud_runtime.write() = runtime;
+    }
+
+    /// Return the shared Soracloud runtime handle when the execution plane is available.
+    #[must_use]
+    pub fn soracloud_runtime(&self) -> Option<crate::soracloud_runtime::SharedSoracloudRuntime> {
+        self.soracloud_runtime.read().clone()
+    }
+
     fn da_shard_cursor_journal_path(&self) -> PathBuf {
         let root = self.kura.store_root();
         if root.as_os_str().is_empty() {
@@ -15432,6 +15451,7 @@ impl State {
             chain_id: iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             pipeline,
             pipeline_parallelism,
+            soracloud_runtime: parking_lot::RwLock::new(None),
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
@@ -15978,6 +15998,7 @@ impl State {
             ivm: &self.ivm,
             kura: &self.kura,
             query_handle: &self.query_handle,
+            soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
@@ -16455,6 +16476,7 @@ impl State {
             ivm: &self.ivm,
             kura: &self.kura,
             query_handle: &self.query_handle,
+            soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
@@ -25955,6 +25977,7 @@ pub(crate) mod deserialize {
             pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
             pipeline,
             pipeline_parallelism,
+            soracloud_runtime: parking_lot::RwLock::new(None),
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
