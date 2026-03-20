@@ -2,6 +2,32 @@
 
 Last updated: 2026-03-20
 
+## 2026-03-20 Follow-up: manifest-declared data triggers now cover structured core-ledger filters
+- Extended manifest-declared trigger support across `crates/iroha_data_model`,
+  `crates/kotodama_lang`, `crates/iroha_core/tests`, and
+  `crates/ivm/docs` so contracts can declare structured data triggers without
+  raw trigger-registration tooling:
+  - `AssetEventFilter` now supports an `asset_definition_matcher` alongside
+    the existing `id_matcher`, with AND semantics across asset id, asset
+    definition id, and event kind.
+  - Kotodama trigger declarations now accept structured data-trigger blocks of
+    the form `on data <family> <event_kind> { ... }` for the core ledger
+    families (`peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`,
+    `trigger`, `role`, `configuration`, `executor`) while preserving the
+    existing flat forms (`on data any`, `on pipeline block`, etc.).
+  - Structured matcher literals now lower directly into manifest
+    `TriggerDescriptor.filter: EventFilterBox`, including the interceptor shape
+    `on data asset added { asset_definition "aid:..." }`, and explicit trigger
+    authority remains supported.
+  - Core activation/deactivation regressions now verify manifest registration
+    for both Data and Pipeline triggers and preserve the existing
+    contract-origin metadata/bookkeeping on installed trigger actions.
+- Validation:
+  - `cargo fmt --all --check` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_data_model asset_filter -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang trigger_decl_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture` (pass)
+
 ## 2026-03-20 Follow-up: self-describing contract artifacts are now mandatory, and Torii deploy/call no longer accept manifest fallbacks
 - Reworked the IVM contract artifact path around a required embedded `CNTR`
   section in 1.1 `.to` artifacts:

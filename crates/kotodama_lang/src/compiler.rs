@@ -1355,6 +1355,83 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_trigger_decl_lowers_structured_data_filter() {
+        use iroha_data_model::events::{
+            EventFilterBox,
+            data::{
+                DataEventFilter,
+                prelude::{AssetEventFilter, AssetEventSet},
+            },
+        };
+
+        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
+            "aid:6872454e9c044641aa581ec5f3801619"
+                .parse()
+                .expect("asset definition id");
+        let src = r#"
+seiyaku Test {
+  kotoage fn run() {}
+  register_trigger intercept {
+    call run;
+    on data asset added {
+      asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+    }
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_eq!(run.triggers.len(), 1);
+        assert_eq!(
+            run.triggers[0].filter,
+            EventFilterBox::Data(DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_events(AssetEventSet::Added)
+                    .for_asset_definition(asset_definition),
+            ))
+        );
+    }
+
+    #[test]
+    fn manifest_trigger_decl_lowers_pipeline_filter() {
+        use iroha_data_model::events::{
+            EventFilterBox,
+            pipeline::{BlockEventFilter, PipelineEventFilterBox},
+        };
+
+        let src = r#"
+seiyaku Test {
+  kotoage fn run() {}
+  register_trigger block_wake {
+    call run;
+    on pipeline block;
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_eq!(run.triggers.len(), 1);
+        assert_eq!(
+            run.triggers[0].filter,
+            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(BlockEventFilter::default(),))
+        );
+    }
+
+    #[test]
     fn access_hint_diagnostics_report_isi_wildcards() {
         let src = r#"
 seiyaku Test {

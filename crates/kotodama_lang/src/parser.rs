@@ -562,7 +562,9 @@ impl<'a> Parser<'a> {
                         return Err(self.error(field_tok, "duplicate `on` field"));
                     }
                     filter = Some(self.parse_trigger_filter()?);
-                    self.expect(TokenKind::Semicolon)?;
+                    if self.peek(TokenKind::Semicolon) {
+                        self.bump();
+                    }
                 }
                 "repeats" => {
                     if repeats.is_some() {
@@ -653,11 +655,52 @@ impl<'a> Parser<'a> {
         let kind = self.expect_ident()?;
         match kind.as_str() {
             "any" => Ok(TriggerDataFilter::Any),
+            _ => {
+                let family = self.parse_trigger_data_family_keyword(&kind)?;
+                let event = match self.expect_ident()?.as_str() {
+                    "any" => TriggerDataEventKind::Any,
+                    other => TriggerDataEventKind::Named(other.to_string()),
+                };
+                let matchers = self.parse_trigger_data_matcher_block()?;
+                Ok(TriggerDataFilter::Structured(TriggerStructuredDataFilter {
+                    family,
+                    event,
+                    matchers,
+                }))
+            }
+        }
+    }
+
+    fn parse_trigger_data_family_keyword(&self, family: &str) -> ParseResult<TriggerDataFamily> {
+        match family {
+            "peer" => Ok(TriggerDataFamily::Peer),
+            "domain" => Ok(TriggerDataFamily::Domain),
+            "account" => Ok(TriggerDataFamily::Account),
+            "asset" => Ok(TriggerDataFamily::Asset),
+            "asset_definition" => Ok(TriggerDataFamily::AssetDefinition),
+            "nft" => Ok(TriggerDataFamily::Nft),
+            "trigger" => Ok(TriggerDataFamily::Trigger),
+            "role" => Ok(TriggerDataFamily::Role),
+            "configuration" => Ok(TriggerDataFamily::Configuration),
+            "executor" => Ok(TriggerDataFamily::Executor),
             _ => Err(self.error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "data filter (`any`)",
+                "data family (`any`, `peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`, `trigger`, `role`, `configuration`, or `executor`)",
             )),
         }
+    }
+
+    fn parse_trigger_data_matcher_block(&mut self) -> ParseResult<Vec<TriggerDataMatcher>> {
+        self.expect(TokenKind::LBrace)?;
+        let mut matchers = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            let value = self.expect_ident_or_string()?;
+            self.expect(TokenKind::Semicolon)?;
+            matchers.push(TriggerDataMatcher { key, value });
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(matchers)
     }
 
     fn parse_trigger_pipeline_filter(&mut self) -> ParseResult<TriggerPipelineFilter> {
@@ -2507,6 +2550,44 @@ mod tests {
             })
             .expect("trigger present");
         assert!(matches!(trigger.filter, TriggerFilter::Data(_)));
+    }
+
+    #[test]
+    fn parse_trigger_decl_with_structured_data_filter() {
+        let src = r#"
+        seiyaku C {
+            kotoage fn run() {}
+            register_trigger wake {
+                call run;
+                on data asset added {
+                    asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+                }
+            }
+        }
+        "#;
+        let prog = parse(src).expect("parse trigger decl");
+        let trigger = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Trigger(t) => Some(t),
+                _ => None,
+            })
+            .expect("trigger present");
+        let TriggerFilter::Data(TriggerDataFilter::Structured(filter)) = &trigger.filter else {
+            panic!("expected structured data filter");
+        };
+        assert_eq!(filter.family, TriggerDataFamily::Asset);
+        assert_eq!(
+            filter.event,
+            TriggerDataEventKind::Named("added".to_string())
+        );
+        assert_eq!(filter.matchers.len(), 1);
+        assert_eq!(filter.matchers[0].key, "asset_definition");
+        assert_eq!(
+            filter.matchers[0].value,
+            "aid:6872454e9c044641aa581ec5f3801619"
+        );
     }
 
     #[test]

@@ -16,7 +16,7 @@ Paths for reference:
 - Contract-level localization (`kotoba { ... }`) is parsed, validated for duplicates/empties, and emitted into manifest translation tables for tooling. ✔
 - Metadata and manifest wiring now surface `meta { features: ["zk","simd"] }` toggles plus per-entrypoint permission/read/write hints. Static ISI keys (including literal `create_trigger` specs and `transfer_domain`), literal map keys (including hashed pointer keys), dynamic map paths (map-level `state:<name>` conflicts), explicit `#[access(read=..., write=...)]` annotations, and literal `execute_instruction` payloads plus `execute_query` payloads for supported queries (InstructionBox/QueryRequest decode, currently `FindAssetById`) are included in access hints; non-literal trigger specs and opaque host access patterns (including non-literal `execute_instruction`/`execute_query` payloads) emit lints unless explicit access hints are provided, and opaque host reads now fall back to conservative wildcard hints (`*`) with diagnostics so schedulers can opt into a dynamic prepass when finer-grained keys are needed (entrypoint manifests emit hints when enabled; `access_hints_skipped` is empty, and fallback counts are reported via diagnostics). ⚠
 - The compiler scans emitted bytecode for ZK/vector opcodes, auto-enables header bits, and rejects `meta` feature requests that do not match actual opcode usage. ✔
-- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute filters, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); data/pipeline filters and authority overrides remain pending, and cross-contract callbacks are rejected. ⚠
+- Numeric aliases (`fixed_u128`, `Amount`, `Balance`) are distinct `Numeric`-backed scalar types (mantissa+scale) restricted to unsigned, scale‑0 values. Decimal literals are rejected in v1; arithmetic preserves the alias and mixing aliases is rejected unless routed through an `int` binding. Conversions to/from `int` are checked at runtime (range‑limited, non‑negative). Trigger declarations (`register_trigger`) now parse time/execute/data/pipeline filters, lower structured data-trigger blocks into manifest `EventFilterBox` values, support explicit trigger authority overrides, attach metadata to entrypoint manifests, and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are rejected. ✔
 
 Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone ISA. Any RISC‑V–like encodings mentioned in the compiler are IVM’s mixed instruction format and an implementation detail.
 
@@ -48,7 +48,7 @@ Note: Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does
   - Pointer literals propagate across calls, durable `state` accesses turn into `STATE_GET/SET/DEL` syscalls when ABI v1 is requested, string/data sections are deduplicated, and manifests supply code/ABI hashes.
   - Emitted bytecode is scanned for ZK/vector opcodes; header bits are auto-enabled and mismatched `meta` requests are rejected.
 - Missing:
-  - Trigger declarations are registered from manifests during contract instance activation; cross-contract callback wiring (`call domain::fn`) is recorded but currently rejected by runtime tooling.
+  - Cross-contract callback wiring (`call domain::fn`) is recorded but currently rejected by runtime tooling.
 - Access-set hints now include static ISI WSV keys (including literal `create_trigger` specs and `transfer_domain`), literal map keys, dynamic map paths (map-level conflict keys), explicit `#[access]` annotations, and literal `execute_instruction` payloads plus `execute_query` payloads for supported queries (currently `FindAssetById`); non-literal trigger specs and opaque helper syscalls (including non-literal `execute_instruction`/`execute_query` payloads) emit lints unless explicit access hints are provided, and opaque host reads now fall back to conservative wildcard hints (`*`).
 
 ## Samples vs. Implementation
@@ -66,7 +66,7 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Done: entrypoint manifests emit hints when enabled; wildcard keys cover opaque access, and diagnostics counters report fallback usage.
 
 2) Permission and trigger plumbing
-- Extend trigger DSL support beyond time/execute filters (data/pipeline) and add explicit authority overrides.
+- Done: extend trigger DSL support to data/pipeline filters and explicit authority overrides.
 - Done: wire manifest trigger descriptors into runtime registration on activation/deactivation (local callbacks only).
 
 3) Type system extensions
@@ -91,6 +91,6 @@ Short-to-mid term steps to align implementation with the designed grammar and sa
 - Meta feature flags (`zk`, `vector`, `features`) are validated against emitted opcodes; requesting features that are unused now fails compilation.
 - Numeric aliases (e.g., `fixed_u128`) are distinct `Numeric` types; v1 restricts them to unsigned integers (scale = 0), rejecting fractional values and decimal literals.
 - `permission(...)` annotations are enforced by compiler diagnostics and written into manifests; runtime enforcement depends on consuming the metadata.
-- Trigger declarations currently support time/execute filters only; data/pipeline filters and explicit authority overrides remain pending, and cross-contract callbacks are rejected (local only).
+- Trigger declarations support time/execute/data/pipeline filters plus explicit authority overrides; cross-contract callbacks are still rejected (local only).
 
 Keeping these limitations explicit helps set expectations and aids contributors in targeting the most valuable next steps.

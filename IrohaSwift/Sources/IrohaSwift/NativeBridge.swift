@@ -2584,7 +2584,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    var bridgeLoadIssue: String? {
+    public var bridgeLoadIssue: String? {
         #if canImport(Darwin)
         switch bridgeStatus {
         case .valid:

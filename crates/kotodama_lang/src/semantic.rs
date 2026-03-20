@@ -4,8 +4,17 @@ use std::{
 };
 
 use indexmap::{IndexMap, IndexSet};
+use iroha_data_model::events::data::prelude::{
+    AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter, AssetDefinitionEventSet,
+    AssetEventFilter, AssetEventSet, ConfigurationEventFilter, ConfigurationEventSet,
+    DomainEventFilter, DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
+    NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet, TriggerEventFilter,
+    TriggerEventSet,
+};
 use iroha_data_model::{
     account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
+    domain::DomainId,
     events::{
         EventFilterBox,
         data::DataEventFilter,
@@ -17,7 +26,10 @@ use iroha_data_model::{
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
     metadata::Metadata,
+    nft::NftId,
+    peer::PeerId,
     prelude::Name,
+    role::RoleId,
     trigger::{TriggerId, action::Repeats},
 };
 use iroha_primitives::json::Json;
@@ -340,6 +352,620 @@ fn type_name(ty: &Type) -> String {
     }
 }
 
+fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
+    match family {
+        TriggerDataFamily::Peer => "peer",
+        TriggerDataFamily::Domain => "domain",
+        TriggerDataFamily::Account => "account",
+        TriggerDataFamily::Asset => "asset",
+        TriggerDataFamily::AssetDefinition => "asset_definition",
+        TriggerDataFamily::Nft => "nft",
+        TriggerDataFamily::Trigger => "trigger",
+        TriggerDataFamily::Role => "role",
+        TriggerDataFamily::Configuration => "configuration",
+        TriggerDataFamily::Executor => "executor",
+    }
+}
+
+fn named_data_event_kind(event: &TriggerDataEventKind) -> Option<&str> {
+    match event {
+        TriggerDataEventKind::Any => None,
+        TriggerDataEventKind::Named(kind) => Some(kind.as_str()),
+    }
+}
+
+fn duplicate_data_matcher_error(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    key: &str,
+) -> SemanticError {
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` has duplicate `{key}` matcher in `{}` data filter",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn invalid_data_matcher_literal<E>(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    key: &str,
+    raw: &str,
+    err: E,
+) -> SemanticError
+where
+    E: std::fmt::Display,
+{
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` has invalid `{key}` matcher literal `{raw}` in `{}` data filter: {err}",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn unsupported_data_matcher_error(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    key: &str,
+) -> SemanticError {
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` does not support `{key}` matcher in `{}` data filter",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn unsupported_data_event_kind_error(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    kind: &str,
+) -> SemanticError {
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` does not support `{kind}` event kind for `{}` data filter",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn parse_peer_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<PeerId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "peer", raw, err))
+}
+
+fn parse_domain_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<DomainId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "domain", raw, err))
+}
+
+fn parse_account_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<AccountId, SemanticError> {
+    AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "account", raw, err))
+}
+
+fn parse_asset_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<AssetId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "asset", raw, err))
+}
+
+fn parse_asset_definition_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<AssetDefinitionId, SemanticError> {
+    raw.parse().map_err(|err| {
+        invalid_data_matcher_literal(trigger_name, family, "asset_definition", raw, err)
+    })
+}
+
+fn parse_nft_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<NftId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "nft", raw, err))
+}
+
+fn parse_trigger_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<TriggerId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "trigger", raw, err))
+}
+
+fn parse_role_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<RoleId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "role", raw, err))
+}
+
+fn lower_structured_data_filter(
+    trigger_name: &str,
+    filter: &TriggerStructuredDataFilter,
+) -> Result<DataEventFilter, SemanticError> {
+    match filter.family {
+        TriggerDataFamily::Peer => {
+            let mut peer =
+                PeerEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => PeerEventSet::all(),
+                    Some("added") => PeerEventSet::Added,
+                    Some("removed") => PeerEventSet::Removed,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_peer = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "peer" => {
+                        if seen_peer {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "peer",
+                            ));
+                        }
+                        peer = peer.for_peer(parse_peer_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_peer = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Peer(peer))
+        }
+        TriggerDataFamily::Domain => {
+            let mut domain =
+                DomainEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => DomainEventSet::all(),
+                    Some("created") => DomainEventSet::Created,
+                    Some("deleted") => DomainEventSet::Deleted,
+                    Some("asset_definition") => DomainEventSet::AnyAssetDefinition,
+                    Some("nft") => DomainEventSet::AnyNft,
+                    Some("account") => DomainEventSet::AnyAccount,
+                    Some("account_linked") => DomainEventSet::AccountLinked,
+                    Some("account_unlinked") => DomainEventSet::AccountUnlinked,
+                    Some("metadata_inserted") => DomainEventSet::MetadataInserted,
+                    Some("metadata_removed") => DomainEventSet::MetadataRemoved,
+                    Some("owner_changed") => DomainEventSet::OwnerChanged,
+                    Some("kaigi_roster_summary") => DomainEventSet::KaigiRosterSummary,
+                    Some("kaigi_relay_registered") => DomainEventSet::KaigiRelayRegistered,
+                    Some("kaigi_relay_manifest_updated") => {
+                        DomainEventSet::KaigiRelayManifestUpdated
+                    }
+                    Some("kaigi_usage_summary") => DomainEventSet::KaigiUsageSummary,
+                    Some("kaigi_relay_health_updated") => DomainEventSet::KaigiRelayHealthUpdated,
+                    Some("streaming_ticket_ready") => DomainEventSet::StreamingTicketReady,
+                    Some("streaming_ticket_revoked") => DomainEventSet::StreamingTicketRevoked,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_domain = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "domain" => {
+                        if seen_domain {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "domain",
+                            ));
+                        }
+                        domain = domain.for_domain(parse_domain_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_domain = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Domain(domain))
+        }
+        TriggerDataFamily::Account => {
+            let mut account =
+                AccountEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => AccountEventSet::all(),
+                    Some("created") => AccountEventSet::Created,
+                    Some("deleted") => AccountEventSet::Deleted,
+                    Some("asset") => AccountEventSet::AnyAsset,
+                    Some("permission_added") => AccountEventSet::PermissionAdded,
+                    Some("permission_removed") => AccountEventSet::PermissionRemoved,
+                    Some("role_granted") => AccountEventSet::RoleGranted,
+                    Some("role_revoked") => AccountEventSet::RoleRevoked,
+                    Some("metadata_inserted") => AccountEventSet::MetadataInserted,
+                    Some("metadata_removed") => AccountEventSet::MetadataRemoved,
+                    Some("repo") => AccountEventSet::AnyRepo,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_account = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "account" => {
+                        if seen_account {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "account",
+                            ));
+                        }
+                        account = account.for_account(parse_account_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_account = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Account(account))
+        }
+        TriggerDataFamily::Asset => {
+            let mut asset =
+                AssetEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => AssetEventSet::all(),
+                    Some("created") => AssetEventSet::Created,
+                    Some("deleted") => AssetEventSet::Deleted,
+                    Some("added") => AssetEventSet::Added,
+                    Some("removed") => AssetEventSet::Removed,
+                    Some("metadata_inserted") => AssetEventSet::MetadataInserted,
+                    Some("metadata_removed") => AssetEventSet::MetadataRemoved,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_asset = false;
+            let mut seen_asset_definition = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "asset" => {
+                        if seen_asset {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "asset",
+                            ));
+                        }
+                        asset = asset.for_asset(parse_asset_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_asset = true;
+                    }
+                    "asset_definition" => {
+                        if seen_asset_definition {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "asset_definition",
+                            ));
+                        }
+                        asset = asset.for_asset_definition(parse_asset_definition_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_asset_definition = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Asset(asset))
+        }
+        TriggerDataFamily::AssetDefinition => {
+            let mut asset_definition = AssetDefinitionEventFilter::new().for_events(
+                match named_data_event_kind(&filter.event) {
+                    None => AssetDefinitionEventSet::all(),
+                    Some("created") => AssetDefinitionEventSet::Created,
+                    Some("deleted") => AssetDefinitionEventSet::Deleted,
+                    Some("metadata_inserted") => AssetDefinitionEventSet::MetadataInserted,
+                    Some("metadata_removed") => AssetDefinitionEventSet::MetadataRemoved,
+                    Some("mintability_changed") => AssetDefinitionEventSet::MintabilityChanged,
+                    Some("mintability_changed_detailed") => {
+                        AssetDefinitionEventSet::MintabilityChangedDetailed
+                    }
+                    Some("total_quantity_changed") => AssetDefinitionEventSet::TotalQuantityChanged,
+                    Some("owner_changed") => AssetDefinitionEventSet::OwnerChanged,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                },
+            );
+            let mut seen_asset_definition = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "asset_definition" => {
+                        if seen_asset_definition {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "asset_definition",
+                            ));
+                        }
+                        asset_definition =
+                            asset_definition.for_asset_definition(parse_asset_definition_matcher(
+                                trigger_name,
+                                filter.family,
+                                &matcher.value,
+                            )?);
+                        seen_asset_definition = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::AssetDefinition(asset_definition))
+        }
+        TriggerDataFamily::Nft => {
+            let mut nft =
+                NftEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => NftEventSet::all(),
+                    Some("created") => NftEventSet::Created,
+                    Some("deleted") => NftEventSet::Deleted,
+                    Some("metadata_inserted") => NftEventSet::MetadataInserted,
+                    Some("metadata_removed") => NftEventSet::MetadataRemoved,
+                    Some("owner_changed") => NftEventSet::OwnerChanged,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_nft = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "nft" => {
+                        if seen_nft {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "nft",
+                            ));
+                        }
+                        nft = nft.for_nft(parse_nft_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_nft = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Nft(nft))
+        }
+        TriggerDataFamily::Trigger => {
+            let mut trigger =
+                TriggerEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => TriggerEventSet::all(),
+                    Some("created") => TriggerEventSet::Created,
+                    Some("deleted") => TriggerEventSet::Deleted,
+                    Some("extended") => TriggerEventSet::Extended,
+                    Some("shortened") => TriggerEventSet::Shortened,
+                    Some("metadata_inserted") => TriggerEventSet::MetadataInserted,
+                    Some("metadata_removed") => TriggerEventSet::MetadataRemoved,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_trigger = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "trigger" => {
+                        if seen_trigger {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "trigger",
+                            ));
+                        }
+                        trigger = trigger.for_trigger(parse_trigger_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_trigger = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Trigger(trigger))
+        }
+        TriggerDataFamily::Role => {
+            let mut role =
+                RoleEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => RoleEventSet::all(),
+                    Some("created") => RoleEventSet::Created,
+                    Some("deleted") => RoleEventSet::Deleted,
+                    Some("permission_added") => RoleEventSet::PermissionAdded,
+                    Some("permission_removed") => RoleEventSet::PermissionRemoved,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_role = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "role" => {
+                        if seen_role {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "role",
+                            ));
+                        }
+                        role = role.for_role(parse_role_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_role = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Role(role))
+        }
+        TriggerDataFamily::Configuration => {
+            let configuration = ConfigurationEventFilter::new().for_events(
+                match named_data_event_kind(&filter.event) {
+                    None => ConfigurationEventSet::all(),
+                    Some("changed") => ConfigurationEventSet::Changed,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                },
+            );
+            if let Some(matcher) = filter.matchers.first() {
+                return Err(unsupported_data_matcher_error(
+                    trigger_name,
+                    filter.family,
+                    &matcher.key,
+                ));
+            }
+            Ok(DataEventFilter::Configuration(configuration))
+        }
+        TriggerDataFamily::Executor => {
+            let executor =
+                ExecutorEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => ExecutorEventSet::all(),
+                    Some("upgraded") => ExecutorEventSet::Upgraded,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            if let Some(matcher) = filter.matchers.first() {
+                return Err(unsupported_data_matcher_error(
+                    trigger_name,
+                    filter.family,
+                    &matcher.key,
+                ));
+            }
+            Ok(DataEventFilter::Executor(executor))
+        }
+    }
+}
+
 fn analyze_trigger(
     trigger: &TriggerDecl,
     fn_modifiers: &HashMap<String, FunctionModifiers>,
@@ -403,6 +1029,9 @@ fn analyze_trigger(
         TriggerFilter::Data(data) => {
             let filter = match data {
                 TriggerDataFilter::Any => DataEventFilter::Any,
+                TriggerDataFilter::Structured(filter) => {
+                    lower_structured_data_filter(&trigger.name, filter)?
+                }
             };
             EventFilterBox::Data(filter)
         }
@@ -5716,6 +6345,37 @@ mod tests {
     }
 
     #[test]
+    fn trigger_decl_supports_structured_asset_data_filter() {
+        let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
+            .parse()
+            .expect("asset definition id");
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on data asset added {
+                        asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+                    }
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let typed = analyze(&program).expect("analyze trigger decl");
+        let trigger = &typed.triggers[0];
+        assert_eq!(
+            trigger.filter,
+            EventFilterBox::Data(DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_events(AssetEventSet::Added)
+                    .for_asset_definition(asset_definition),
+            ))
+        );
+    }
+
+    #[test]
     fn trigger_decl_supports_pipeline_filter() {
         let program = parse(
             r#"
@@ -5735,6 +6395,50 @@ mod tests {
             trigger.filter,
             EventFilterBox::Pipeline(PipelineEventFilterBox::Block(_))
         ));
+    }
+
+    #[test]
+    fn trigger_decl_rejects_invalid_data_matcher_literal() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on data asset added {
+                        asset_definition "not-an-aid";
+                    }
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let err = analyze(&program).expect_err("invalid matcher should error");
+        assert!(
+            err.message
+                .contains("invalid `asset_definition` matcher literal")
+        );
+    }
+
+    #[test]
+    fn trigger_decl_rejects_duplicate_data_matchers() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on data asset added {
+                        asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+                        asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+                    }
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let err = analyze(&program).expect_err("duplicate matcher should error");
+        assert!(err.message.contains("duplicate `asset_definition` matcher"));
     }
 
     #[test]

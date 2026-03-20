@@ -24,7 +24,7 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Upgrade hook `kaizen`/`改善` + `permission` |  🟨    | parsed; governance/dispatch enforced by runtime |
 | `kotoba {…}` translations                    |  🟩    | parsed; emitted in manifest |
 | Access hints `#[access(read=..., write=...)]`|  ✅    | collected into manifest/entrypoint hints |
-| Trigger declarations `register_trigger {…}`  |  ✅    | time/execute trigger DSL; metadata recorded in entrypoint manifests and auto-registered on activation |
+| Trigger declarations `register_trigger {…}`  |  ✅    | time/execute/data/pipeline trigger DSL with metadata and explicit authority; manifest triggers auto-register on activation |
 | `state Type name;`                           |  ✅    | host-backed durable overlays (Norito TLV persistence + checkpoint/restore rollback) |
 | `struct Name { … }`                          |  ✅    | lowered to tuple layout; field access compiled |
 | `let name[: Type] = expr;`                   |  ✅    | optional type annotation |
@@ -109,19 +109,58 @@ MetaEntry  = ( "abi_version" | "abi" ) ":" Number
 
 TriggerDecl = ("register_trigger" | "trigger") Ident "{" { TriggerField } "}" ;
 TriggerField = "call" CallTarget ";"                         // callback target
-             | "on" TriggerFilter ";"                        // event filter
+             | "on" TriggerFilter [ ";" ]                    // event filter
              | "repeats" Repeats ";"                         // repetition policy
+             | "authority" (Ident | String) ";"             // explicit trigger authority
              | "metadata" "{" { MetadataEntry ";" } "}" [ ";" ] ;
 CallTarget = Ident [ "::" Ident ] ;
 TriggerFilter = "time" ("pre_commit" | "schedule" "(" Number [ "," Number ] ")")
-              | "execute" "trigger" (Ident | String) ;
+              | "execute" "trigger" (Ident | String)
+              | "data" "any"
+              | "data" DataFamily DataEventKind DataMatcherBlock
+              | "pipeline" ("transaction" | "block" | "merge" | "witness") ;
+DataFamily = "peer"
+           | "domain"
+           | "account"
+           | "asset"
+           | "asset_definition"
+           | "nft"
+           | "trigger"
+           | "role"
+           | "configuration"
+           | "executor" ;
+DataEventKind = Ident | "any" ;
+DataMatcherBlock = "{" { DataMatcher ";" } "}" ;
+DataMatcher = "peer" (Ident | String)
+            | "domain" (Ident | String)
+            | "account" (Ident | String)
+            | "asset" (Ident | String)
+            | "asset_definition" (Ident | String)
+            | "nft" (Ident | String)
+            | "trigger" (Ident | String)
+            | "role" (Ident | String) ;
 Repeats = "indefinitely" | Number ;
 MetadataEntry = (Ident | String) ":" Literal ;               // JSON literal (string/number/bool/null/json!)
 
 FunctionSignature = Ident "(" [ ParamList ] ")" ;                  // see Parameters
 ```
 
-Contract-level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach metadata to entrypoint manifests and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are currently rejected. Free functions are fully compiled end-to-end today. See Gap Analysis for details.
+Contract-level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach filters, metadata, and optional explicit authority to entrypoint manifests and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are currently rejected. Free functions are fully compiled end-to-end today. See Gap Analysis for details.
+
+Structured data-trigger example:
+```kotodama
+register_trigger cbuae_aed_to_pkr_asset_added {
+  call run;
+  on data asset added {
+    asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+  }
+}
+```
+
+Notes:
+- `asset` data filters may combine both `asset` and `asset_definition` matchers; both apply with logical AND semantics.
+- `configuration` and `executor` filters currently expose event-kind selection only and do not accept matcher fields.
+- The DSL covers the core ledger data families above. Specialized product-specific event families still use the lower-level filter APIs when needed.
 
 ### Parameters & Returns [Parsed/Enforced]
 ```
