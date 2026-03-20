@@ -36,6 +36,9 @@ public final class OfflineJsonParserTest {
               "controller_id": "alice@wonderland",
               "controller_display": "alice@wonderland",
               "asset_id": "usd#wonderland",
+              "asset_definition_id": "usd#wonderland",
+              "asset_definition_name": "USD",
+              "asset_definition_alias": null,
               "registered_at_ms": 1700000000000,
               "expires_at_ms": 1700500000000,
               "policy_expires_at_ms": 1700600000000,
@@ -56,6 +59,9 @@ public final class OfflineJsonParserTest {
     assert "deadbeef".equals(item.certificateIdHex()) : "certificate id mismatch";
     assert "alice@wonderland".equals(item.controllerId()) : "controller mismatch";
     assert "usd#wonderland".equals(item.assetId()) : "asset mismatch";
+    assert "usd#wonderland".equals(item.assetDefinitionId()) : "asset definition id mismatch";
+    assert "USD".equals(item.assetDefinitionName()) : "asset definition name mismatch";
+    assert item.assetDefinitionAlias() == null : "asset definition alias mismatch";
     assert item.registeredAtMs() == 1_700_000_000_000L : "timestamp mismatch";
     assert item.certificateExpiresAtMs() == 1_700_500_000_000L : "certificate expiry mismatch";
     assert item.policyExpiresAtMs() == 1_700_600_000_000L : "policy expiry mismatch";
@@ -397,6 +403,9 @@ public final class OfflineJsonParserTest {
               "controller_id": "alice@wonderland",
               "controller_display": "alice@wonderland",
               "asset_id": "usd#wonderland",
+              "asset_definition_id": "usd#wonderland",
+              "asset_definition_name": "USD",
+              "asset_definition_alias": null,
               "registered_at_ms": 1700000000000,
               "expires_at_ms": 1700500000000,
               "policy_expires_at_ms": 1700600000000,

@@ -81,6 +81,9 @@ public final class OfflineToriiClientTests {
                   "controller_id": "alice@wonderland",
                   "controller_display": "alice@wonderland",
                   "asset_id": "usd#wonderland",
+                  "asset_definition_id": "usd#wonderland",
+                  "asset_definition_name": "USD",
+                  "asset_definition_alias": null,
                   "registered_at_ms": 1,
                   "expires_at_ms": 1700000000000,
                   "policy_expires_at_ms": 1710000000000,
@@ -118,6 +121,10 @@ public final class OfflineToriiClientTests {
     assert list.total() == 1 : "allowance total mismatch";
     assert "alice@wonderland".equals(list.items().get(0).controllerId())
         : "allowance controller mismatch";
+    assert "xor#merchants".equals(list.items().get(0).assetDefinitionId())
+        : "allowance asset definition id mismatch";
+    assert "Merchant XOR".equals(list.items().get(0).assetDefinitionName())
+        : "allowance asset definition name mismatch";
     assert list.items().get(0).certificateExpiresAtMs() == 1_700_000_000_000L
         : "certificate expiry mismatch";
     assert "42.0".equals(list.items().get(0).remainingAmount())

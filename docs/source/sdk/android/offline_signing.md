@@ -320,6 +320,11 @@ OfflineBalanceProof.Artifacts artifacts =
   deadlines first, then policy expiry, then certificate expiry; once the
   deadline passes they flip to `State.EXPIRED` and continue to surface until a
   fresh verdict is registered.
+- Allowance list items now also carry asset-definition metadata for UI labels.
+  Use `item.assetDefinitionName()` for the display label, keep `item.assetId()`
+  for the concrete `AssetId`, and use `item.assetDefinitionId()` /
+  `item.assetDefinitionAlias()` when you need to show or cache the canonical
+  asset-definition reference separately.
 - `OfflineWallet.ensureFreshVerdict(...)` refuses stale attestations before a
   bundle is submitted. Pass the certificate id (and optionally the cached
   `attestation_nonce_hex`) to ensure the refresh/policy/certificate deadlines

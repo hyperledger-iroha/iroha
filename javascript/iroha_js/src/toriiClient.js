@@ -22136,6 +22136,24 @@ function normalizeOfflineAllowanceListItem(value, context) {
     record.asset_id,
     `${context}.asset_id`,
   );
+  const assetDefinitionId = requireNonEmptyString(
+    record.asset_definition_id,
+    `${context}.asset_definition_id`,
+  );
+  const assetDefinitionName = requireNonEmptyString(
+    record.asset_definition_name,
+    `${context}.asset_definition_name`,
+  );
+  if (!Object.prototype.hasOwnProperty.call(record, "asset_definition_alias")) {
+    throw new TypeError(`${context}.asset_definition_alias is required`);
+  }
+  const assetDefinitionAlias =
+    record.asset_definition_alias === null
+      ? null
+      : requireNonEmptyString(
+          record.asset_definition_alias,
+          `${context}.asset_definition_alias`,
+        );
   const registeredAt = ToriiClient._normalizeUnsignedInteger(
     record.registered_at_ms,
     `${context}.registered_at_ms`,
@@ -22209,6 +22227,9 @@ function normalizeOfflineAllowanceListItem(value, context) {
     controller_id: controllerId,
     controller_display: controllerDisplay,
     asset_id: assetId,
+    asset_definition_id: assetDefinitionId,
+    asset_definition_name: assetDefinitionName,
+    asset_definition_alias: assetDefinitionAlias,
     registered_at_ms: registeredAt,
     expires_at_ms: expiresAt,
     policy_expires_at_ms: policyExpiresAt,
