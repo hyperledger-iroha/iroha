@@ -4514,10 +4514,7 @@ fn identifier_receipt_response(
     backend: &str,
 ) -> Result<routing::IdentifierResolveResponseDto, Error> {
     let signature_payload = receipt.payload();
-    let signature_payload_hex = receipt
-        .payload_bytes()
-        .map(hex::encode_upper)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+    let signature_payload_hex = hex::encode_upper(receipt.payload_bytes());
     Ok(routing::IdentifierResolveResponseDto {
         policy_id: receipt.payload.policy_id.to_string(),
         opaque_id: receipt.payload.opaque_id.to_string(),
@@ -10139,72 +10136,6 @@ async fn handler_commit_qc(
 // ---------------- Contracts/VK POST handlers ----------------
 
 #[cfg(feature = "app_api")]
-async fn handler_post_contract_code(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    request: NoritoJson<crate::routing::RegisterContractCodeDto>,
-) -> Result<AxResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return crate::routing::handle_post_contract_code(
-            app.chain_id.clone(),
-            app.queue.clone(),
-            app.state.clone(),
-            app.telemetry.clone(),
-            request,
-        )
-        .await
-        .map(axum::response::IntoResponse::into_response);
-    }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("code"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        None,
-        "v1/contracts/code",
-        app.api_token_enforced(),
-    );
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if !limits::allow_conditionally(&app.deploy_rate_limiter, &key, enforce).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("code"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_contract_code(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("code"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
 async fn handler_post_contract_deploy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -15128,7 +15059,6 @@ impl Torii {
         builder.apply(|router| {
             // Group contracts + VK endpoints into a small sub-router for clarity and merge it.
             let group = Router::new()
-                .route("/v1/contracts/code", post(handler_post_contract_code))
                 .route(
                     "/v1/contracts/code-bytes/{code_hash}",
                     get(handler_get_contract_code_bytes),
@@ -18807,10 +18737,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(feature = "telemetry")]
     use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
     use crate::{
-        routing::{
-            ActivateInstanceDto, DeployContractDto, RegisterContractCodeDto,
-            handle_v1_sumeragi_commit_qcs,
-        },
+        routing::{ActivateInstanceDto, DeployContractDto, handle_v1_sumeragi_commit_qcs},
         utils::extractors::NoritoJson,
     };
 
@@ -20853,69 +20780,10 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(proofs.entry_hash, entry_hash);
     }
 
-    fn empty_manifest() -> iroha_data_model::smart_contract::manifest::ContractManifest {
-        iroha_data_model::smart_contract::manifest::ContractManifest {
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-    }
-
     fn clone_private_key(
         src: &iroha_data_model::prelude::ExposedPrivateKey,
     ) -> iroha_data_model::prelude::ExposedPrivateKey {
         iroha_data_model::prelude::ExposedPrivateKey(src.0.clone())
-    }
-
-    #[tokio::test]
-    async fn contract_code_rate_limit_throttles_after_burst() {
-        let mut app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
-        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
-        app_inner.fee_policy = FeePolicy::Manual {
-            asset_id: "xor#wonderland".to_string(),
-            amount: 1,
-            receiver: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".to_string(),
-        };
-
-        let headers = HeaderMap::new();
-        let creds = crate::test_utils::random_authority();
-
-        let dto1 = RegisterContractCodeDto {
-            authority: creds.account.clone(),
-            private_key: clone_private_key(&creds.private_key),
-            manifest: empty_manifest(),
-            gov_namespace: None,
-            gov_contract_id: None,
-        };
-        let dto2 = RegisterContractCodeDto {
-            authority: creds.account.clone(),
-            private_key: clone_private_key(&creds.private_key),
-            manifest: empty_manifest(),
-            gov_namespace: None,
-            gov_contract_id: None,
-        };
-
-        let first = super::handler_post_contract_code(
-            State(app.clone()),
-            headers.clone(),
-            NoritoJson(dto1),
-        )
-        .await;
-        assert!(first.is_ok(), "first request should pass: {first:?}");
-
-        let second =
-            super::handler_post_contract_code(State(app.clone()), headers, NoritoJson(dto2)).await;
-        assert!(matches!(
-            second,
-            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
-            )))
-        ));
     }
 
     #[tokio::test]
@@ -21533,20 +21401,36 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn contracts_deploy_handler_ok() {
-        // Helper to compose a minimal IVM program (.to bytes) with ABI v1
+        // Helper to compose a minimal self-describing contract artifact with ABI v1.
         fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-            let mut code = Vec::new();
-            code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             let meta = ivm::ProgramMetadata {
                 version_major: 1,
-                version_minor: 0,
+                version_minor: 1,
                 mode: 0,
                 vector_length: 0,
                 max_cycles: 0,
                 abi_version,
             };
+            let interface = ivm::EmbeddedContractInterfaceV1 {
+                compiler_fingerprint: "torii-lib-tests".to_owned(),
+                features_bitmap: 0,
+                access_set_hints: None,
+                kotoba: Vec::new(),
+                entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                    name: "main".to_owned(),
+                    kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                    permission: None,
+                    read_keys: Vec::new(),
+                    write_keys: Vec::new(),
+                    access_hints_complete: Some(true),
+                    access_hints_skipped: Vec::new(),
+                    triggers: Vec::new(),
+                    entry_pc: 0,
+                }],
+            };
             let mut out = meta.encode();
-            out.extend_from_slice(&code);
+            out.extend_from_slice(&interface.encode_section());
+            out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
             out
         }
 

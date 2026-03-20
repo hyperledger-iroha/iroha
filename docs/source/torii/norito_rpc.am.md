@@ -2,12 +2,14 @@
 lang: am
 direction: ltr
 source: docs/source/torii/norito_rpc.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: edef94c3e45bc93af79c6bb17b96244216a70aa6c2e1a919470d89a748a74bb1
-source_last_modified: "2026-01-16T17:13:25.860099+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 2dc50ed85122206ca788874d53deccb260b633cd2d54c7c097dbb894961d2d05
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 ---
+
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
 ## Norito-RPC Transport (NRPC-1)
 
@@ -141,7 +143,7 @@ curl \
 | Group | Representative routes | Request types | Response shape | Notes |
 | --- | --- | --- | --- | --- |
 | Signed queries | `POST /query` (aliased by the pipeline router) | `SignedQuery` via `NoritoVersioned`[`crates/iroha_torii/src/lib.rs:5387`](/crates/iroha_torii/src/lib.rs#L5387) | Norito or JSON `QueryResultBox` depending on `Accept` | The handler streams results through `handle_queries`/`handle_queries_with_opts`, honouring pagination and cursor overrides (`crates/iroha_torii/src/routing.rs:9472`). |
-| Contracts & verifying keys | `POST /v1/contracts/{code,deploy,instance,*}`; `POST /v1/zk/vk/{register,update,deprecate}` | `RegisterContractCodeDto`, `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`[`crates/iroha_torii/src/routing.rs:3307`](/crates/iroha_torii/src/routing.rs#L3307)[`crates/iroha_torii/src/routing.rs:4336`](/crates/iroha_torii/src/routing.rs#L4336) | Norito acknowledgement envelope mirroring `/v1/pipeline/transactions` status fields | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Successful calls enqueue a signed transaction via `handle_transaction_with_metrics`. |
+| Contracts & verifying keys | `POST /v1/contracts/{deploy,instance,*}`; `POST /v1/zk/vk/{register,update,deprecate}` | `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`[`crates/iroha_torii/src/routing.rs:3307`](/crates/iroha_torii/src/routing.rs#L3307)[`crates/iroha_torii/src/routing.rs:4336`](/crates/iroha_torii/src/routing.rs#L4336) | Norito acknowledgement envelope mirroring `/v1/pipeline/transactions` status fields | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Successful calls enqueue a signed transaction via `handle_transaction_with_metrics`. |
 | ZK proof orchestration | `POST /v1/zk/{roots,verify,submit-proof,vote/tally}`; `GET /v1/zk/proofs{,/count}` | `ZkRootsGetRequestDto`, `ZkVoteGetTallyRequestDto`, batch envelopes for proof submission[`crates/iroha_torii/src/routing.rs:2441`](/crates/iroha_torii/src/routing.rs#L2441)[`crates/iroha_torii/src/routing.rs:2497`](/crates/iroha_torii/src/routing.rs#L2497) | Norito structs (`ProofRootsResponse`, `ProofVoteTallyDto`, etc.) selected by `Accept` | NORITO requests reject malformed payloads before reaching business logic (`crates/iroha_torii/src/zk_prover.rs:985`), preserving deterministic proof verification. |
 | SoraFS storage APIs | `/v1/sorafs/{pin,capacity,deal,replication,por}/*` | `RegisterPinManifestDto`, `RegisterCapacityDeclarationDto`, `RecordDealUsageDto`, `RecordPorChallengeDto`, `RecordPorProofDto`, etc.[`crates/iroha_torii/src/routing.rs:5624`](/crates/iroha_torii/src/routing.rs#L5624)[`crates/iroha_torii/src/routing.rs:6385`](/crates/iroha_torii/src/routing.rs#L6385) | Norito acknowledgements with policy enforcement metadata | All admissions run through shared helpers that emit deterministic telemetry and queue transactions when on-chain mutations are required. |
 | Confidential ledger helpers | `POST /v1/confidential/derive-keyset` | `ConfidentialKeyRequest`[`crates/iroha_torii/src/routing.rs:1328`](/crates/iroha_torii/src/routing.rs#L1328) | Norito `ConfidentialKeyResponse` containing derived key material | Input seeds accept hex or base64 encodings; invalid lengths are rejected before key derivation. |

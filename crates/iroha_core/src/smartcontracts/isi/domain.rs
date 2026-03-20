@@ -2339,7 +2339,15 @@ pub mod isi {
 
             let authority_controls_subject = authority.subject_id() == subject;
             let authority_controls_domain = authority == &domain_owner;
-            if !authority_controls_subject && !authority_controls_domain {
+            let authority_can_register_domain_accounts = authority_can_register_account_in_domain(
+                &state_transaction.world,
+                authority,
+                &domain,
+            );
+            if !authority_controls_subject
+                && !authority_controls_domain
+                && !authority_can_register_domain_accounts
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "authority is not permitted to link this account subject to the domain"
                         .to_owned()
@@ -2630,7 +2638,15 @@ pub mod isi {
 
             let authority_controls_subject = authority.subject_id() == subject;
             let authority_controls_domain = authority == &domain_owner;
-            if !authority_controls_subject && !authority_controls_domain {
+            let authority_can_register_domain_accounts = authority_can_register_account_in_domain(
+                &state_transaction.world,
+                authority,
+                &domain,
+            );
+            if !authority_controls_subject
+                && !authority_controls_domain
+                && !authority_can_register_domain_accounts
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "authority is not permitted to unlink this account subject from the domain"
                         .to_owned()
@@ -3073,6 +3089,64 @@ mod tests {
                 .execute(&view)
                 .expect("query should succeed");
         assert!(linked_accounts.is_empty(), "domain links should be removed");
+        let linked_domains =
+            iroha_data_model::query::account::FindDomainsByAccountId::new(probe_account)
+                .execute(&view)
+                .expect("query should succeed");
+        assert!(linked_domains.is_empty(), "subject links should be removed");
+    }
+
+    #[test]
+    fn link_and_unlink_account_domain_allow_domain_registrar() {
+        let mut state = test_state();
+        let linked_domain: DomainId = "linked".parse().expect("domain id");
+        let owner = (*ALICE_ID).clone();
+        let registrar = (*BOB_ID).clone();
+        seed_domain(&mut state, &linked_domain, &owner);
+        seed_account(&mut state, &registrar, &linked_domain);
+
+        let probe_account = AccountId::new(KeyPair::random().public_key().clone());
+        let permission: Permission = CanRegisterAccount {
+            domain: linked_domain.clone(),
+        }
+        .into();
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Grant::account_permission(permission, registrar.clone())
+            .execute(&owner, &mut tx)
+            .expect("grant registrar permission");
+
+        LinkAccountDomain {
+            account: probe_account.clone(),
+            domain: linked_domain.clone(),
+        }
+        .execute(&registrar, &mut tx)
+        .expect("domain registrar should be able to link subject");
+        tx.apply();
+        block.commit().expect("block commit should succeed");
+
+        let view = state.view();
+        let linked_domains =
+            iroha_data_model::query::account::FindDomainsByAccountId::new(probe_account.clone())
+                .execute(&view)
+                .expect("query should succeed");
+        assert_eq!(linked_domains, vec![linked_domain.clone()]);
+
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        UnlinkAccountDomain {
+            account: probe_account.clone(),
+            domain: linked_domain.clone(),
+        }
+        .execute(&registrar, &mut tx)
+        .expect("domain registrar should be able to unlink subject");
+        tx.apply();
+        block.commit().expect("block commit should succeed");
+
+        let view = state.view();
         let linked_domains =
             iroha_data_model::query::account::FindDomainsByAccountId::new(probe_account)
                 .execute(&view)

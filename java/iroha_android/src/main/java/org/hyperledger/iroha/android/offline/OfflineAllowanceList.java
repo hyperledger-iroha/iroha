@@ -30,6 +30,9 @@ public final class OfflineAllowanceList {
     private final String controllerId;
     private final String controllerDisplay;
     private final String assetId;
+    private final String assetDefinitionId;
+    private final String assetDefinitionName;
+    private final String assetDefinitionAlias;
     private final long registeredAtMs;
     private final long certificateExpiresAtMs;
     private final long policyExpiresAtMs;
@@ -44,6 +47,9 @@ public final class OfflineAllowanceList {
         final String controllerId,
         final String controllerDisplay,
         final String assetId,
+        final String assetDefinitionId,
+        final String assetDefinitionName,
+        final String assetDefinitionAlias,
         final long registeredAtMs,
         final long certificateExpiresAtMs,
         final long policyExpiresAtMs,
@@ -56,6 +62,10 @@ public final class OfflineAllowanceList {
       this.controllerId = Objects.requireNonNull(controllerId, "controllerId");
       this.controllerDisplay = Objects.requireNonNull(controllerDisplay, "controllerDisplay");
       this.assetId = Objects.requireNonNull(assetId, "assetId");
+      this.assetDefinitionId = Objects.requireNonNull(assetDefinitionId, "assetDefinitionId");
+      this.assetDefinitionName =
+          Objects.requireNonNull(assetDefinitionName, "assetDefinitionName");
+      this.assetDefinitionAlias = assetDefinitionAlias;
       this.registeredAtMs = registeredAtMs;
       this.certificateExpiresAtMs = certificateExpiresAtMs;
       this.policyExpiresAtMs = policyExpiresAtMs;
@@ -80,6 +90,18 @@ public final class OfflineAllowanceList {
 
     public String assetId() {
       return assetId;
+    }
+
+    public String assetDefinitionId() {
+      return assetDefinitionId;
+    }
+
+    public String assetDefinitionName() {
+      return assetDefinitionName;
+    }
+
+    public String assetDefinitionAlias() {
+      return assetDefinitionAlias;
     }
 
     public long registeredAtMs() {

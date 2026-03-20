@@ -2,150 +2,161 @@
 lang: am
 direction: ltr
 source: docs/source/contract_deployment.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 0f2b1d7d027d715eac5a3ca8be29dea8f0e76013e948947a4de66108ac561f34
-source_last_modified: "2026-01-22T14:58:53.689594+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 747a7ac905ca4b698ea6cc89d384a1ee11db13953440d3f35a1691ce78638e52
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 title: Contract Deployment (.to) — API & Workflow
 translator: machine-google-reviewed
 ---
 
-ሁኔታ፡ በTorii፣ CLI እና ዋና የመግቢያ ፈተናዎች (ህዳር 2025) የተተገበረ እና ተግባራዊ የተደረገ።
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-## አጠቃላይ እይታ
+# Contract Deployment (.to) — API & Workflow
 
-- የተጠናቀረው IVM ባይትኮድ (`.to`) ወደ Torii በማስገባት ወይም በማውጣት ያሰማሩ
-  `RegisterSmartContractCode`/`RegisterSmartContractBytes` መመሪያዎች
-  በቀጥታ.
-- አንጓዎች `code_hash` እና ቀኖናዊውን ABI hash በአካባቢው እንደገና ይሰላሉ; አለመመጣጠን
-  በቆራጥነት እምቢ ማለት.
-- የተከማቹ ቅርሶች በሰንሰለት ስር ይኖራሉ `contract_manifests` እና
-  `contract_code` መዝገቦች. የማጣቀሻ ሃሽዎችን ብቻ ያሳያል እና ትንሽ ሆኖ ይቆያል;
-  ኮድ ባይት በ `code_hash` ተቆልፏል።
-- የተጠበቁ የስም ቦታዎች ከሀ በፊት የፀደቀ የአስተዳደር ፕሮፖዛል ሊያስፈልጋቸው ይችላል።
-  ማሰማራት ገብቷል. የመግቢያ ዱካ የፕሮፖዛል ክፍያን እና ይመለከታል
-  የ `(namespace, contract_id, code_hash, abi_hash)` እኩልነትን ያስፈጽማል
-  የስም ቦታ የተጠበቀ ነው።
+Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
 
-## የተከማቹ ቅርሶች እና ማቆየት።
+## Overview
 
-- `RegisterSmartContractCode` ያስገባዋል / አንድ የተሰጠ አንጸባራቂ ይጽፋል
-  `code_hash`. ተመሳሳዩ ሃሽ ቀድሞውኑ ሲኖር, በአዲሱ ይተካል
-  ገላጭ.
-- `RegisterSmartContractBytes` የተጠናቀረውን ፕሮግራም ስር ያከማቻል
-  `contract_code[code_hash]`. ለሃሽ ባይት አስቀድሞ ካለ እነሱ መዛመድ አለባቸው
-  በትክክል; የተለያዩ ባይት የማይለዋወጥ ጥሰትን ያሳድጋል።
-- የኮድ መጠን በብጁ መለኪያ `max_contract_code_bytes` ተሸፍኗል
-  (ነባሪ 16 ሚቢ)። ከዚህ በፊት በ`SetParameter(Custom)` ግብይት ይሽሩት
-  ትላልቅ ቅርሶችን መመዝገብ.
-- ማቆየት ያልተገደበ ነው፡ መግለጫዎች እና ኮድ በግልጽ እስከሚገኙ ድረስ ይገኛሉ
-  በወደፊት የአስተዳደር የስራ ሂደት ውስጥ ተወግዷል. ቲቲኤል ወይም አውቶማቲክ ጂሲ የለም።
+- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
+  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
+  directly.
+- Contract `.to` artifacts are self-describing: the required `CNTR` section
+  embeds the contract interface ahead of the executable stream, and Torii
+  derives the on-chain `ContractManifest` from that section after verification.
+- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
+  reject deterministically.
+- Stored artifacts live under the on-chain `contract_manifests` and
+  `contract_code` registries. Manifests reference hashes only and remain small;
+  code bytes are keyed by `code_hash`.
+- Protected namespaces can require an enacted governance proposal before a
+  deployment is admitted. The admission path looks up the proposal payload and
+  enforces `(namespace, contract_id, code_hash, abi_hash)` equality when the
+  namespace is protected.
 
-## የመግቢያ መስመር
+## Stored Artifacts & Retention
 
-- አረጋጋጩ የIVM ራስጌን ይተነትናል፣ `version_major == 1`ን ያስፈጽማል እና ይፈትሻል
-  `abi_version == 1`. ያልታወቁ ስሪቶች ወዲያውኑ ውድቅ ያደርጋሉ; የሩጫ ጊዜ የለም።
-  ቀያይር።
-- ለ`code_hash` አንጸባራቂ ሲገኝ፣ ማረጋገጫው ያረጋግጣል
-  የተከማቸ `code_hash`/`abi_hash` ከተሰሉት እሴቶች ጋር እኩል ነው።
-  ፕሮግራም. አለመመጣጠን የ`Manifest{Code,Abi}HashMismatch` ስህተቶችን ይፈጥራል።
-- የተጠበቁ የስም ቦታዎችን ያነጣጠሩ ግብይቶች የሜታዳታ ቁልፎችን ማካተት አለባቸው
-  `gov_namespace` እና `gov_contract_id`። የመግቢያ መንገዱ ያነፃፅራቸዋል።
-  በ `DeployContract` ፕሮፖዛል ላይ; ተዛማጅ ፕሮፖዛል ከሌለ እ.ኤ.አ
-  ግብይት በ `NotPermitted` ውድቅ ተደርጓል።
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash`. When the same hash already exists, it is replaced with the new
+  manifest.
+- `RegisterSmartContractBytes` stores the compiled program under
+  `contract_code[code_hash]`. If bytes for a hash already exist they must match
+  exactly; differing bytes raise an invariant violation.
+- Code size is capped by the custom parameter `max_contract_code_bytes`
+  (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
+  registering larger artifacts.
+- Retention is unbounded: manifests and code remain available until explicitly
+  removed in a future governance workflow. There is no TTL or automatic GC.
 
-## Torii የመጨረሻ ነጥቦች (ባህሪ `app_api`)- `POST /v1/contracts/deploy`
-  - የጥያቄ አካል፡ `DeployContractDto` (የመስክ ዝርዝሮችን ለማግኘት `docs/source/torii_contracts_api.md` ይመልከቱ)።
-  - Torii ቤዝ64 ክፍያን መፍታት፣ ሁለቱንም ሃሽ ያሰላል፣ አንጸባራቂ ይሠራል፣
-    እና `RegisterSmartContractCode` ፕላስ ያቀርባል
-    `RegisterSmartContractBytes` በመወከል በተፈረመ ግብይት ውስጥ
-    ደዋይ
-  - ምላሽ: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - ስህተቶች፡ ልክ ያልሆነ ቤዝ64፣ የማይደገፍ የ ABI ስሪት፣ ፍቃድ ይጎድላል
-    (`CanRegisterSmartContractCode`)፣ የመጠን ካፕ ታልፏል፣ የአስተዳደር መግቢያ።
-- `POST /v1/contracts/code`
-  - `RegisterContractCodeDto` (ባለስልጣን ፣ የግል ቁልፍ ፣ መግለጫ) ይቀበላል እና ብቻ ያቀርባል
-    `RegisterSmartContractCode`. አንጸባራቂዎች ተለይተው ሲዘጋጁ ይጠቀሙ
-    ባይትኮድ
+## Admission pipeline
+
+- Contract deployment parses the artifact, requires IVM `1.1`, requires the
+  embedded `CNTR` section, and verifies the embedded interface against the
+  decoded executable stream before any manifest is stored.
+- Verification fails closed on malformed sections, duplicate/invalid
+  entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
+  / ABI mismatches, or unsupported metadata.
+- The canonical manifest is built from the verified `CNTR` payload, signed by
+  the submitting key, and then stored together with the uploaded bytecode.
+- Transactions targeting protected namespaces must include metadata keys
+  `gov_namespace` and `gov_contract_id`. The admission path compares them
+  against enacted `DeployContract` proposals; if no matching proposal exists the
+  transaction is rejected with `NotPermitted`.
+
+## Torii endpoints (feature `app_api`)
+
+- `POST /v1/contracts/deploy`
+  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
+  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
+    derives the manifest from the artifact itself, and submits `RegisterSmartContractCode` plus
+    `RegisterSmartContractBytes` in a signed transaction on behalf of the
+    caller.
+  - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
+  - Errors: invalid base64, invalid contract artifact, missing permission
+    (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
 - `POST /v1/contracts/instance`
-  - `DeployAndActivateInstanceDto` ይቀበላል (ስልጣን ፣ የግል ቁልፍ ፣ የስም ቦታ/ኮንትራት_id ፣ `code_b64` ፣ አማራጭ አንጸባራቂ ይሽራል) እና ያሰማራው + በአቶሚካል ያነቃል።
+  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`) and deploys + activates atomically.
 - `POST /v1/contracts/instance/activate`
-  - `ActivateInstanceDto` (ባለስልጣን ፣ የግል ቁልፍ ፣ የስም ቦታ ፣ contract_id ፣ `code_hash`) ይቀበላል እና የማግበር መመሪያውን ብቻ ያቀርባል።
+  - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
 - `GET /v1/contracts/code/{code_hash}`
-  - `{ manifest: { code_hash, abi_hash } }` ይመልሳል።
-    ተጨማሪ አንጸባራቂ መስኮች ከውስጥ ተጠብቀው ይገኛሉ ነገር ግን እዚህ ለሀ
-    የተረጋጋ API.
+  - Returns `{ manifest: { code_hash, abi_hash } }`.
+    Additional manifest fields are preserved internally but omitted here for a
+    stable API.
 - `GET /v1/contracts/code-bytes/{code_hash}`
-  - `{ code_b64 }` በተከማቸ `.to` ምስል እንደ base64 ኮድ ይመልሳል።
+  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-ሁሉም የኮንትራት የህይወት ኡደት የመጨረሻ ነጥቦች በ በኩል የተዋቀረ የተወሰነ የማሰማራት ገደብ ያጋራሉ።
-`torii.deploy_rate_per_origin_per_sec` (ቶከኖች በሰከንድ) እና
-`torii.deploy_burst_per_origin` (ፍንዳታ ቶከኖች)። ነባሪዎች 4 req/s ከፍንዳታ ጋር ናቸው።
-8 ለእያንዳንዱ ማስመሰያ/ቁልፍ ከ`X-API-Token`፣ ከርቀት አይፒ ወይም የመጨረሻ ነጥብ ፍንጭ የተገኘ።
-የታመኑ ኦፕሬተሮችን ገደብ ለማሰናከል የትኛውንም መስክ ወደ `null` ያቀናብሩ። መቼ
-ገዳይ እሳቶች፣ Torii ይጨምራል
-`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` ቴሌሜትሪ ቆጣሪ እና
-HTTP 429 ይመልሳል; ማንኛውም ተቆጣጣሪ ስህተት ይጨምራል
-`torii_contract_errors_total{endpoint=…}` ለማስጠንቀቅ።
+All contract lifecycle endpoints share a dedicated deploy limiter configured via
+`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
+`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
+8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
+Set either field to `null` to disable the limiter for trusted operators. When the
+limiter fires, Torii increments the
+`torii_contract_throttled_total{endpoint="deploy|instance|activate"}` telemetry counter and
+returns HTTP 429; any handler error increments
+`torii_contract_errors_total{endpoint=…}` for alerting.
 
-## የአስተዳደር ውህደት እና የተጠበቁ የስም ቦታዎች- ብጁ መለኪያውን `gov_protected_namespaces` (የ JSON የስም ቦታ ድርድር ያቀናብሩ)
-  ሕብረቁምፊዎች) የመግቢያ ጋቲንግን ለማንቃት። Torii ረዳቶችን ያጋልጣል
-  `/v1/gov/protected-namespaces` እና CLI በእነርሱ በኩል ያንጸባርቃሉ
+## Governance integration & protected namespaces
+
+- Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
+  strings) to enable admission gating. Torii exposes helpers under
+  `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- በ `ProposeDeployContract` (ወይም በ Torii የተፈጠሩ ሀሳቦች)
-  `/v1/gov/proposals/deploy-contract` የመጨረሻ ነጥብ) ቀረጻ
+- Proposals created with `ProposeDeployContract` (or the Torii
+  `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
-- ህዝበ ውሳኔው አንዴ ካለፈ፣ `EnactReferendum` ፕሮፖዛሉ ተቀባይነት ያለው እና
-  መግባቱ ተዛማጅ ሜታዳታ እና ኮድ የያዙ ማሰማራቶችን ይቀበላል።
-- ግብይቶች የሜታዳታ ጥንድ `gov_namespace=a namespace` እና ማካተት አለባቸው
-  `gov_contract_id=an identifier` (እና `contract_namespace` ማዘጋጀት አለበት /
-  `contract_id` ለጥሪ ጊዜ ማሰሪያ)። የ CLI ረዳቶች እነዚህን ይሞላሉ።
-  በራስ-ሰር `--namespace`/`--contract-id` ሲያልፉ።
-- የተጠበቁ የስም ቦታዎች ሲነቁ ወረፋ መግባት ሙከራዎችን ውድቅ ያደርጋል
-  ያለውን `contract_id` ወደ ሌላ የስም ቦታ እንደገና ማያያዝ; የወጣውን ተጠቀም
-  ወደ ሌላ ቦታ ከመሰማራቱ በፊት የቀደመውን አስገዳጅ ሀሳብ ያቅርቡ ወይም ጡረታ ይውጡ።
-- የሌይን አንጸባራቂ አረጋጋጭ ምልአተ ጉባኤ ከአንድ በላይ ካዘጋጀ ያካትቱ
-  `gov_manifest_approvers` (የ JSON ድርድር አረጋጋጭ መለያ መታወቂያዎች) ስለዚህ ወረፋው ሊቆጠር ይችላል
-  ከግብይቱ ባለስልጣን ጋር ተጨማሪ ማጽደቆች. መስመሮችም አይቀበሉም።
-  በአንጸባራቂው ውስጥ የማይገኙ የስም ቦታዎችን የሚጠቅስ ሜታዳታ
-  `protected_namespaces` ስብስብ።
+- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
+  admission will accept deployments that carry matching metadata and code.
+- Transactions must include the metadata pair `gov_namespace=a namespace` and
+  `gov_contract_id=an identifier` (and should set `contract_namespace` /
+  `contract_id` for call-time binding). CLI helpers populate these
+  automatically when you pass `--namespace`/`--contract-id`.
+- When protected namespaces are enabled, queue admission rejects attempts to
+  rebind an existing `contract_id` to a different namespace; use the enacted
+  proposal or retire the previous binding before deploying elsewhere.
+- If the lane manifest sets a validator quorum above one, include
+  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
+  the additional approvals alongside the transaction authority. Lanes also reject
+  metadata that references namespaces not present in the manifest's
+  `protected_namespaces` set.
 
-## CLI ረዳቶች
+## CLI helpers
 
 - `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  የTorii ማሰማራት ጥያቄን (በበረራ ላይ በማስላት ላይ) ያቀርባል።
+  submits the Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  አንጸባራቂውን ይገነባል (በቀረበው ቁልፍ የተፈረመ)፣ ባይት + አንጸባራቂ ይመዘግባል፣
-  እና `(namespace, contract_id)` ማሰሪያን በአንድ ግብይት ያነቃል። ተጠቀም
-  `--dry-run` የተሰላውን ሃሽ እና የመመሪያ ቆጠራን ያለሱ ለማተም
-  በማስገባት ላይ፣ እና `--manifest-out` የተፈረመውን አንጸባራቂ JSON ለማስቀመጥ።
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` ያሰላል።
-  `code_hash`/`abi_hash` ለተጠናቀረ `.to` እና እንደ አማራጭ ማኒፌክትን ይፈርማል፣
-  JSON ማተም ወይም ወደ `--out` መፃፍ።
+  verifies the embedded `CNTR`, derives the canonical manifest, registers bytes
+  + manifest, and activates the `(namespace, contract_id)` binding in one
+  transaction. Use `--dry-run` to print the computed hashes and instruction
+  count without submitting, and `--manifest-out` to save the signed manifest
+  JSON for inspection.
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+  `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
+  embedded `CNTR`, and optionally signs it for inspection, printing JSON or
+  writing to `--out`.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
-  ከመስመር ውጭ የVM ማለፊያ ያስኬዳል እና ኤቢአይ/ሃሽ ዲበዳታ እና የተሰለፉትን አይኤስአይኤስ ሪፖርት ያደርጋል
-  (ቆጠራዎች እና የመመሪያ መታወቂያዎች) አውታረ መረቡን ሳይነኩ. ያያይዙ
-  `--namespace/--contract-id` የጥሪ ጊዜ ዲበ ውሂብን ለማንጸባረቅ።
-- `iroha_cli app contracts manifest get --code-hash <hex>` አንጸባራቂውን በTorii በኩል ያመጣል
-  እና በአማራጭ ወደ ዲስክ ይጽፋል.
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` ውርዶች
-  የተቀመጠው `.to` ምስል.
-- `iroha_cli app contracts instances --namespace <ns> [--table]` ዝርዝሮች ነቅተዋል።
-  የኮንትራት ሁኔታዎች (አንጸባራቂ + ሜታዳታ የሚነዳ)።
-- የአስተዳደር ረዳቶች (`iroha_cli app gov deploy propose`፣ `iroha_cli app gov enact`፣
-  `iroha_cli app gov protected set/get`) የተጠበቀውን የስም ቦታ የስራ ፍሰት ያቀናጃል እና
-  የJSON ቅርሶችን ለኦዲት ማጋለጥ።
+  runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
+  (counts and instruction ids) without touching the network. Attach
+  `--namespace/--contract-id` to mirror call-time metadata.
+- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+  and optionally writes it to disk.
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+  the stored `.to` image.
+- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
+  contract instances (manifest + metadata driven).
+- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
+  expose JSON artefacts for auditing.
 
-## ሙከራ እና ሽፋን
+## Testing & coverage
 
-- ክፍል `crates/iroha_core/tests/contract_code_bytes.rs` ሽፋን ኮድ ስር ሙከራዎች
-  ማከማቻ፣ idempotency እና የመጠን ቆብ።
-- `crates/iroha_core/tests/gov_enact_deploy.rs` አንጸባራቂ ማስገባትን ያረጋግጣል
-  ማስፈጸሚያ፣ እና `crates/iroha_core/tests/gov_protected_gate.rs` መልመጃዎች
-  የተጠበቀ-ስም ቦታ መግቢያ ከጫፍ እስከ ጫፍ።
-- Torii መንገዶች የጥያቄ/የምላሽ ክፍል ሙከራዎችን ያካትታሉ፣ እና የCLI ትዕዛዞች አሏቸው።
-  የJSON ዙር ጉዞዎች የተረጋጋ መሆናቸውን የሚያረጋግጡ የውህደት ሙከራዎች።
+- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
+  storage, idempotency, and the size cap.
+- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
+  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
+  protected-namespace admission end-to-end.
+- Torii routes include request/response unit tests, and the CLI commands have
+  integration tests ensuring JSON round-trips remain stable.
 
-ለዝርዝር የሪፈረንደም ክፍያ እና ለ `docs/source/governance_api.md` ይመልከቱ
-የድምጽ መስጫ የስራ ፍሰቶች.
+Refer to `docs/source/governance_api.md` for detailed referendum payloads and
+ballot workflows.

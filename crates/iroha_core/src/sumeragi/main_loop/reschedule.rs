@@ -115,6 +115,45 @@ pub(super) fn near_quorum_payload_timeout(rebroadcast_cooldown: Duration) -> Dur
         .clamp(Duration::from_millis(200), Duration::from_millis(800))
 }
 
+pub(super) fn contiguous_frontier_vote_backed_resend_window(
+    rebroadcast_cooldown: Duration,
+    vote_count: usize,
+    min_votes_for_commit: usize,
+) -> Duration {
+    if min_votes_for_commit > 0 && vote_count.saturating_add(1) >= min_votes_for_commit {
+        rebroadcast_cooldown
+    } else {
+        super::saturating_mul_duration(rebroadcast_cooldown, 2)
+    }
+    .max(Duration::from_millis(1))
+}
+
+pub(super) fn contiguous_frontier_vote_backed_fast_resend_window(
+    rebroadcast_cooldown: Duration,
+    contiguous_frontier: bool,
+    vote_count: usize,
+    min_votes_for_commit: usize,
+    relay_backpressure: bool,
+    vote_queue_backlog: bool,
+    rbc_availability_unresolved: bool,
+) -> Option<Duration> {
+    if !contiguous_frontier
+        || vote_count == 0
+        || vote_count >= min_votes_for_commit
+        || relay_backpressure
+        || vote_queue_backlog
+        || rbc_availability_unresolved
+    {
+        return None;
+    }
+
+    Some(contiguous_frontier_vote_backed_resend_window(
+        rebroadcast_cooldown,
+        vote_count,
+        min_votes_for_commit,
+    ))
+}
+
 impl Actor {
     pub(super) fn reschedule_stale_pending_blocks(
         &mut self,
@@ -378,6 +417,9 @@ impl Actor {
                 && min_votes_for_commit > 0
                 && vote_count < min_votes_for_commit
                 && vote_count.saturating_add(1) >= min_votes_for_commit;
+            let pending_parent = pending.block.header().prev_block_hash();
+            let contiguous_frontier = pending.height == committed_height.saturating_add(1)
+                && pending_extends_tip(pending.height, pending_parent, tip_height, tip_hash);
             let rbc_key = (*hash, pending.height, pending.view);
             let rbc_session_incomplete = da_enabled
                 && self
@@ -406,11 +448,22 @@ impl Actor {
             let consensus_queue_backlog = Self::consensus_queue_backlog(queue_depths);
             let near_quorum_queue_backlog =
                 self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
+            let near_quorum_slot_ingress_backlog = near_commit_quorum
+                && contiguous_frontier
+                && (queue_depths.block_payload_rx > 0 || queue_depths.block_rx > 0);
             let missing_local_data = da_enabled && !payload_available;
             let near_quorum_timeout = near_quorum_payload_timeout(self.rebroadcast_cooldown());
             let near_quorum_fast_timeout_allowed = near_commit_quorum
                 && missing_local_data
                 && !near_quorum_queue_backlog
+                && !rbc_session_incomplete;
+            let vote_queue_backlog = queue_depths.vote_rx > 0;
+            let vote_backed_validation_inflight = validation_inflight
+                && contiguous_frontier
+                && has_votes
+                && !has_qc
+                && !relay_backpressure
+                && !vote_queue_backlog
                 && !rbc_session_incomplete;
             let fast_path_allowed = (!da_enabled || allow_da_fast_reschedule)
                 && !has_votes
@@ -434,6 +487,19 @@ impl Actor {
                     pending_age_ms = pending_age.as_millis(),
                     quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                     "deferring quorum reschedule while pre-vote validation is inflight"
+                );
+                continue;
+            }
+            if vote_backed_validation_inflight {
+                debug!(
+                    height = pending.height,
+                    view = pending.view,
+                    block = %hash,
+                    votes = vote_count,
+                    min_votes = min_votes_for_commit,
+                    pending_age_ms = pending_age.as_millis(),
+                    quorum_timeout_ms = effective_quorum_timeout.as_millis(),
+                    "deferring vote-backed quorum reschedule while pre-vote validation is inflight"
                 );
                 continue;
             }
@@ -466,7 +532,7 @@ impl Actor {
                 ));
             }
             if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
-                if queue_depths.vote_rx > 0 {
+                if vote_queue_backlog {
                     debug!(
                         height = pending.height,
                         view = pending.view,
@@ -494,6 +560,15 @@ impl Actor {
                 let near_quorum_recent_progress_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 4)
                         .max(Duration::from_millis(200));
+                let first_vote_backed_frontier_quiet_window =
+                    super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
+                        .max(Duration::from_millis(400));
+                let first_single_vote_frontier_quiet_window =
+                    if vote_count == 1 && contiguous_frontier && !near_commit_quorum {
+                        first_vote_backed_frontier_quiet_window.max(effective_quorum_timeout)
+                    } else {
+                        first_vote_backed_frontier_quiet_window
+                    };
                 let zero_vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
                         .max(Duration::from_millis(400));
@@ -504,6 +579,13 @@ impl Actor {
                     zero_vote_backlog_deadline_base,
                     backlog_extension_active,
                 );
+                let frontier_ownerless_same_height_dependency_backlog_active = contiguous_frontier
+                    && !self.frontier_recovery_exists_at_height(pending.height)
+                    && self.same_height_dependency_backlog_active_in_frontier_window(
+                        pending.height,
+                        now,
+                        queue_depths,
+                    );
                 let vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
                         .max(Duration::from_millis(400));
@@ -516,6 +598,7 @@ impl Actor {
                 if !has_votes
                     && consensus_queue_backlog
                     && progress_stall_age < zero_vote_backlog_deadline
+                    && !frontier_ownerless_same_height_dependency_backlog_active
                 {
                     debug!(
                         height = pending.height,
@@ -532,6 +615,26 @@ impl Actor {
                         block_rx_depth = queue_depths.block_rx,
                         consensus_rx_depth = queue_depths.consensus_rx,
                         "deferring quorum reschedule: zero-vote block still has consensus backlog"
+                    );
+                    continue;
+                }
+                if has_votes
+                    && contiguous_frontier
+                    && pending.last_quorum_reschedule.is_none()
+                    && !consensus_queue_backlog
+                    && !rbc_session_incomplete
+                    && !relay_backpressure
+                    && progress_stall_age < first_single_vote_frontier_quiet_window
+                {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        votes = vote_count,
+                        min_votes = min_votes_for_commit,
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
+                        quiet_window_ms = first_single_vote_frontier_quiet_window.as_millis(),
+                        "deferring quorum reschedule: first contiguous-frontier vote progress is still settling"
                     );
                     continue;
                 }
@@ -598,12 +701,31 @@ impl Actor {
                     );
                     continue;
                 }
-                if self.rbc_availability_unresolved_for_reschedule(
+                if near_quorum_slot_ingress_backlog && progress_stall_age < vote_backlog_deadline {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        votes = vote_count,
+                        min_votes = min_votes_for_commit,
+                        progress_stall_age_ms = progress_stall_age.as_millis(),
+                        availability_timeout_ms = availability_timeout.as_millis(),
+                        vote_backlog_grace_ms = vote_backlog_grace.as_millis(),
+                        vote_backlog_deadline_base_ms = vote_backlog_deadline_base.as_millis(),
+                        vote_backlog_deadline_ms = vote_backlog_deadline.as_millis(),
+                        block_payload_rx_depth = queue_depths.block_payload_rx,
+                        block_rx_depth = queue_depths.block_rx,
+                        "deferring quorum reschedule: near quorum while same-slot ingress is still arriving"
+                    );
+                    continue;
+                }
+                let rbc_availability_unresolved = self.rbc_availability_unresolved_for_reschedule(
                     rbc_key,
                     &commit_topology,
                     progress_stall_age,
                     availability_timeout,
-                ) {
+                );
+                if rbc_availability_unresolved {
                     debug!(
                         height = pending.height,
                         view = pending.view,
@@ -631,12 +753,32 @@ impl Actor {
                         vote_count,
                         min_votes_for_commit,
                     );
+                let contiguous_frontier_fast_resend_window =
+                    contiguous_frontier_vote_backed_fast_resend_window(
+                        self.rebroadcast_cooldown(),
+                        pending.height == committed_height.saturating_add(1),
+                        vote_count,
+                        min_votes_for_commit,
+                        relay_backpressure,
+                        vote_queue_backlog,
+                        rbc_availability_unresolved,
+                    );
+                let effective_reschedule_backoff =
+                    if let Some(fast_resend_window) = contiguous_frontier_fast_resend_window {
+                        effective_reschedule_backoff.min(fast_resend_window)
+                    } else {
+                        effective_reschedule_backoff
+                    };
                 if stall_escalated {
                     quorum_stall_escalations = quorum_stall_escalations.saturating_add(1);
                     super::status::inc_quorum_stall_age_escalation();
                 }
                 let reschedule_due = if has_votes || has_qc {
-                    pending.vote_backed_reschedule_due(now, effective_reschedule_backoff)
+                    pending.vote_backed_reschedule_due(
+                        now,
+                        effective_reschedule_backoff,
+                        vote_count,
+                    )
                 } else {
                     pending.reschedule_due(now, effective_reschedule_backoff)
                 };
@@ -652,6 +794,7 @@ impl Actor {
                     min_votes_for_commit,
                     stake_quorum_missing,
                     effective_reschedule_backoff,
+                    contiguous_frontier_fast_resend_window.map(|_| effective_reschedule_backoff),
                 ));
             }
         }
@@ -792,6 +935,7 @@ impl Actor {
             min_votes,
             _stake_quorum_missing,
             effective_reschedule_backoff,
+            bundle_window_override,
         ) in to_reschedule
         {
             if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
@@ -809,6 +953,7 @@ impl Actor {
                     vote_count,
                     quorum_timeout,
                     effective_reschedule_backoff,
+                    bundle_window_override,
                     now,
                 );
                 progress |= action_taken;
@@ -966,6 +1111,7 @@ impl Actor {
         vote_count: usize,
         quorum_timeout: Duration,
         reschedule_backoff: Duration,
+        bundle_window_override: Option<Duration>,
         now: Instant,
     ) -> bool {
         let block_hash = pending.block.hash();
@@ -1055,10 +1201,20 @@ impl Actor {
                     && now.saturating_duration_since(state.last_progress_at) < frontier_window
             });
         let frontier_same_height_dependency_backlog_active = contiguous_frontier
-            && self.frontier_recovery_same_height_dependency_backlog_active(
+            && self.same_height_dependency_backlog_active_in_frontier_window(
                 height,
                 now,
                 queue_depths,
+            );
+        let frontier_same_slot_ingress_active = contiguous_frontier
+            && self.frontier_recovery_same_slot_ingress_active(height, view, queue_depths);
+        let vote_backed_frontier_window_owned = contiguous_frontier
+            && has_reschedule_votes
+            && !drop_pending
+            && self.frontier_recovery_owns_height_window_with_window(
+                height,
+                now,
+                bundle_window_override.unwrap_or(frontier_window),
             );
         if frontier_window_owned && drop_pending {
             debug!(
@@ -1088,7 +1244,11 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        if frontier_same_height_dependency_backlog_active && drop_pending {
+        if (frontier_same_height_dependency_backlog_active || frontier_same_slot_ingress_active)
+            && drop_pending
+        {
+            let created_frontier_owner =
+                self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
             debug!(
                 block = %block_hash,
                 height,
@@ -1100,12 +1260,15 @@ impl Actor {
                 block_payload_rx_depth = queue_depths.block_payload_rx,
                 rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                 block_rx_depth = queue_depths.block_rx,
-                "suppressing zero-vote quorum reschedule; same-height frontier recovery backlog is still converging"
+                same_height_dependency_backlog_active = frontier_same_height_dependency_backlog_active,
+                same_slot_ingress_active = frontier_same_slot_ingress_active,
+                created_frontier_owner,
+                "suppressing zero-vote quorum reschedule; same-slot frontier recovery ingress is still converging"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        if frontier_window_owned && has_reschedule_votes && !drop_pending {
+        if vote_backed_frontier_window_owned {
             debug!(
                 block = %block_hash,
                 height,
@@ -1177,9 +1340,12 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        if !self.try_reserve_round_recovery_bundle_window(
+        let commit_quorum_bundle_window =
+            bundle_window_override.unwrap_or_else(|| self.round_recovery_bundle_window());
+        if !self.try_reserve_round_recovery_bundle_window_with_window(
             height,
             super::RoundRecoveryBundleSource::CommitQuorumReschedule,
+            commit_quorum_bundle_window,
             now,
         ) {
             debug!(
@@ -1188,6 +1354,7 @@ impl Actor {
                 view,
                 pending_age_ms = pending_age.as_millis(),
                 quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                resend_window_ms = commit_quorum_bundle_window.as_millis(),
                 "suppressing repeated commit-quorum reschedule in current deterministic recovery bundle window"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
@@ -1238,7 +1405,11 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        pending.mark_quorum_reschedule(now);
+        if has_reschedule_votes {
+            pending.mark_vote_backed_quorum_reschedule(now, reschedule_vote_count);
+        } else {
+            pending.mark_quorum_reschedule(now);
+        }
         let frontier_recovery_advance = if handoff_frontier_quorum_timeout_owner {
             let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
             Some(self.advance_frontier_recovery(

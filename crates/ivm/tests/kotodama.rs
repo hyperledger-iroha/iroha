@@ -621,6 +621,25 @@ fn compile_emits_get_authority_syscall() {
 }
 
 #[test]
+fn compile_emits_resolve_account_alias_syscall() {
+    let src = r#"fn f() { let a = resolve_account_alias(name("banking"), domain("sbp")); }"#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let mut words = Vec::new();
+    let mut i = off;
+    while i + 4 <= code.len() {
+        words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
+        i += 4;
+    }
+    let scall = instruction::wide::system::SCALL;
+    let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8);
+    assert!(
+        words.contains(&want),
+        "RESOLVE_ACCOUNT_ALIAS syscall not found"
+    );
+}
+
+#[test]
 fn parse_and_type_bounded_map_take_one() {
     let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(1) { let z = k; } }"#;
     let prog = parse(src).expect("parse");
@@ -686,7 +705,11 @@ fn compile_and_run_add() {
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode, 0);
-    assert_eq!(off, 17);
+    assert_eq!(meta.version_minor, 1);
+    assert!(
+        off > 17,
+        "self-describing artifacts must prefix code with CNTR"
+    );
 
     let mut vm = ivm::IVM::new(u64::MAX);
     // Decode trace left disabled by default; first-words dump is printed above.
@@ -1900,9 +1923,17 @@ fn manifest_includes_entrypoints_and_features() {
             }
         }
     "#;
-    let (_code, manifest) = Compiler::new()
+    let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile manifest with entrypoints");
+    let parsed = ProgramMetadata::parse(&code).expect("parse compiled artifact");
+    assert_eq!(parsed.metadata.version_minor, 1);
+    let contract_interface = parsed
+        .contract_interface
+        .expect("compiled contract must embed a CNTR section");
+    assert_eq!(contract_interface.entrypoints.len(), 2);
+    assert_eq!(contract_interface.entrypoints[0].name, "hajimari");
+    assert_eq!(contract_interface.entrypoints[1].name, "run");
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     assert_eq!(entrypoints.len(), 2);
     assert_eq!(entrypoints[0].name, "hajimari");

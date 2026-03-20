@@ -38,7 +38,7 @@ Endpoints
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`
   - Request: { "authority": "i105...", "private_key": "…", "code_b64": "…" }
-  - Behavior: Computes `code_hash` from the IVM program body and `abi_hash` from the header `abi_version`, then submits `RegisterSmartContractCode` (manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, then submits `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
   - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
   - Related:
     - GET `/v1/contracts/code/{code_hash}` → returns stored manifest

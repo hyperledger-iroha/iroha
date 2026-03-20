@@ -2,87 +2,92 @@
 lang: fr
 direction: ltr
 source: docs/source/ivm_header.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 779174437b1a7e57b371d3b41d1cab780d94700acf6642b1356cdb75504ae5fa
-source_last_modified: "2026-01-21T10:30:30.084677+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 70ccb43ffcaf762c6eb1ac381a21be99fc81aa58a787ff95e8313950c7ec5f03
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 translator: machine-google-reviewed
 ---
 
-# IVM En-tête de bytecode
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
+
+# IVM Bytecode Header
 
 
-Magie
-- 4 octets : ASCII `IVM\0` au offset 0.
+Magic
+- 4 bytes: ASCII `IVM\0` at offset 0.
 
-Mise en page (actuelle)
-- Décalages et tailles (17 octets au total) :
-  - 0..4 : magique `IVM\0`
-  - 4 : `version_major: u8`
-  - 5 : `version_minor: u8`
-  - 6 : `mode: u8` (bits de fonctionnalité ; voir ci-dessous)
-  - 7 : `vector_length: u8`
-  - 8..16 : `max_cycles: u64` (petit-boutiste)
-  - 16 : `abi_version: u8`
+Layout (current)
+- Offsets and sizes (17 bytes total):
+  - 0..4: magic `IVM\0`
+  - 4: `version_major: u8`
+  - 5: `version_minor: u8`
+  - 6: `mode: u8` (feature bits; see below)
+  - 7: `vector_length: u8`
+  - 8..16: `max_cycles: u64` (little‑endian)
+  - 16: `abi_version: u8`
 
-Bits de mode
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (réservé/fonctionnel).
+Mode bits
+- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
-Champs (signification)
-- `abi_version` : table d'appel système et version du schéma pointeur‑ABI.
-- `mode` : bits de fonctionnalité pour le traçage ZK/VECTOR/HTM.
-- `vector_length` : longueur de vecteur logique pour les opérations vectorielles (0 → non défini).
-- `max_cycles` : limite de remplissage d'exécution utilisée en mode ZK et admission.
+Fields (meaning)
+- `abi_version`: syscall table and pointer‑ABI schema version.
+- `mode`: feature bits for ZK tracing/VECTOR/HTM.
+- `vector_length`: logical vector length for vector ops (0 → unset).
+- `max_cycles`: execution padding bound used in ZK mode and admission.
 
-Remarques
-- L'endianisme et la mise en page sont définis par l'implémentation et liés à `version`. La disposition filaire ci-dessus reflète l'implémentation actuelle dans `crates/ivm_abi/src/metadata.rs`.
-- Un lecteur minimal peut s'appuyer sur cette disposition pour les artefacts actuels et doit gérer les modifications futures via le portail `version`.
-- L'accélération matérielle (SIMD/Metal/CUDA) est optionnelle par hôte. Le moteur d'exécution lit les valeurs `AccelerationConfig` à partir de `iroha_config` : `enable_simd` force les replis scalaires lorsqu'ils sont faux, tandis que `enable_metal` et `enable_cuda` contrôlent leurs backends respectifs même lorsqu'ils sont compilés. Ces bascules sont appliquées via `ivm::set_acceleration_config`. avant la création de la VM.
-- Les SDK mobiles (Android/Swift) présentent les mêmes boutons ; `IrohaSwift.AccelerationSettings`
-  appelle `connect_norito_set_acceleration_config` pour que les versions macOS/iOS puissent opter pour Metal /
-  NEON tout en gardant des replis déterministes.
-- Les opérateurs peuvent également forcer la désactivation de backends spécifiques pour les diagnostics en exportant `IVM_DISABLE_METAL=1` ou `IVM_DISABLE_CUDA=1`. Ces remplacements d'environnement ont priorité sur la configuration et maintiennent la VM sur le chemin déterministe du processeur.
+Notes
+- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
+- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
+- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
+- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
+  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
+  NEON while keeping deterministic fallbacks.
+- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
 
-Aides d'état durables et surface ABI
-- Les appels système d'assistance d'état durable (0x50–0x5A : STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* et JSON/SCHEMA encode/decode) font partie de l'ABI V1 et sont inclus dans le calcul `abi_hash`.
-- CoreHost connecte STATE_{GET,SET,DEL} à l'état de contrat intelligent durable soutenu par WSV ; Les hôtes de développement/test peuvent utiliser des superpositions ou une persistance locale mais doivent conserver le même comportement observable.
+Durable state helpers and ABI surface
+- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
+- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
-- L'admission de nœud accepte uniquement les en-têtes `version_major = 1` et `version_minor = 0`.
-- `mode` ne doit contenir que des bits connus : `ZK`, `VECTOR`, `HTM` (les bits inconnus sont rejetés).
-- `vector_length` est consultatif et peut être différent de zéro même si le bit `VECTOR` n'est pas activé ; l'admission impose uniquement une limite supérieure.
-- Valeurs `abi_version` prises en charge : la première version accepte uniquement `1` (V1) ; les autres valeurs sont rejetées à l'admission.
+- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
+- Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
+- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
+- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
+- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
-### Politique (générée)
-Le résumé de la politique suivant est généré à partir de la mise en œuvre et ne doit pas être modifié manuellement.<!-- BEGIN GENERATED HEADER POLICY -->
-| Champ | Politique |
+### Policy (generated)
+The following policy summary is generated from the implementation and should not be edited manually.
+
+<!-- BEGIN GENERATED HEADER POLICY -->
+| Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_mineure | 0 |
-| mode (bits connus) | 0x07 (ZK=0x01, VECTEUR=0x02, HTM=0x04) |
+| version_minor | 1 |
+| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
-| longueur_vecteur | 0 ou 1..=64 (consultatif ; indépendant du bit VECTOR) |
+| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->
 
-### Hachages ABI (générés)
-Le tableau suivant est généré à partir de l'implémentation et répertorie les valeurs canoniques `abi_hash` pour les stratégies prises en charge.
+### ABI Hashes (generated)
+The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| Politique | abi_hash (hexadécimal) |
+| Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | ba1786031c3d0cdbd607debdae1cc611a0807bf9cf49ed349a0632855724969f |
+| ABI v1 | 76a5ec2375dfd65cc8b7cceb798ce087f6000bfe1d836ae3e390cb9e150bf595 |
 <!-- END GENERATED ABI HASHES -->
 
-- Des mises à jour mineures peuvent ajouter des instructions derrière `feature_bits` et un espace opcode réservé ; les mises à jour majeures peuvent modifier les codages ou supprimer/réutiliser uniquement avec une mise à niveau du protocole.
-- Les plages Syscall sont stables ; inconnu pour le `abi_version` actif donne `E_SCALL_UNKNOWN`.
-- Les horaires de gaz sont liés au `version` et nécessitent des vecteurs dorés lors du changement.
+- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
+- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
+- Gas schedules are bound to the `version` and require golden vectors on change.
 
-Inspection des artefacts
-- Utilisez `ivm_tool inspect <file.to>` pour une vue stable des champs d'en-tête.
-- Pour le développement, des exemples/incluent une petite cible Makefile `examples-inspect` qui exécute une inspection sur les artefacts construits.
+Inspecting artifacts
+- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
+- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
 
-Exemple (Rust) : magie minimale + contrôle de taille
+Example (Rust): minimal magic + size check
 
 ```rust
 use std::fs::File;
@@ -98,4 +103,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-Remarque : La disposition exacte de l'en-tête au-delà de la magie est versionnée et définie par l'implémentation ; préférez `ivm_tool inspect` pour les noms et valeurs de champs stables.
+Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.

@@ -2788,6 +2788,14 @@ impl Actor {
 
         // Keep proposal context cached for this slot so stalled peers can recover from
         // `BlockCreated` retransmits that race ahead of proposal delivery.
+        if da_enabled && self.promote_rbc_session_roster_and_retry(session_key) {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "promoted derived RBC roster and retried pending READY/DELIVER after BlockCreated"
+            );
+        }
         if let Some(block) = self
             .pending
             .pending_blocks

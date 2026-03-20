@@ -4,80 +4,93 @@
 lang: ja
 direction: ltr
 source: docs/source/ivm_header.md
-status: complete
+status: needs-update
 translator: manual
 ---
 
-# IVM バイトコードヘッダー
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-本ページでは IVM バイトコードヘッダーの各フィールドと互換性ポリシーを説明します。内容は `ivm.md`（アーキテクチャ概説）を補完し、パイプラインやサンプル関連のドキュメントから参照されます。
+# IVM Bytecode Header
 
-## マジック
-- 4 バイト: オフセット 0 に ASCII `IVM\0` を配置します。
 
-## レイアウト（現行）
-- オフセットとサイズ（合計 17 バイト）:
-  - 0..4: マジック `IVM\0`
+Magic
+- 4 bytes: ASCII `IVM\0` at offset 0.
+
+Layout (current)
+- Offsets and sizes (17 bytes total):
+  - 0..4: magic `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
-  - 6: `mode: u8`（フィーチャビット。後述）
+  - 6: `mode: u8` (feature bits; see below)
   - 7: `vector_length: u8`
-  - 8..16: `max_cycles: u64`（リトルエンディアン）
+  - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
 
-## モードビット
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04`（予約済み／機能ゲート対象）。
+Mode bits
+- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
-## フィールドの意味
-- `version`: バイトコード形式のセマンティックバージョン（`version_major.version_minor`）。デコーダー互換性とガススケジュール選択に利用されます。
-- `abi_version`: システムコール表とポインター ABI スキーマのバージョン。
-- `mode`: ZK トレース／VECTOR／HTM のフィーチャビット。
-- `vector_length`: ベクトル命令向けの論理的ベクトル長（0 は未設定を意味する）。
-- `max_cycles`: ZK モードおよびアドミッションで利用される実行パディング上限。
+Fields (meaning)
+- `abi_version`: syscall table and pointer‑ABI schema version.
+- `mode`: feature bits for ZK tracing/VECTOR/HTM.
+- `vector_length`: logical vector length for vector ops (0 → unset).
+- `max_cycles`: execution padding bound used in ZK mode and admission.
 
-## 備考
-- エンディアンとレイアウトは実装によって定義され、`version` と結び付いています。上記は `crates/ivm_abi/src/metadata.rs` における現行実装を反映しています。
-- 最小限のリーダーは現行アーティファクトに対してこのレイアウトに依存できますが、将来の変更に備え `version` によるゲーティングを実装すべきです。
-- ハードウェアアクセラレーション（Metal/CUDA）は各ホストでオプトインです。ランタイムは `iroha_config` の `AccelerationConfig` から `enable_metal` と `enable_cuda` を読み取り、コンパイル済みであっても該当バックエンドを切り替えます。VM 作成前に `ivm::set_acceleration_config` を介して適用されます。
-- オペレーターは診断目的で `IVM_DISABLE_METAL=1` または `IVM_DISABLE_CUDA=1` を設定し、特定バックエンドを強制的に無効化できます。これらの環境変数は設定を上書きし、VM を決定論的な CPU パスに固定します。
+Notes
+- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
+- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
+- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
+- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
+  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
+  NEON while keeping deterministic fallbacks.
+- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
 
-## Durable 状態ヘルパーと ABI サーフェス
-- Durable 状態ヘルパーのシステムコール（0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* および JSON/SCHEMA エンコード／デコード）は V1 ABI の一部であり、`abi_hash` の計算に含まれます。
-- CoreHost は STATE_{GET,SET,DEL} を WSV に裏付けられた永続スマートコントラクト状態へ接続します。dev/test ホストはオーバーレイやローカル永続化を使ってもよいが、観測可能な挙動は同一でなければなりません。
+Durable state helpers and ABI surface
+- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
+- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
-## バリデーション
-- ノードアドミッションは `version_major = 1` かつ `version_minor = 0` のヘッダーのみを受け入れます。
-- `mode` には既知のビット（`ZK`, `VECTOR`, `HTM`）のみを設定できます。未知のビットは拒否されます。
-- `vector_length` は助言的な値であり、`VECTOR` ビットが未設定でも非ゼロになり得ます。アドミッションでは上限のみを検証します。
-- サポートされる `abi_version` は初回リリース時点では `1` のみであり、他の値はアドミッションで拒否されます。
+Validation
+- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
+- Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
+- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
+- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
+- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
-### ポリシー（自動生成）
-以下のポリシー概要は実装から生成され、手動で編集してはいけません。
+### Policy (generated)
+The following policy summary is generated from the implementation and should not be edited manually.
 
 <!-- BEGIN GENERATED HEADER POLICY -->
-| フィールド | ポリシー |
+| Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_minor | 0 |
+| version_minor | 1 |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
-| vector_length | 0 または 1..=64（助言用。VECTOR ビットと独立） |
+| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->
 
-### ABI ハッシュ（自動生成）
-以下の表は、サポートされるポリシーに対する正準 `abi_hash` を示します。
+### ABI Hashes (generated)
+The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| ポリシー | abi_hash (hex) |
+| Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 377f7125a0f20d40f65ed5e3a179bc5e04d68a385570b54d67d961861e8d9f83 |
+| ABI v1 | 76a5ec2375dfd65cc8b7cceb798ce087f6000bfe1d836ae3e390cb9e150bf595 |
 <!-- END GENERATED ABI HASHES -->
 
-## 互換性ポリシー
-- マイナー更新では `feature_bits` や予約済み opcode 領域の背後で命令を追加できます。メジャー更新ではプロトコルアップグレードと同時にのみエンコーディングの変更や廃止／置換を行います。
-- システムコール番号のレンジは安定しており、アクティブな `abi_version` に存在しない番号は `E_SCALL_UNKNOWN` によって扱われます。
+- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
+- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
+- Gas schedules are bound to the `version` and require golden vectors on change.
+
+Inspecting artifacts
+- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
+- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
+
+Example (Rust): minimal magic + size check
 
 ```rust
+use std::fs::File;
+use std::io::{Read};
+
 fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
     let mut f = File::open(path)?;
     let mut magic = [0u8; 4];
@@ -88,4 +101,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-**補足:** マジック以降の正確なヘッダーレイアウトはバージョン管理され実装依存です。安定したフィールド名と値を取得するには `ivm_tool inspect` の利用を優先してください。
+Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.

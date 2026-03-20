@@ -2,126 +2,138 @@
 lang: my
 direction: ltr
 source: docs/source/governance_api.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: eea277d4aae6a7b29b5be539ef9d8e63948ccdd89a152de5af4a3cb357fe543a
-source_last_modified: "2026-01-22T16:26:46.569356+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: c169c69f99daf761a5c240e94b11d2ec768224b1b6dc3ad75bb642fa806fec13
+source_last_modified: "2026-03-20T08:32:54+00:00"
+translation_last_reviewed: 2026-03-20
 title: Governance App API — Endpoints (Draft)
 translator: machine-google-reviewed
 ---
 
-အခြေအနေ- အုပ်ချုပ်မှု အကောင်အထည်ဖော်ရေး လုပ်ငန်းများကို ပူးတွဲဆောင်ရွက်ရန် မူကြမ်း/ပုံကြမ်း။ အကောင်အထည်ဖော်နေစဉ်အတွင်း ပုံစံများ ပြောင်းလဲနိုင်သည်။ Determinism နှင့် RBAC မူဝါဒများသည် စံကန့်သတ်ချက်များဖြစ်သည်။ Torii သည် `authority` နှင့် `private_key` ကို ပံ့ပိုးပေးသောအခါတွင် ငွေပေးငွေယူများကို လက်မှတ်ထိုး/တင်သွင်းနိုင်သည်၊ သို့မဟုတ်ပါက clients များသည် `/transaction` သို့ တည်ဆောက်ပြီး တင်ပြနိုင်သည်။
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-အရေးကြီးသည်- ကျွန်ုပ်တို့သည် အမြဲတမ်းကောင်စီ သို့မဟုတ် "ပုံသေ" အုပ်ချုပ်မှုစာရင်းကို ပေးပို့ခြင်းမပြုပါ။ ဘောက်စ်အတွင်းမှ၊ ကောင်စီသည် အလွတ်/ဆိုင်းငံ့နေသည့် အခြေအနေသို့ ပြန်ပို့ပေးသည် သို့မဟုတ် ဖွင့်ထားသည့်အခါတွင် သတ်မှတ်ထားသော ကန့်သတ်ဘောင်များ (အစုရှယ်ယာပိုင်ဆိုင်မှု၊ သက်တမ်း၊ ကော်မတီအရွယ်အစား) တို့မှ အဆုံးအဖြတ်ပေးသော ဆုတ်ယုတ်မှုတစ်ခုကို ရယူနိုင်သည်။ အော်ပရေတာများသည် အုပ်ချုပ်မှုလမ်းကြောင်းများမှတစ်ဆင့် ၎င်းတို့၏ကိုယ်ပိုင်စာရင်းကို ဆက်လက်ထားရှိရမည်ဖြစ်ပါသည်။ ဤသိုလှောင်ခန်းတွင် လျှို့ဝှက်သော့၊ သို့မဟုတ် အခွင့်ထူးခံကောင်စီအကောင့်တွင် ပေါင်းထည့်ထားသော multisig၊ လျှို့ဝှက်သော့၊ သို့မဟုတ် အခွင့်ထူးခံကောင်စီအကောင့်မရှိပါ။
+# Governance App API — Endpoints (Draft)
 
-ခြုံငုံသုံးသပ်ချက်
-- အဆုံးမှတ်များအားလုံးသည် JSON ကို ပြန်ပေးသည်။ အရောင်းအ၀ယ်-ထုတ်လုပ်သည့် စီးဆင်းမှုများအတွက်၊ တုံ့ပြန်မှုများတွင် `tx_instructions` — တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော ညွှန်ကြားချက်အရိုးစုများ၏ array တစ်ခုပါဝင်သည်-
-  - `wire_id`- ညွှန်ကြားချက်အမျိုးအစားအတွက် မှတ်ပုံတင်စနစ်
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/transaction`.
+
+Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the configured parameters (stake asset, term, committee size) when enabled. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
+
+Overview
+- All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
+  - `wire_id`: registry identifier for the instruction type
   - `payload_hex`: Norito payload bytes (hex)
-- အကယ်၍ `authority` နှင့် `private_key` (သို့မဟုတ် မဲ DTO များပေါ်တွင် `private_key`) ကို Torii ဆိုင်းဘုတ်များတင်ပြီး ငွေပေးငွေယူတင်ပြပြီး `tx_instructions` ကို ဆက်လက်ပေးပို့ပါ။
-- မဟုတ်ပါက၊ clients များသည် ၎င်းတို့၏ အခွင့်အာဏာနှင့် chain_id ကို အသုံးပြု၍ SignedTransaction ကိုစုပေါင်းပြီး `/transaction` သို့ လက်မှတ်ထိုးပြီး POST လုပ်ပါ။
-- SDK လွှမ်းခြုံမှု-
-- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` သည် `GovernanceProposalResult` (ပုံမှန်အခြေအနေ/အမျိုးအစားအကွက်များ), `ToriiClient.get_governance_referendum_typed` ပြန်ပေးသည် `GovernanceReferendumResult`, Prometheus, Prometheus `ToriiClient.get_governance_locks_typed` သည် `GovernanceLocksResult` ကို ပြန်ပေးသည်၊ `ToriiClient.get_governance_unlock_stats_typed` သည် `GovernanceUnlockStats` ကို ပြန်ပေးသည်၊ နှင့် `ToriiClient.list_governance_instances_typed` သည် `GovernanceInstancesPage` ကို ပြန်ပေးသည်၊ REUTERS တွင် စာရိုက်ဝင်ရောက်ခွင့်ကို အုပ်ချုပ်မှုနမူနာများဖြင့် ပြဌာန်းထားသည်။
-- Python ပေါ့ပါးသောကလိုင်းယင့် (`iroha_torii_client`): `ToriiClient.finalize_referendum` နှင့် `ToriiClient.enact_proposal` ပြန်ရိုက်ထားသော `GovernanceInstructionDraft` အစုအဝေးများ (Torii အရိုးစု I1805008X ကို ရှောင်ရှားခြင်း)၊ scripts များသည် Finalize/ Enact flows ကိုရေးဖွဲ့သည်။
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` သည် အဆိုပြုချက်များ၊ ရည်ညွှန်းချက်၊ မှတ်တမ်းများ၊ သော့ခတ်မှုများ၊ လော့ခ်ဖွင့်ခြင်း ကိန်းဂဏန်းများနှင့် ယခု `listGovernanceInstances(namespace, options)` နှင့် council endpoints (Sumeragi) `governancePersistCouncil`၊ `getGovernanceCouncilAudit`) ထို့ကြောင့် Node.js ဖောက်သည်များသည် `/v1/gov/instances/{ns}` ကို paginate နိုင်ပြီး VRF ကျောထောက်နောက်ခံပြုထားသော အလုပ်အသွားအလာများကို လက်ရှိစာချုပ်-ဥပမာစာရင်းနှင့်အတူ မောင်းနှင်နိုင်သည်။ `governanceFinalizeReferendumTyped` နှင့် `governanceEnactProposalTyped` သည် ဖွဲ့စည်းတည်ဆောက်ထားသော မူကြမ်းကို အမြဲပြန်ပေးခြင်းဖြင့် Python helpers များကို ထင်ဟပ်စေသည် (Torii မှ `204 No Content` တွင် automation 8000000X မတိုင်မီ NI000000000000000000 တွင် NI0000000000 မတိုင်မီ automation ခွဲထွက်ခြင်းမှ `204 No Content` မတိုင်မီ automation ခွဲထွက်ခြင်းမပြုမီ အစပျိုးသည်။ ယခု `getGovernanceLocksTyped` သည် `404 Not Found` တုံ့ပြန်မှုများကို `{found: false, locks: {}, referendum_id: <id>}` သို့ ပုံမှန်ဖြစ်အောင် ပြုလုပ်ပေးသောကြောင့် JS ခေါ်ဆိုသူများသည် ဆန္ဒခံယူပွဲတစ်ခုတွင် သော့မရှိသည့်အခါ Python helper ကဲ့သို့ ပုံစံတူရလဒ်ကို ရရှိမည်ဖြစ်သည်။
+- If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
+- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
+- SDK coverage:
+- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` returns `GovernanceUnlockStats`, and `ToriiClient.list_governance_instances_typed` returns `GovernanceInstancesPage`, enforcing typed access across the governance surface with README usage examples.
+- Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and now `listGovernanceInstances(namespace, options)` plus the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) so Node.js clients can paginate `/v1/gov/instances/{ns}` and drive VRF-backed workflows alongside the existing contract-instance listing. `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers. `getGovernanceLocksTyped` now normalises `404 Not Found` responses into `{found: false, locks: {}, referendum_id: <id>}` so JS callers get the same shaped result as the Python helper when a referendum has no locks.
 
-အဆုံးမှတ်များ- POST `/v1/gov/proposals/deploy-contract`
-  - တောင်းဆိုချက် (JSON):
+Endpoints
+
+- POST `/v1/gov/proposals/deploy-contract`
+  - Request (JSON):
     {
-      "namespace": "အက်ပ်များ",
+      "namespace": "apps",
       "contract_id": "my.contract.v1",
-      "code_hash": "blake2b32:…" | "…64 hex"၊
-      "abi_hash": "blake2b32:…" | "…64 hex"၊
+      "code_hash": "blake2b32:…" | "…64hex",
+      "abi_hash": "blake2b32:…" | "…64hex",
       "abi_version": "1",
-      "window": { "lower": 12345၊ "upper": 12400 }၊
-      "authority": "i105...?"၊
+      "window": { "lower": 12345, "upper": 12400 },
+      "authority": "i105...?",
       "private_key": "…?"
     }
-  - တုံ့ပြန်မှု (JSON):
-    { "ok": true၊ "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
-  - အတည်ပြုခြင်း- ပေးထားသော `abi_version` အတွက် nodes များကို canonicalise `abi_hash` နှင့် မကိုက်ညီမှုများကို ငြင်းပယ်ပါ။ `abi_version = "v1"` အတွက် မျှော်မှန်းတန်ဖိုးမှာ `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ဖြစ်သည်။
+  - Response (JSON):
+    { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
+  - Validation: nodes canonicalise `abi_hash` for the provided `abi_version` and reject mismatches. For `abi_version = "v1"`, the expected value is `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
 
-စာချုပ်များ API (အသုံးချရန်)
+Contracts API (deploy)
 - POST `/v1/contracts/deploy`
-  - တောင်းဆိုချက်- { "authority": "i105...", "private_key": "…", "code_b64": "…" }
-  - အပြုအမူ- IVM ပရိုဂရမ်ကိုယ်ထည်မှ `code_hash` ကို တွက်ချက်ပြီး `abi_version` ခေါင်းစီးမှ `abi_hash` ၊ ထို့နောက် `RegisterSmartContractCode` (manifest) နှင့် I10080NI `.to` bytes) `authority` ကိုယ်စား။
-  - တုံ့ပြန်ချက်- { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
-  ဆက်စပ်-
-    - `/v1/contracts/code/{code_hash}` → သိမ်းဆည်းထားသော မန်နီးဖက်စ်ကို ပြန်ရယူပါ။
-    - `/v1/contracts/code-bytes/{code_hash}` ကိုရယူပါ → `{ code_b64 }` ကို ပြန်ပေးသည်
+  - Request: { "authority": "i105...", "private_key": "…", "code_b64": "…" }
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, then submits `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
+  - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
+  - Related:
+    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
+    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - တောင်းဆိုချက်- { "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
-  - အပြုအမူ- ပံ့ပိုးပေးထားသော bytecode ကို အသုံးချပြီး `ActivateContractInstance` မှတစ်ဆင့် `(namespace, contract_id)` မြေပုံကို ချက်ချင်း အသက်သွင်းသည်။
-  - တုံ့ပြန်မှု- { "ok": true၊ "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
+  - Request: { "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
+  - Behavior: Deploys the supplied bytecode and immediately activates the `(namespace, contract_id)` mapping via `ActivateContractInstance`.
+  - Response: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
 
-Alias ဝန်ဆောင်မှု
+Alias Service
 - POST `/v1/aliases/voprf/evaluate`
-  - တောင်းဆိုချက်- { "blinded_element_hex": "…" }
-  - တုံ့ပြန်ချက်- { "evaluated_element_hex": "…128hex", "backend": "blake2b512-mock" }
-    - `backend` သည် အကဲဖြတ်သူ၏ အကောင်အထည်ဖော်မှုကို ထင်ဟပ်စေသည်။ ကာလတန်ဖိုး- `blake2b512-mock`။
-  - မှတ်စုများ- ဒိုမိန်းခွဲထုတ်ခြင်း `iroha.alias.voprf.mock.v1` ဖြင့် Blake2b512 ကိုအသုံးပြုသည့် ခွဲခြားသတ်မှတ်ပုံသဏ္ဍန်အကဲဖြတ်သူ။ ထုတ်လုပ်မှု VOPRF ပိုက်လိုင်းကို Iroha မှတဆင့် ကြိုးမသွယ်မချင်း စမ်းသပ်ကိရိယာအတွက် ရည်ရွယ်သည်။
-  - အမှားအယွင်းများ- ပုံစံမမှန်သော hex ထည့်သွင်းမှုတွင် HTTP `400`။ Torii သည် Norito `ValidationFail::QueryFailed::Conversion` စာအိတ်ကို ဒီကုဒ်ဒါအမှား မက်ဆေ့ဂျ်ဖြင့် ပြန်ပေးသည်။
+  - Request: { "blinded_element_hex": "…" }
+  - Response: { "evaluated_element_hex": "…128hex", "backend": "blake2b512-mock" }
+    - `backend` reflects the evaluator implementation. Current value: `blake2b512-mock`.
+  - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
+  - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
 - POST `/v1/aliases/resolve`
-  - တောင်းဆိုချက်- { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - တုံ့ပြန်မှု- { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
-  - မှတ်ချက်များ- ISO တံတားဖွင့်ချိန် အဆင့်သတ်မှတ်မှု (`[iso_bridge.account_aliases]` တွင် `iroha_config`) လိုအပ်သည်။ Torii သည် ရှာဖွေမှုမပြုမီ အဖြူကွက်နှင့် အပေါ်ဖုံးကို ဖယ်ထုတ်ခြင်းဖြင့် နာမည်များကို ပုံမှန်ဖြစ်စေသည်။ alias မရှိတော့သည့်အခါ 404 နှင့် ISO တံတားဖွင့်ချိန်ကို ပိတ်ထားသောအခါ 503 ကို ပြန်ပေးသည်။
+  - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
+  - Response: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
+  - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
 - POST `/v1/aliases/resolve_index`
-  - တောင်းဆိုချက်- { "index": 0 }
-  - တုံ့ပြန်မှု- { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
-  - မှတ်ချက်- Alias indices များကို configuration order (0-based) မှ ဆုံးဖြတ်သတ်မှတ်ပေးပါသည်။ ဖောက်သည်များသည် အတုအယောင် သက်သေခံချက်ဖြစ်ရပ်များအတွက် စာရင်းစစ်လမ်းကြောင်းများတည်ဆောက်ရန် အော့ဖ်လိုင်းတွင် တုံ့ပြန်မှုများကို ကက်ရှ်လုပ်နိုင်ပါသည်။Code Size Cap
-- စိတ်ကြိုက်ဘောင်- `max_contract_code_bytes` (JSON u64)
-  - ကွင်းဆက်စာချုပ်ကုဒ်သိုလှောင်မှုအတွက် အများဆုံးခွင့်ပြုထားသောအရွယ်အစား (ဘိုက်များ) ကို ထိန်းချုပ်သည်။
-  - ပုံသေ- 16 MiB `.to` ပုံအလျားသည် အဖုံးကို ကျော်လွန်နေသောအခါ Nodes များသည် `RegisterSmartContractBytes` ကို ငြင်းဆိုသည်။
-  - အော်ပရေတာများသည် `SetParameter(Custom)` ကို `id = "max_contract_code_bytes"` နှင့် ဂဏန်းပေးချေမှုတစ်ခုတင်ပြခြင်းဖြင့် ချိန်ညှိနိုင်သည်။
+  - Request: { "index": 0 }
+  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
+  - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
+
+Code Size Cap
+- Custom parameter: `max_contract_code_bytes` (JSON u64)
+  - Controls the maximum allowed size (in bytes) for on-chain contract code storage.
+  - Default: 16 MiB. Nodes reject `RegisterSmartContractBytes` when the `.to` image length exceeds the cap with an invariant violation error.
+  - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/zk`
-  - တောင်းဆိုချက်- { "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", " public": {…} }
-  - တုံ့ပြန်ချက်- { "ok": true၊ "accepted": true, "tx_instructions": [{…}] }
-  - မှတ်စုများ
-    - ဆားကစ်၏ အများသူငှာ သွင်းအားစုများတွင် `owner`၊ `amount`၊ နှင့် `duration_blocks` ပါ၀င်ပြီး အထောက်အထားသည် configured VK ကို ဆန့်ကျင်သောအခါ၊ node သည် Sumeragi အတွက် အုပ်ချုပ်မှုလော့ခ်တစ်ခုကို ဖန်တီး သို့မဟုတ် တိုးချဲ့သည် ဦးတည်ချက်သည် အရိပ်အမြွက်မပြပါက (`unknown`) ကို ဝှက်ထားဆဲဖြစ်သည်။ ပမာဏ/သက်တမ်း ကုန်ဆုံးမှုကိုသာ အပ်ဒိတ်လုပ်ထားသည်။ ပြန်လည်မဲများသည် မိုနိုတိုနစ်ဖြစ်သည်- ပမာဏနှင့် သက်တမ်းကုန်ဆုံးမှုသည်သာ တိုးလာသည် (node ​​သည် အမြင့်ဆုံး(amount, prev.amount) နှင့် max(expiry, prev.expiry)))။
-    - မည်သည့်သော့ခတ်မှုအရိပ်အမြွက်ကိုမဆိုပေးသောအခါ၊ မဲသည် `owner`၊ `amount`၊ နှင့် `duration_blocks` ပေးရမည်။ တစ်စိတ်တစ်ပိုင်း အရိပ်အမြွက်များကို ပယ်ချပါသည်။ `min_bond_amount > 0` တွင် လော့ခ်ချရန် အရိပ်အမြွက်များ လိုအပ်ပါသည်။
-    - ပမာဏ သို့မဟုတ် သက်တမ်းကုန်ဆုံးရန် ကြိုးပမ်းသော ZK ပြန်လည်မဲများသည် `BallotRejected` အဖြေရှာခြင်းများဖြင့် ဆာဗာဘက်တွင် ပယ်ချပါသည်။
-    - စာချုပ်အကောင်အထည်ဖော်မှုတွင် `SubmitBallot` ကိုမခေါ်ယူမီ `ZK_VOTE_VERIFY_BALLOT` ကိုခေါ်ဆိုရပါမည်။ အိမ်ရှင်များသည် တစ်ချက်ချက် လက်ကိုင်ကို တွန်းအားပေးသည်။
+  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes:
+    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
+    - When any lock hint is provided, the ballot must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required.
+    - ZK re-votes that attempt to shrink amount or expiry are rejected server-side with `BallotRejected` diagnostics.
+    - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/plain`
-  - တောင်းဆိုချက်- { "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "yetain"}|A
-  - တုံ့ပြန်ချက်- { "ok": true၊ "accepted": true, "tx_instructions": [{…}] }
-  - မှတ်စုများ- ပြန်လည်မဲပေးခြင်းသည် သက်တမ်းတိုးခြင်းသာဖြစ်သည် — မဲအသစ်သည် ရှိပြီးသားလော့ခ်၏ပမာဏ သို့မဟုတ် သက်တမ်းကုန်ဆုံးမှုကို လျှော့ချ၍မရပါ။ `owner` သည် ငွေပေးငွေယူလုပ်ပိုင်ခွင့်အာဏာနှင့် တူညီရပါမည်။ အနည်းဆုံးကြာချိန်သည် `conviction_step_blocks` ဖြစ်သည်။- POST `/v1/gov/finalize`
-  - တောင်းဆိုချက်- { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "…?" }
-  - တုံ့ပြန်ချက်- { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
-  - ကွင်းဆက်အကျိုးသက်ရောက်မှု (လက်ရှိ scaffold): အတည်ပြုထားသော ဖြန့်ကျက်အဆိုပြုချက်ကို အတည်ပြုခြင်းသည် `code_hash` ဖြင့် သော့ခတ်ထားသော အနည်းဆုံး `code_hash` ဖြင့် သော့ခတ်ထားသော `abi_hash` ကို ထည့်သွင်းပြီး အဆိုပြုချက်ကို အတည်ပြုကြောင်း အမှတ်အသားပြုပါသည်။ အခြား `abi_hash` နှင့် `code_hash` အတွက် ထင်ရှားချက်တစ်ခု ရှိနှင့်ပြီးဖြစ်ပါက၊ အတည်ပြုချက်ကို ပယ်ချပါသည်။
-  - မှတ်စုများ
-    - ZK ရွေးကောက်ပွဲများအတွက်၊ စာချုပ်လမ်းကြောင်းများသည် `FinalizeElection` ကိုမလုပ်ဆောင်မီ `ZK_VOTE_VERIFY_TALLY` သို့ခေါ်ဆိုရပါမည်။ အိမ်ရှင်များသည် တစ်ချက်ချက် လက်ကိုင်ကို တွန်းအားပေးသည်။ `FinalizeReferendum` သည် ZK ၏ ဆန္ဒခံယူမှုကို ပယ်ချသည် ။
-    - `h_end` တွင် အလိုအလျောက်ပိတ်သည် ရိုးရှင်းသောဆန္ဒခံယူခြင်းအတွက်သာ အတည်ပြု/ပယ်ချခံရသည် ။ ZK ၏ဆန္ဒခံယူချက်ကို အပြီးသတ်စာရင်းတင်သွင်းပြီး `FinalizeReferendum` ကို အပြီးသတ်သည်အထိ ပိတ်ထားသည်။
-    - မဲစာရင်းစစ်ဆေးမှုများသည် approve+reject ကိုသာအသုံးပြုသည်။ မဲဆန္ဒရှင်စာရင်းတွင် ရှောင်ရန် မပါဝင်ပါ။
+  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
+
+- POST `/v1/gov/finalize`
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
+  - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
+  - Notes:
+    - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
+    - Auto-close at `h_end` emits Approved/Rejected only for Plain referenda; ZK referenda remain closed until a finalized tally is submitted and `FinalizeReferendum` is executed.
+    - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  - တောင်းဆိုချက်- { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }
-  - တုံ့ပြန်ချက်- { "ok": true၊ "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
-  - မှတ်စုများ- Torii သည် `authority`/`private_key` ကို ပံ့ပိုးပေးသောအခါတွင် လက်မှတ်ရေးထိုးထားသော ငွေပေးငွေယူကို တင်သွင်းပါသည်။ မဟုတ်ပါက ၎င်းသည် ဖောက်သည်များအား လက်မှတ်ရေးထိုးပြီး တင်ပြရန် အရိုးစုကို ပြန်ပေးသည်။ အကြိုဓာတ်ပုံသည် ရွေးချယ်နိုင်ပြီး လက်ရှိတွင် အချက်အလက်ဖြစ်သည်။
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
+  - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
-- `/v1/gov/proposals/{id}` ရယူပါ။
-  - လမ်းကြောင်း `{id}`- အဆိုပြုချက် id hex (64 လုံး)
-  - တုံ့ပြန်ချက်- { "found": bool, "proposal": { … }? }
+- GET `/v1/gov/proposals/{id}`
+  - Path `{id}`: proposal id hex (64 chars)
+  - Response: { "found": bool, "proposal": { … }? }
 
-- `/v1/gov/locks/{rid}` ရယူပါ။
-  - လမ်းကြောင်း `{rid}`- ဆန္ဒခံယူပွဲ id စာကြောင်း
-  - တုံ့ပြန်ချက်- { "found": bool, "referendum_id": "rid", "locks": { … }? }
+- GET `/v1/gov/locks/{rid}`
+  - Path `{rid}`: referendum id string
+  - Response: { "found": bool, "referendum_id": "rid", "locks": { … }? }
 
-- `/v1/gov/council/current` ရယူပါ။
-  - တုံ့ပြန်ချက်- { "epoch": N၊ "အဖွဲ့ဝင်များ"- [{ "account_id": "…" }, …] }
-  - မှတ်စုများ- လက်ရှိရှိနေသည့် ကောင်စီကို ပြန်ပေးသည်။ သို့မဟုတ်ပါက သတ်မှတ်ထားသော အစုရှယ်ယာပိုင်ဆိုင်မှုနှင့် ကန့်သတ်ချက်များကို အသုံးပြု၍ အဆုံးအဖြတ်ပေးသည့် ဆုတ်ယုတ်မှုတစ်ခု (VRF သတ်မှတ်ချက်ကို မှန်ချပ်များပေါ်မှ VRF အထောက်အထားများ ဆက်လက်တည်ရှိနေသည်အထိ)။
+- GET `/v1/gov/council/current`
+  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
+  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback using the configured stake asset and thresholds (mirrors the VRF spec until live VRF proofs are persisted on chain).
 
-- POST `/v1/gov/council/derive-vrf` (အင်္ဂါရပ်- gov_vrf)
-  - တောင်းဆိုချက်- { "committee_size": 21၊ "epoch": 123? , "လျှောက်ထားသူများ"- [{ "account_id": "…", "မူကွဲ"- "ပုံမှန်|အသေးစား", "pk_b64": "…", "proof_b64": "…" }, …] }
-  - အပြုအမူ- `chain_id`၊ `epoch` နှင့် နောက်ဆုံးဘလောက် hash beacon တို့မှ ဆင်းသက်လာသော canonical input ကိုဆန့်ကျင်သော ကိုယ်စားလှယ်တစ်ဦးစီ၏ VRF သက်သေကို စစ်ဆေးပါ။ Tiebreakers ဖြင့် အထွက် bytes desc ဖြင့် စီပါ။ ထိပ်တန်း `committee_size` အဖွဲ့ဝင်များကို ပြန်ပေးသည်။ မတည်မြဲပါဘူး။
-  - တုံ့ပြန်ချက်- { "epoch": N၊ "အဖွဲ့ဝင်များ"- [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
-  - မှတ်စုများ- G1 တွင် ပုံမှန် = pk၊ G2 (96 bytes) ဖြင့် အထောက်အထား။ Small = G2 တွင် pk၊ G1 (48 bytes) ဖြင့် အထောက်အထား။ ထည့်သွင်းမှုများကို ဒိုမိန်း-ခြားထားပြီး `chain_id` ပါဝင်သည်။
+- POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
+  - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
+  - Behavior: Verifies each candidate’s VRF proof against the canonical input derived from `chain_id`, `epoch`, and the latest block hash beacon; sorts by output bytes desc with tiebreakers; returns the top `committee_size` members. Does not persist.
+  - Response: { "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
+  - Notes: Normal = pk in G1, proof in G2 (96 bytes). Small = pk in G2, proof in G1 (48 bytes). Inputs are domain-separated and include `chain_id`.
 
-### အုပ်ချုပ်မှုပုံသေများ (iroha_config `gov.*`)
+### Governance defaults (iroha_config `gov.*`)
 
-ဆက်ရှိနေသောစာရင်းစာရင်းမရှိသောအခါ Torii မှအသုံးပြုသော council fallback ကို `iroha_config` မှတဆင့်ကန့်သတ်ထားသည်-```toml
+The council fallback used by Torii when no persisted roster exists is parameterised via `iroha_config`:
+
+```toml
 [gov]
   vk_ballot.backend = "halo2/ipa"
   vk_ballot.name    = "ballot_v1"
@@ -146,7 +158,7 @@ Alias ဝန်ဆောင်မှု
   parliament_eligibility_asset_id = "SORA#stake"
 ```
 
-တူညီသောပတ်ဝန်းကျင်ကို အစားထိုးသည်-
+Equivalent environment overrides:
 
 ```
 GOV_VK_BACKEND=halo2/ipa
@@ -166,147 +178,157 @@ GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
 
-Sora Nexus မူရင်း- `voting_asset_id` ၏ `min_bond_amount` ၏ မဲများကို လော့ခ်ချသည်
-escrow အကောင့်ကို စီစဉ်သတ်မှတ်ထားသည်။ မဲများကျလာသည့်အခါ သော့ခတ်မှုများကို ဖန်တီး သို့မဟုတ် သက်တမ်းတိုးသည်။
-သက်တမ်းကုန်ဆုံးရက်တွင်ထုတ်ပြန်ခဲ့သည် နှောင်ကြိုးဘဝစက်ဝိုင်းကို `governance_bond_events_total` မှတဆင့် ထုတ်လွှတ်သည်။
-တယ်လီမီတာ (သော့ခတ်_ဖန်တီးထား|သော့ခတ်_တိုးချဲ့|သော့ခတ်ပြီးသော့ဖွင့်ထား|သော့ခတ်_ခုတ်ထစ်|သော့ခတ်_ပြန်လည်ပြင်ဆင်ထားသည်)။
+Sora Nexus default: ballots lock `min_bond_amount` of `voting_asset_id` into the
+configured escrow account. Locks are created or extended when ballots land and
+released on expiry; bond lifecycle is emitted via `governance_bond_events_total`
+telemetry (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
 
-`parliament_committee_size` သည် ကောင်စီကိုဆက်လက်မတည်မြဲသောအခါတွင် ပြန်ပေးသည့်အဖွဲ့ဝင်အရေအတွက်ကို ဖုံးအုပ်ထားသည်၊ `parliament_term_blocks` သည် မျိုးစေ့ဆင်းသက်မှုအတွက်အသုံးပြုသည့်အချိန်ကာလကိုသတ်မှတ်သည် (`epoch = floor(height / term_blocks)`)၊ `parliament_min_stake` သည် အနိမ့်ဆုံးနှင့် အနိမ့်ဆုံးယူနစ်များအဖြစ် သတ်မှတ်ပြဋ္ဌာန်းသည် `parliament_eligibility_asset_id` သည် ကိုယ်စားလှယ်လောင်းသတ်မှတ်မှုကို တည်ဆောက်သည့်အခါ မည်သည့်ပိုင်ဆိုင်မှုလက်ကျန်ကို စကင်ဖတ်သည်ကို ရွေးသည်။
+`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`), `parliament_min_stake` enforces the minimum stake (in smallest units) on the eligibility asset, and `parliament_eligibility_asset_id` selects which asset balance is scanned when building the candidate set.
 
-Governance VK အတည်ပြုခြင်းတွင် ရှောင်ကွင်းမရှိပါ- မဲပြားအတည်ပြုခြင်းတွင် Inline bytes ပါသော `Active` ဖြင့် အတည်ပြုသောကီးကို အမြဲတမ်းလိုအပ်ပြီး အတည်ပြုခြင်းအား ကျော်ရန် ပတ်ဝန်းကျင်များသည် စမ်းသပ်မှု-သီးသန့်ခလုတ်များပေါ်တွင် အားမကိုးရပါ။
+Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
 
 RBAC
-- On-chain execution သည် ခွင့်ပြုချက်များ လိုအပ်သည်-
-  - အဆိုပြုချက်များ- `CanProposeContractDeployment{ contract_id }`
-  - မဲများ- `CanSubmitGovernanceBallot{ referendum_id }`
-  - အတည်ပြုချက်- `CanEnactGovernance`
-  - ဖြတ်တောက်ခြင်း/အယူခံမှု- `CanSlashGovernanceLock{ referendum_id }`၊ `CanRestituteGovernanceLock{ referendum_id }`
-  - ကောင်စီစီမံခန့်ခွဲမှု (အနာဂတ်): `CanManageParliament`
-- ခုတ်ထစ်ခြင်း/အယူခံမှုများ-
-  - နှစ်ချက်-မဲ/တရားမ၀င်/အရည်အချင်းမပြည့်မီသောမဲများသည် ငွေချေးစာချုပ် escrow နှင့် ကိုက်ညီသော ပြင်ဆင်သတ်မှတ်ထားသော မျဉ်းစောင်းရာခိုင်နှုန်းများကို သက်ရောက်သည်၊ ရန်ပုံငွေများကို `slash_receiver_account` သို့ပြောင်းခြင်း၊ မျဉ်းစောင်းဖြတ်ပိုင်းစာရင်းကို အပ်ဒိတ်လုပ်ခြင်း၊ နှင့် `LockSlashed` ရိုက်ထည့်ထားသော ဖြစ်ရပ်များ (အကြောင်းရင်း + ဦးတည်ရာ + မှတ်စု)။
-  - လက်စွဲစာအုပ် `SlashGovernanceLock`/`RestituteGovernanceLock` ညွှန်ကြားချက်များသည် အော်ပရေတာမှ မောင်းနှင်သော ပြစ်ဒဏ်များနှင့် အယူခံဝင်မှုများကို ပံ့ပိုးပေးသည်။ ပြန်လည်အပ်နှံခြင်းကို မှတ်တမ်းတင်ထားသော မျဉ်းစောင်းများဖြင့် ဖုံးအုပ်ထားပြီး၊ ငွေချေးစာချုပ်တွင် ရန်ပုံငွေများ ပြန်လည်ရယူသည်၊ လယ်ဂျာကို အပ်ဒိတ်လုပ်ကာ `LockRestituted` ကို သက်တမ်းကုန်ဆုံးသည့်အချိန်အထိ သော့ခတ်မှုကို ဆက်လက်လုပ်ဆောင်နေချိန်တွင် ထုတ်လွှတ်ပါသည်။ကာကွယ်ထားသော အမည်နေရာများ
-- စိတ်ကြိုက်ကန့်သတ်ဘောင် `gov_protected_namespaces` (JSON အခင်းအကျင်းများ) သည် စာရင်းသွင်းထားသော namespace များအတွင်း ဖြန့်ကျက်ရန်အတွက် ဝင်ခွင့်တံခါးကို ဖွင့်ပေးသည်။
-- ဖောက်သည်များသည် ကာကွယ်ထားသော namespaces ကို ပစ်မှတ်ထား၍ ဖြန့်ကျက်ရန်အတွက် ငွေပေးငွေယူ မက်တာဒေတာသော့များ ပါဝင်ရမည်-
-  - `gov_namespace`- ပစ်မှတ်အမည်နေရာ (ဥပမာ၊ `"apps"`)
-  - `gov_contract_id`- namespace အတွင်းရှိ ယုတ္တိကျသော စာချုပ် ID
-- `gov_manifest_approvers`- i105... အကောင့် ID များ၏ ရွေးချယ်နိုင်သော JSON အခင်းအကျင်း။ လမ်းကြောတစ်ခုက တစ်ခုထက်ပိုကြီးသော quorum ကိုကြေညာသောအခါ၊ ဝင်ခွင့်သည် ထင်ရှားသောအထမြောက်မှုကို ကျေနပ်စေရန် ငွေပေးငွေယူလုပ်ပိုင်ခွင့်အာဏာနှင့် စာရင်းသွင်းထားသောအကောင့်များ လိုအပ်ပါသည်။
-- Telemetry သည် `governance_manifest_admission_total{result}` မှတစ်ဆင့် လုံး၀ ဝင်ခွင့်ကောင်တာကို ဖော်ထုတ်ပေးသောကြောင့် အော်ပရေတာများသည် အောင်မြင်သော ဝန်ခံချက်များကို `missing_manifest`၊ `non_i105..._authority`၊ `quorum_rejected`၊ Sumeragi နှင့် `protected_namespace_rejected` နှင့် လမ်းကြောင်းများကို ခွဲခြားနိုင်ပါသည်။
-- Telemetry သည် `governance_manifest_quorum_total{outcome}` (တန်ဖိုးများ `satisfied` / `rejected`) မှတစ်ဆင့် ပြဋ္ဌာန်းထားသောလမ်းကြောင်းကို ဖုံးအုပ်ပေးသောကြောင့် အော်ပရေတာများသည် ပျောက်ဆုံးနေသော အတည်ပြုချက်များကို စစ်ဆေးနိုင်ပါသည်။
-- Lanes များသည် ၎င်းတို့၏ manifests များတွင် ထုတ်ပြန်ထားသော namespace ခွင့်ပြုစာရင်းကို တွန်းအားပေးသည်။ `gov_namespace` ကို သတ်မှတ်ပေးသည့် မည်သည့် လွှဲပြောင်းမှုမဆို `gov_contract_id` ကို ပေးဆောင်ရမည် ဖြစ်ပြီး namespace သည် manifest ၏ `protected_namespaces` set တွင် ပေါ်လာရပါမည်။ အကာအကွယ်ကိုဖွင့်ထားသောအခါ `RegisterSmartContractCode` တွင် ဤမက်တာဒေတာမပါဘဲ တင်ပြမှုများကို ပယ်ချပါသည်။
-- tuple `(namespace, contract_id, code_hash, abi_hash)` အတွက် အတည်ပြုထားသော အုပ်ချုပ်မှု အဆိုပြုချက်တစ်ခု ရှိနေကြောင်း ဝင်ခွင့် ပြဋ္ဌာန်းထားသည်။ မဟုတ်ပါက ခွင့်မပြုသော အမှားတစ်ခုဖြင့် အတည်ပြုခြင်း မအောင်မြင်ပါ။
+- On-chain execution requires permissions:
+  - Proposals: `CanProposeContractDeployment{ contract_id }`
+  - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
+  - Enactment: `CanEnactGovernance`
+  - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
+  - Council management (future): `CanManageParliament`
+- Slashing/appeals:
+  - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
+  - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.
+
+Protected Namespaces
+- Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
+- Clients must include transaction metadata keys for deploys targeting protected namespaces:
+  - `gov_namespace`: the target namespace (e.g., `"apps"`)
+  - `gov_contract_id`: the logical contract id within the namespace
+- `gov_manifest_approvers`: optional JSON array of i105... account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
+- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_i105..._authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
+- Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
+- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_namespace` must provide `gov_contract_id`, and the namespace must appear in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
+- Admission enforces that an Enacted governance proposal exists for the tuple `(namespace, contract_id, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
 
 Runtime Upgrade Hooks
-- Lane manifests သည် runtime upgrade ညွှန်ကြားချက်များ (`ProposeRuntimeUpgrade`၊ `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`) ကိုဂိတ်ပေါက်ရန် `hooks.runtime_upgrade` ကြေငြာနိုင်ပါသည်။
-- ချိတ်ကွက်များ
-  - `allow` (bool၊ မူရင်း `true`): `false` တွင်၊ runtime-upgrade ညွှန်ကြားချက်များအားလုံးကို ပယ်ချပါသည်။
-  - `require_metadata` (bool၊ မူရင်း `false`): `metadata_key` မှ သတ်မှတ်ထားသော ငွေပေးငွေယူ မက်တာဒေတာ ထည့်သွင်းမှု လိုအပ်ပါသည်။
-  - `metadata_key` (string)- ချိတ်ဖြင့် ပြဋ္ဌာန်းထားသော မက်တာဒေတာအမည်။ မက်တာဒေတာလိုအပ်သည့်အခါ သို့မဟုတ် ခွင့်ပြုစာရင်းတစ်ခုရှိနေသည့်အခါ မူရင်းပုံစံသည် `gov_upgrade_id` ဖြစ်သည်။
-  - `allowed_ids` (စာကြောင်းများ၏ အခင်းအကျင်း)- မက်တာဒေတာတန်ဖိုးများ၏ ရွေးချယ်ခွင့်စာရင်း (ချုံ့ပြီးနောက်)။ ပေးထားသည့်တန်ဖိုးကို စာရင်းမသွင်းသည့်အခါ ငြင်းပယ်သည်။
-- အချိတ်အဆက်ရှိနေသောအခါ၊ ငွေပေးငွေယူတန်းစီထဲသို့မဝင်မီ တန်းစီခြင်းဝင်ခွင့်သည် မက်တာဒေတာမူဝါဒကို ပြဋ္ဌာန်းသည်။ ခွင့်ပြုစာရင်းပြင်ပရှိ မက်တာဒေတာ၊ အလွတ်တန်ဖိုးများ သို့မဟုတ် တန်ဖိုးများသည် အဆုံးအဖြတ်ပေးသော `NotPermitted` အမှားအယွင်းကို ဖြစ်ပေါ်စေသည်။
-- Telemetry သည် `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` မှတစ်ဆင့် ပြဋ္ဌာန်းထားသော ရလဒ်များကို ခြေရာခံသည်။
-- ချိတ်ကို ကျေနပ်စေသော ငွေပေးငွေယူများတွင် မက်တာဒေတာ `gov_upgrade_id=<value>` (သို့မဟုတ် manifest-သတ်မှတ်သော့) နှင့်အတူ manifest quorum မှလိုအပ်သော မည်သည့် i105... အတည်ပြုချက်များ ပါဝင်ရမည်။
+- Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- Hook fields:
+  - `allow` (bool, default `true`): when `false`, all runtime-upgrade instructions are rejected.
+  - `require_metadata` (bool, default `false`): require the transaction metadata entry specified by `metadata_key`.
+  - `metadata_key` (string): metadata name enforced by the hook. Defaults to `gov_upgrade_id` when metadata is required or an allowlist is present.
+  - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
+- When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
+- Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
+- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any i105... approvals required by the manifest quorum.
 
-အဆင်ပြေမှုအဆုံးမှတ်
-- POST `/v1/gov/protected-namespaces` — `gov_protected_namespaces` ကို node ပေါ်တွင် တိုက်ရိုက်သက်ရောက်သည်။
-  - တောင်းဆိုချက်- { "namespaces"- ["apps", "system"] }
-  - တုံ့ပြန်ချက်- { "ok": true, "applied": 1 }
-  - မှတ်စုများ- admin/testing အတွက် ရည်ရွယ်ပါသည်။ ပြင်ဆင်သတ်မှတ်ပါက API တိုကင်လိုအပ်သည်။ ထုတ်လုပ်မှုအတွက်၊ `SetParameter(Custom)` ဖြင့် လက်မှတ်ရေးထိုးထားသော အရောင်းအ၀ယ်ကို တင်သွင်းခြင်းကို ပိုနှစ်သက်သည်။CLI အကူအညီပေးသူများ
+Convenience Endpoint
+- POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
+  - Request: { "namespaces": ["apps", "system"] }
+  - Response: { "ok": true, "applied": 1 }
+  - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
+
+CLI Helpers
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
-  - namespace နှင့် cross-checks အတွက် စာချုပ်ဥပမာများကို ထုတ်ယူသည်-
-    - Torii သည် `code_hash` တစ်ခုစီအတွက် bytecode ကို သိမ်းဆည်းထားပြီး ၎င်း၏ Blake2b-32 အညွှန်းသည် `code_hash` နှင့် ကိုက်ညီပါသည်။
-    - `/v1/contracts/code/{code_hash}` အောက်တွင် သိမ်းဆည်းထားသော မန်နီးဖက်စ်သည် `code_hash` နှင့် `abi_hash` တန်ဖိုးများနှင့် ကိုက်ညီသော အစီရင်ခံစာများ။
-    - တူညီသော proposal-id ကို node အသုံးပြုမှုများကို ဟက်ချခြင်းဖြင့် ဆင်းသက်လာသကဲ့သို့ `(namespace, contract_id, code_hash, abi_hash)` အတွက် အတည်ပြုပြဌာန်းထားသော အုပ်ချုပ်မှု အဆိုပြုချက်တစ်ခု ရှိပါသည်။
-  - စာချုပ်တစ်ခုလျှင် `results[]` ဖြင့် JSON အစီရင်ခံစာ (ပြဿနာများ၊ သရုပ်ဖော်ခြင်း/ကုဒ်/အဆိုပြုချက် အနှစ်ချုပ်များ) နှင့် (`--no-summary`) တို့ကို ဖိနှိပ်ထားခြင်းမရှိပါက တစ်ကြောင်းတစ်ကြောင်း အကျဉ်းချုပ်ကို ထုတ်ပေးပါသည်။
-  - ကာကွယ်ထားသော namespace များကို စစ်ဆေးခြင်း သို့မဟုတ် အုပ်ချုပ်မှုထိန်းချုပ်ထားသော အလုပ်အသွားအလာများကို စိစစ်ခြင်းအတွက် အသုံးဝင်သည်။
+  - Fetches contract instances for the namespace and cross-checks that:
+    - Torii stores bytecode for each `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
+    - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
+    - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
+  - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
+  - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
 - `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
-  - manifest quorum စည်းမျဉ်းများကို ကျေနပ်စေရန် ရွေးချယ်နိုင်သော `gov_manifest_approvers` အပါအဝင် ကာကွယ်ထားသော namespaces များသို့ ဖြန့်ကျက်ထည့်သွင်းရာတွင် အသုံးပြုသည့် JSON မက်တာဒေတာအရိုးစုကို ထုတ်လွှတ်သည်။
+  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
 - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - Canonical account ids များကို တရားဝင်စေပြီး 32-byte nullifier အရိပ်အမြွက်များကို canonicalize လုပ်ကာ အရိပ်အမြွက်များကို `public_inputs_json` (နောက်ထပ်ထပ်ဆောင်းမှုများအတွက် `--public <path>` နှင့်) ပေါင်းထည့်သည်။
-  - nullifier ကို အထောက်အထား ကတိကဝတ် (အများပြည်သူ ထည့်သွင်းမှု) နှင့် `domain_tag`၊ `chain_id` နှင့် `election_id` တို့မှ ဆင်းသက်လာပါသည်။ `--nullifier` ကို ပေးသွင်းသည့်အခါ အထောက်အထားနှင့် ကိုက်ညီကြောင်း အတည်ပြုထားသည်။
-  - တစ်ကြောင်းချင်းအကျဉ်းချုပ်သည် ယခုအခါတွင် ကုဒ်လုပ်ထားသော `CastZkBallot` မှ ဆင်းသက်လာသော အဆုံးအဖြတ်ပေးသည့် `fingerprint=<hex>` ကို ဖော်ပြနေပါသည်။
-  - CLI တုံ့ပြန်မှုများသည် `tx_instructions[]` နှင့် `payload_fingerprint_hex` အပေါင်းကို ကုဒ်လုပ်ထားသော အကွက်များဖြင့် မှတ်သားထားသောကြောင့် ရေအောက်တူးလ်လုပ်ခြင်းဖြင့် Norito ကို ထပ်မွမ်းမံခြင်းမပြုဘဲ အရိုးစုကို အတည်ပြုနိုင်သည်။
-  - သော့ခတ်မှု အရိပ်အမြွက်ပေးသည့်အခါ၊ ZK မဲများသည် `owner`၊ `amount` နှင့် `duration_blocks` တို့ကို ပံ့ပိုးပေးရမည်။ တစ်စိတ်တစ်ပိုင်း အရိပ်အမြွက်များကို ပယ်ချပါသည်။ `min_bond_amount > 0` တွင် လော့ခ်ချရန် အရိပ်အမြွက်များ လိုအပ်ပါသည်။ လမ်းညွှန်ချက်သည် ရွေးချယ်ခွင့်ရှိနေဆဲဖြစ်ပြီး အရိပ်အမြွက်အဖြစ်သာ သဘောထားသည်။
+  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
+  - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
+  - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
+  - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
 - `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` သည် canonical I105 စာလုံးများကို လက်ခံသည် ။ ရွေးချယ်နိုင်သော `@<domain>` ၏ နောက်ဆက်တွဲများသည် လမ်းပြခြင်းအရိပ်အမြွက်များသာဖြစ်သည်။
-  - Aliases `--lock-amount`/`--lock-duration-blocks` သည် scripting parity အတွက် ZK အလံအမည်များကို ထင်ဟပ်စေသည်။
-  - ကုဒ်လုပ်ထားသော ညွှန်ကြားချက်လက်ဗွေနှင့် လူသားဖတ်နိုင်သောမဲကွက်များ (`owner`၊ `amount`၊ `duration_blocks`၊ `direction`) အပါအဝင် ကုဒ်လုပ်ထားသော လက်ဗွေနှင့် လူသားဖတ်နိုင်သော မဲပုံးများအပါအဝင် အကျဉ်းချုပ် အထွက်မှန်များကို `duration_blocks`၊သာဓကများစာရင်း
-- `/v1/gov/instances/{ns}` ကိုရယူပါ — namespace အတွက် တက်ကြွသော စာချုပ်ဖြစ်ရပ်များကို စာရင်းပြုစုပါ။
-  - Query params များ-
-    - `contains`- `contract_id` (စာလုံးအသေး-အကဲဆတ်) ၏ အခွဲဖြင့် စစ်ထုတ်ပါ
-    - `hash_prefix`- `code_hash_hex` ၏ hex ရှေ့ဆက်ဖြင့် စစ်ထုတ်ခြင်း
-    - `offset` (မူလ 0)၊ `limit` (မူလ 100၊ အများဆုံး 10_000)
-    - `order`- `cid_asc` (မူရင်း)၊ `cid_desc`၊ `hash_asc`၊ `hash_desc`
-  - တုံ့ပြန်မှု- { "namespace": "ns", "instances": [{ "contract_id": "…", "code_hash_hex": "…" }, …], "total": N, "offset": n, "limit": m }
-  - SDK အကူအညီပေးသူ- `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) သို့မဟုတ် `ToriiClient.list_governance_instances_typed("apps", ...)` (Python)။
+  - `--owner` accepts canonical I105 literals; Pass domain context through the surrounding scoped interface when required.
+  - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
+  - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
-Sweep ကို လော့ခ်ဖွင့်ပါ (အော်ပရေတာ/စာရင်းစစ်)
-- `/v1/gov/unlocks/stats` ရယူပါ။
-  - တုံ့ပြန်မှု- { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
-  - မှတ်စုများ- `last_sweep_height` သည် သက်တမ်းလွန်သော့ခလောက်များကို ဖယ်ရှားပြီး ဆက်လက်တည်မြဲနေသည့် လတ်တလော ဘလောက်အမြင့်ကို ထင်ဟပ်စေသည်။ `expired_locks_now` ကို `expiry_height <= height_current` ဖြင့် လော့ခ်ချခြင်းမှတ်တမ်းများကို စကင်န်ဖတ်ခြင်းဖြင့်တွက်ချက်ပါသည်။
+Instances Listing
+- GET `/v1/gov/instances/{ns}` — lists active contract instances for a namespace.
+  - Query params:
+    - `contains`: filter by substring of `contract_id` (case-sensitive)
+    - `hash_prefix`: filter by hex prefix of `code_hash_hex` (lowercase)
+    - `offset` (default 0), `limit` (default 100, max 10_000)
+    - `order`: one of `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
+  - Response: { "namespace": "ns", "instances": [{ "contract_id": "…", "code_hash_hex": "…" }, …], "total": N, "offset": n, "limit": m }
+  - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) or `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
+
+Unlock Sweep (Operator/Audit)
+- GET `/v1/gov/unlocks/stats`
+  - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
+  - Notes: `last_sweep_height` reflects the most recent block height where expired locks were swept and persisted. `expired_locks_now` is computed by scanning lock records with `expiry_height <= height_current`.
 - POST `/v1/gov/ballots/zk-v1`
-  - တောင်းဆိုချက် (v1-စတိုင် DTO):
+  - Request (v1-style DTO):
     {
-      "authority": "i105..."၊
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "…?"၊
-      "election_id": "ကိုးကား-၁",
+      "private_key": "…?",
+      "election_id": "ref-1",
       "backend": "halo2/ipa",
-      "envelope_b64": "AAECAwQ="၊
-      "root_hint": "0x…64hex?"၊
-      "ပိုင်ရှင်"- "i105…", // canonical AccountId (I105 ပကတိ; ရွေးချယ်နိုင်သော @domain အရိပ်အမြွက်)
-      "ပမာဏ": "100?"၊
-      "duration_blocks": 6000?၊
-      "ဦးတည်ချက်"- "အေး|နေ|နေသလား?"၊
+      "envelope_b64": "AAECAwQ=",
+      "root_hint": "0x…64hex?",
+      "owner": "i105…",          // canonical AccountId (domainless encoded literal; no @domain suffix)
+      "amount": "100?",
+      "duration_blocks": 6000?,
+      "direction": "Aye|Nay|Abstain?",
       "nullifier": "blake2b32:…64hex?"
     }
-  - တုံ့ပြန်ချက်- { "ok": true၊ "accepted": true, "tx_instructions": [{…}] }- ပို့စ် `/v1/gov/ballots/zk-v1/ballot-proof` (အင်္ဂါရပ်- `zk-ballot`)
-  - `BallotProof` JSON ကို တိုက်ရိုက်လက်ခံပြီး `CastZkBallot` အရိုးစုကို ပြန်ပေးသည်။
-  - တောင်းဆိုချက်-
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+
+- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
+  - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
+  - Request:
     {
-      "authority": "i105..."၊
+      "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "…?"၊
-      "election_id": "ကိုးကား-1",
-      "မဲ"- {
+      "private_key": "…?",
+      "election_id": "ref-1",
+      "ballot": {
         "backend": "halo2/ipa",
-        "envelope_bytes": "AAECAwQ="၊ ZK1 သို့မဟုတ် H2* ကွန်တိန်နာ၏ // base64
-        "root_hint": null၊ // ရွေးချယ်နိုင်သော 32-byte hex string (အရည်အချင်းပြည့်မီမှု အမြစ်)
-        "ပိုင်ရှင်"- null၊ // ရွေးချယ်နိုင်သော canonical AccountId (I105 ပကတိ၊ ရွေးချယ်နိုင်သော @domain အရိပ်အမြွက်)
-        "nullifier"- null၊ // ရွေးချယ်နိုင်သော 32-byte hex string (nullifier အရိပ်အမြွက်)
-        "ပမာဏ"- "100", // ရွေးချယ်နိုင်သော လော့ခ်ပမာဏ အရိပ်အမြွက် (ဒဿမ စာတန်း)
-        "duration_blocks": 6000၊ // ရွေးချယ်နိုင်သောသော့ခတ်ကြာချိန် အရိပ်အမြွက်
-        "direction": "အေး" // ရွေးချယ်နိုင်သော ဦးတည်ချက် အရိပ်အမြွက်
+        "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
+        "owner": null,                    // optional canonical AccountId (domainless encoded literal; no @domain suffix)
+        "nullifier": null,                // optional 32-byte hex string (nullifier hint)
+        "amount": "100",                  // optional lock amount hint (decimal string)
+        "duration_blocks": 6000,          // optional lock duration hint
+        "direction": "Aye"                // optional direction hint
       }
     }
-  - တုံ့ပြန်မှု-
+  - Response:
     {
-      "ok": မှန်ပါတယ်၊
-      "လက်ခံသည်": မှန်သည်၊
-      "အကြောင်းပြချက်": "ငွေပေးငွေယူအရိုးစုတည်ဆောက်ခြင်း",
+      "ok": true,
+      "accepted": true,
+      "reason": "build transaction skeleton",
       "tx_instructions": [
         { "wire_id": "CastZkBallot", "payload_hex": "…" }
       ]
     }
-  - မှတ်စုများ
-    - `private_key` ကို ပံ့ပိုးပေးသောအခါ၊ Torii သည် လက်မှတ်ထိုးထားသော ငွေလွှဲပို့မှုကို တင်သွင်းပြီး `reason` ကို `submitted transaction` သို့ သတ်မှတ်သည်။
-    - ဆာဗာသည် ရွေးချယ်နိုင်သော `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/Prometheus အတွက် မဲပုံးမှ `nullifier` မှ I1800000180X `CastZkBallot`။
-    - စာအိတ်ဘိုက်များကို ညွှန်ကြားချက်ပေးဆောင်မှုအတွက် base64 အဖြစ် ပြန်လည်ကုဒ်လုပ်ထားပါသည်။
-    - `zk-ballot` အင်္ဂါရပ်ကို ဖွင့်ထားသောအခါမှသာ ဤအဆုံးမှတ်ကို ရရှိနိုင်သည်။
+  - Notes:
+    - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
+    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
+    - The envelope bytes are re-encoded as base64 for the instruction payload.
+    - This endpoint is only available when the `zk-ballot` feature is enabled.
 
-CastZkBallot အတည်ပြုခြင်းလမ်းကြောင်း
-- `CastZkBallot` သည် ပံ့ပိုးပေးထားသော base64 အထောက်အထားကို ကုဒ်လုပ်ပြီး ဗလာ သို့မဟုတ် ပုံပျက်နေသော payloads (`BallotRejected` with `invalid or empty proof`) ကို ငြင်းပယ်သည်။
-- အကယ်၍ `public_inputs_json` ကို ထောက်ပံ့ပေးပါက၊ ၎င်းသည် JSON အရာဝတ္ထုတစ်ခု ဖြစ်ရပါမည်။ အရာဝတ္ထုမဟုတ်သော payload များကို ငြင်းပယ်သည်။
-- အိမ်ရှင်သည် ဆန္ဒခံယူပွဲ (`vk_ballot`) သို့မဟုတ် အုပ်ချုပ်မှုပုံသေများမှ မဲစိစစ်သည့်သော့ကို ဖြေရှင်းပေးပြီး မှတ်တမ်းတည်ရှိရန် လိုအပ်သည်၊ `Active` ဖြစ်ရန်နှင့် inline bytes သယ်ဆောင်ပါ။
-- သိမ်းဆည်းထားသော အတည်ပြုသော့ဘိုက်များကို `hash_vk` ဖြင့် ပြန်လည် ဟက်ခ်လုပ်ထားပါသည်။ ကတိကဝတ်များ မကိုက်ညီပါက ဖျက်လိုက်သော registry entries များကို ကာကွယ်ရန် စိစစ်ခြင်းမပြုမီ ကတိကဝတ်များ ပျက်သွားသည် (`BallotRejected` with `verifying key commitment mismatch`)။
-- အထောက်အထားဘိုက်များကို `zk::verify_backend` မှတစ်ဆင့် စာရင်းသွင်းထားသော နောက်ခံသို့ ပေးပို့သည်။ `invalid proof` ဖြင့် `BallotRejected` အဖြစ် မမှန်ကန်သော စာသားများ ပေါ်လာပြီး ညွှန်ကြားချက်သည် တိကျစွာ ပျက်ကွက်ပါသည်။
-- အထောက်အထားသည် အများသူငှာ သွင်းအားစုများအဖြစ် မဲကတိကဝတ်နှင့် အရည်အချင်းပြည့်မီမှု အရင်းမြစ်ကို ဖော်ထုတ်ရမည်။ အမြစ်သည် ရွေးကောက်ပွဲ၏ `eligible_root` နှင့် ကိုက်ညီရမည်ဖြစ်ပြီး ဆင်းသက်လာသော nullifier သည် ပေးထားသည့် မည်သည့်အရိပ်အမြွက်နှင့်မဆို ကိုက်ညီရပါမည်။
-- အောင်မြင်သောအထောက်အထားများသည် `BallotAccepted` ကိုထုတ်လွှတ်သည်။ ပွားနေသော nullifiers၊ ဟောင်းနွမ်းနေသော အရည်အသွေးပြည့်မီမှု အမြစ်များ သို့မဟုတ် လော့ခ်ချခြင်း ဆုတ်ယုတ်မှုများသည် ဤစာတမ်းတွင် ဖော်ပြထားသော ရှိပြီးသား ငြင်းပယ်ခြင်းဆိုင်ရာ အကြောင်းပြချက်များကို ဆက်လက်ဖြစ်ပေါ်စေပါသည်။
+CastZkBallot Verification Path
+- `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
+- If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
+- The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
+- Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
+- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
+- Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
 
-## မမှန်မကန်ပြုမူမှုနှင့် ပူးတွဲသဘောဆန္ဒကို အတည်ပြုသည်။
+## Validator Misbehaviour & Joint Consensus
 
-### ခုတ်ထစ်ခြင်းနှင့် ထောင်ချခြင်းလုပ်ငန်းi105... ပရိုတိုကောကို ချိုးဖောက်သည့်အခါတိုင်း Norito-encoded `Evidence` payload တစ်ခုစီသည် in-memory `EvidenceStore` တွင်ရှိပြီး၊ မမြင်ရပါက WSV ကျောထောက်နောက်ခံပြုထားသော `consensus_evidence` မြေပုံတွင် ရုပ်လုံးပေါ်လာပါသည်။ `sumeragi.npos.reconfig.evidence_horizon_blocks` (မူလ `7200` ဘလောက်များ) ထက်ဟောင်းသော မှတ်တမ်းများကို ပယ်ချသည် ထို့ကြောင့် မော်ကွန်းကို ကန့်သတ်ထားသော်လည်း ငြင်းပယ်ခြင်းကို အော်ပရေတာများအတွက် မှတ်တမ်းတင်ထားသည်။ မိုးကုပ်စက်ဝိုင်းအတွင်းမှ အထောက်အထားများသည် ပူးတွဲသဘောတူညီချက် (`mode_activation_height requires next_mode to be set in the same block`)၊ စတင်ခြင်းနှောင့်နှေးခြင်း (`sumeragi.npos.reconfig.activation_lag_blocks`၊ မူရင်း `1`) နှင့် မျဉ်းစောင်းနှောင့်နှေးမှု (`sumeragi.npos.reconfig.slashing_delay_blocks`၊ 7000 default `sumeragi.npos.reconfig.slashing_delay_blocks`)၊ မလျှောက်ထားမီ ပြစ်ဒဏ်များကို ပယ်ဖျက်ပါ။
+### Slashing and Jailing Workflow
 
-အသိအမှတ်ပြုထားသော ပြစ်မှုများသည် `EvidenceKind` သို့ တစ်ပုံမှတစ်ပုံ ပုံဖော်ထားသည်။ ခွဲခြားဆက်ဆံသူများသည် ဒေတာပုံစံဖြင့် တည်ငြိမ်ပြီး ကျင့်သုံးသည်-
+Consensus emits Norito-encoded `Evidence` whenever a i105... violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
+
+Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
 ```rust
 use iroha_data_model::block::consensus::EvidenceKind;
@@ -324,53 +346,55 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — the i105... တူညီသော `(phase,height,view,epoch)` tuple အတွက် ကွဲလွဲနေသော hashe များကို ရေးထိုးထားသည်။
-- **InvalidQc** — စုစည်းမှုတစ်ခုသည် အဆုံးအဖြတ်စစ်ဆေးမှုများ မအောင်မြင်သော ပုံသဏ္ဍာန်၏ QC တစ်ခုအား အတင်းအဖျင်းပြောခဲ့သည် (ဥပမာ၊ ဗလာနက္ခတ်ဘစ်မြေပုံ)။
-- **InvalidProposal** — ခေါင်းဆောင်တစ်ဦးသည် ဖွဲ့စည်းတည်ဆောက်ပုံဆိုင်ရာ စစ်ဆေးအတည်ပြုခြင်းမှ ပျက်ကွက်သောပိတ်ဆို့တစ်ခု (ဥပမာ၊ သော့ခတ်ထားသောကွင်းဆက်စည်းမျဉ်းကို ချိုးဖောက်သည်)။
-- **ဆင်ဆာဖြတ်တောက်ခြင်း** — လက်မှတ်ရေးထိုးထားသော တင်သွင်းမှုပြေစာများသည် အဆိုပြုခြင်း/ကတိက၀တ် မပြုဖူးသော အရောင်းအ၀ယ်တစ်ခုကို ပြသသည်။
+- **DoublePrepare/DoubleCommit** — the i105... signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
+- **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
-VRF ပြစ်ဒဏ်များသည် `activation_lag_blocks` (ပြစ်မှုကျူးလွန်သူများအား ထောင်သွင်းအကျဉ်းချခြင်း) ပြီးနောက် အလိုအလျောက် ပြဋ္ဌာန်းပါသည်။ အုပ်ချုပ်ရေးမှ ပြစ်ဒဏ်ကို မပယ်ဖျက်ပါက `slashing_delay_blocks` ဝင်းဒိုးပြီးနောက်မှသာ အများသဘောတူချက်ကို ဖြတ်တောက်ခြင်းကို အသုံးပြုပါသည်။
+VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
 
-အော်ပရေတာများနှင့် ကိရိယာတန်ဆာပလာများသည် ဝန်ဆောင်ခများကို စစ်ဆေးပြီး ပြန်လည်ထုတ်လွှင့်နိုင်သည်-
+Operators and tooling can inspect and re-broadcast payloads through:
 
-- Torii: `GET /v1/sumeragi/evidence` နှင့် `GET /v1/sumeragi/evidence/count`။
-- CLI- `iroha ops sumeragi evidence list`၊ `… count` နှင့် `… submit --evidence-hex <payload>`။
+- Torii: `GET /v1/sumeragi/evidence` and `GET /v1/sumeragi/evidence/count`.
+- CLI: `iroha ops sumeragi evidence list`, `… count`, and `… submit --evidence-hex <payload>`.
 
-အုပ်ချုပ်ရေးသည် သက်သေ ဘိုက်များကို ကျမ်းဂန်အထောက်အထားအဖြစ် ဆက်ဆံရမည်-
+Governance must treat the evidence bytes as canonical proof:
 
-1. **သက်တမ်းမကုန်မီ payload** ကိုစုဆောင်းပါ။ အကြမ်းထည် Norito bytes ကို အမြင့်/ကြည့်ရှုမှု မက်တာဒေတာနှင့်အတူ သိမ်းဆည်းပါ။
-2. လိုအပ်ပါက `CancelConsensusEvidencePenalty` ကို `slashing_delay_blocks` မတိုင်မီ အထောက်အထားပေးဆောင်မှုနှင့်အတူ တင်သွင်းခြင်းဖြင့် **Cancel**၊ မှတ်တမ်းကို `penalty_cancelled` နှင့် `penalty_cancelled_at_height` ဟု အမှတ်အသားပြုထားပြီး မျဉ်းစောင်းများ သက်ရောက်မှုမရှိပါ။
-3. လူထုဆန္ဒခံယူပွဲ သို့မဟုတ် sudo ညွှန်ကြားချက် (ဥပမာ၊ `Unregister::peer`) တွင် payload ကို ထည့်သွင်းခြင်းဖြင့် **ပြစ်ဒဏ်ကို အဆင့်သတ်မှတ်ပါ* လုပ်ဆောင်ချက်သည် ဝန်ဆောင်ခကို ပြန်လည်အတည်ပြုသည်။ ပုံသဏ္ဍာန်မမှန်သော၊
-4. **နောက်ဆက်တွဲ topology ကို အချိန်ဇယားဆွဲပါ** ထို့ကြောင့် စော်ကားသော i105... သည် ချက်ချင်းပြန်မလာနိုင်ပါ။ အပ်ဒိတ်စာရင်းဇယားနှင့်အတူ ပုံမှန်စီးဆင်းနေသော `SetParameter(Sumeragi::NextMode)` နှင့် `SetParameter(Sumeragi::ModeActivationHeight)`။
-5. **စာရင်းစစ်ရလဒ်** သည် `/v1/sumeragi/evidence` နှင့် `/v1/sumeragi/status` မှတစ်ဆင့် သက်သေအထောက်အထားများ တန်ပြန်အဆင့်မြင့်ပြီး အုပ်ချုပ်ရေးမှ ဖယ်ရှားခြင်းကို အတည်ပြုကြောင်း သေချာစေရန်။
+1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
+2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
+3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
+4. **Schedule the follow-up topology** so the offending i105... cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
 ### Joint-Consensus Sequencing
 
-အထွက် i105... set သည် သတ်မှတ်အသစ်မစတင်မီ နယ်နိမိတ်ပိတ်ဆို့ခြင်းကို အပြီးသတ်ကြောင်း အာမခံပါသည်။ runtime သည် တွဲထားသော ဘောင်များမှတစ်ဆင့် စည်းမျဉ်းကို ပြဋ္ဌာန်းသည်-- `SumeragiParameter::NextMode` နှင့် `SumeragiParameter::ModeActivationHeight` သည် **တူညီသောဘလောက်** တွင် ကျူးလွန်ရပါမည်။ `mode_activation_height` သည် အပ်ဒိတ်လုပ်သော ဘလောက်အမြင့်ထက် တင်းကြပ်စွာ ကြီးနေရမည် ဖြစ်ပြီး အနည်းဆုံး တစ်တုံး နောက်ကျခြင်းကို ပေးဆောင်သည်။
-- `sumeragi.npos.reconfig.activation_lag_blocks` (မူလ `1`) သည် လုံးဝလက်မလျှော့ခြင်းများကို တားဆီးပေးသည့် ဖွဲ့စည်းမှုအစောင့်အကြပ်ဖြစ်သည်-
-- `sumeragi.npos.reconfig.slashing_delay_blocks` (မူလ `259200`) သည် အများဆန္ဒကို ဖြတ်တောက်ခြင်းကို နှောင့်နှေးစေသောကြောင့် အုပ်ချုပ်ရေးက ၎င်းတို့မကျင့်သုံးမီ ပြစ်ဒဏ်များကို ပယ်ဖျက်နိုင်သည်။
+Joint consensus guarantees that the outgoing i105... set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
+
+- `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
+- `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- runtime နှင့် CLI သည် `/v1/sumeragi/params` နှင့် `iroha sumeragi params --summary` မှတဆင့် အဆင့်သတ်မှတ်ထားသော ဘောင်များကို ဖော်ထုတ်ပေးသောကြောင့် အော်ပရေတာများသည် activation အမြင့်များနှင့် i105... စာရင်းများကို အတည်ပြုနိုင်ပါသည်။
-- အုပ်ချုပ်မှု အလိုအလျောက်စနစ်သည် အမြဲရှိသင့်သည်-
-  1. အထောက်အထား-ကျောထောက်နောက်ခံပြုထားသော ဖယ်ရှားခြင်း (သို့မဟုတ် ပြန်လည်ထည့်သွင်းခြင်း) ဆုံးဖြတ်ချက်ကို အပြီးသတ်ပါ။
-  2. `mode_activation_height = h_current + activation_lag_blocks` ဖြင့် နောက်ဆက်တွဲ ပြင်ဆင်မှုကို တန်းစီပါ။
-  3. `/v1/sumeragi/status` ကို `effective_consensus_mode` အထိ မျှော်လင့်ထားသည့် အမြင့်သို့ ပြန်လှန်ပါ။
+- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and i105... rosters.
+- Governance automation should always:
+  1. Finalise the evidence-backed removal (or reinstatement) decision.
+  2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
+  3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
 
-i105...s ကို လှည့်ပတ်သော သို့မဟုတ် ဖြတ်တောက်ခြင်းကို အသုံးချသည့် မည်သည့် script မဆို ** မလုပ်ဆောင်ရပါမည်** ကို လုံးဝလက်မလျော့ဘဲ အသက်သွင်းရန် ကြိုးပမ်းခြင်း သို့မဟုတ် hand-off ကန့်သတ်ဘောင်များကို ချန်လှပ်ထားခြင်း၊ ထိုသို့သော လွှဲပြောင်းမှုများကို ပယ်ချပြီး ကွန်ရက်ကို ယခင်မုဒ်တွင် ထားလိုက်ပါ။
+Any script that rotates i105...s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
 
-## Telemetry မျက်နှာပြင်များ
+## Telemetry surfaces
 
-- Prometheus မက်ထရစ်များ ပို့ကုန်အုပ်ချုပ်ရေး လုပ်ဆောင်ချက်-
-  - `governance_proposals_status{status}` (gauge) သည် အခြေအနေအလိုက် အဆိုပြုချက်ရေတွက်မှုကို ခြေရာခံသည်။
-  - ကာကွယ်ထားသော namespace ဝင်ခွင့်လက်ခံမှုကို ခွင့်ပြုခြင်း သို့မဟုတ် ငြင်းပယ်သည့်အခါ `governance_protected_namespace_total{outcome}` (ကောင်တာ) တိုးခြင်းများ။
-  - `governance_manifest_activations_total{event}` (ကောင်တာ) သည် ထင်ရှားသောထည့်သွင်းမှုများ (`event="manifest_inserted"`) နှင့် namespace binding (`event="instance_bound"`) တို့ကို မှတ်တမ်းတင်သည်။
-- `/status` တွင် `governance` သည် အဆိုပြုချက်အရေအတွက်များကို ထင်ဟပ်ပြသပေးသည့် အရာဝတ္တုတစ်ခု၊ ကာကွယ်ထားသော namespace စုစုပေါင်းများကို အစီရင်ခံခြင်းနှင့် မကြာသေးမီက ထင်ရှားပေါ်လွင်သော အသက်သွင်းမှုများ (namespace၊ စာချုပ် id၊ ကုဒ်/ABI ဟက်ရှ်၊ ပိတ်ဆို့အမြင့်၊ အသက်သွင်းချိန်တံဆိပ်) ပါဝင်သည်။ ပြဋ္ဌာန်းချက်များ မွမ်းမံထားသော မန်နီးဖက်စ်များနှင့် ကာကွယ်ထားသော namespace ဂိတ်များကို ပြဋ္ဌာန်းထားကြောင်း အတည်ပြုရန် အော်ပရေတာများသည် ဤအကွက်ကို စစ်တမ်းကောက်ယူနိုင်သည်။
-- Grafana နမူနာပုံစံ (`docs/source/grafana_governance_constraints.json`) နှင့်
-  `telemetry.md` ရှိ telemetry runbook တွင် ချိတ်မိစေရန် အချက်ပေးသံများကို ဝိုင်ယာကြိုးတပ်နည်းကို ပြသည်
-  အဆိုပြုချက်များ၊ ထင်ရှားသော အသက်သွင်းမှုများ ပျောက်ဆုံးနေခြင်း၊ သို့မဟုတ် မျှော်လင့်မထားသော ကာကွယ်ထားသော အမည်နေရာလွတ်များ
-  runtime အဆင့်မြှင့်တင်မှုများအတွင်း ငြင်းပယ်မှုများ။
+- Prometheus metrics export governance activity:
+  - `governance_proposals_status{status}` (gauge) tracks proposal counts by status.
+  - `governance_protected_namespace_total{outcome}` (counter) increments when protected namespace admission allows or rejects a deploy.
+  - `governance_manifest_activations_total{event}` (counter) records manifest insertions (`event="manifest_inserted"`) and namespace bindings (`event="instance_bound"`).
+- `/status` includes a `governance` object mirroring the proposal counts, reporting protected namespace totals, and listing recent manifest activations (namespace, contract id, code/ABI hash, block height, activation timestamp). Operators can poll this field to confirm that enactments updated manifests and that protected namespace gates are enforced.
+- A Grafana template (`docs/source/grafana_governance_constraints.json`) and the
+  telemetry runbook in `telemetry.md` show how to wire alarms for stuck
+  proposals, missing manifest activations, or unexpected protected-namespace
+  rejections during runtime upgrades.

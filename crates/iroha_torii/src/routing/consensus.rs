@@ -5,13 +5,14 @@ use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
-        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-        SumeragiConsensusMessageHandlingStatus, SumeragiDataspaceCommitment,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcStatus,
-        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRuntimeUpgradeHook,
-        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiCommitPipelineStatus, SumeragiConsensusCapsStatus,
+        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+        SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
+        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus, SumeragiNposTimeoutsStatus,
+        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
+        SumeragiQcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
+        SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
         SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
         SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
         SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
@@ -2214,6 +2215,67 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("pause_queue_depths", commit_pause_queue_depths),
         json_entry("resume_queue_depths", commit_resume_queue_depths),
     ]);
+    let commit_pipeline = json_object(vec![
+        json_entry("last_total_ms", snap.commit_pipeline.last_total_ms),
+        json_entry("last_validation_ms", snap.commit_pipeline.last_validation_ms),
+        json_entry("last_qc_rebuild_ms", snap.commit_pipeline.last_qc_rebuild_ms),
+        json_entry("last_gate_ms", snap.commit_pipeline.last_gate_ms),
+        json_entry("last_finalize_ms", snap.commit_pipeline.last_finalize_ms),
+        json_entry(
+            "last_drain_results_ms",
+            snap.commit_pipeline.last_drain_results_ms,
+        ),
+        json_entry(
+            "last_drain_qc_verify_ms",
+            snap.commit_pipeline.last_drain_qc_verify_ms,
+        ),
+        json_entry(
+            "last_drain_persist_ms",
+            snap.commit_pipeline.last_drain_persist_ms,
+        ),
+        json_entry(
+            "last_drain_kura_store_ms",
+            snap.commit_pipeline.last_drain_kura_store_ms,
+        ),
+        json_entry(
+            "last_drain_state_apply_ms",
+            snap.commit_pipeline.last_drain_state_apply_ms,
+        ),
+        json_entry(
+            "last_drain_state_commit_ms",
+            snap.commit_pipeline.last_drain_state_commit_ms,
+        ),
+        json_entry("ema_total_ms", snap.commit_pipeline.ema_total_ms),
+        json_entry("ema_validation_ms", snap.commit_pipeline.ema_validation_ms),
+        json_entry("ema_gate_ms", snap.commit_pipeline.ema_gate_ms),
+        json_entry("ema_finalize_ms", snap.commit_pipeline.ema_finalize_ms),
+    ]);
+    let round_gap = json_object(vec![
+        json_entry(
+            "last_deliver_to_state_commit_ms",
+            snap.round_gap.last_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "last_state_commit_to_next_propose_ms",
+            snap.round_gap.last_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "last_deliver_to_next_propose_ms",
+            snap.round_gap.last_deliver_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_state_commit_ms",
+            snap.round_gap.ema_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "ema_state_commit_to_next_propose_ms",
+            snap.round_gap.ema_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_next_propose_ms",
+            snap.round_gap.ema_deliver_to_next_propose_ms,
+        ),
+    ]);
     let kura_store = json_object(vec![
         json_entry("failures_total", snap.kura_store.failures_total),
         json_entry("abort_total", snap.kura_store.abort_total),
@@ -2906,6 +2968,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("tx_queue", tx_queue),
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
+        json_entry("commit_pipeline", commit_pipeline),
+        json_entry("round_gap", round_gap),
         json_entry("missing_block_fetch", missing_block_fetch),
         json_entry(
             "committed_edge_conflict_obsolete_total",
@@ -4072,6 +4136,31 @@ mod status_tests {
                 signatures_required: 3,
                 last_updated_ms: 1234,
             },
+            commit_pipeline: status::CommitPipelineSnapshot {
+                last_total_ms: 84,
+                last_validation_ms: 21,
+                last_qc_rebuild_ms: 8,
+                last_gate_ms: 9,
+                last_finalize_ms: 17,
+                last_drain_results_ms: 12,
+                last_drain_qc_verify_ms: 1,
+                last_drain_persist_ms: 2,
+                last_drain_kura_store_ms: 3,
+                last_drain_state_apply_ms: 4,
+                last_drain_state_commit_ms: 5,
+                ema_total_ms: 80,
+                ema_validation_ms: 19,
+                ema_gate_ms: 8,
+                ema_finalize_ms: 16,
+            },
+            round_gap: status::RoundGapSnapshot {
+                last_deliver_to_state_commit_ms: 31,
+                last_state_commit_to_next_propose_ms: 12,
+                last_deliver_to_next_propose_ms: 43,
+                ema_deliver_to_state_commit_ms: 29,
+                ema_state_commit_to_next_propose_ms: 10,
+                ema_deliver_to_next_propose_ms: 39,
+            },
             ..Default::default()
         };
         let payload = status_snapshot_json(&snap);
@@ -4140,6 +4229,46 @@ mod status_tests {
         assert_eq!(
             commit_quorum.get("last_updated_ms").and_then(Value::as_u64),
             Some(1234)
+        );
+        let commit_pipeline = payload
+            .get("commit_pipeline")
+            .and_then(Value::as_object)
+            .expect("commit_pipeline object");
+        assert_eq!(
+            commit_pipeline.get("last_total_ms").and_then(Value::as_u64),
+            Some(84)
+        );
+        assert_eq!(
+            commit_pipeline
+                .get("last_drain_state_commit_ms")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            commit_pipeline.get("ema_finalize_ms").and_then(Value::as_u64),
+            Some(16)
+        );
+        let round_gap = payload
+            .get("round_gap")
+            .and_then(Value::as_object)
+            .expect("round_gap object");
+        assert_eq!(
+            round_gap
+                .get("last_deliver_to_state_commit_ms")
+                .and_then(Value::as_u64),
+            Some(31)
+        );
+        assert_eq!(
+            round_gap
+                .get("last_state_commit_to_next_propose_ms")
+                .and_then(Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(
+            round_gap
+                .get("ema_deliver_to_next_propose_ms")
+                .and_then(Value::as_u64),
+            Some(39)
         );
     }
 }
@@ -4774,6 +4903,35 @@ pub async fn handle_v1_sumeragi_status(
                     lane_relay_rx: snap.commit_inflight.resume_queue_depths.lane_relay_rx,
                     background_rx: snap.commit_inflight.resume_queue_depths.background_rx,
                 },
+            },
+            commit_pipeline: SumeragiCommitPipelineStatus {
+                last_total_ms: snap.commit_pipeline.last_total_ms,
+                last_validation_ms: snap.commit_pipeline.last_validation_ms,
+                last_qc_rebuild_ms: snap.commit_pipeline.last_qc_rebuild_ms,
+                last_gate_ms: snap.commit_pipeline.last_gate_ms,
+                last_finalize_ms: snap.commit_pipeline.last_finalize_ms,
+                last_drain_results_ms: snap.commit_pipeline.last_drain_results_ms,
+                last_drain_qc_verify_ms: snap.commit_pipeline.last_drain_qc_verify_ms,
+                last_drain_persist_ms: snap.commit_pipeline.last_drain_persist_ms,
+                last_drain_kura_store_ms: snap.commit_pipeline.last_drain_kura_store_ms,
+                last_drain_state_apply_ms: snap.commit_pipeline.last_drain_state_apply_ms,
+                last_drain_state_commit_ms: snap.commit_pipeline.last_drain_state_commit_ms,
+                ema_total_ms: snap.commit_pipeline.ema_total_ms,
+                ema_validation_ms: snap.commit_pipeline.ema_validation_ms,
+                ema_gate_ms: snap.commit_pipeline.ema_gate_ms,
+                ema_finalize_ms: snap.commit_pipeline.ema_finalize_ms,
+            },
+            round_gap: SumeragiRoundGapStatus {
+                last_deliver_to_state_commit_ms: snap.round_gap.last_deliver_to_state_commit_ms,
+                last_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .last_state_commit_to_next_propose_ms,
+                last_deliver_to_next_propose_ms: snap.round_gap.last_deliver_to_next_propose_ms,
+                ema_deliver_to_state_commit_ms: snap.round_gap.ema_deliver_to_state_commit_ms,
+                ema_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .ema_state_commit_to_next_propose_ms,
+                ema_deliver_to_next_propose_ms: snap.round_gap.ema_deliver_to_next_propose_ms,
             },
         };
         return Ok(crate::NoritoBody(wire).into_response());

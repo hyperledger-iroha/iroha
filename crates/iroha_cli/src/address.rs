@@ -1,10 +1,12 @@
-//! Account address tooling (canonical I105 input/output).
+//! Account address tooling (canonical I105 and public-key input/output).
 
 use super::*;
 use clap::ValueEnum;
 use iroha::account_address::{
     AccountAddress, AccountAddressError, AddressDomainKind, ParsedAccountAddress,
 };
+use iroha::data_model::account::AccountId;
+use iroha_crypto::PublicKey;
 use norito::json::{self, JsonSerialize};
 use std::{
     fs::{self, File},
@@ -37,7 +39,7 @@ impl Run for Command {
 
 #[derive(clap::Args, Debug)]
 pub struct Convert {
-    /// Address literal to parse (canonical I105 encoded).
+    /// Address literal to parse (canonical I105 or public key).
     #[arg(value_name = "ADDRESS")]
     input: String,
     /// Require I105 inputs to match the provided network prefix.
@@ -299,7 +301,7 @@ impl AddressSummary {
         network_prefix: u16,
     ) -> Result<Self, AccountAddressError> {
         Ok(Self {
-            detected_format: DetectedFormat::i105(),
+            detected_format: parsed.detected_format,
             domain: DomainSummary::from_kind(parsed.parsed.domain_kind()),
             canonical_hex: parsed.parsed.canonical_hex()?,
             i105: I105Encoding {
@@ -313,7 +315,7 @@ impl AddressSummary {
     }
 }
 
-#[derive(JsonSerialize)]
+#[derive(Clone, Copy, Debug, JsonSerialize)]
 struct DetectedFormat {
     kind: &'static str,
     network_prefix: Option<u16>,
@@ -323,6 +325,13 @@ impl DetectedFormat {
     const fn i105() -> Self {
         Self {
             kind: "i105",
+            network_prefix: None,
+        }
+    }
+
+    const fn public_key() -> Self {
+        Self {
+            kind: "public_key",
             network_prefix: None,
         }
     }
@@ -362,6 +371,7 @@ fn normalize_skipped_address_message(index: usize, err: &eyre::Report, i18n: &Lo
 #[derive(Debug)]
 struct ParsedAddressInput {
     parsed: ParsedAccountAddress,
+    detected_format: DetectedFormat,
 }
 
 fn parse_address_input(
@@ -381,13 +391,29 @@ fn parse_address_input(
     {
         eyre::bail!("address literal must be canonical I105; canonical hex is not accepted");
     }
+    if let Ok(public_key) = trimmed.parse::<PublicKey>() {
+        let account = AccountId::new(public_key);
+        let address = AccountAddress::from_account_id(&account)
+            .wrap_err("failed to encode account address from public key")?;
+        let parsed = ParsedAccountAddress {
+            domain_kind: address.domain_kind(),
+            address,
+        };
+        return Ok(ParsedAddressInput {
+            parsed,
+            detected_format: DetectedFormat::public_key(),
+        });
+    }
     let address = AccountAddress::parse_encoded(trimmed, expect_prefix)
         .wrap_err("failed to parse account address")?;
     let parsed = ParsedAccountAddress {
         domain_kind: address.domain_kind(),
         address,
     };
-    Ok(ParsedAddressInput { parsed })
+    Ok(ParsedAddressInput {
+        parsed,
+        detected_format: DetectedFormat::i105(),
+    })
 }
 
 #[derive(JsonSerialize)]
@@ -520,7 +546,7 @@ fn csv_escape(value: &str) -> String {
 mod tests {
     use super::*;
     use iroha::account_address::default_domain_name;
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use iroha_data_model::{account::AccountId, domain::DomainId, name::Name};
     use iroha_i18n::{Bundle, Language, Localizer};
     use std::str::FromStr;
@@ -544,6 +570,7 @@ mod tests {
                 domain_kind: address.domain_kind(),
                 address,
             },
+            detected_format: DetectedFormat::i105(),
         };
         let summary = AddressSummary::build(&parsed, DEFAULT_I105_PREFIX).expect("summary");
         assert_eq!(summary.domain.kind, "default");
@@ -559,6 +586,7 @@ mod tests {
                 domain_kind: address.domain_kind(),
                 address,
             },
+            detected_format: DetectedFormat::i105(),
         };
         let summary = AddressSummary::build(&parsed, DEFAULT_I105_PREFIX).expect("summary");
         assert_eq!(summary.domain.kind, "default");
@@ -616,6 +644,46 @@ mod tests {
         assert!(
             err.to_string().contains("canonical hex is not accepted"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_address_input_accepts_public_key_and_marks_detected_format() {
+        let key_pair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        let public_key = key_pair.public_key().to_string();
+
+        let parsed =
+            parse_address_input(&public_key, Some(DEFAULT_I105_PREFIX)).expect("public key parses");
+
+        assert_eq!(parsed.detected_format.kind, "public_key");
+        let expected = AccountAddress::from_account_id(&AccountId::new(
+            public_key
+                .parse::<PublicKey>()
+                .expect("public key literal should parse"),
+        ))
+        .expect("address encoding");
+        assert_eq!(parsed.parsed.address, expected);
+    }
+
+    #[test]
+    fn convert_public_key_input_emits_canonical_i105() {
+        let key_pair = KeyPair::from_seed(vec![10; 32], Algorithm::Ed25519);
+        let public_key = key_pair.public_key().to_string();
+        let parsed =
+            parse_address_input(&public_key, Some(DEFAULT_I105_PREFIX)).expect("public key parses");
+
+        let rendered = encode_address_literal(&parsed, DEFAULT_I105_PREFIX, OutputFormat::I105)
+            .expect("i105 render");
+
+        assert_eq!(
+            rendered,
+            AccountId::new(
+                public_key
+                    .parse::<PublicKey>()
+                    .expect("public key literal should parse"),
+            )
+            .canonical_i105()
+            .expect("canonical i105"),
         );
     }
 }

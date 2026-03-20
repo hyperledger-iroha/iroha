@@ -192,6 +192,26 @@ public struct MultisigRegisterRequest {
     }
 }
 
+public struct ClaimIdentifierRequest {
+    public let chainId: String
+    public let authority: String
+    public let accountId: String
+    public let receipt: ToriiIdentifierResolutionReceipt
+    public let ttlMs: UInt64?
+
+    public init(chainId: String,
+                authority: String,
+                accountId: String,
+                receipt: ToriiIdentifierResolutionReceipt,
+                ttlMs: UInt64? = nil) {
+        self.chainId = chainId
+        self.authority = authority
+        self.accountId = accountId
+        self.receipt = receipt
+        self.ttlMs = ttlMs
+    }
+}
+
 public enum VerifyingKeyIdError: Error, LocalizedError, Equatable {
     case emptyBackend
     case emptyName
@@ -900,6 +920,20 @@ public final class IrohaSDK: @unchecked Sendable {
         submit(envelope: envelope, completion: completion)
     }
 
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       keypair: Keypair,
+                       completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildClaimIdentifier(request: request, keypair: keypair)
+        submit(envelope: envelope, completion: completion)
+    }
+
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       signingKey: SigningKey,
+                       completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildClaimIdentifier(request: request, signingKey: signingKey)
+        submit(envelope: envelope, completion: completion)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     public func submit(transfer: TransferRequest, keypair: Keypair) async throws {
         let envelope = try buildSignedTransfer(transfer: transfer, keypair: keypair)
@@ -909,6 +943,20 @@ public final class IrohaSDK: @unchecked Sendable {
     @available(iOS 15.0, macOS 12.0, *)
     public func submit(transfer: TransferRequest, signingKey: SigningKey) async throws {
         let envelope = try buildSignedTransfer(transfer: transfer, signingKey: signingKey)
+        try await submit(envelope: envelope)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       keypair: Keypair) async throws {
+        let envelope = try buildClaimIdentifier(request: request, keypair: keypair)
+        try await submit(envelope: envelope)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       signingKey: SigningKey) async throws {
+        let envelope = try buildClaimIdentifier(request: request, signingKey: signingKey)
         try await submit(envelope: envelope)
     }
 
@@ -954,6 +1002,22 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeMultisigRegister(request: request,
                                                                   signingKey: signingKey,
                                                                   creationTimeMs: creationTimeMs)
+    }
+
+    public func buildClaimIdentifier(request: ClaimIdentifierRequest,
+                                     keypair: Keypair) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                 keypair: keypair,
+                                                                 creationTimeMs: creationTimeMs)
+    }
+
+    public func buildClaimIdentifier(request: ClaimIdentifierRequest,
+                                     signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                 signingKey: signingKey,
+                                                                 creationTimeMs: creationTimeMs)
     }
 
     public func buildShield(shield: ShieldRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {

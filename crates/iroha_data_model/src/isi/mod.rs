@@ -206,6 +206,30 @@ impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox
     }
 }
 
+impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
+    fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::identifier::ActivateIdentifierPolicy> for InstructionBox {
+    fn from(i: crate::isi::identifier::ActivateIdentifierPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::identifier::ClaimIdentifier> for InstructionBox {
+    fn from(i: crate::isi::identifier::ClaimIdentifier) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::identifier::RevokeIdentifier> for InstructionBox {
+    fn from(i: crate::isi::identifier::RevokeIdentifier) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of runtime upgrade instructions
 impl From<crate::isi::runtime_upgrade::ProposeRuntimeUpgrade> for InstructionBox {
     fn from(i: crate::isi::runtime_upgrade::ProposeRuntimeUpgrade) -> Self {

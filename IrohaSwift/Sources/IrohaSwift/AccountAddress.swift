@@ -108,6 +108,7 @@ public struct AccountAddress {
     private let header: AddressHeader
     private let domain: DomainSelector
     private let controller: ControllerPayload
+    private let rawCanonicalBytes: Data?
 
     struct ControllerInfo {
         let algorithm: SigningAlgorithm
@@ -134,7 +135,12 @@ public struct AccountAddress {
     public static func fromAccount(publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm)
-        return AccountAddress(header: header, domain: .default, controller: controller)
+        return AccountAddress(
+            header: header,
+            domain: .default,
+            controller: controller,
+            rawCanonicalBytes: nil
+        )
     }
 
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
@@ -142,7 +148,12 @@ public struct AccountAddress {
         let header = try AddressHeader.decode(bytes[0])
         let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
         guard cursor == bytes.count else { throw AccountAddressError.unexpectedTrailingBytes }
-        return AccountAddress(header: header, domain: .default, controller: controller)
+        return AccountAddress(
+            header: header,
+            domain: .default,
+            controller: controller,
+            rawCanonicalBytes: bytes
+        )
     }
 
     public static func fromI105(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
@@ -196,6 +207,9 @@ public struct AccountAddress {
     }
 
     public func canonicalBytes() throws -> Data {
+        if let rawCanonicalBytes {
+            return rawCanonicalBytes
+        }
         var bytes = Data()
         bytes.append(header.encode())
         try controller.encode(into: &bytes)
@@ -559,44 +573,100 @@ private enum ControllerPayload {
             guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
             let threshold = (UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1])
             cursor += 2
-            guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
-            let memberCount = Int(bytes[cursor])
-            cursor += 1
-            guard memberCount <= multisigMemberMax else {
-                throw AccountAddressError.multisigMemberOverflow(memberCount)
-            }
-            var members: [MultisigMember] = []
-            members.reserveCapacity(memberCount)
-            for _ in 0..<memberCount {
-                guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
-                let curveRaw = bytes[cursor]
-                cursor += 1
-                let curve = try CurveId.decode(rawValue: curveRaw)
-                guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
-                let weight = (UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1])
-                cursor += 2
-                guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
-                let keyLength = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
-                cursor += 2
-                let end = cursor + keyLength
-                guard end <= bytes.count else { throw AccountAddressError.invalidLength }
-                let key = Data(bytes[cursor..<end])
-                cursor = end
-                members.append(MultisigMember(curve: curve, weight: weight, publicKey: key))
-            }
             guard threshold > 0 else {
                 throw AccountAddressError.invalidMultisigPolicy("ZeroThreshold")
             }
-            guard !members.isEmpty else {
-                throw AccountAddressError.invalidMultisigPolicy("EmptyMembers")
+            if let decoded = try decodeMultisigMembers(
+                bytes: bytes,
+                cursor: cursor,
+                version: version,
+                threshold: threshold,
+                countWidth: .u16
+            ) {
+                return decoded
             }
-            return (.multiSig(version: version, threshold: threshold, members: members), cursor)
+            if let decoded = try decodeMultisigMembers(
+                bytes: bytes,
+                cursor: cursor,
+                version: version,
+                threshold: threshold,
+                countWidth: .u8
+            ) {
+                return decoded
+            }
+            throw AccountAddressError.invalidLength
         }
     }
 
     private enum ControllerPayloadTag: UInt8 {
         case singleKey = 0x00
         case multiSig = 0x01
+    }
+
+    private enum MultisigCountWidth {
+        case u8
+        case u16
+    }
+
+    private static func decodeMultisigMembers(
+        bytes: Data,
+        cursor: Int,
+        version: UInt8,
+        threshold: UInt16,
+        countWidth: MultisigCountWidth
+    ) throws -> (ControllerPayload, Int)? {
+        var cursor = cursor
+        let memberCount: Int
+        switch countWidth {
+        case .u8:
+            guard cursor < bytes.count else {
+                return nil
+            }
+            memberCount = Int(bytes[cursor])
+            cursor += 1
+        case .u16:
+            guard cursor + 1 < bytes.count else {
+                return nil
+            }
+            memberCount = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
+            cursor += 2
+        }
+        guard memberCount <= multisigMemberMax else {
+            return nil
+        }
+
+        var members: [MultisigMember] = []
+        members.reserveCapacity(memberCount)
+        for _ in 0..<memberCount {
+            guard cursor < bytes.count else {
+                return nil
+            }
+            let curveRaw = bytes[cursor]
+            cursor += 1
+            let curve = try CurveId.decode(rawValue: curveRaw)
+            guard cursor + 1 < bytes.count else {
+                return nil
+            }
+            let weight = (UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1])
+            cursor += 2
+            guard cursor + 1 < bytes.count else {
+                return nil
+            }
+            let keyLength = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
+            cursor += 2
+            let end = cursor + keyLength
+            guard end <= bytes.count else {
+                return nil
+            }
+            let key = Data(bytes[cursor..<end])
+            cursor = end
+            members.append(MultisigMember(curve: curve, weight: weight, publicKey: key))
+        }
+
+        // Preserve already-issued on-chain identifiers even when the embedded
+        // multisig policy is degenerate. Callers that need to validate or build
+        // policies should enforce stronger invariants separately.
+        return (.multiSig(version: version, threshold: threshold, members: members), cursor)
     }
 }
 

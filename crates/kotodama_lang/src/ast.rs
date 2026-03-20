@@ -162,6 +162,44 @@ pub enum TriggerFilter {
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerDataFilter {
     Any,
+    Structured(TriggerStructuredDataFilter),
+}
+
+/// Structured data trigger filter block.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TriggerStructuredDataFilter {
+    pub family: TriggerDataFamily,
+    pub event: TriggerDataEventKind,
+    pub matchers: Vec<TriggerDataMatcher>,
+}
+
+/// Supported data-event families for contract trigger declarations.
+#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+pub enum TriggerDataFamily {
+    Peer,
+    Domain,
+    Account,
+    Asset,
+    AssetDefinition,
+    Nft,
+    Trigger,
+    Role,
+    Configuration,
+    Executor,
+}
+
+/// Event kind selector inside a structured data trigger.
+#[derive(Debug, PartialEq, Clone)]
+pub enum TriggerDataEventKind {
+    Any,
+    Named(String),
+}
+
+/// Matcher entry inside a structured data trigger block.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TriggerDataMatcher {
+    pub key: String,
+    pub value: String,
 }
 
 /// Pipeline trigger filter variants.

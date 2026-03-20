@@ -1,6 +1,156 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
+
+Latest sync (2026-03-20 manifest-declared structured data triggers):
+`crates/iroha_data_model/src/events/data/filters.rs`,
+`crates/kotodama_lang/src/{ast.rs,parser.rs,semantic.rs,compiler.rs}`,
+`crates/iroha_core/tests/contract_manifest_triggers.rs`,
+and
+`crates/ivm/docs/{kotodama_grammar.md,kotodama_gap_analysis.md}`
+now close the manifest trigger DSL/data-filter gap for core ledger families:
+
+- `AssetEventFilter` now matches by asset id, asset definition id, and event
+  kind with logical AND semantics, which is enough to express
+  "any account credited with AED" at the data-model layer.
+- Kotodama trigger declarations now support structured data-trigger blocks
+  (`on data <family> <event_kind> { ... }`) for the core ledger families while
+  keeping the existing flat forms working.
+- Structured matcher literals lower directly into manifest
+  `TriggerDescriptor.filter` values, including explicit trigger authority.
+- Core activation/deactivation regressions now prove manifest registration for
+  Data and Pipeline triggers and keep the existing contract-origin metadata
+  bookkeeping intact.
+
+Targeted validation passed:
+- `cargo fmt --all --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_data_model asset_filter -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang trigger_decl_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang manifest_trigger_decl_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture`
+
+Open work for this slice now remains:
+- broaden the validation from targeted crate tests into wider crate/workspace
+  coverage once the multi-hour budget is available,
+- if downstream product-specific event families need Kotodama syntax later,
+  add them explicitly instead of overloading the current core-ledger family
+  surface.
+
+Latest sync (2026-03-20 self-describing `.to` contract artifacts, no deploy/call fallbacks):
+`crates/ivm_abi/src/metadata.rs`,
+`crates/ivm/src/{contract_artifact.rs,core_host.rs,host.rs,ivm.rs,lib.rs}`,
+`crates/kotodama_lang/src/compiler.rs`,
+`crates/iroha_cli/src/contracts.rs`,
+`crates/iroha_torii/src/{routing.rs,test_utils.rs,lib.rs}`,
+and the contract deployment docs/tests now close the first-release contract
+artifact/deploy slice:
+
+- contract `.to` artifacts now have a mandatory embedded `CNTR` interface
+  section and are emitted as IVM 1.1 artifacts,
+- generic IVM artifact parsing is now `1.1`-only as well, and the remaining
+  `1.0` fixture/build helpers plus tracked predecoder exports were removed,
+- Torii deploy and single-step instance activation now accept bytecode only,
+  derive the canonical manifest from the verified artifact, and reject missing
+  or dishonest embedded interfaces,
+- the legacy public `POST /v1/contracts/code` manifest-registration endpoint
+  and its MCP alias are removed, so there is no manifest-only publication
+  bypass left in the first-release contract surface,
+- Torii contract calls now require a stored manifest entrypoint match and no
+  longer fall back to raw `Executable::Ivm`,
+- the runtime and literal loader paths now execute prefixed
+  `CNTR + LTLB + code` artifacts correctly,
+- the affected source and portal contract/governance docs were resynced to the
+  corrected English canon and marked `needs-update` where older translations
+  had still documented removed manifest-sidecar paths or `1.0` header policy,
+- the real in-memory deploy, activate, and call integration tests now seed a
+  concrete contract operator account/permission set and pass against the new
+  `.to`-only flow.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test metadata --test cli_smoke --test contract_artifact --test ivm_header_doc_sync -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama compile_and_run_add -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama call_function_with_tuple_return -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama manifest_includes_entrypoints_and_features -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib contract_entrypoint_validation_tests -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib deploy_tests::deploy_endpoint_returns_hashes -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib multisig_contract_call_instruction_envelope_hashes_deterministically -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_submit_error -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture`
+- `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture`
+- `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_activate_integration contracts_deploy_and_activate_via_single_endpoint -- --nocapture`
+- `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_call_integration contracts_call_enqueues_transaction -- --nocapture`
+- `bash /Users/takemiyamakoto/dev/pk-cbdc-core-api/scripts/build_kotodama_contracts.sh`
+- `CARGO_TARGET_DIR=/tmp/pk-cbdc-core-api-contract-artifact-target cargo test --test mint_flow mint_flow_contract_artifacts_exist -- --nocapture` in `../pk-cbdc-core-api`
+
+Open work for this slice now remains:
+- finish and monitor the broader `cargo test --workspace` validation sweep for
+  unrelated cross-workspace fallout outside the contract slice.
+
+Latest sync (2026-03-20 Torii multisig selector private-field compile fix):
+`crates/iroha_core/src/state.rs` and `crates/iroha_torii/src/routing.rs`
+now close the immediate `E0616` regression from the recent `World` visibility
+tightening:
+
+- `iroha_core::state::World` now exposes a narrow
+  `smart_contract_state_mut_for_testing()` helper for test/API scaffolding,
+- the Torii multisig selector regression test now seeds fallback contract state
+  through that helper instead of reaching into a private field directly.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii --lib --no-run`
+- `cargo test -p iroha_torii multisig_spec_falls_back_to_contract_state_when_metadata_is_missing -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the broader workspace validation sweep, especially if more cross-crate
+  tests still seed `World` internals directly after the recent privacy
+  tightening.
+
+Latest sync (2026-03-20 RBC observability retention + multilane Kura merge-log regression):
+`crates/iroha_config/src/parameters/actual.rs`,
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+close the two regressions behind the recent failing integration slice:
+
+- multilane Kura now derives a distinct merge-ledger log path for each lane
+  again, which restores the expected on-disk layout for Nexus-enabled
+  multi-lane test networks,
+- commit cleanup now preserves the retained RBC status summary written during
+  drain/commit while still clearing runtime-only caches, so delivered/recovered
+  RBC evidence remains visible to `/v1/sumeragi/rbc/sessions` and the persisted
+  `rbc_sessions/sessions.norito` snapshot after commit and restart.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_config lane_config_from_catalog_preserves_alias_metadata -- --nocapture`
+- `cargo test -p iroha_core clean_rbc_sessions_for_block_ -- --nocapture`
+- `cargo test -p integration_tests multilane_kura_layout::kura_prepares_multilane_storage_layout -- --nocapture`
+- `cargo test -p integration_tests --test mod extra_functional::seven_peer_consistency::seven_peer_cross_peer_consistency_basic -- --nocapture`
+- `cargo test -p integration_tests --test mod sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the rest of the previously failing DA/RBC integration set
+  (`sumeragi_rbc_da_large_payload_*`, `sumeragi_rbc_background_queue_synchronous`,
+  `sumeragi_da_commit_certificate_history_four_peers`,
+  `sumeragi_rbc_recovers_after_restart_with_roster_change`) under the longer
+  multi-hour budget to confirm the retained-summary fix removes the remaining
+  topology-specific failures as well.
+
+Latest sync (2026-03-19 merge-conflict resolution + workspace compile gate):
+the branch no longer has unresolved merge entries, and the merged workspace now
+passes the compile gate again after reconciling the remaining conflicts in
+`.gitignore`, `Cargo.toml`, `Dockerfile.cross`, and
+`crates/iroha_torii/src/routing.rs`.
+
+Open work after this sync:
+- run the broader targeted/runtime test coverage, then the multi-hour
+  `cargo test --workspace` sweep when the validation budget is available,
+- review the large staged SDK/docs/generated artifact set if the next step is a
+  narrower release cut instead of carrying the full merged feature surface.
 
 Latest sync (2026-03-19 generic hidden-program RAM-LFE program-policy foundation):
 `crates/iroha_crypto/src/ram_lfe.rs`,

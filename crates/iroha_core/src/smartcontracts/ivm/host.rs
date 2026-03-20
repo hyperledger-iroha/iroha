@@ -20,6 +20,7 @@ use std::{
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
+    account::rekey::AccountLabel,
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
     events::time::Schedule,
     isi::{
@@ -681,6 +682,16 @@ pub struct SubscriptionContext {
 
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Resolve a stable account alias to the current backing account id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the alias is missing or resolves ambiguously.
+    fn resolve_account_alias(
+        &self,
+        label: &Name,
+        domain: &DomainId,
+    ) -> Result<AccountId, ivm::VMError>;
     /// Resolve subscription context for a trigger identifier.
     ///
     /// # Errors
@@ -709,6 +720,27 @@ pub trait QueryStateRefOps {
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn resolve_account_alias(
+        &self,
+        label: &Name,
+        domain: &DomainId,
+    ) -> Result<AccountId, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => {
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(view, label, domain)
+            }
+            QueryStateRef::QueryView(view) => {
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(view, label, domain)
+            }
+            QueryStateRef::Block(block) => {
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(block, label, domain)
+            }
+            QueryStateRef::Transaction(tx) => {
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(tx, label, domain)
+            }
+        }
+    }
+
     fn subscription_context_for_trigger(
         &self,
         trigger_id: &TriggerId,
@@ -4464,6 +4496,33 @@ where
 }
 
 impl<QS> CoreHostImpl<QS> {
+    fn resolve_account_alias<R: StateReadOnly>(
+        state: &R,
+        label: &Name,
+        domain: &DomainId,
+    ) -> Result<AccountId, ivm::VMError> {
+        let alias_label = AccountLabel::new(domain.clone(), label.clone());
+        if let Some(account_id) = state.world().account_aliases().get(&alias_label).cloned() {
+            return Ok(account_id);
+        }
+
+        let mut matched_account_id: Option<AccountId> = None;
+        for (account_id, value) in state.world().accounts().iter() {
+            if value.as_ref().label() != Some(&alias_label) {
+                continue;
+            }
+            if let Some(existing) = matched_account_id.as_ref() {
+                if existing != account_id {
+                    return Err(ivm::VMError::DecodeError);
+                }
+            } else {
+                matched_account_id = Some(account_id.clone());
+            }
+        }
+
+        matched_account_id.ok_or(ivm::VMError::PermissionDenied)
+    }
+
     /// Set the trigger identifier for the current execution.
     pub(crate) fn set_trigger_id(&mut self, id: TriggerId) {
         self.current_trigger_id = Some(id);
@@ -5129,6 +5188,30 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => self.subscription_bill(),
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE => self.subscription_record_usage(),
+            ivm::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS => {
+                let label_ptr = vm.register(10);
+                let domain_ptr = vm.register(11);
+                let label: Name = Self::decode_tlv_typed(vm, label_ptr, PointerType::Name)?;
+                let domain: DomainId =
+                    Self::decode_tlv_typed(vm, domain_ptr, PointerType::DomainId)?;
+                let Some(state_ref) = self.query_state.get() else {
+                    return Err(ivm::VMError::NotImplemented { syscall: number });
+                };
+                let account_id = state_ref.resolve_account_alias(&label, &domain)?;
+                let payload =
+                    norito::to_bytes(&account_id).map_err(|_| ivm::VMError::NoritoInvalid)?;
+                let payload_len = Self::len_to_u32(payload.len())?;
+                let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+                out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&payload_len.to_be_bytes());
+                out.extend_from_slice(&payload);
+                let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
             ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
                 let account_ptr = vm.register(10);
                 let asset_def_ptr = vm.register(11);
@@ -9487,6 +9570,45 @@ mod tests {
             CoreHost::decode_tlv_typed(&vm, authority_ptr, PointerType::AccountId)
                 .expect("authority TLV should remain intact");
         assert_eq!(decoded, authority);
+    }
+
+    #[test]
+    fn resolve_account_alias_syscall_reads_current_alias_binding() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let alias_domain = fixture_domain_id();
+        let alias_domain_label = alias_domain.to_string();
+        let alias_label: Name = "banking".parse().expect("alias label");
+        let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
+        let domain = Domain::new(alias_domain.clone()).build(&authority);
+        let aliased_account =
+            Account::new(alias_account_id.clone().to_account_id(alias_domain.clone()))
+                .with_label(Some(AccountLabel::new(
+                    alias_domain.clone(),
+                    alias_label.clone(),
+                )))
+                .build(&authority);
+        let world = World::with([domain], [aliased_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000_000);
+
+        let label_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&alias_label));
+        let domain_ptr = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&alias_domain));
+        vm.set_register(10, label_ptr);
+        vm.set_register(11, domain_ptr);
+
+        host.syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
+            .expect("resolve alias syscall");
+
+        let resolved: AccountId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
+                .expect("resolved account id");
+        assert_eq!(resolved, alias_account_id);
     }
 
     pub(super) fn begin_axt_envelope(

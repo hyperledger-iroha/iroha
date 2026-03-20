@@ -240,14 +240,15 @@ pub mod isi {
         definition_id: &AssetDefinitionId,
         subject: &AccountId,
         amount: Option<&Numeric>,
+        dataspace: Option<DataSpaceId>,
         binding: &AssetSubjectBindingV1,
     ) -> Result<(), Error> {
         if binding.allowed_dataspaces.is_empty() {
             return Ok(());
         }
 
-        let current_dataspace = state_transaction
-            .current_dataspace_id
+        let current_dataspace = dataspace
+            .or(state_transaction.current_dataspace_id)
             .or(state_transaction.world.current_dataspace_id)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
@@ -333,6 +334,7 @@ pub mod isi {
         policy: &AssetIssuerUsagePolicyV1,
         subject: &AccountId,
         amount: Option<&Numeric>,
+        dataspace: Option<DataSpaceId>,
     ) -> Result<(), Error> {
         let binding = policy.binding_for(subject);
         if policy.require_subject_binding && binding.is_none() {
@@ -353,6 +355,7 @@ pub mod isi {
             definition_id,
             subject,
             amount,
+            dataspace,
             binding,
         )?;
         Ok(())
@@ -362,7 +365,7 @@ pub mod isi {
     fn ensure_usage_policy_for_accounts<'a>(
         state_transaction: &StateTransaction<'_, '_>,
         definition_id: &AssetDefinitionId,
-        participants: impl IntoIterator<Item = &'a AccountId>,
+        participants: impl IntoIterator<Item = (&'a AccountId, Option<DataSpaceId>)>,
         amount: Option<&Numeric>,
     ) -> Result<(), Error> {
         let definition = state_transaction
@@ -370,16 +373,29 @@ pub mod isi {
             .asset_definition(definition_id)
             .map_err(Error::from)?;
         let policy = load_issuer_usage_policy(&definition)?;
-        for subject in participants {
+        for (subject, dataspace) in participants {
             ensure_subject_usage_policy(
                 state_transaction,
                 definition_id,
                 &policy,
                 subject,
                 amount,
+                dataspace,
             )?;
         }
         Ok(())
+    }
+
+    fn asset_id_dataspace_hint(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_id: &AssetId,
+    ) -> Option<DataSpaceId> {
+        match asset_id.scope() {
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => Some(*dataspace),
+            iroha_data_model::asset::AssetBalanceScope::Global => state_transaction
+                .current_dataspace_id
+                .or(state_transaction.world.current_dataspace_id),
+        }
     }
 
     fn apply_transfer_delta(
@@ -391,9 +407,14 @@ pub mod isi {
         let source_id = state_transaction
             .world
             .resolve_asset_id_for_current_scope(source_id)?;
+        let destination_dataspace = state_transaction
+            .world
+            .dataspace_for_account(destination_id.account())
+            .or(state_transaction.current_dataspace_id)
+            .or(state_transaction.world.current_dataspace_id);
         let destination_id = state_transaction
             .world
-            .resolve_asset_id_for_current_scope(destination_id)?;
+            .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;
         let spec = state_transaction
             .numeric_spec_for(source_id.definition())
             .map_err(Error::from)?;
@@ -407,7 +428,16 @@ pub mod isi {
         ensure_usage_policy_for_accounts(
             state_transaction,
             source_id.definition(),
-            [source_id.account(), destination_id.account()],
+            [
+                (
+                    source_id.account(),
+                    asset_id_dataspace_hint(state_transaction, &source_id),
+                ),
+                (
+                    destination_id.account(),
+                    asset_id_dataspace_hint(state_transaction, &destination_id),
+                ),
+            ],
             Some(amount),
         )?;
         ensure_not_offline_escrow_source(state_transaction, &source_id)?;
@@ -444,7 +474,7 @@ pub mod isi {
         {
             let dst = state_transaction
                 .world
-                .asset_or_insert(&destination_id, Numeric::zero())?;
+                .asset_or_insert_exact(&destination_id, Numeric::zero())?;
             let current = dst.clone().into_inner();
             ensure_non_negative(&current)?;
             to_balance_before = current.clone();
@@ -476,6 +506,9 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_id = self.destination().clone();
+            let resolved_asset_id = state_transaction
+                .world
+                .resolve_asset_id_for_current_scope(&asset_id)?;
 
             let amount = self.object().clone();
             let _created = ensure_receiving_account(
@@ -496,7 +529,10 @@ pub mod isi {
             ensure_usage_policy_for_accounts(
                 state_transaction,
                 asset_id.definition(),
-                [asset_id.account()],
+                [(
+                    resolved_asset_id.account(),
+                    asset_id_dataspace_hint(state_transaction, &resolved_asset_id),
+                )],
                 Some(&amount),
             )?;
 
@@ -547,6 +583,9 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_id = self.destination().clone();
+            let resolved_asset_id = state_transaction
+                .world
+                .resolve_asset_id_for_current_scope(&asset_id)?;
 
             let spec = state_transaction
                 .numeric_spec_for(asset_id.definition())
@@ -555,7 +594,10 @@ pub mod isi {
             ensure_usage_policy_for_accounts(
                 state_transaction,
                 asset_id.definition(),
-                [asset_id.account()],
+                [(
+                    resolved_asset_id.account(),
+                    asset_id_dataspace_hint(state_transaction, &resolved_asset_id),
+                )],
                 Some(self.object()),
             )?;
 
@@ -1476,14 +1518,17 @@ pub mod query {
     mod tests {
         use std::collections::{BTreeMap, BTreeSet};
 
+        use iroha_data_model::account::NewAccount;
         use iroha_data_model::asset::{
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1,
             AssetSubjectBindingV1, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         };
-        use iroha_data_model::nexus::DataSpaceId;
+        use iroha_data_model::nexus::{
+            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
+            ManifestEffect, ManifestEntry,
+        };
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
-        use iroha_data_model::{account::NewAccount, nexus::AssetPermissionManifest};
         use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         use nonzero_ext::nonzero;
@@ -2360,6 +2405,205 @@ pub mod query {
             assert!(
                 matches!(err, InstructionExecutionError::InvariantViolation(_)),
                 "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn transfer_restricted_asset_uses_destination_dataspace_binding_and_policy() {
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let source_dataspace = DataSpaceId::new(7);
+            let destination_dataspace = DataSpaceId::new(11);
+            let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::alice-destination-scope"),
+            );
+            let uaid_bob = iroha_data_model::nexus::UniversalAccountId::from_hash(
+                iroha_crypto::Hash::new(b"uaid::bob-destination-scope"),
+            );
+
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = NewAccount::new_in_domain(ALICE_ID.clone(), domain_id.clone())
+                .with_uaid(Some(uaid_alice))
+                .build(&ALICE_ID);
+            let bob_account = NewAccount::new_in_domain(BOB_ID.clone(), domain_id.clone())
+                .with_uaid(Some(uaid_bob))
+                .build(&BOB_ID);
+
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                "wonderland".parse().unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let mut asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .with_balance_scope_policy(
+                iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
+            )
+            .build(&ALICE_ID);
+            let issuer_policy = AssetIssuerUsagePolicyV1 {
+                require_subject_binding: true,
+                subject_bindings: BTreeMap::from([
+                    (
+                        ALICE_ID.clone(),
+                        AssetSubjectBindingV1 {
+                            allowed_domains: BTreeSet::new(),
+                            allowed_dataspaces: BTreeSet::from([source_dataspace]),
+                        },
+                    ),
+                    (
+                        BOB_ID.clone(),
+                        AssetSubjectBindingV1 {
+                            allowed_domains: BTreeSet::new(),
+                            allowed_dataspaces: BTreeSet::from([destination_dataspace]),
+                        },
+                    ),
+                ]),
+            };
+            asset_def.metadata_mut().insert(
+                ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+                    .parse()
+                    .expect("metadata key"),
+                Json::new(issuer_policy),
+            );
+
+            let source_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
+            );
+            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+
+            let mut world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [source_asset],
+                [],
+            );
+            world.uaid_accounts.insert(uaid_alice, ALICE_ID.clone());
+            world.uaid_accounts.insert(uaid_bob, BOB_ID.clone());
+
+            let mut alice_bindings =
+                crate::nexus::space_directory::UaidDataspaceBindings::default();
+            alice_bindings.bind_account(source_dataspace, ALICE_ID.clone());
+            world.uaid_dataspaces.insert(uaid_alice, alice_bindings);
+            let mut bob_bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
+            bob_bindings.bind_account(destination_dataspace, BOB_ID.clone());
+            world.uaid_dataspaces.insert(uaid_bob, bob_bindings);
+
+            let mut alice_manifest_record =
+                crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
+                    AssetPermissionManifest {
+                        version: iroha_data_model::nexus::ManifestVersion::default(),
+                        uaid: uaid_alice,
+                        dataspace: source_dataspace,
+                        issued_ms: 1,
+                        activation_epoch: 0,
+                        expiry_epoch: None,
+                        entries: vec![ManifestEntry {
+                            scope: CapabilityScope {
+                                dataspace: Some(source_dataspace),
+                                program: None,
+                                method: None,
+                                asset: Some(asset_def_id.clone()),
+                                role: None,
+                            },
+                            effect: ManifestEffect::Allow(Allowance {
+                                max_amount: None,
+                                window: AllowanceWindow::PerDay,
+                            }),
+                            notes: None,
+                        }],
+                    },
+                );
+            alice_manifest_record.lifecycle.mark_activated(0);
+            let mut bob_manifest_record =
+                crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(
+                    AssetPermissionManifest {
+                        version: iroha_data_model::nexus::ManifestVersion::default(),
+                        uaid: uaid_bob,
+                        dataspace: destination_dataspace,
+                        issued_ms: 1,
+                        activation_epoch: 0,
+                        expiry_epoch: None,
+                        entries: vec![ManifestEntry {
+                            scope: CapabilityScope {
+                                dataspace: Some(destination_dataspace),
+                                program: None,
+                                method: None,
+                                asset: Some(asset_def_id.clone()),
+                                role: None,
+                            },
+                            effect: ManifestEffect::Allow(Allowance {
+                                max_amount: None,
+                                window: AllowanceWindow::PerDay,
+                            }),
+                            notes: None,
+                        }],
+                    },
+                );
+            bob_manifest_record.lifecycle.mark_activated(0);
+            let mut alice_set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+            alice_set.upsert(alice_manifest_record);
+            let mut bob_set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+            bob_set.upsert(bob_manifest_record);
+            world
+                .space_directory_manifests
+                .insert(uaid_alice, alice_set);
+            world.space_directory_manifests.insert(uaid_bob, bob_set);
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            stx.current_dataspace_id = Some(source_dataspace);
+            stx.world.current_dataspace_id = Some(source_dataspace);
+
+            Transfer::asset_numeric(
+                AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
+                1_u32,
+                BOB_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("transfer should resolve the recipient into its bound dataspace");
+
+            let destination_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(destination_dataspace),
+            );
+            assert_eq!(
+                stx.world
+                    .asset(&destination_asset_id)
+                    .expect("destination asset created in bound dataspace")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(1, 0)
+            );
+
+            let wrong_scope_destination = AssetId::with_scope(
+                asset_def_id.clone(),
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
+            );
+            assert!(
+                stx.world.asset(&wrong_scope_destination).is_err(),
+                "destination balance must not be materialized in the source dataspace"
+            );
+
+            assert_eq!(
+                stx.world
+                    .asset(&source_asset_id)
+                    .expect("source balance still exists")
+                    .value()
+                    .clone()
+                    .into_inner(),
+                Numeric::new(9, 0)
             );
         }
 

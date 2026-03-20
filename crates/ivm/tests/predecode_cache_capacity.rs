@@ -34,7 +34,7 @@ fn global_capacity_eviction_and_runtime_resize() {
     // Use minimal metadata (vmaj/vmin) implied by get_or_predecode with meta in helper
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,

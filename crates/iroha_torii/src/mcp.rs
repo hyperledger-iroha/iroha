@@ -245,7 +245,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_finalize_tool());
     tools.push(iroha_aliases_resolve_tool());
     tools.push(iroha_aliases_resolve_index_tool());
-    tools.push(iroha_contracts_code_register_tool());
     tools.push(iroha_contracts_code_get_tool());
     tools.push(iroha_contracts_code_bytes_get_tool());
     tools.push(iroha_contracts_deploy_tool());
@@ -1146,12 +1145,6 @@ async fn handle_tools_call(
         }
         "iroha.aliases.resolve_index" => {
             match dispatch_iroha_aliases_resolve_index(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.contracts.code.register" => {
-            match dispatch_iroha_contracts_code_register(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4446,14 +4439,6 @@ async fn dispatch_iroha_aliases_resolve_index(
             .map(str::to_owned),
     )
     .await
-}
-
-async fn dispatch_iroha_contracts_code_register(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/code").await
 }
 
 async fn dispatch_iroha_contracts_code_get(
@@ -10339,14 +10324,6 @@ fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str)
     }
 }
 
-fn iroha_contracts_code_register_tool() -> ToolSpec {
-    iroha_contracts_post_tool(
-        "iroha.contracts.code.register",
-        "Register contract code/manifest (`/v1/contracts/code`).",
-        "/v1/contracts/code",
-    )
-}
-
 fn iroha_contracts_code_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.code.get".to_owned(),
@@ -14016,11 +13993,6 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.aliases.resolve_index")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.contracts.code.register")
         );
         assert!(
             tools

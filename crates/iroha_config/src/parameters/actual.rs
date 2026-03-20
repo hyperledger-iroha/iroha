@@ -2718,17 +2718,16 @@ impl LaneConfigEntry {
         root.as_ref().join("blocks").join(&self.kura_segment)
     }
 
-    /// Compute the canonical merge-ledger log path.
-    ///
-    /// Nexus mode persists a universal merge ledger, so this path is shared
-    /// across all lanes.
+    /// Compute the canonical merge-ledger log path for this lane.
     #[must_use]
     pub fn merge_log_path(&self, root: impl AsRef<Path>) -> PathBuf {
         debug_assert!(
             !self.merge_segment.is_empty(),
             "lane config entries always carry a stable merge segment label",
         );
-        root.as_ref().join("merge_ledger").join("universal.log")
+        root.as_ref()
+            .join("merge_ledger")
+            .join(format!("{}.log", self.merge_segment))
     }
 }
 
@@ -7655,6 +7654,10 @@ mod tests_npos_timeouts {
         assert_eq!(default_entry.kura_segment, "lane_000_default");
         assert_eq!(default_entry.merge_segment, "lane_000_default_merge");
         assert_eq!(
+            default_entry.merge_log_path("/tmp/iroha"),
+            PathBuf::from("/tmp/iroha/merge_ledger/lane_000_default_merge.log")
+        );
+        assert_eq!(
             default_entry.key_prefix,
             LaneId::SINGLE.as_u32().to_be_bytes()
         );
@@ -7670,6 +7673,10 @@ mod tests_npos_timeouts {
         assert_eq!(public_entry.slug, "public_lane");
         assert_eq!(public_entry.kura_segment, "lane_001_public_lane");
         assert_eq!(public_entry.merge_segment, "lane_001_public_lane_merge");
+        assert_eq!(
+            public_entry.merge_log_path("/tmp/iroha"),
+            PathBuf::from("/tmp/iroha/merge_ledger/lane_001_public_lane_merge.log")
+        );
         assert_eq!(
             public_entry.key_prefix,
             LaneId::new(1).as_u32().to_be_bytes()

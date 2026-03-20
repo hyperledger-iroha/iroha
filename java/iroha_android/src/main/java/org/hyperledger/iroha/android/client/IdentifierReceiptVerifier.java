@@ -5,6 +5,8 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Objects;
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters;
+import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 
@@ -70,7 +72,24 @@ public final class IdentifierReceiptVerifier {
       verifier.update(message);
       return verifier.verify(signature);
     } catch (final Exception ex) {
-      throw new IllegalArgumentException("failed to verify Ed25519 identifier receipt", ex);
+      return verifyEd25519WithBouncyCastle(publicKey, message, signature, ex);
+    }
+  }
+
+  private static boolean verifyEd25519WithBouncyCastle(
+      final byte[] publicKey,
+      final byte[] message,
+      final byte[] signature,
+      final Exception jcaFailure) {
+    try {
+      final Ed25519Signer verifier = new Ed25519Signer();
+      verifier.init(false, new Ed25519PublicKeyParameters(publicKey, 0));
+      verifier.update(message, 0, message.length);
+      return verifier.verifySignature(signature);
+    } catch (final Exception fallbackFailure) {
+      fallbackFailure.addSuppressed(jcaFailure);
+      throw new IllegalArgumentException(
+          "failed to verify Ed25519 identifier receipt", fallbackFailure);
     }
   }
 

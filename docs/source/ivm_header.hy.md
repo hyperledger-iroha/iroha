@@ -2,87 +2,92 @@
 lang: hy
 direction: ltr
 source: docs/source/ivm_header.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 779174437b1a7e57b371d3b41d1cab780d94700acf6642b1356cdb75504ae5fa
-source_last_modified: "2026-01-21T19:17:13.237630+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 70ccb43ffcaf762c6eb1ac381a21be99fc81aa58a787ff95e8313950c7ec5f03
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 translator: machine-google-reviewed
 ---
 
-# IVM բայթ կոդի վերնագիր
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
+
+# IVM Bytecode Header
 
 
-Կախարդություն
-- 4 բայթ՝ ASCII `IVM\0` օֆսեթ 0-ով:
+Magic
+- 4 bytes: ASCII `IVM\0` at offset 0.
 
-Դասավորություն (ներկայիս)
-- Օֆսեթներ և չափեր (ընդհանուր 17 բայթ).
-  - 0..4՝ կախարդական `IVM\0`
+Layout (current)
+- Offsets and sizes (17 bytes total):
+  - 0..4: magic `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
-  - 6: `mode: u8` (հատկանիշի բիթերը, տես ստորև)
+  - 6: `mode: u8` (feature bits; see below)
   - 7: `vector_length: u8`
-  - 8..16: `max_cycles: u64` (փոքր էնդյան)
+  - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
 
-Ռեժիմի բիթերը
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (վերապահված/առանձնահատկված):
+Mode bits
+- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
-Դաշտեր (նշանակություն)
-- `abi_version`. syscall աղյուսակ և ցուցիչ-ABI սխեմայի տարբերակ:
-- `mode`. հատկանիշի բիթեր ZK հետագծման/VECTOR/HTM-ի համար:
-- `vector_length`. տրամաբանական վեկտորի երկարություն վեկտորի օպերացիաների համար (0 → չկարգավորված):
-- `max_cycles`. կատարման լիցք, որն օգտագործվում է ZK ռեժիմում և ընդունում:
+Fields (meaning)
+- `abi_version`: syscall table and pointer‑ABI schema version.
+- `mode`: feature bits for ZK tracing/VECTOR/HTM.
+- `vector_length`: logical vector length for vector ops (0 → unset).
+- `max_cycles`: execution padding bound used in ZK mode and admission.
 
-Նշումներ
-- Էնդիանականությունը և դասավորությունը սահմանվում են իրականացմամբ և կապված են `version`-ի հետ: Վերևում տեղադրված լարերի դասավորությունը արտացոլում է ընթացիկ իրականացումը `crates/ivm_abi/src/metadata.rs`-ում:
-- Նվազագույն ընթերցողը կարող է ապավինել այս դասավորությանը ընթացիկ արտեֆակտների համար և պետք է կարգավորի ապագա փոփոխությունները `version` դարպասի միջոցով:
-- Սարքավորման արագացումը (SIMD/Metal/CUDA) ընտրվում է յուրաքանչյուր հյուրընկալողի համար: Գործարկման ժամանակը կարդում է `AccelerationConfig` արժեքներ `iroha_config`-ից. `enable_simd`-ը ստիպում է սկալյար հետադարձ կապեր, երբ կեղծ է, մինչդեռ `enable_metal` և `enable_cuda` իրենց համապատասխան հետնամասերը կիրառվում են նույնիսկ այն դեպքում, երբ դրանք կիրառվում են դրանց համապատասխան հետնամասերում: `ivm::set_acceleration_config` նախքան VM-ի ստեղծումը:
-- Բջջային SDK-ները (Android/Swift) ունեն նույն կոճակները; `IrohaSwift.AccelerationSettings`
-  զանգում է `connect_norito_set_acceleration_config`, որպեսզի macOS/iOS build-ները կարողանան ընտրել Metal /
-  ՆԵՈՆ՝ պահպանելով դետերմինիստական հետադարձ կապերը:
-- Օպերատորները կարող են նաև ստիպել անջատել հատուկ հետին մասերը ախտորոշման համար՝ արտահանելով `IVM_DISABLE_METAL=1` կամ `IVM_DISABLE_CUDA=1`: Շրջակա միջավայրի այս անտեսումները գերակայում են կազմաձևից և VM-ին պահում են CPU-ի որոշիչ ուղու վրա:
+Notes
+- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
+- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
+- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
+- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
+  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
+  NEON while keeping deterministic fallbacks.
+- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
 
-Երկարակյաց պետական օգնականներ և ABI մակերես
-- Երկարատև վիճակի օգնական համակարգերը (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* և JSON/SCHEMA կոդավորում/վերծանում) V1 ABI-ի մի մասն են և ներառված են `abi_hash` հաշվարկում:
-- CoreHost լարերը STATE_{GET,SET,DEL} WSV-ով ապահովված կայուն խելացի պայմանագրային վիճակի; dev/test hosts-ը կարող է օգտագործել ծածկույթներ կամ տեղական կայունություն, սակայն պետք է պահպանի նույն դիտարկելի վարքը:
+Durable state helpers and ABI surface
+- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
+- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
-Վավերացում
-- Հանգույցի ընդունումն ընդունում է միայն `version_major = 1` և `version_minor = 0` վերնագրեր:
-- `mode`-ը պետք է պարունակի միայն հայտնի բիթերը՝ `ZK`, `VECTOR`, `HTM` (անհայտ բիթերը մերժվում են):
-- `vector_length`-ը խորհրդատվական է և կարող է լինել ոչ զրոյական, նույնիսկ եթե `VECTOR` բիթը սահմանված չէ. ընդունելությունը պարտադրում է միայն վերին սահմանը:
-- Աջակցված `abi_version` արժեքներ. առաջին թողարկումն ընդունում է միայն `1` (V1); այլ արժեքները մերժվում են ընդունելության ժամանակ:
+Validation
+- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
+- Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
+- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
+- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
+- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
-### Քաղաքականություն (ստեղծվել է)
-Հետևյալ քաղաքականության ամփոփումը ստեղծվել է իրականացումից և չպետք է խմբագրվի ձեռքով:<!-- BEGIN GENERATED HEADER POLICY -->
-| Դաշտային | Քաղաքականություն |
+### Policy (generated)
+The following policy summary is generated from the implementation and should not be edited manually.
+
+<!-- BEGIN GENERATED HEADER POLICY -->
+| Field | Policy |
 |---|---|
-| տարբերակ_հիմնական | 1 |
-| տարբերակ_փոքր | 0 |
-| ռեժիմ (հայտնի բիթ) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
+| version_major | 1 |
+| version_minor | 1 |
+| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
-| վեկտորի_երկարություն | 0 կամ 1..=64 (խորհրդատվական; անկախ ՎԵԿՏՈՐ բիթից) |
+| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->
 
-### ABI հեշեր (ստեղծված)
-Հետևյալ աղյուսակը ստեղծվել է իրականացումից և թվարկում է `abi_hash` կանոնական արժեքները աջակցվող քաղաքականության համար:
+### ABI Hashes (generated)
+The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| Քաղաքականություն | abi_hash (hex) |
+| Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | ba1786031c3d0cdbd607debdae1cc611a0807bf9cf49ed349a0632855724969f |
+| ABI v1 | 76a5ec2375dfd65cc8b7cceb798ce087f6000bfe1d836ae3e390cb9e150bf595 |
 <!-- END GENERATED ABI HASHES -->
 
-- Փոքր թարմացումները կարող են ավելացնել հրահանգներ `feature_bits`-ի և վերապահված opcode տարածքի հետևում. Հիմնական թարմացումները կարող են փոխել կոդավորումները կամ հեռացնել/վերաբացել միայն արձանագրության թարմացման հետ մեկտեղ:
-- Syscall միջակայքերը կայուն են; ակտիվ `abi_version`-ի համար անհայտը տալիս է `E_SCALL_UNKNOWN`:
-- Գազի գրաֆիկները կապված են `version`-ի հետ և պահանջում են ոսկե վեկտորներ փոփոխության դեպքում:
+- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
+- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
+- Gas schedules are bound to the `version` and require golden vectors on change.
 
-Արտեֆակտների ստուգում
-- Օգտագործեք `ivm_tool inspect <file.to>` վերնագրի դաշտերի կայուն դիտման համար:
-- Զարգացման համար օրինակներ/ ներառում են փոքր Makefile թիրախ `examples-inspect`, որը ստուգում է կառուցված արտեֆակտները:
+Inspecting artifacts
+- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
+- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
 
-Օրինակ (Ժանգ). նվազագույն մոգություն + չափի ստուգում
+Example (Rust): minimal magic + size check
 
 ```rust
 use std::fs::File;
@@ -98,4 +103,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-Նշում․ մոգությունից դուրս վերնագրի ճշգրիտ դասավորությունը տարբերակված է և սահմանվում է իրագործմամբ։ նախընտրում են `ivm_tool inspect`՝ կայուն դաշտերի անունների և արժեքների համար:
+Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.

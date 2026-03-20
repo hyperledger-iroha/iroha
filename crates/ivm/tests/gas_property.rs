@@ -17,7 +17,7 @@ fn gas_matches_sum_for_simple_arith_sequence() {
     // Use RV‑compat ADDI encoding accepted by the IVM decoder.
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
@@ -52,7 +52,7 @@ fn gas_matches_sum_for_mixed_scalar_sequence() {
     // Program: store → load → add → mul → div → halt.
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
@@ -110,7 +110,7 @@ fn gas_scales_with_vector_length_for_vadd32() {
     // Program: header (VECTOR enabled, logical VL=2) + 3x VADD32 + HALT
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: ivm::ivm_mode::VECTOR,
         // Use VL=2 to match the interpreter's base lanes consistently across
         // hosts. Larger VL gets clamped to the host maximum and may vary.

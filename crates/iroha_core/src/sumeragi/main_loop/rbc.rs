@@ -1491,7 +1491,7 @@ impl Actor {
             if peer == &local_peer_id {
                 continue;
             }
-            self.schedule_background(BackgroundRequest::Post {
+            self.schedule_background_via_queue(BackgroundRequest::Post {
                 peer: peer.clone(),
                 msg: BlockMessageWire::with_encoded(
                     Arc::clone(&init_message),
@@ -1506,7 +1506,6 @@ impl Actor {
                 .rbc
                 .payload_rebroadcast_last_sent
                 .insert(key, Instant::now());
-            let _ = self.flush_rbc_outbound_chunks(Instant::now());
         }
         self.maybe_emit_rbc_ready(key)?;
         Ok(())
@@ -1980,6 +1979,15 @@ impl Actor {
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
         if should_update_status {
             self.publish_rbc_backlog_snapshot();
+        }
+        let promoted_roster = self.promote_rbc_session_roster_and_retry(key);
+        if promoted_roster {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                "promoted derived RBC roster and retried pending READY/DELIVER after payload hydration"
+            );
         }
         if !invalidated {
             self.maybe_emit_rbc_ready(key)?;
@@ -4315,6 +4323,7 @@ impl Actor {
                     first_deliver =
                         session.record_deliver(deliver.sender, deliver.signature.clone());
                     if first_deliver {
+                        status::record_round_gap_deliver(key.1, key.2, key.0);
                         delivered_bytes = session.delivered_payload_bytes();
                     }
                 }

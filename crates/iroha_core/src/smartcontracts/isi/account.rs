@@ -367,10 +367,14 @@ pub mod query {
     use super::*;
     use crate::{
         smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::StateReadOnly,
+        state::{StateReadOnly, WorldReadOnly},
     };
 
-    fn account_from_entry(account_id: &AccountId, account_value: &AccountValue) -> Account {
+    fn account_from_entry(
+        world: &impl WorldReadOnly,
+        account_id: &AccountId,
+        account_value: &AccountValue,
+    ) -> Account {
         let details = account_value.as_ref();
         Account {
             id: account_id.clone(),
@@ -378,7 +382,7 @@ pub mod query {
             label: details.label.clone(),
             uaid: details.uaid,
             opaque_ids: details.opaque_ids.clone(),
-            linked_domains: details.linked_domains.clone(),
+            linked_domains: world.domains_for_subject(account_id).into_iter().collect(),
         }
     }
 
@@ -565,6 +569,7 @@ pub mod query {
     }
 
     fn account_matches_filter(
+        world: &impl WorldReadOnly,
         filter: &CompoundPredicate<Account>,
         predicate_json: Option<&PredicateJson>,
         account_id: &AccountId,
@@ -577,10 +582,10 @@ pub mod query {
             if !matches {
                 return None;
             }
-            return Some(account_from_entry(account_id, account_value));
+            return Some(account_from_entry(world, account_id, account_value));
         }
 
-        let account = account_from_entry(account_id, account_value);
+        let account = account_from_entry(world, account_id, account_value);
         filter.applies(&account).then_some(account)
     }
 
@@ -630,7 +635,7 @@ pub mod query {
                 let iter: Box<dyn Iterator<Item = Account> + '_> = Box::new(
                     world
                         .accounts_iter()
-                        .map(|entry| account_from_entry(entry.id(), entry.value())),
+                        .map(|entry| account_from_entry(world, entry.id(), entry.value())),
                 );
                 return Ok(iter);
             }
@@ -645,7 +650,7 @@ pub mod query {
                     AccountSimpleIdPath::One(account_id) => {
                         Box::new(world.accounts().get_key_value(&account_id).into_iter().map(
                             |(account_id, account_value)| {
-                                account_from_entry(account_id, account_value)
+                                account_from_entry(world, account_id, account_value)
                             },
                         ))
                     }
@@ -654,7 +659,7 @@ pub mod query {
                         Box::new(account_ids.into_iter().filter_map(move |account_id| {
                             world.accounts().get_key_value(&account_id).map(
                                 |(account_id, account_value)| {
-                                    account_from_entry(account_id, account_value)
+                                    account_from_entry(world, account_id, account_value)
                                 },
                             )
                         }))
@@ -678,9 +683,10 @@ pub mod query {
                             return None;
                         };
                         if id_only_predicate {
-                            return Some(account_from_entry(account_id, account_value));
+                            return Some(account_from_entry(world, account_id, account_value));
                         }
                         account_matches_filter(
+                            world,
                             &filter,
                             predicate_json.as_ref(),
                             account_id,
@@ -693,6 +699,7 @@ pub mod query {
             let iter: Box<dyn Iterator<Item = Account> + '_> =
                 Box::new(world.accounts_iter().filter_map(move |entry| {
                     account_matches_filter(
+                        world,
                         &filter,
                         predicate_json.as_ref(),
                         entry.id(),
@@ -739,7 +746,7 @@ pub mod query {
                             return None;
                         }
 
-                        Some(account_from_entry(account_id, account_value))
+                        Some(account_from_entry(world, account_id, account_value))
                     }));
                 return Ok(iter);
             }
@@ -785,7 +792,7 @@ pub mod query {
                             return None;
                         }
 
-                        Some(account_from_entry(account_id, account_value))
+                        Some(account_from_entry(world, account_id, account_value))
                     }));
                 return Ok(iter);
             }
@@ -826,10 +833,11 @@ pub mod query {
                     }
 
                     if id_only_predicate {
-                        return Some(account_from_entry(account_id, account_value));
+                        return Some(account_from_entry(world, account_id, account_value));
                     }
 
                     account_matches_filter(
+                        world,
                         &filter,
                         predicate_json.as_ref(),
                         account_id,
@@ -1021,6 +1029,57 @@ pub mod query {
                 .map(|account| account.id)
                 .collect();
             assert_eq!(results, vec![acc1]);
+        }
+
+        #[test]
+        fn find_accounts_projects_linked_domains_from_subject_index() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let wonderland: DomainId = "wonderland".parse().unwrap();
+            let sbp: DomainId = "sbp".parse().unwrap();
+            Register::domain(Domain::new(wonderland.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::domain(Domain::new(sbp.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (account, _kp) = gen_account_in("wonderland");
+            Register::account(Account::new(
+                account.clone().to_account_id(wonderland.clone()),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let scoped = account.subject_id().to_account_id(sbp.clone());
+            stx.world.link_account_subject_domain(&scoped);
+            stx.world
+                .account_mut(&account)
+                .expect("account must exist")
+                .set_linked_domains(std::collections::BTreeSet::new());
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let account = FindAccounts
+                .execute(
+                    CompoundPredicate::<Account>::build(|p| p.equals("id", account.to_string())),
+                    &view,
+                )
+                .unwrap()
+                .next()
+                .expect("account should be returned");
+            assert_eq!(
+                account.linked_domains,
+                std::collections::BTreeSet::from([sbp, wonderland])
+            );
         }
 
         #[test]

@@ -2,150 +2,161 @@
 lang: hy
 direction: ltr
 source: docs/source/contract_deployment.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 0f2b1d7d027d715eac5a3ca8be29dea8f0e76013e948947a4de66108ac561f34
-source_last_modified: "2026-01-22T14:58:53.689594+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 747a7ac905ca4b698ea6cc89d384a1ee11db13953440d3f35a1691ce78638e52
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 title: Contract Deployment (.to) — API & Workflow
 translator: machine-google-reviewed
 ---
 
-Կարգավիճակ. իրականացվել և իրականացվել է Torii, CLI և հիմնական ընդունելության թեստերի միջոցով (2025թ. նոյեմբերի):
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-## Տեսություն
+# Contract Deployment (.to) — API & Workflow
 
-- Տեղադրեք կազմված IVM բայթ կոդը (`.to`)՝ այն ներկայացնելով Torii-ին կամ թողարկելով
-  `RegisterSmartContractCode`/`RegisterSmartContractBytes` հրահանգներ
-  ուղղակիորեն։
-- Հանգույցները վերահաշվարկում են `code_hash`-ը և կանոնական ABI հեշը տեղական մակարդակում; անհամապատասխանություններ
-  մերժել դետերմինիստորեն.
-- Պահված արտեֆակտները ապրում են `contract_manifests` շղթայի տակ և
-  `contract_code` գրանցամատյաններ: Դրսևորում է միայն հղումների հեշերը և մնում փոքր;
-  ծածկագրի բայթերը մուտքագրվում են `code_hash`-ով:
-- Պաշտպանված անվանատարածքները կարող են պահանջել վավերացված կառավարման առաջարկ մինչև ա
-  տեղակայումն ընդունված է։ Ընդունման ուղին փնտրում է առաջարկի ծանրաբեռնվածությունը և
-  պարտադրում է `(namespace, contract_id, code_hash, abi_hash)` հավասարությունը, երբ
-  Անվան տարածությունը պաշտպանված է:
+Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
 
-## Պահված արտեֆակտներ և պահպանում
+## Overview
 
-- `RegisterSmartContractCode`-ը ներդիր/վերագրում է մանիֆեստը տվյալի համար
-  `code_hash`. Երբ նույն հեշն արդեն գոյություն ունի, այն փոխարինվում է նորով
-  դրսևորել.
-- `RegisterSmartContractBytes`-ը պահում է կազմված ծրագիրը տակ
-  `contract_code[code_hash]`. Եթե բայթերը հեշի համար արդեն գոյություն ունեն, դրանք պետք է համապատասխանեն
-  ճշգրիտ; Տարբեր բայթերը առաջացնում են անփոփոխ խախտում:
-- Կոդի չափը ծածկված է `max_contract_code_bytes` մաքսային պարամետրով
-  (կանխադրված 16 MiB): Անտեսեք այն նախկինում `SetParameter(Custom)` գործարքով
-  ավելի մեծ արտեֆակտների գրանցում.
-- Պահպանումն անսահմանափակ է. մանիֆեստները և ծածկագիրը մնում են հասանելի մինչև հստակ
-  հեռացվել է ապագա կառավարման աշխատանքային գործընթացում: Չկա TTL կամ ավտոմատ GC:
+- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
+  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
+  directly.
+- Contract `.to` artifacts are self-describing: the required `CNTR` section
+  embeds the contract interface ahead of the executable stream, and Torii
+  derives the on-chain `ContractManifest` from that section after verification.
+- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
+  reject deterministically.
+- Stored artifacts live under the on-chain `contract_manifests` and
+  `contract_code` registries. Manifests reference hashes only and remain small;
+  code bytes are keyed by `code_hash`.
+- Protected namespaces can require an enacted governance proposal before a
+  deployment is admitted. The admission path looks up the proposal payload and
+  enforces `(namespace, contract_id, code_hash, abi_hash)` equality when the
+  namespace is protected.
 
-## Ընդունման խողովակաշար
+## Stored Artifacts & Retention
 
-- Վալիդատորը վերլուծում է IVM վերնագիրը, պարտադրում `version_major == 1` և ստուգում
-  `abi_version == 1`. Անհայտ տարբերակները անմիջապես մերժում են. գործարկման ժամանակ չկա
-  փոխարկել.
-- Երբ մանիֆեստն արդեն առկա է `code_hash`-ի համար, վավերացումը ապահովում է
-  պահված `code_hash`/`abi_hash` հավասար է ներկայացվածի հաշվարկված արժեքներին
-  ծրագիրը։ Անհամապատասխանությունը առաջացնում է `Manifest{Code,Abi}HashMismatch` սխալներ:
-- Պաշտպանված անվանատարածքներին ուղղված գործարքները պետք է ներառեն մետատվյալների բանալիներ
-  `gov_namespace` և `gov_contract_id`: Ընդունելության ուղին դրանք համեմատում է
-  ընդունված `DeployContract` առաջարկների դեմ; եթե չկա համապատասխան առաջարկ
-  գործարքը մերժվում է `NotPermitted`-ով:
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash`. When the same hash already exists, it is replaced with the new
+  manifest.
+- `RegisterSmartContractBytes` stores the compiled program under
+  `contract_code[code_hash]`. If bytes for a hash already exist they must match
+  exactly; differing bytes raise an invariant violation.
+- Code size is capped by the custom parameter `max_contract_code_bytes`
+  (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
+  registering larger artifacts.
+- Retention is unbounded: manifests and code remain available until explicitly
+  removed in a future governance workflow. There is no TTL or automatic GC.
 
-## Torii վերջնակետեր (հատկանիշ `app_api`)- `POST /v1/contracts/deploy`
-  - Հարցման մարմին՝ `DeployContractDto` (տե՛ս `docs/source/torii_contracts_api.md` դաշտի մանրամասների համար):
-  - Torii-ը վերծանում է base64 օգտակար բեռը, հաշվարկում է երկու հեշերը, կառուցում է մանիֆեստ,
-    և ներկայացնում է `RegisterSmartContractCode` գումարած
-    `RegisterSmartContractBytes`-ի անունից ստորագրված գործարքում
-    զանգահարող.
-  - Պատասխան՝ `{ ok, code_hash_hex, abi_hash_hex }`:
-  - Սխալներ՝ անվավեր base64, չաջակցվող ABI տարբերակ, բացակայում է թույլտվությունը
-    (`CanRegisterSmartContractCode`), չափի սահմանաչափը գերազանցված է, կառավարման դարպաս:
-- `POST /v1/contracts/code`
-  - Ընդունում է `RegisterContractCodeDto` (հեղինակություն, անձնական բանալի, մանիֆեստ) և ներկայացնում է միայն
-    `RegisterSmartContractCode`. Օգտագործեք, երբ մանիֆեստները բեմադրվում են առանձին
-    բայթկոդ:
+## Admission pipeline
+
+- Contract deployment parses the artifact, requires IVM `1.1`, requires the
+  embedded `CNTR` section, and verifies the embedded interface against the
+  decoded executable stream before any manifest is stored.
+- Verification fails closed on malformed sections, duplicate/invalid
+  entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
+  / ABI mismatches, or unsupported metadata.
+- The canonical manifest is built from the verified `CNTR` payload, signed by
+  the submitting key, and then stored together with the uploaded bytecode.
+- Transactions targeting protected namespaces must include metadata keys
+  `gov_namespace` and `gov_contract_id`. The admission path compares them
+  against enacted `DeployContract` proposals; if no matching proposal exists the
+  transaction is rejected with `NotPermitted`.
+
+## Torii endpoints (feature `app_api`)
+
+- `POST /v1/contracts/deploy`
+  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
+  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
+    derives the manifest from the artifact itself, and submits `RegisterSmartContractCode` plus
+    `RegisterSmartContractBytes` in a signed transaction on behalf of the
+    caller.
+  - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
+  - Errors: invalid base64, invalid contract artifact, missing permission
+    (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
 - `POST /v1/contracts/instance`
-  - Ընդունում է `DeployAndActivateInstanceDto` (հեղինակություն, մասնավոր բանալի, անվանատարածք/պայմանագրի_id, `code_b64`, կամընտիր մանիֆեստի անտեսում) և տեղակայում է + ատոմային ակտիվացում:
+  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`) and deploys + activates atomically.
 - `POST /v1/contracts/instance/activate`
-  - Ընդունում է `ActivateInstanceDto` (հեղինակություն, մասնավոր բանալի, անվանատարածք, contract_id, `code_hash`) և ներկայացնում է միայն ակտիվացման հրահանգը:
+  - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
 - `GET /v1/contracts/code/{code_hash}`
-  - Վերադարձնում է `{ manifest: { code_hash, abi_hash } }`:
-    Լրացուցիչ մանիֆեստի դաշտերը պահպանվում են ներսից, բայց այստեղ բաց թողնված են a
-    կայուն API:
+  - Returns `{ manifest: { code_hash, abi_hash } }`.
+    Additional manifest fields are preserved internally but omitted here for a
+    stable API.
 - `GET /v1/contracts/code-bytes/{code_hash}`
-  - Վերադարձնում է `{ code_b64 }`՝ պահպանված `.to` պատկերով, որը կոդավորված է որպես base64:
+  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-Պայմանագրի կյանքի ցիկլի բոլոր վերջնակետերը կիսում են հատուկ տեղակայման սահմանափակիչը՝ կազմաձևված միջոցով
-`torii.deploy_rate_per_origin_per_sec` (նշաններ մեկ վայրկյանում) և
-`torii.deploy_burst_per_origin` (պայթել նշաններ): Կանխադրված են 4 req/s հետ պոռթկում
-8 յուրաքանչյուր նշանի/բանալու համար, որը ստացվել է `X-API-Token`-ից, հեռավոր IP-ից կամ վերջնակետի հուշումից:
-Ցանկացած դաշտը սահմանեք `null`՝ վստահելի օպերատորների համար սահմանափակումն անջատելու համար: Երբ որ
-սահմանափակիչը կրակում է, Torii ավելացնում է
-`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` հեռաչափական հաշվիչ և
-վերադարձնում է HTTP 429; ցանկացած կարգավորիչի սխալի ավելացում
-`torii_contract_errors_total{endpoint=…}` ահազանգելու համար:
+All contract lifecycle endpoints share a dedicated deploy limiter configured via
+`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
+`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
+8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
+Set either field to `null` to disable the limiter for trusted operators. When the
+limiter fires, Torii increments the
+`torii_contract_throttled_total{endpoint="deploy|instance|activate"}` telemetry counter and
+returns HTTP 429; any handler error increments
+`torii_contract_errors_total{endpoint=…}` for alerting.
 
-## Կառավարման ինտեգրում և պաշտպանված անունների տարածքներ- Սահմանեք մաքսային պարամետրը `gov_protected_namespaces` (անվան տարածության JSON զանգված
-  strings) մուտքի դարպասը միացնելու համար: Torii-ը բացահայտում է օգնականներին տակ
-  `/v1/gov/protected-namespaces` և CLI-ն արտացոլում է դրանք միջոցով
+## Governance integration & protected namespaces
+
+- Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
+  strings) to enable admission gating. Torii exposes helpers under
+  `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- `ProposeDeployContract`-ով (կամ Torii-ով ստեղծված առաջարկներ
-  `/v1/gov/proposals/deploy-contract` վերջնակետ) գրավում
+- Proposals created with `ProposeDeployContract` (or the Torii
+  `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
-- Հանրաքվեն անցնելուց հետո, `EnactReferendum` նշում է առաջարկը ուժի մեջ և
-  ընդունելությունը կընդունի տեղակայումներ, որոնք պարունակում են համապատասխան մետատվյալներ և կոդ:
-- Գործարքները պետք է ներառեն `gov_namespace=a namespace` մետատվյալների զույգը և
-  `gov_contract_id=an identifier` (և պետք է սահմանվի `contract_namespace` /
-  `contract_id` զանգի ժամանակի կապի համար): CLI օգնականները բնակեցնում են դրանք
-  ավտոմատ կերպով, երբ անցնում եք `--namespace`/`--contract-id`:
-- Երբ պաշտպանված անունների տարածքները միացված են, հերթերի ընդունումը մերժում է դրա փորձերը
-  վերամիացնել գոյություն ունեցող `contract_id`-ը մեկ այլ անվանատարածքի մեջ. օգտագործել ընդունված
-  առաջարկել կամ դադարեցնել նախկին պարտավորեցումը` նախքան այլ տեղ տեղակայելը:
-- Եթե երթուղու մանիֆեստը հաստատում է մեկից բարձր քվորում, ներառեք
-  `gov_manifest_approvers` (Վալիդատորի հաշվի ID-ների JSON զանգված), որպեսզի հերթը կարողանա հաշվել
-  գործարքի մարմնի հետ մեկտեղ լրացուցիչ հաստատումներ: Lanes-ը նույնպես մերժում է
-  մետատվյալներ, որոնք հղում են անում մանիֆեստում բացակայող անվանատարածքներին
-  `protected_namespaces` հավաքածու.
+- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
+  admission will accept deployments that carry matching metadata and code.
+- Transactions must include the metadata pair `gov_namespace=a namespace` and
+  `gov_contract_id=an identifier` (and should set `contract_namespace` /
+  `contract_id` for call-time binding). CLI helpers populate these
+  automatically when you pass `--namespace`/`--contract-id`.
+- When protected namespaces are enabled, queue admission rejects attempts to
+  rebind an existing `contract_id` to a different namespace; use the enacted
+  proposal or retire the previous binding before deploying elsewhere.
+- If the lane manifest sets a validator quorum above one, include
+  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
+  the additional approvals alongside the transaction authority. Lanes also reject
+  metadata that references namespaces not present in the manifest's
+  `protected_namespaces` set.
 
-## CLI օգնականներ
+## CLI helpers
 
 - `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  ներկայացնում է Torii տեղակայման հարցումը (հաշվարկվող հեշերը անմիջապես):
+  submits the Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  կառուցում է մանիֆեստը (ստորագրված է տրամադրված բանալիով), գրանցում է բայթ + մանիֆեստ,
-  և ակտիվացնում է `(namespace, contract_id)` կապը մեկ գործարքում: Օգտագործեք
-  `--dry-run`՝ տպելու հաշվարկված հեշերը և հրահանգների քանակը՝ առանց
-  ներկայացնելը, և `--manifest-out`՝ ստորագրված JSON մանիֆեստը պահպանելու համար:
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` հաշվում է
-  `code_hash`/`abi_hash` կոմպիլացված `.to`-ի համար և ընտրովի ստորագրում է մանիֆեստը,
-  տպել JSON կամ գրել `--out`-ին:
+  verifies the embedded `CNTR`, derives the canonical manifest, registers bytes
+  + manifest, and activates the `(namespace, contract_id)` binding in one
+  transaction. Use `--dry-run` to print the computed hashes and instruction
+  count without submitting, and `--manifest-out` to save the signed manifest
+  JSON for inspection.
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+  `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
+  embedded `CNTR`, and optionally signs it for inspection, printing JSON or
+  writing to `--out`.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
-  գործարկում է անցանց VM անցագիր և հայտնում ABI/hash մետատվյալները գումարած հերթագրված ISI-ները
-  (հաշվիչներ և հրահանգների նույնացուցիչներ) առանց ցանցին դիպչելու: Կցել
-  `--namespace/--contract-id`՝ զանգի ժամանակի մետատվյալները արտացոլելու համար:
-- `iroha_cli app contracts manifest get --code-hash <hex>`-ը վերցնում է մանիֆեստը Torii-ի միջոցով
-  և ընտրովի գրում է սկավառակի վրա:
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` ներլցումներ
-  պահված `.to` պատկերը:
-- `iroha_cli app contracts instances --namespace <ns> [--table]` ցուցակներն ակտիվացված են
-  պայմանագրային դեպքեր (մանիֆեստ + մետատվյալներով պայմանավորված):
-- Կառավարման օգնականներ (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
-  `iroha_cli app gov protected set/get`) կազմակերպում է պաշտպանված անվանատարածքի աշխատանքային հոսքը և
-  բացահայտել JSON արտեֆակտները աուդիտի համար:
+  runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
+  (counts and instruction ids) without touching the network. Attach
+  `--namespace/--contract-id` to mirror call-time metadata.
+- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+  and optionally writes it to disk.
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+  the stored `.to` image.
+- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
+  contract instances (manifest + metadata driven).
+- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
+  expose JSON artefacts for auditing.
 
-## Փորձարկում և ծածկույթ
+## Testing & coverage
 
-- Միավորի փորձարկումներ `crates/iroha_core/tests/contract_code_bytes.rs` ծածկագրի ներքո
-  պահեստավորում, անզորություն և չափի գլխարկ:
-- `crates/iroha_core/tests/gov_enact_deploy.rs`-ը վավերացնում է մանիֆեստի տեղադրումը միջոցով
-  ուժի մեջ մտնելը և `crates/iroha_core/tests/gov_protected_gate.rs` վարժությունները
-  պաշտպանված անվանատարածքի մուտքը վերջից մինչև վերջ:
-- Torii երթուղիները ներառում են հարցում/պատասխանի միավորի թեստեր, և CLI հրամանները ունեն
-  ինտեգրման թեստեր, որոնք ապահովում են JSON-ի հետադարձ ճանապարհորդությունները կայուն մնալու համար:
+- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
+  storage, idempotency, and the size cap.
+- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
+  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
+  protected-namespace admission end-to-end.
+- Torii routes include request/response unit tests, and the CLI commands have
+  integration tests ensuring JSON round-trips remain stable.
 
-Տե՛ս `docs/source/governance_api.md`՝ հանրաքվեի մանրամասն օգտակար բեռների և
-քվեաթերթիկների աշխատանքային հոսքերը:
+Refer to `docs/source/governance_api.md` for detailed referendum payloads and
+ballot workflows.

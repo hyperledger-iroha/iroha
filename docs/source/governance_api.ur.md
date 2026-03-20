@@ -2,16 +2,16 @@
 lang: ur
 direction: rtl
 source: docs/source/governance_api.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: eea277d4aae6a7b29b5be539ef9d8e63948ccdd89a152de5af4a3cb357fe543a
-source_last_modified: "2026-01-22T15:58:10.548809+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: c169c69f99daf761a5c240e94b11d2ec768224b1b6dc3ad75bb642fa806fec13
+source_last_modified: "2026-03-20T08:32:54+00:00"
+translation_last_reviewed: 2026-03-20
 ---
 
----
-title: Governance App API — Endpoints (Draft)
----
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
+
+# Governance App API — Endpoints (Draft)
 
 Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/transaction`.
 
@@ -49,7 +49,7 @@ Endpoints
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`
   - Request: { "authority": "i105...", "private_key": "…", "code_b64": "…" }
-  - Behavior: Computes `code_hash` from the IVM program body and `abi_hash` from the header `abi_version`, then submits `RegisterSmartContractCode` (manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, then submits `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
   - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
   - Related:
     - GET `/v1/contracts/code/{code_hash}` → returns stored manifest

@@ -13,7 +13,6 @@ use iroha::{
         metadata::Metadata,
         name::Name,
         prelude::*,
-        smart_contract::manifest::ContractManifest,
         transaction::{IvmBytecode, TransactionBuilder},
     },
 };
@@ -74,7 +73,7 @@ impl Run for CodeCommand {
 pub enum ManifestCommand {
     /// Fetch on-chain contract manifest by code hash and either print or save (if --out is provided)
     Get(ManifestArgs),
-    /// Build a manifest for compiled bytecode (with optional signing)
+    /// Inspect the manifest embedded in compiled bytecode (with optional signing)
     Build(BuildManifestArgs),
 }
 
@@ -188,19 +187,9 @@ impl Run for DeployActivateArgs {
         }
         let keypair = &context.config().key_pair;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
+        let verified = verify_contract_from_bytes(&code)?;
         let summary = program_summary_from_bytes(&code)?;
-
-        let manifest = ContractManifest {
-            code_hash: Some(summary.code_hash),
-            abi_hash: Some(summary.abi_hash),
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&keypair);
+        let manifest = verified.manifest.signed(&keypair);
 
         if let Some(path) = self.manifest_out.as_ref() {
             let json = norito::json::to_json_pretty(&manifest)?;
@@ -210,7 +199,7 @@ impl Run for DeployActivateArgs {
 
         let instructions: Vec<InstructionBox> = vec![
             RegisterSmartContractBytes {
-                code_hash: summary.code_hash,
+                code_hash: verified.code_hash,
                 code: code.clone(),
             }
             .into(),
@@ -221,7 +210,7 @@ impl Run for DeployActivateArgs {
             ActivateContractInstance {
                 namespace: self.namespace.clone(),
                 contract_id: self.contract_id.clone(),
-                code_hash: summary.code_hash,
+                code_hash: verified.code_hash,
             }
             .into(),
         ];
@@ -297,17 +286,8 @@ pub struct BuildManifestArgs {
 impl Run for BuildManifestArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
-        let summary = program_summary_from_bytes(&code)?;
-        let mut manifest = ContractManifest {
-            code_hash: Some(summary.code_hash),
-            abi_hash: Some(summary.abi_hash),
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        };
+        let verified = verify_contract_from_bytes(&code)?;
+        let mut manifest = verified.manifest;
         if let Some(hex_key) = self.sign_with {
             let private: PrivateKey = hex_key.parse().wrap_err("invalid --sign-with")?;
             let kp =
@@ -337,6 +317,10 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
     } else {
         Err(eyre!("either --code-file or --code-b64 must be provided"))
     }
+}
+
+fn verify_contract_from_bytes(bytes: &[u8]) -> Result<ivm::VerifiedContractArtifact> {
+    ivm::verify_contract_artifact(bytes).map_err(|err| eyre!(err.to_string()))
 }
 
 fn program_summary_from_bytes(bytes: &[u8]) -> Result<ProgramSummary> {

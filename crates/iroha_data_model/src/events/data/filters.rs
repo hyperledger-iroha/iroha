@@ -208,6 +208,8 @@ mod model {
     pub struct AssetEventFilter {
         /// If specified matches only events originating from this asset
         pub(super) id_matcher: Option<super::AssetId>,
+        /// If specified matches only events for assets belonging to this asset definition
+        pub(super) asset_definition_matcher: Option<super::AssetDefinitionId>,
         /// Matches only event from this set
         pub(super) event_set: AssetEventSet,
     }
@@ -1139,6 +1141,7 @@ impl AssetEventFilter {
     pub const fn new() -> Self {
         Self {
             id_matcher: None,
+            asset_definition_matcher: None,
             event_set: AssetEventSet::all(),
         }
     }
@@ -1147,6 +1150,13 @@ impl AssetEventFilter {
     #[must_use]
     pub fn for_asset(mut self, id_matcher: AssetId) -> Self {
         self.id_matcher = Some(id_matcher);
+        self
+    }
+
+    /// Modifies an [`AssetEventFilter`] to accept only [`AssetEvent`]s whose assets belong to `asset_definition_matcher`.
+    #[must_use]
+    pub fn for_asset_definition(mut self, asset_definition_matcher: AssetDefinitionId) -> Self {
+        self.asset_definition_matcher = Some(asset_definition_matcher);
         self
     }
 
@@ -1172,6 +1182,10 @@ impl super::EventFilter for AssetEventFilter {
         self.id_matcher
             .as_ref()
             .is_none_or(|id| id == event.origin())
+            && self
+                .asset_definition_matcher
+                .as_ref()
+                .is_none_or(|definition| definition == &event.origin().definition)
             && self.event_set.matches(event)
     }
 }
@@ -1661,6 +1675,113 @@ mod tests {
         assert!(!asset_filter.matches(&domain_created));
         assert!(!asset_filter.matches(&account_created));
         assert!(asset_filter.matches(&asset_created));
+    }
+
+    #[test]
+    fn asset_filter_matches_by_asset_definition_only() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let matching_definition = crate::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let other_definition = crate::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        );
+        let matching_asset = AssetId::new(matching_definition.clone(), account_id.clone());
+        let other_asset = AssetId::new(other_definition, account_id);
+        let matching_event = AssetEvent::Added(AssetChanged {
+            asset: matching_asset,
+            amount: Numeric::new(10, 0),
+        });
+        let other_event = AssetEvent::Added(AssetChanged {
+            asset: other_asset,
+            amount: Numeric::new(10, 0),
+        });
+
+        let filter = AssetEventFilter::new()
+            .for_events(AssetEventSet::Added)
+            .for_asset_definition(matching_definition);
+        assert!(filter.matches(&matching_event));
+        assert!(!filter.matches(&other_event));
+    }
+
+    #[test]
+    fn asset_filter_matches_by_asset_id_only() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let definition = crate::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let matching_asset = AssetId::new(definition.clone(), account_id.clone());
+        let other_asset =
+            AssetId::new(definition, AccountId::new(KeyPair::random().into_parts().0));
+        let matching_event = AssetEvent::Added(AssetChanged {
+            asset: matching_asset.clone(),
+            amount: Numeric::new(5, 0),
+        });
+        let other_event = AssetEvent::Added(AssetChanged {
+            asset: other_asset,
+            amount: Numeric::new(5, 0),
+        });
+
+        let filter = AssetEventFilter::new()
+            .for_events(AssetEventSet::Added)
+            .for_asset(matching_asset);
+        assert!(filter.matches(&matching_event));
+        assert!(!filter.matches(&other_event));
+    }
+
+    #[test]
+    fn asset_filter_matches_with_asset_and_asset_definition_matchers() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let matching_definition = crate::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let other_definition = crate::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "tulip".parse().unwrap(),
+        );
+        let matching_asset = AssetId::new(matching_definition.clone(), account_id.clone());
+        let mismatched_asset = AssetId::new(other_definition, account_id);
+        let matching_event = AssetEvent::Added(AssetChanged {
+            asset: matching_asset.clone(),
+            amount: Numeric::new(3, 0),
+        });
+        let mismatched_event = AssetEvent::Added(AssetChanged {
+            asset: mismatched_asset,
+            amount: Numeric::new(3, 0),
+        });
+
+        let filter = AssetEventFilter::new()
+            .for_events(AssetEventSet::Added)
+            .for_asset(matching_asset)
+            .for_asset_definition(matching_definition);
+        assert!(filter.matches(&matching_event));
+        assert!(!filter.matches(&mismatched_event));
+    }
+
+    #[test]
+    fn asset_filter_behavior_is_unchanged_without_asset_definition_matcher() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let definition = crate::asset::AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_id = AssetId::new(definition.clone(), account_id);
+        let added = AssetEvent::Added(AssetChanged {
+            asset: asset_id,
+            amount: Numeric::new(7, 0),
+        });
+        let created = AssetEvent::Created(Asset::new(
+            AssetId::new(definition, AccountId::new(KeyPair::random().into_parts().0)),
+            0_u32,
+        ));
+
+        let filter = AssetEventFilter::new().for_events(AssetEventSet::Added);
+        assert!(filter.matches(&added));
+        assert!(!filter.matches(&created));
     }
 
     #[test]

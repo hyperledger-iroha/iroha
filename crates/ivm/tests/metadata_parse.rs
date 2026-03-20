@@ -14,7 +14,7 @@ fn build_header(
     let mut v = Vec::new();
     v.extend_from_slice(b"IVM\0");
     v.push(version_major);
-    v.push(0); // version_minor
+    v.push(1); // version_minor
     v.push(mode);
     v.push(vector_length);
     v.extend_from_slice(&max_cycles.to_le_bytes());
@@ -32,7 +32,7 @@ fn parse_accepts_version_1_and_abi_v1() {
 
     let off = parsed.code_offset;
     assert_eq!(meta.version_major, 1);
-    assert_eq!(meta.version_minor, 0);
+    assert_eq!(meta.version_minor, 1);
     assert_eq!(meta.mode, 0);
     assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 0);

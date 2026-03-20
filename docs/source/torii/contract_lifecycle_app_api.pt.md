@@ -2,12 +2,14 @@
 lang: pt
 direction: ltr
 source: docs/source/torii/contract_lifecycle_app_api.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: a3cb3434ce45e746b44dd2754eb975168934db29f4829a223afa6265a651f2c2
-source_last_modified: "2026-01-28T17:58:57.298994+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: d712ede36c3431573b639fbfa55064a3e210e7d7618bb5a78d588511a33ae89a
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 ---
+
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
 # Torii Contract Lifecycle App API (TORII-APP-4)
 
@@ -31,53 +33,14 @@ tooling can depend on stable Norito DTOs.
   private key, then queues it through `handle_transaction_with_metrics`, which
   records `torii_lane_admission_latency_seconds{lane_id,endpoint}` when
   telemetry is enabled.【crates/iroha_torii/src/routing.rs:3293】
-- DTOs embed full Norito types: `AccountId`, `ExposedPrivateKey`, `ContractManifest`,
-  and plain strings for namespace/contract identifiers. The manifest schema is
+- DTOs embed full Norito types: `AccountId`, `ExposedPrivateKey`, and plain
+  strings for namespace/contract identifiers. The stored manifest schema is
   defined in `iroha_data_model::smart_contract::manifest::ContractManifest` and
-  includes optional compiler metadata and access-set hints.【crates/iroha_data_model/src/smart_contract.rs:87】
+  includes compiler metadata, verified entrypoints, and access-set hints
+  derived from the uploaded artifact.【crates/iroha_data_model/src/smart_contract.rs:87】
 - Router-level integration tests cover the standalone deploy path, direct
   activation, and the combined deploy+activate workflow, keeping these schemas
   regression-tested.【crates/iroha_torii/tests/contracts_deploy_integration.rs:1】【crates/iroha_torii/tests/contracts_instance_activate_integration.rs:1】【crates/iroha_torii/tests/contracts_activate_integration.rs:1】
-
-## `POST /v1/contracts/code`
-
-Submits a pre-built `RegisterSmartContractCode` transaction when clients already
-possess the manifest (including hashes) and only need Torii to queue it.【crates/iroha_torii/src/routing.rs:3631】
-
-### Request (`RegisterContractCodeDto`)
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `authority` | `AccountId` | Canonical I105 account id (domainless encoded literal). Torii strict parser paths accept only canonical I105 and reject non-I105 literals and any `@<domain>` suffix. |
-| `private_key` | `ExposedPrivateKey` | Bare multihash hex as emitted by `ExposedPrivateKey::to_string()`; no `ed25519:` prefix is included.【crates/iroha_crypto/src/lib.rs:1994】 |
-| `manifest` | `ContractManifest` | Optional fields; if `code_hash`/`abi_hash` are present they must match node-side validation.【crates/iroha_data_model/src/smart_contract.rs:87】 |
-
-Sample JSON request:
-
-```json
-{
-  "authority": "3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt",
-  "private_key": "ED010820F1D2C3B4A596877899AABBCCDDEEFF00112233445566778899AABBCC",
-  "manifest": {
-    "code_hash": "f4d0bc7a2fa8c98bf5f5d6a638f3b939e1436a8a567164d72d41308c0ea2db9f",
-    "abi_hash": "59bf03d5f0795884183abdb0297c7c9f6cfdcccd21d8a11a3ccf71027284e9a1",
-    "compiler_fingerprint": "kotodama-0.8.0 (rustc 1.80)",
-    "features_bitmap": null,
-    "access_set_hints": {
-      "read_keys": ["account:alice#wonderland"],
-      "write_keys": ["account:alice#wonderland.detail:vm_state"]
-    }
-  }
-}
-```
-
-### Response
-
-- Success: `202 Accepted` with an empty body (`()`); the handler does not emit a
-  JSON payload, and execution results surface later via pipeline status APIs.
-- Failure: manifest mismatches map to `ValidationFail::Conversion` (HTTP 400);
-  queue admission errors bubble up as `PushIntoQueue` failures with the
-  endpoint label `/v1/contracts/code`.
 
 ## `POST /v1/contracts/deploy`
 
@@ -96,9 +59,8 @@ instructions so the bytecode is stored on-chain.【crates/iroha_torii/src/routin
 `prepare_contract_deployment` enforces:
 
 - Base64 decoding must succeed (`ValidationFail::Conversion` on failure).【crates/iroha_torii/src/routing.rs:4898】
-- The program metadata must decode with `abi_version == 1`; other versions are rejected (`"unsupported abi_version …"`).【crates/iroha_torii/src/routing.rs:4920】
-- Any manifest override must match the computed `code_hash`/`abi_hash`; otherwise a conversion error is returned.【crates/iroha_torii/src/routing.rs:4942】
-- The handler always persists the canonical manifest with both hashes populated.
+- The uploaded artifact must verify as a self-describing contract artifact: IVM `1.1`, required `CNTR`, valid section ordering, valid entrypoints, valid trigger callback targets, and supported ABI/feature metadata. Invalid artifacts fail closed with `ValidationFail::Conversion`.
+- Torii derives the canonical manifest from the verified `CNTR` payload and signs that manifest with the submitting key. There is no manifest override input on the deploy path.
 
 Sample request and response:
 

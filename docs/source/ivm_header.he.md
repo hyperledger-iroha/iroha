@@ -4,87 +4,88 @@
 lang: he
 direction: rtl
 source: docs/source/ivm_header.md
-status: complete
+status: needs-update
 translator: manual
 ---
 
-<div dir="rtl">
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-# כותרת בייטקוד של IVM
+# IVM Bytecode Header
 
-עמוד זה מגדיר את שדות כותרת הבייטקוד של IVM ואת מדיניות התאימות. הוא משלים את סקירת הארכיטקטורה ב־`ivm.md` ומוזכר במסמכי הצינור והדוגמאות.
 
-## Magic
-- ארבעה בתים: ASCII `IVM\0` החל מהיסט 0.
+Magic
+- 4 bytes: ASCII `IVM\0` at offset 0.
 
-## תצורה (נוכחית)
-- היסטים וגדלים (17 בתים בסך הכול):
-  - ‎0..4: magic ‏`IVM\0`
-  - ‎4: ‏`version_major: u8`
-  - ‎5: ‏`version_minor: u8`
-  - ‎6: ‏`mode: u8` (ביטי פיצ'ר; ראו להלן)
-  - ‎7: ‏`vector_length: u8`
-  - ‎8..16: ‏`max_cycles: u64` (little-endian)
-  - ‎16: ‏`abi_version: u8`
+Layout (current)
+- Offsets and sizes (17 bytes total):
+  - 0..4: magic `IVM\0`
+  - 4: `version_major: u8`
+  - 5: `version_minor: u8`
+  - 6: `mode: u8` (feature bits; see below)
+  - 7: `vector_length: u8`
+  - 8..16: `max_cycles: u64` (little‑endian)
+  - 16: `abi_version: u8`
 
-## ביטי מצב (Mode bits)
-- ‏`ZK = 0x01`, ‏`VECTOR = 0x02`, ‏`HTM = 0x04` (שמורים/מופעלים ע״י פיצ'ר).
+Mode bits
+- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
-## משמעות השדות
-- ‏`version`: גרסת המשמעות (semantic version) של פורמט הבייטקוד (`version_major.version_minor`). משמשת להתאמת הדקודר ולבחירת לוח הגזים.
-- ‏`abi_version`: גרסת טבלת הקריאות ומוסכמות ה־pointer‑ABI.
-- ‏`mode`: ביטי פיצ'ר לתיעוד ZK / פעולות וקטוריות / HTM.
-- ‏`vector_length`: אורך וקטור לוגי עבור פקודות וקטוריות (0 = לא מוגדר).
-- ‏`max_cycles`: חסם ריפוד ריצה המשמש במצב ZK ובקבלה לבלוק.
+Fields (meaning)
+- `abi_version`: syscall table and pointer‑ABI schema version.
+- `mode`: feature bits for ZK tracing/VECTOR/HTM.
+- `vector_length`: logical vector length for vector ops (0 → unset).
+- `max_cycles`: execution padding bound used in ZK mode and admission.
 
-## הערות
-- סדר הבתים והפריסה נקבעים ע"י היישום ונקשרים ל־`version`. הפריסה כאן מייצגת את המימוש הנוכחי ב־`crates/ivm_abi/src/metadata.rs`.
-- קורא מינימלי יכול להסתמך על פריסה זו עבור ארטיפקטים נוכחיים, ובשינויים עתידיים עליו להשתמש ב־`version` כדי להסתגל.
-- האצת חומרה (Metal/CUDA) היא opt-in בכל מארח. בזמן הריצה קוראים ערכי `AccelerationConfig` מתוך `iroha_config`: המפתחות `enable_metal` ו־`enable_cuda` מפעילים את המנועים המתאימים גם אם קומפלו. ההגדרות מוחלות באמצעות `ivm::set_acceleration_config` לפני יצירת ה־VM.
-- מפעילים יכולים גם לכפות השבתת מנועים לצורך דיאגנוסטיקה באמצעות `IVM_DISABLE_METAL=1` או `IVM_DISABLE_CUDA=1`. משתני סביבה אלה גוברים על הקונפיגורציה ומשאירים את ה־VM בנתיב ה־CPU הדטרמיניסטי.
+Notes
+- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
+- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
+- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
+- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
+  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
+  NEON while keeping deterministic fallbacks.
+- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
 
-## עזרי מצב Durable ופני השטח של ה־ABI
-- קריאות העזר למצב Durable (‎0x50–0x5A: ‏STATE_{GET,SET,DEL}, ‏ENCODE/DECODE_INT, ‏BUILD_PATH_* וקידוד/פענוח JSON/SCHEMA) הן חלק מ־ABI V1 ונכללות בחישוב `abi_hash`.
-- CoreHost מחבר את STATE_{GET,SET,DEL} למצב חוזים עמיד מגובה־WSV; מארחי dev/בדיקה יכולים להשתמש ב־overlays או בהתמדה מקומית אך חייבים לשמור על אותה התנהגות נצפית.
+Durable state helpers and ABI surface
+- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
+- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
-## ולידציה
-- קבלה לנוד מאפשרת רק כותרות עם `version_major = 1` ו־`version_minor = 0`.
-- `mode` חייב להכיל רק ביטים מוכרים: ‏`ZK`, ‏`VECTOR`, ‏`HTM` (ביטים לא מוכרים נדחים).
-- ‏`vector_length` הוא שדה ייעוץ ויכול להיות לא־אפס גם אם ביט `VECTOR` אינו מוגדר; הקבלה אוכפת חסם עליון בלבד.
-- ערכי `abi_version` נתמכים: גרסת השחרור הראשונה תומכת ב־`1` בלבד (V1); ערכים אחרים נדחים בקבלה.
+Validation
+- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
+- Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
+- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
+- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
+- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
-### מדיניות (נוצרה אוטומטית)
-הטבלה הבאה נוצרת מהיישום ואין לערוך אותה ידנית.
+### Policy (generated)
+The following policy summary is generated from the implementation and should not be edited manually.
 
 <!-- BEGIN GENERATED HEADER POLICY -->
-| שדה | מדיניות |
+| Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_minor | 0 |
-| mode (known bits) | ‎0x07 (‏ZK=0x01, VECTOR=0x02, HTM=0x04) |
+| version_minor | 1 |
+| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
-| vector_length | 0 או 1..=64 (ייעוצי; לא תלוי בביט VECTOR) |
+| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->
 
-### ערכי ABI Hash (נוצרו אוטומטית)
-הטבלה הבאה מציגה את ערכי `abi_hash` הקנוניים עבור המדיניות הנתמכות.
+### ABI Hashes (generated)
+The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| מדיניות | abi_hash (hex) |
+| Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 377f7125a0f20d40f65ed5e3a179bc5e04d68a385570b54d67d961861e8d9f83 |
+| ABI v1 | 76a5ec2375dfd65cc8b7cceb798ce087f6000bfe1d836ae3e390cb9e150bf595 |
 <!-- END GENERATED ABI HASHES -->
 
-## מדיניות תאימות
-- עדכונים מינוריים יכולים להוסיף פקודות מאחורי `feature_bits` ומרחב opcode שמור; עדכונים מרכזיים עשויים לשנות קידודים או להסירם/להחליפם רק עם שדרוג פרוטוקול.
-- תחומי קריאות המערכת יציבים; מספר לא מוכר עבור `abi_version` הפעיל מוביל ל־`E_SCALL_UNKNOWN`.
-- לוחות גז תלויים ב־`version` ודורשים וקטורים מזהב בעת שינוי.
+- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
+- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
+- Gas schedules are bound to the `version` and require golden vectors on change.
 
-## בדיקת ארטיפקטים
-- השתמשו ב־`ivm_tool inspect <file.to>` כדי לצפות בשדות הכותרת באופן יציב.
-- לצורכי פיתוח, ספריית `examples/` כוללת יעד Makefile קטן `examples-inspect` שמריץ inspect על ארטיפקטים שנבנו.
+Inspecting artifacts
+- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
+- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
 
-## דוגמה (Rust): בדיקת magic וגודל מינימליים
+Example (Rust): minimal magic + size check
 
 ```rust
 use std::fs::File;
@@ -100,6 +101,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-הערה: פריסת הכותרת מעבר ל־magic היא גרסתית ותלויה ביישום; עדיף להשתמש ב־`ivm_tool inspect` לקבלת שמות שדות וערכים יציבים.
-
-</div>
+Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.

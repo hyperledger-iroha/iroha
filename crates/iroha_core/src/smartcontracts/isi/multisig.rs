@@ -1398,14 +1398,45 @@ fn execute_approve(
     }
 
     upsert_subject_approval(&mut proposal_state.approvals, approver);
+    iroha_logger::info!(
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        approvals = proposal_state.approvals.len(),
+        "multisig approval storing updated proposal state"
+    );
     store_multisig_proposal_state(state_transaction, &proposal_state)?;
+    iroha_logger::info!(
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        "multisig approval stored updated proposal state"
+    );
 
     let approved_weight = approved_weight_by_subject(&spec, &proposal_state.approvals);
     let is_authenticated = approved_weight >= u32::from(spec.quorum.get());
+    iroha_logger::info!(
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        approved_weight,
+        quorum = u32::from(spec.quorum.get()),
+        is_authenticated,
+        "multisig approval evaluated quorum"
+    );
 
     if is_authenticated {
         match proposal_state.is_relayed {
-            None => prune_down(state_transaction, &multisig_account, &instructions_hash)?,
+            None => {
+                iroha_logger::info!(
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    "multisig approval pruning proposal tree"
+                );
+                prune_down(state_transaction, &multisig_account, &instructions_hash)?;
+                iroha_logger::info!(
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    "multisig approval pruned proposal tree"
+                );
+            }
             Some(false) => {
                 proposal_state.is_relayed = Some(true);
                 store_multisig_proposal_state(state_transaction, &proposal_state)?;
@@ -1414,9 +1445,22 @@ fn execute_approve(
         }
 
         for instruction in proposal_state.instructions {
+            iroha_logger::info!(
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                approver = %authority,
+                instruction = ?instruction,
+                "multisig approval executing authenticated instruction"
+            );
             instruction
                 .execute(&multisig_account, state_transaction)
                 .map_err(ValidationFail::from)?;
+            iroha_logger::info!(
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                approver = %authority,
+                "multisig approval finished authenticated instruction"
+            );
         }
     }
 
@@ -1925,6 +1969,23 @@ fn persist_multisig_account_state(
     state_transaction: &mut StateTransaction<'_, '_>,
     account_state: &MultisigAccountState,
 ) -> Result<(), ValidationFail> {
+    let account = state_transaction
+        .world
+        .accounts
+        .get_mut(&account_state.account_id)
+        .ok_or_else(|| {
+            ValidationFail::InstructionFailed(InstructionExecutionError::Find(FindError::Account(
+                account_state.account_id.clone(),
+            )))
+        })?;
+    account
+        .metadata
+        .insert(spec_key(), Json::new(account_state.spec.clone()));
+    account.metadata.insert(
+        home_domain_key(),
+        Json::new(account_state.home_domain.clone()),
+    );
+
     let bytes = norito::to_bytes(account_state).map_err(multisig_state_encode_error)?;
     state_transaction
         .world
@@ -2402,6 +2463,94 @@ mod tests {
     }
 
     #[test]
+    fn register_persists_multisig_metadata_on_authority_account() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-register-persists-metadata"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+
+        let owner = KeyPair::random();
+        let owner_id = new_account_id(&owner);
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&owner_id, &mut state_transaction)
+            .expect("domain registration");
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &owner_id,
+            "register owner",
+        );
+
+        let signer = KeyPair::random();
+        let signer_id = new_account_id(&signer);
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &signer_id,
+            "register signer",
+        );
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let multisig_seed = new_account_id(&KeyPair::random());
+        execute_register(
+            &mut state_transaction,
+            &owner_id,
+            MultisigRegister::with_account(multisig_seed, domain_id.clone(), spec.clone()),
+        )
+        .expect("register multisig");
+
+        let registered_multisig_id = state_transaction
+            .world
+            .accounts_iter()
+            .find(|account| account.id().multisig_policy().is_some())
+            .map(|account| account.id().clone())
+            .expect("registered multisig account");
+        let account = state_transaction
+            .world
+            .account(&registered_multisig_id)
+            .expect("multisig account present");
+        let stored_spec = account
+            .metadata()
+            .get(&spec_key())
+            .cloned()
+            .expect("multisig/spec metadata");
+        let stored_spec: MultisigSpec = stored_spec
+            .try_into_any_norito()
+            .expect("multisig/spec should decode");
+        let stored_home_domain = account
+            .metadata()
+            .get(&home_domain_key())
+            .cloned()
+            .expect("multisig home-domain metadata");
+        let stored_home_domain: iroha_data_model::domain::DomainId = stored_home_domain
+            .try_into_any_norito()
+            .expect("home-domain should decode");
+
+        assert_eq!(
+            stored_spec, spec,
+            "registered authority must expose spec metadata"
+        );
+        assert_eq!(
+            stored_home_domain, domain_id,
+            "registered authority must expose home-domain metadata"
+        );
+    }
+
+    #[test]
     fn register_invalid_spec_does_not_materialize_missing_signatory() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -2615,6 +2764,22 @@ mod tests {
                 .account_roles_iter(&updated_account)
                 .any(|role| role == &signer_role),
             "multisig account should receive the signatory role"
+        );
+        let updated_account_data = state_transaction
+            .world
+            .account(&updated_account)
+            .expect("updated multisig account");
+        let metadata_spec = updated_account_data
+            .metadata()
+            .get(&spec_key())
+            .cloned()
+            .expect("updated multisig/spec metadata");
+        let metadata_spec: MultisigSpec = metadata_spec
+            .try_into_any_norito()
+            .expect("updated multisig/spec should decode");
+        assert_eq!(
+            metadata_spec, updated_spec,
+            "rekeyed authority should keep metadata spec in sync"
         );
     }
 

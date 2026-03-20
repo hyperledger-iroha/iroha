@@ -28,7 +28,7 @@ use crate::{
     host::{AccessLog, IVMHost},
     ivm::IVM,
     memory::Memory,
-    metadata::LITERAL_SECTION_MAGIC,
+    metadata::{CONTRACT_INTERFACE_SECTION_MAGIC, LITERAL_SECTION_MAGIC},
     mock_wsv::{MockWorldStateView, SpaceDirectoryAxtPolicy},
     parallel::StateUpdate,
     pointer_abi::{self, PointerType},
@@ -694,11 +694,6 @@ impl CoreHost {
         njson::Value::Object(map)
     }
 
-    fn load_u32(vm: &IVM, addr: usize) -> Option<u32> {
-        let slice = vm.memory.load_region(addr as u64, 4).ok()?;
-        Some(u32::from_le_bytes(slice.try_into().ok()?))
-    }
-
     fn load_u64(vm: &IVM, addr: usize) -> Option<u64> {
         let slice = vm.memory.load_region(addr as u64, 8).ok()?;
         Some(u64::from_le_bytes(slice.try_into().ok()?))
@@ -706,32 +701,56 @@ impl CoreHost {
 
     fn literal_table_info(vm: &IVM) -> Option<(usize, usize, usize, usize, usize)> {
         let limit = vm.pc() as usize;
-        let mut idx = 0usize;
-        while idx + 4 <= limit {
-            let buf = vm.memory.load_region(idx as u64, 4).ok()?;
-            if buf == LITERAL_SECTION_MAGIC {
-                let literal_start = idx;
-                let literal_count = Self::load_u32(vm, literal_start + 4)? as usize;
-                let post_pad = Self::load_u32(vm, literal_start + 8)? as usize;
-                let data_len = Self::load_u32(vm, literal_start + 12)? as usize;
-                let offsets_start = literal_start + 16;
-                let lits_bytes = literal_count.checked_mul(8)?;
-                let data_start = offsets_start.checked_add(lits_bytes)?;
-                let data_end = data_start.checked_add(data_len)?.checked_add(post_pad)?;
-                return Some((
-                    literal_start,
-                    offsets_start,
-                    data_start,
-                    data_end,
-                    literal_count,
-                ));
+        let prefix = vm.memory.load_region(0, limit as u64).ok()?;
+        let mut literal_start = 0usize;
+        if vm.metadata().version_minor == 1 {
+            if limit >= 8 && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC {
+                let contract_payload_len =
+                    u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
+                let contract_section_len = 8usize.checked_add(contract_payload_len)?;
+                literal_start = contract_section_len;
             }
-            idx += 1;
         }
-        if crate::dev_env::decode_trace_enabled() {
-            eprintln!("[CoreHost] literal table not found (limit=0x{limit:08x})");
+        if literal_start + 4 > limit
+            || prefix[literal_start..literal_start + 4] != LITERAL_SECTION_MAGIC
+        {
+            if crate::dev_env::decode_trace_enabled() {
+                eprintln!("[CoreHost] literal table not found (limit=0x{limit:08x})");
+            }
+            return None;
         }
-        None
+        if literal_start + 16 > limit {
+            return None;
+        }
+        let literal_count = u32::from_le_bytes(
+            prefix[literal_start + 4..literal_start + 8]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let post_pad = u32::from_le_bytes(
+            prefix[literal_start + 8..literal_start + 12]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let data_len = u32::from_le_bytes(
+            prefix[literal_start + 12..literal_start + 16]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let offsets_start = literal_start + 16;
+        let lits_bytes = literal_count.checked_mul(8)?;
+        let data_start = offsets_start.checked_add(lits_bytes)?;
+        let data_end = data_start.checked_add(data_len)?.checked_add(post_pad)?;
+        if data_end > limit {
+            return None;
+        }
+        Some((
+            literal_start,
+            offsets_start,
+            data_start,
+            data_end,
+            literal_count,
+        ))
     }
 
     fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
@@ -784,7 +803,7 @@ impl CoreHost {
     }
 
     fn expect_tlv(vm: &IVM, reg: usize, ty: PointerType) -> Result<(), VMError> {
-        let addr = vm.register(reg);
+        let addr = Self::resolve_code_tlv_addr(vm, vm.register(reg));
         // First, check type id directly from the TLV header to catch mismatches deterministically
         let hdr = vm.memory.load_region(addr, 7)?;
         let raw_type = u16::from_be_bytes([hdr[0], hdr[1]]);
@@ -820,6 +839,17 @@ impl CoreHost {
         Ok(())
     }
 
+    fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
+        let input_lo = Memory::INPUT_START;
+        let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
+        if addr >= input_lo && addr < input_hi {
+            return addr;
+        }
+        Self::resolve_literal_pointer(vm, addr as usize)
+            .map(|resolved| resolved as u64)
+            .unwrap_or(addr)
+    }
+
     fn decode_tlv<'a>(
         &self,
         vm: &'a IVM,
@@ -853,13 +883,14 @@ impl CoreHost {
         addr: u64,
         expected: PointerType,
     ) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let resolved_addr = Self::resolve_code_tlv_addr(vm, addr);
         let code_len = vm.memory.code_len();
-        if addr >= code_len || addr + 7 > code_len {
+        if resolved_addr >= code_len || resolved_addr + 7 > code_len {
             return Err(VMError::NoritoInvalid);
         }
         let mut hdr = [0u8; 7];
         vm.memory
-            .load_bytes(addr, &mut hdr)
+            .load_bytes(resolved_addr, &mut hdr)
             .map_err(|_| VMError::NoritoInvalid)?;
         let type_id = u16::from_be_bytes([hdr[0], hdr[1]]);
         if type_id != expected as u16 {
@@ -874,12 +905,12 @@ impl CoreHost {
             .and_then(|x| x.checked_add(IrohaHash::LENGTH))
             .ok_or(VMError::NoritoInvalid)?;
         let code_len = code_len as usize;
-        if addr as usize + total > code_len {
+        if resolved_addr as usize + total > code_len {
             return Err(VMError::NoritoInvalid);
         }
         let envelope = vm
             .memory
-            .load_region(addr, total as u64)
+            .load_region(resolved_addr, total as u64)
             .map_err(|_| VMError::NoritoInvalid)?;
         pointer_abi::validate_tlv_bytes(envelope)
     }
@@ -1822,7 +1853,9 @@ impl IVMHost for CoreHost {
                 if ptr == 0 {
                     return Ok(0);
                 }
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = vm
+                    .memory
+                    .validate_tlv(Self::resolve_code_tlv_addr(vm, ptr))?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {

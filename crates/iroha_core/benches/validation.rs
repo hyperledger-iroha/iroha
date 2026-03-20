@@ -1,5 +1,6 @@
 //! Benchmarks for transaction signing, acceptance, validation, and block signing.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(clippy::all)]
 #![allow(clippy::disallowed_types)] // benches use HashSet internally for metrics
 use std::sync::{Arc, LazyLock};
 

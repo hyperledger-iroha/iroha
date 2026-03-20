@@ -30,7 +30,7 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox},
     role::RoleId,
     smart_contract::manifest::{
-        AccessSetHints, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
+        AccessSetHints, EntryPointKind, TriggerCallback, TriggerDescriptor,
     },
     trigger::{Trigger, TriggerId},
 };
@@ -49,7 +49,10 @@ use super::{
 };
 use crate::{
     encoding, instruction,
-    metadata::{self, LITERAL_SECTION_MAGIC, ProgramMetadata},
+    metadata::{
+        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
+        EmbeddedEntrypointDescriptor, LITERAL_SECTION_MAGIC, ProgramMetadata,
+    },
     pointer_abi::PointerType,
     syscalls,
 };
@@ -58,12 +61,11 @@ const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
 const POINTER_STUB_LEN: usize = 24;
 const LITERAL_SHIFT_REG: u8 = 26;
-const FEATURE_BIT_ZK: u64 = 1 << 0;
-const FEATURE_BIT_VECTOR: u64 = 1 << 1;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
+const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone)]
 struct AccessSets {
@@ -97,10 +99,7 @@ impl StatePathHint {
 
 struct CompilationArtifacts {
     bytes: Vec<u8>,
-    entrypoints: Vec<EntrypointDescriptor>,
-    access_set_hints: Option<AccessSetHints>,
     access_hint_diagnostics: AccessHintDiagnostics,
-    kotoba_entries: Vec<iroha_data_model::smart_contract::manifest::KotobaTranslationEntry>,
 }
 
 /// Diagnostics emitted when access hints cannot be fully derived.
@@ -1352,6 +1351,336 @@ seiyaku Test {
                     .map(ParsedAccountId::into_account_id)
                     .expect("authority literal"),
             )
+        );
+    }
+
+    #[test]
+    fn manifest_trigger_decl_lowers_structured_data_filter() {
+        use iroha_data_model::events::{
+            EventFilterBox,
+            data::{
+                DataEventFilter,
+                prelude::{AssetEventFilter, AssetEventSet},
+            },
+        };
+
+        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
+            "aid:6872454e9c044641aa581ec5f3801619"
+                .parse()
+                .expect("asset definition id");
+        let src = r#"
+seiyaku Test {
+  kotoage fn run() {}
+  register_trigger intercept {
+    call run;
+    on data asset added {
+      asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+    }
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_eq!(run.triggers.len(), 1);
+        assert_eq!(
+            run.triggers[0].filter,
+            EventFilterBox::Data(DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_events(AssetEventSet::Added)
+                    .for_asset_definition(asset_definition),
+            ))
+        );
+    }
+
+    #[test]
+    fn manifest_trigger_decl_lowers_structured_data_filters_for_core_families() {
+        use iroha_data_model::{
+            DomainId,
+            account::{AccountId, ParsedAccountId},
+            asset::AssetId,
+            events::{
+                EventFilterBox,
+                data::{
+                    DataEventFilter,
+                    prelude::{
+                        AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter,
+                        AssetDefinitionEventSet, AssetEventFilter, AssetEventSet,
+                        ConfigurationEventFilter, ConfigurationEventSet, DomainEventFilter,
+                        DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
+                        NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet,
+                        TriggerEventFilter, TriggerEventSet,
+                    },
+                },
+            },
+            nft::NftId,
+            peer::PeerId,
+            role::RoleId,
+            trigger::TriggerId,
+        };
+
+        let account_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let account = AccountId::parse_encoded(account_literal)
+            .map(ParsedAccountId::into_account_id)
+            .expect("account");
+        let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
+        let peer: PeerId = peer_literal.parse().expect("peer");
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
+            "aid:6872454e9c044641aa581ec5f3801619"
+                .parse()
+                .expect("asset definition");
+        let asset = AssetId::new(asset_definition.clone(), account.clone());
+        let asset_literal = asset.canonical_encoded();
+        let nft: NftId = "n0$wonderland".parse().expect("nft");
+        let trigger_id: TriggerId = "wake".parse().expect("trigger");
+        let role_id: RoleId = "auditor".parse().expect("role");
+
+        let cases = vec![
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data peer added {{
+      peer "{peer_literal}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Peer(
+                    PeerEventFilter::new()
+                        .for_events(PeerEventSet::Added)
+                        .for_peer(peer),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data domain created {{
+      domain "{domain}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Domain(
+                    DomainEventFilter::new()
+                        .for_events(DomainEventSet::Created)
+                        .for_domain(domain.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data account created {{
+      account "{account_literal}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Account(
+                    AccountEventFilter::new()
+                        .for_events(AccountEventSet::Created)
+                        .for_account(account.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data asset added {{
+      asset "{asset_literal}";
+      asset_definition "{asset_definition}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Asset(
+                    AssetEventFilter::new()
+                        .for_events(AssetEventSet::Added)
+                        .for_asset(asset.clone())
+                        .for_asset_definition(asset_definition.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data asset_definition created {{
+      asset_definition "{asset_definition}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::AssetDefinition(
+                    AssetDefinitionEventFilter::new()
+                        .for_events(AssetDefinitionEventSet::Created)
+                        .for_asset_definition(asset_definition.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data nft created {{
+      nft "{nft}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Nft(
+                    NftEventFilter::new()
+                        .for_events(NftEventSet::Created)
+                        .for_nft(nft),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data trigger created {{
+      trigger "{trigger_id}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Trigger(
+                    TriggerEventFilter::new()
+                        .for_events(TriggerEventSet::Created)
+                        .for_trigger(trigger_id),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data role created {{
+      role "{role_id}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Role(
+                    RoleEventFilter::new()
+                        .for_events(RoleEventSet::Created)
+                        .for_role(role_id),
+                )),
+            ),
+            (
+                r#"
+seiyaku Test {
+  kotoage fn run() {}
+  register_trigger wake {
+    call run;
+    on data configuration changed {}
+  }
+}
+"#
+                .to_string(),
+                EventFilterBox::Data(DataEventFilter::Configuration(
+                    ConfigurationEventFilter::new().for_events(ConfigurationEventSet::Changed),
+                )),
+            ),
+            (
+                r#"
+seiyaku Test {
+  kotoage fn run() {}
+  register_trigger wake {
+    call run;
+    on data executor upgraded {}
+  }
+}
+"#
+                .to_string(),
+                EventFilterBox::Data(DataEventFilter::Executor(
+                    ExecutorEventFilter::new().for_events(ExecutorEventSet::Upgraded),
+                )),
+            ),
+        ];
+
+        let compiler = Compiler::new();
+        for (src, expected_filter) in cases {
+            let (_bytes, manifest) = compiler
+                .compile_source_with_manifest(&src)
+                .expect("compile manifest");
+            let entrypoints = manifest.entrypoints.expect("entrypoints present");
+            let run = entrypoints
+                .iter()
+                .find(|entry| entry.name == "run")
+                .expect("run entrypoint");
+            assert_eq!(run.triggers.len(), 1);
+            assert_eq!(run.triggers[0].filter, expected_filter);
+        }
+    }
+
+    #[test]
+    fn manifest_trigger_decl_lowers_pipeline_filter() {
+        use iroha_data_model::events::{
+            EventFilterBox,
+            pipeline::{BlockEventFilter, PipelineEventFilterBox},
+        };
+
+        let src = r#"
+seiyaku Test {
+  kotoage fn run() {}
+  register_trigger block_wake {
+    call run;
+    on pipeline block;
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        assert_eq!(run.triggers.len(), 1);
+        assert_eq!(
+            run.triggers[0].filter,
+            EventFilterBox::Pipeline(PipelineEventFilterBox::Block(BlockEventFilter::default(),))
         );
     }
 
@@ -3895,6 +4224,48 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::ResolveAccountAlias {
+                            dest,
+                            label,
+                            domain,
+                        } => {
+                            if let Some(label_str) = string_map
+                                .get(&(func_idx, *label))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, label_str);
+                            } else {
+                                let r = src_reg(label, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(domain_str) = string_map
+                                .get(&(func_idx, *domain))
+                                .map(|s| DataKey(DataKind::Domain, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, domain_str);
+                            } else {
+                                let r = src_reg(domain, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::GetTriggerEvent { dest } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(
@@ -6056,7 +6427,7 @@ impl Compiler {
         // Construct header using contract meta (if present) with compiler options as fallback
         let meta = ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode,
             vector_length: meta_decl
                 .and_then(|m| m.vector_length)
@@ -6316,27 +6687,46 @@ impl Compiler {
             Ok(off)
         };
 
-        // Compute literal table and patch LOADs. Default layout places the
-        // literal table and its data payload BEFORE the code so literal
-        // pointers remain within a small 12-bit LOAD offset from x0. When
-        // there are no literals we omit the padding to keep the code start
-        // offset equal to the header size (17), which many tests/tools assume:
-        //   - No literals: [ header | code ]
-        //   - With literals: [ header | pad(align8) | literal table | data | code ]
+        let entrypoint_descriptors = build_entrypoint_descriptors(
+            &typed,
+            &access_sets,
+            &ir_prog.functions,
+            &hint_reports,
+            &func_start_offsets,
+        )?;
+        let access_set_hints = build_access_set_hints(&access_sets, include_hints);
+        let kotoba_entries = build_kotoba_entries(&typed.kotoba_entries);
+        let mut feature_bits = 0u64;
+        if meta.mode & metadata::mode::ZK != 0 {
+            feature_bits |= CONTRACT_FEATURE_BIT_ZK;
+        }
+        if meta.mode & metadata::mode::VECTOR != 0 {
+            feature_bits |= CONTRACT_FEATURE_BIT_VECTOR;
+        }
+        let contract_interface = EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: COMPILER_FINGERPRINT.to_owned(),
+            features_bitmap: feature_bits,
+            access_set_hints: access_set_hints.clone(),
+            kotoba: kotoba_entries.clone(),
+            entrypoints: entrypoint_descriptors.clone(),
+        };
+
+        // Compute literal table and patch LOADs. Contract artifacts are laid out as:
+        //   [ header | CNTR | LTLB? | code ]
         let meta_bytes = meta.encode();
+        let contract_section = contract_interface.encode_section();
         let header_len = meta_bytes.len() as u64;
         let need_literals = !key_order.is_empty();
-        // Literal table base when present (aligned to 8 bytes after header)
-        let lit_base = header_len;
+        // Literal table base when present, immediately after the required CNTR section.
+        let lit_base = header_len + contract_section.len() as u64;
         // Literal table length and offsets
         let lit_count = key_order.len() as u64;
         let lit_size = lit_count * 8;
         let lit_header_size: u64 = if need_literals { 16 } else { 0 };
         let lit_entries_base = lit_base + lit_header_size;
-        let pad_prefix = (lit_base - header_len) as usize;
         let lit_entries_base_rel = lit_entries_base
-            .checked_sub(header_len)
-            .expect("literal base beyond header");
+            .checked_sub(lit_base)
+            .expect("literal entries base beyond literal section start");
         let data_base_rel = lit_entries_base_rel + lit_size;
         let mut lit_bytes: Vec<u8> = Vec::with_capacity(lit_size as usize);
         for k in key_order.iter() {
@@ -6355,20 +6745,19 @@ impl Compiler {
 
         // Final layout assembly
         let mut out = meta_bytes;
+        out.extend_from_slice(&contract_section);
         let mut post_pad: usize = 0;
         if need_literals {
-            let total_prefix =
-                pad_prefix + lit_header_size as usize + lit_size as usize + data_bytes.len();
+            let total_prefix = contract_section.len()
+                + lit_header_size as usize
+                + lit_size as usize
+                + data_bytes.len();
             let rem = total_prefix % 4;
             if rem != 0 {
                 post_pad = 4 - rem;
             }
         }
         if need_literals {
-            let pad = (lit_base - header_len) as usize;
-            if pad > 0 {
-                out.resize(out.len() + pad, 0u8);
-            }
             let data_len = data_bytes.len() as u32;
             out.extend_from_slice(&LITERAL_SECTION_MAGIC);
             out.extend_from_slice(&(lit_count as u32).to_le_bytes());
@@ -6402,29 +6791,16 @@ impl Compiler {
                 let _ = write!(&mut hex, "{b:02x}");
             }
             let _ = write!(&mut hex, " | ");
-            // Code bytes (first 64) start right after header when no literals,
-            // or after header+pad+lit when literals are present.
-            let code_off = if need_literals {
-                (lit_entries_base as usize) + lit_bytes.len()
-            } else {
-                header_len as usize
-            };
-            for b in out.iter().skip(code_off).take(64) {
+            // Code bytes (first 64) start after the CNTR/literal prefix.
+            for b in out.iter().skip(code_start).take(64) {
                 let _ = write!(&mut hex, "{b:02x}");
             }
             eprintln!("[kotodama-compile] header+lit(first64) | code(first64): {hex}");
         }
-        let entrypoint_descriptors =
-            build_entrypoint_descriptors(&typed, &access_sets, &ir_prog.functions, &hint_reports);
-        let access_set_hints = build_access_set_hints(&access_sets, include_hints);
-        let kotoba_entries = build_kotoba_entries(&typed.kotoba_entries);
 
         Ok(CompilationArtifacts {
             bytes: out,
-            entrypoints: entrypoint_descriptors,
-            access_set_hints,
             access_hint_diagnostics: hint_diagnostics,
-            kotoba_entries,
         })
     }
 
@@ -6465,6 +6841,9 @@ impl Compiler {
         let bytes = artifacts.bytes.clone();
         let parsed = crate::metadata::ProgramMetadata::parse(&bytes)
             .map_err(|e| format!("manifest parse header: {e}"))?;
+        let contract_interface = parsed.contract_interface.ok_or_else(|| {
+            "manifest parse header: missing embedded contract interface".to_owned()
+        })?;
         let code_hash = iroha_crypto::Hash::new(&bytes[parsed.header_len..]);
         let meta = parsed.metadata;
         // First release: emit manifests only for ABI v1
@@ -6473,21 +6852,20 @@ impl Compiler {
             v => return Err(format!("unsupported abi_version {v}; expected 1")),
         };
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
-        let mut feature_bits = 0u64;
-        if meta.mode & metadata::mode::ZK != 0 {
-            feature_bits |= FEATURE_BIT_ZK;
-        }
-        if meta.mode & metadata::mode::VECTOR != 0 {
-            feature_bits |= FEATURE_BIT_VECTOR;
-        }
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash_bytes)),
-            compiler_fingerprint: None,
-            features_bitmap: (feature_bits != 0).then_some(feature_bits),
-            access_set_hints: artifacts.access_set_hints,
-            entrypoints: (!artifacts.entrypoints.is_empty()).then_some(artifacts.entrypoints),
-            kotoba: (!artifacts.kotoba_entries.is_empty()).then_some(artifacts.kotoba_entries),
+            compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
+            features_bitmap: Some(contract_interface.features_bitmap),
+            access_set_hints: contract_interface.access_set_hints,
+            entrypoints: Some(
+                contract_interface
+                    .entrypoints
+                    .into_iter()
+                    .map(|entrypoint| entrypoint.to_manifest_descriptor())
+                    .collect(),
+            ),
+            kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
         Ok((bytes, manifest, artifacts.access_hint_diagnostics))
@@ -7399,7 +7777,8 @@ fn build_entrypoint_descriptors(
     access_sets: &[AccessSets],
     ir_functions: &[ir::Function],
     hint_reports: &[HintReport],
-) -> Vec<EntrypointDescriptor> {
+    func_start_offsets: &HashMap<String, usize>,
+) -> Result<Vec<EmbeddedEntrypointDescriptor>, String> {
     let mut hints_by_name: HashMap<&str, (&IndexSet<String>, &IndexSet<String>)> = HashMap::new();
     let mut hintable_by_name: HashMap<&str, bool> = HashMap::new();
     let mut hint_report_by_name: HashMap<&str, &HintReport> = HashMap::new();
@@ -7434,7 +7813,7 @@ fn build_entrypoint_descriptors(
 
     let build_descriptor = |func: &semantic::TypedFunction,
                             kind: EntryPointKind|
-     -> EntrypointDescriptor {
+     -> Result<EmbeddedEntrypointDescriptor, String> {
         let include_hints = hintable_by_name
             .get(func.name.as_str())
             .copied()
@@ -7466,7 +7845,11 @@ fn build_entrypoint_descriptors(
             .cloned()
             .unwrap_or_default();
         let report = hint_report_by_name.get(func.name.as_str()).copied();
-        EntrypointDescriptor {
+        let entry_pc = func_start_offsets
+            .get(&func.name)
+            .copied()
+            .ok_or_else(|| format!("missing function offset for entrypoint `{}`", func.name))?;
+        Ok(EmbeddedEntrypointDescriptor {
             name: func.name.clone(),
             kind,
             permission: func.modifiers.permission.clone(),
@@ -7477,10 +7860,11 @@ fn build_entrypoint_descriptors(
                 .map(|r| r.skipped_reasons.clone())
                 .unwrap_or_default(),
             triggers,
-        }
+            entry_pc: entry_pc as u64,
+        })
     };
 
-    let mut entrypoints: Vec<EntrypointDescriptor> = typed
+    let mut entrypoints: Vec<EmbeddedEntrypointDescriptor> = typed
         .items
         .iter()
         .filter_map(|item| match item {
@@ -7489,7 +7873,7 @@ fn build_entrypoint_descriptors(
                 Some(build_descriptor(func, kind))
             }
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     if entrypoints.is_empty()
         && let Some(func) = typed.items.iter().find_map(|item| match item {
@@ -7501,10 +7885,10 @@ fn build_entrypoint_descriptors(
             _ => None,
         })
     {
-        entrypoints.push(build_descriptor(func, EntryPointKind::Public));
+        entrypoints.push(build_descriptor(func, EntryPointKind::Public)?);
     }
 
-    entrypoints
+    Ok(entrypoints)
 }
 
 fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<EntryPointKind> {

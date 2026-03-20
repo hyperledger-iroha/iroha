@@ -171,15 +171,16 @@ use iroha_data_model as dm;
 use iroha_data_model::{
     account,
     block::consensus::{
-        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
-        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-        SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason, SumeragiDaGateSatisfaction,
-        SumeragiDaGateStatus, SumeragiDataspaceCommitment, SumeragiKuraStoreStatus,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus, SumeragiNposTimeoutsStatus,
-        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
-        SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRbcEvictedSession,
-        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
+        SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitPipelineStatus,
+        SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+        SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
+        SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
+        SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+        SumeragiMissingBlockFetchStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
+        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRoundGapStatus,
         SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
         SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
         SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
@@ -6033,261 +6034,6 @@ mod nts_tests {
     }
 }
 
-// Note: endpoint behavior is covered by unit tests in ivm_cli and doc-sync tests.
-
-fn protected_contract_namespaces_from_custom_parameter(state: &CoreState) -> Vec<String> {
-    use iroha_data_model::{name::Name, parameter::CustomParameterId};
-
-    let world = state.world_view();
-    let params = world.parameters();
-    let Ok(name) = Name::from_str("gov_protected_namespaces") else {
-        return Vec::new();
-    };
-    let id = CustomParameterId(name);
-    params
-        .custom()
-        .get(&id)
-        .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
-        .unwrap_or_default()
-}
-
-fn lane_manifest_protected_namespaces(state: &CoreState, lane_id: LaneId) -> Vec<String> {
-    let manifests = state.lane_manifests.read().clone();
-    manifests
-        .status(lane_id)
-        .and_then(|status| status.rules())
-        .map(|rules| {
-            rules
-                .protected_namespaces
-                .iter()
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn all_lane_manifest_protected_namespaces(state: &CoreState) -> Vec<String> {
-    let manifests = state.lane_manifests.read().clone();
-    let mut namespaces = BTreeSet::new();
-    for status in manifests.statuses() {
-        if let Some(rules) = status.rules() {
-            for namespace in &rules.protected_namespaces {
-                namespaces.insert(namespace.to_string());
-            }
-        }
-    }
-    namespaces.into_iter().collect()
-}
-
-fn protected_contract_namespaces(
-    state: &CoreState,
-    tx: &iroha_data_model::transaction::signed::SignedTransaction,
-) -> Vec<String> {
-    let accepted =
-        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(tx));
-    let nexus = state.nexus.read().clone();
-    let routing = iroha_core::queue::evaluate_policy_with_catalog(
-        &nexus.routing_policy,
-        &nexus.lane_catalog,
-        &nexus.dataspace_catalog,
-        &accepted,
-    )
-    .map_err(|err| {
-        iroha_logger::warn!(
-            reason = %err,
-            reason_label = err.as_label(),
-            "unable to resolve lane route while loading protected contract namespaces"
-        );
-        err
-    })
-    .ok();
-
-    let mut namespaces = routing
-        .map(|routing| lane_manifest_protected_namespaces(state, routing.lane_id))
-        .unwrap_or_else(|| all_lane_manifest_protected_namespaces(state));
-    if namespaces.is_empty() {
-        namespaces = all_lane_manifest_protected_namespaces(state);
-    }
-    if namespaces.is_empty() {
-        return protected_contract_namespaces_from_custom_parameter(state);
-    }
-    namespaces
-}
-
-fn fallback_contract_registration_id(
-    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
-) -> String {
-    manifest
-        .code_hash
-        .as_ref()
-        .map(|code_hash| {
-            let code_hash_hex = hex::encode(code_hash.as_ref());
-            format!("manifest_{}", &code_hash_hex[..16])
-        })
-        .unwrap_or_else(|| "manifest_registration".to_owned())
-}
-
-fn resolve_contract_registration_metadata(
-    requested_namespace: Option<&str>,
-    requested_contract_id: Option<&str>,
-    protected_namespaces: &[String],
-    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
-) -> Option<(String, String)> {
-    let requested_namespace = requested_namespace
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let requested_contract_id = requested_contract_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    if requested_namespace.is_none()
-        && requested_contract_id.is_none()
-        && protected_namespaces.is_empty()
-    {
-        return None;
-    }
-
-    let namespace = requested_namespace.or_else(|| {
-        protected_namespaces.iter().find_map(|candidate| {
-            let trimmed = candidate.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            iroha_data_model::name::Name::from_str(trimmed).ok()?;
-            Some(trimmed.to_owned())
-        })
-    })?;
-    let contract_id =
-        requested_contract_id.unwrap_or_else(|| fallback_contract_registration_id(manifest));
-    Some((namespace, contract_id))
-}
-
-/// Submit RegisterSmartContractCode as a signed transaction.
-#[iroha_futures::telemetry_future]
-pub async fn handle_post_contract_code(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<RegisterContractCodeDto>,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::{
-        isi::smart_contract_code, metadata::Metadata, name::Name, prelude as dm,
-    };
-
-    // Build the ISI
-    let isi = smart_contract_code::RegisterSmartContractCode {
-        manifest: req.manifest.clone(),
-    };
-    let mut tx_builder =
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_instructions(core::iter::once(dm::InstructionBox::from(isi)));
-    let preview_tx = tx_builder.clone().sign(&req.private_key.0);
-    let protected_namespaces = protected_contract_namespaces(&state, &preview_tx);
-    let mut metadata_attached = false;
-
-    if let Some((namespace, contract_id)) = resolve_contract_registration_metadata(
-        req.gov_namespace.as_deref(),
-        req.gov_contract_id.as_deref(),
-        &protected_namespaces,
-        &req.manifest,
-    ) {
-        let mut metadata = Metadata::default();
-        let gov_namespace_key =
-            Name::from_str("gov_namespace").expect("static metadata key `gov_namespace`");
-        metadata.insert(gov_namespace_key, IrohaJson::new(namespace.clone()));
-        let gov_contract_id_key =
-            Name::from_str("gov_contract_id").expect("static metadata key `gov_contract_id`");
-        metadata.insert(gov_contract_id_key, IrohaJson::new(contract_id.clone()));
-        let contract_namespace_key =
-            Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
-        metadata.insert(contract_namespace_key, IrohaJson::new(namespace));
-        let contract_id_key =
-            Name::from_str("contract_id").expect("static metadata key `contract_id`");
-        metadata.insert(contract_id_key, IrohaJson::new(contract_id));
-        tx_builder = tx_builder.with_metadata(metadata);
-        metadata_attached = true;
-    }
-
-    // Construct and sign a transaction
-    let tx = if metadata_attached {
-        tx_builder.sign(&req.private_key.0)
-    } else {
-        preview_tx
-    };
-
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/contracts/code")
-        .await
-        .map(|_| (StatusCode::ACCEPTED, ()))
-}
-
-#[cfg(test)]
-mod contract_registration_metadata_tests {
-    use iroha_crypto::Hash;
-
-    use super::*;
-
-    fn manifest_with_code_hash(
-        code_hash: Option<Hash>,
-    ) -> iroha_data_model::smart_contract::manifest::ContractManifest {
-        iroha_data_model::smart_contract::manifest::ContractManifest {
-            code_hash,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-    }
-
-    #[test]
-    fn registration_metadata_uses_first_valid_protected_namespace() {
-        let code_hash = Hash::new(b"manifest-test");
-        let manifest = manifest_with_code_hash(Some(code_hash));
-        let protected = vec![
-            "   ".to_owned(),
-            "not valid namespace".to_owned(),
-            "treasury".to_owned(),
-        ];
-
-        let resolved = resolve_contract_registration_metadata(None, None, &protected, &manifest)
-            .expect("metadata should resolve");
-
-        let expected_contract_id = format!("manifest_{}", &hex::encode(code_hash.as_ref())[..16]);
-        assert_eq!(resolved, ("treasury".to_owned(), expected_contract_id));
-    }
-
-    #[test]
-    fn registration_metadata_prefers_request_values() {
-        let manifest = manifest_with_code_hash(None);
-        let protected = vec!["treasury".to_owned()];
-
-        let resolved = resolve_contract_registration_metadata(
-            Some("  contracts  "),
-            Some("  demo.contract  "),
-            &protected,
-            &manifest,
-        )
-        .expect("metadata should resolve");
-
-        assert_eq!(
-            resolved,
-            ("contracts".to_owned(), "demo.contract".to_owned())
-        );
-    }
-
-    #[test]
-    fn registration_metadata_absent_without_request_or_protected_namespaces() {
-        let manifest = manifest_with_code_hash(None);
-        let resolved = resolve_contract_registration_metadata(None, None, &[], &manifest);
-        assert!(resolved.is_none());
-    }
-}
-
 /// Fetch on-chain contract manifest by code_hash.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
@@ -6739,11 +6485,10 @@ pub async fn handle_post_contract_instance(
         namespace,
         contract_id,
         code_b64,
-        manifest,
     } = req;
 
     let signer = KeyPair::from(private_key.0.clone());
-    let prepared = prepare_contract_deployment(&code_b64, manifest.as_ref(), &signer)?;
+    let prepared = prepare_contract_deployment(&code_b64, &signer)?;
 
     let instructions = [
         dm::InstructionBox::from(smart_contract_code::RegisterSmartContractCode {
@@ -6830,12 +6575,14 @@ pub async fn handle_post_contract_call(
         abi_hash,
         manifest,
     } = prepared;
+    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
+    ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
 
     let metadata = build_contract_call_metadata(
         &manifest,
         &namespace,
         &contract_id,
-        entrypoint.as_deref(),
+        Some(resolved_entrypoint),
         payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
@@ -6845,11 +6592,23 @@ pub async fn handle_post_contract_call(
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let instructions = build_direct_contract_call_instructions(
+        &authority,
+        &namespace,
+        &contract_id,
+        resolved_entrypoint,
+        payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+        &manifest,
+        &code_hash,
+        code_bytes,
+    )?;
     let builder = builder
         .with_metadata(metadata)
-        .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
-            code_bytes,
-        )));
+        .with_instructions(instructions);
+    let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let response =
@@ -6876,7 +6635,7 @@ pub async fn handle_post_contract_call(
                 tx_hash_hex: Some(tx_hash_hex),
                 signed_transaction_b64: None,
                 signing_message_b64: None,
-                entrypoint,
+                entrypoint: response_entrypoint.clone(),
             }
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
@@ -6943,7 +6702,7 @@ pub async fn handle_post_contract_call(
                 tx_hash_hex: Some(tx_hash_hex),
                 signed_transaction_b64: None,
                 signing_message_b64: None,
-                entrypoint,
+                entrypoint: response_entrypoint.clone(),
             }
         } else {
             let scaffold_key =
@@ -6966,7 +6725,7 @@ pub async fn handle_post_contract_call(
                 tx_hash_hex: None,
                 signed_transaction_b64: Some(signed_transaction_b64),
                 signing_message_b64: Some(signing_message_b64),
-                entrypoint,
+                entrypoint: response_entrypoint,
             }
         };
 
@@ -6988,6 +6747,31 @@ fn current_time_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_public_contract_entrypoint(
+    manifest: &manifest::ContractManifest,
+    selector: &str,
+) -> Result<()> {
+    let advertised_entrypoints = manifest.entrypoints.as_ref().ok_or_else(|| {
+        conversion_error(
+            "stored contract manifest does not advertise callable entrypoints".to_owned(),
+        )
+    })?;
+    let descriptor = advertised_entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{selector}`")))?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(conversion_error(format!(
+            "contract entrypoint `{selector}` is not a public by-call entrypoint"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -7037,8 +6821,9 @@ fn build_contract_call_metadata(
 }
 
 #[cfg(feature = "app_api")]
-fn derive_multisig_contract_call_trigger_id(
-    multisig_account_id: &iroha_data_model::account::AccountId,
+fn derive_contract_call_trigger_id(
+    prefix: &str,
+    action_authority: &iroha_data_model::account::AccountId,
     namespace: &str,
     contract_id: &str,
     entrypoint: &str,
@@ -7056,19 +6841,20 @@ fn derive_multisig_contract_call_trigger_id(
         .unwrap_or_default();
     let gas_asset_repr = gas_asset_id.unwrap_or_default();
     let seed = format!(
-        "{multisig_account_id}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
+        "{action_authority}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
         hex::encode(code_hash.as_ref())
     );
     let digest = blake3_hash(seed.as_bytes());
-    let trigger_name = format!("msig_cc_{}", &hex::encode(digest.as_bytes())[..24]);
+    let trigger_name = format!("{prefix}_{}", &hex::encode(digest.as_bytes())[..24]);
     let trigger_name = Name::from_str(&trigger_name)
         .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
     Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
 }
 
 #[cfg(feature = "app_api")]
-fn build_multisig_contract_call_instructions(
-    multisig_account_id: &iroha_data_model::account::AccountId,
+fn build_contract_call_trigger_instructions(
+    prefix: &str,
+    action_authority: &iroha_data_model::account::AccountId,
     namespace: &str,
     contract_id: &str,
     entrypoint: &str,
@@ -7079,12 +6865,10 @@ fn build_multisig_contract_call_instructions(
     manifest: &manifest::ContractManifest,
     code_hash: &Hash,
     code_bytes: Vec<u8>,
-) -> Result<(
-    Vec<iroha_data_model::isi::InstructionBox>,
-    HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
-)> {
-    let trigger_id = derive_multisig_contract_call_trigger_id(
-        multisig_account_id,
+) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
+    let trigger_id = derive_contract_call_trigger_id(
+        prefix,
+        action_authority,
         namespace,
         contract_id,
         entrypoint,
@@ -7111,30 +6895,129 @@ fn build_multisig_contract_call_instructions(
             iroha_data_model::transaction::IvmBytecode::from_compiled(code_bytes),
         ),
         iroha_data_model::trigger::action::Repeats::Exactly(1),
-        multisig_account_id.clone(),
+        action_authority.clone(),
         filter,
     )
     .with_metadata(trigger_metadata);
     let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
+    let execute_trigger = if let Some(payload_value) = payload.cloned() {
+        iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()).with_args(payload_value)
+    } else {
+        iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone())
+    };
+    // Exactly-once triggers self-expire after execution; an explicit unregister would
+    // race with that cleanup and reject the enclosing transaction on success.
     let instructions = vec![
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
             trigger,
         )),
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-            trigger_id.clone(),
-        )),
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Unregister::trigger(
-            trigger_id,
-        )),
+        iroha_data_model::isi::InstructionBox::from(execute_trigger),
     ];
+    Ok(instructions)
+}
+
+#[cfg(feature = "app_api")]
+fn build_direct_contract_call_instructions(
+    authority: &iroha_data_model::account::AccountId,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+    manifest: &manifest::ContractManifest,
+    code_hash: &Hash,
+    code_bytes: Vec<u8>,
+) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
+    build_contract_call_trigger_instructions(
+        "cc",
+        authority,
+        namespace,
+        contract_id,
+        entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+        manifest,
+        code_hash,
+        code_bytes,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn build_multisig_contract_call_instructions(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+    manifest: &manifest::ContractManifest,
+    code_hash: &Hash,
+    code_bytes: Vec<u8>,
+) -> Result<(
+    Vec<iroha_data_model::isi::InstructionBox>,
+    HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+)> {
+    let instructions = build_contract_call_trigger_instructions(
+        "msig_cc",
+        multisig_account_id,
+        namespace,
+        contract_id,
+        entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+        manifest,
+        code_hash,
+        code_bytes,
+    )?;
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
 }
 
 #[cfg(feature = "app_api")]
 const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
+
 #[cfg(feature = "app_api")]
-const MULTISIG_PROPOSAL_METADATA_PREFIX: &str = "multisig/proposals/";
+fn multisig_account_state_contract_key(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Name {
+    Name::from_str(&format!(
+        "multisig/account/{}",
+        HashOf::new(multisig_account_id)
+    ))
+    .expect("multisig account state contract key")
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_state_prefix(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Name {
+    Name::from_str(&format!(
+        "multisig/proposal/{}/",
+        HashOf::new(multisig_account_id)
+    ))
+    .expect("multisig proposal state prefix")
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_state_contract_key(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+) -> Name {
+    Name::from_str(&format!(
+        "{}{}",
+        multisig_proposal_state_prefix(multisig_account_id).as_ref(),
+        instructions_hash
+    ))
+    .expect("multisig proposal state contract key")
+}
 
 #[cfg(feature = "app_api")]
 fn multisig_not_found_error() -> Error {
@@ -7213,11 +7096,32 @@ fn load_multisig_spec(
     })?;
     let key =
         Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("static multisig spec metadata key");
-    let value = account.metadata().get(&key).cloned().ok_or_else(|| {
-        multisig_selector_validation_error(format!(
+    if let Some(value) = account.metadata().get(&key).cloned() {
+        return decode_multisig_spec_from_metadata(value);
+    }
+
+    let storage = world.smart_contract_state();
+    let contract_key = multisig_account_state_contract_key(multisig_account_id);
+    let Some(bytes) = storage.get(contract_key.as_ref()) else {
+        return Err(multisig_selector_validation_error(format!(
             "resolved account is not a multisig authority: {multisig_account_id}"
+        )));
+    };
+    let account_state = norito::decode_from_bytes::<
+        iroha_executor_data_model::isi::multisig::MultisigAccountState,
+    >(bytes)
+    .map_err(|err| {
+        conversion_error(format!(
+            "invalid native multisig account state on account: {err}"
         ))
     })?;
+    Ok(account_state.spec)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_multisig_spec_from_metadata(
+    value: IrohaJson,
+) -> Result<iroha_executor_data_model::isi::multisig::MultisigSpec> {
     value.try_into_any_norito().map_err(|err| {
         conversion_error(format!("invalid multisig spec metadata on account: {err}"))
     })
@@ -7243,20 +7147,27 @@ fn load_multisig_proposal_value(
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
 ) -> Result<Option<iroha_executor_data_model::isi::multisig::MultisigProposalValue>> {
     let world = state.world_view();
-    let account = world.account(multisig_account_id).map_err(|_| {
+    world.account(multisig_account_id).map_err(|_| {
         conversion_error(format!("multisig account not found: {multisig_account_id}"))
     })?;
-    let key = Name::from_str(&format!(
-        "{MULTISIG_PROPOSAL_METADATA_PREFIX}{instructions_hash}"
-    ))
-    .map_err(|err| conversion_error(format!("invalid multisig proposal metadata key: {err}")))?;
-    let Some(value) = account.metadata().get(&key).cloned() else {
+    let storage = world.smart_contract_state();
+    let key = multisig_proposal_state_contract_key(multisig_account_id, instructions_hash);
+    let Some(bytes) = storage.get(key.as_ref()) else {
         return Ok(None);
     };
-    value
-        .try_into_any_norito()
-        .map(Some)
-        .map_err(|err| conversion_error(format!("invalid multisig proposal metadata: {err}")))
+    let proposal_state = norito::decode_from_bytes::<
+        iroha_executor_data_model::isi::multisig::MultisigProposalState,
+    >(bytes)
+    .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+    Ok(Some(
+        iroha_executor_data_model::isi::multisig::MultisigProposalValue::new(
+            proposal_state.instructions,
+            proposal_state.proposed_at_ms,
+            proposal_state.expires_at_ms,
+            proposal_state.approvals,
+            proposal_state.is_relayed,
+        ),
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -7323,21 +7234,31 @@ fn list_multisig_nonterminal_proposals(
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
 ) -> Result<Vec<MultisigProposalEntryDto>> {
     let world = state.world_view();
-    let account = world.account(multisig_account_id).map_err(|_| {
+    world.account(multisig_account_id).map_err(|_| {
         conversion_error(format!("multisig account not found: {multisig_account_id}"))
     })?;
+    let storage = world.smart_contract_state();
+    let prefix = multisig_proposal_state_prefix(multisig_account_id);
+    let prefix_literal = prefix.as_ref().to_owned();
     let now_ms = current_time_millis();
     let mut proposals = Vec::new();
 
-    for (key, value) in account.metadata().iter() {
+    for (key, value) in storage.range(prefix.clone()..) {
         let key_str = key.as_ref();
-        let Some(hash_literal) = key_str.strip_prefix(MULTISIG_PROPOSAL_METADATA_PREFIX) else {
-            continue;
+        let Some(hash_literal) = key_str.strip_prefix(prefix_literal.as_str()) else {
+            break;
         };
-        let proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue =
-            value.clone().try_into_any_norito().map_err(|err| {
-                conversion_error(format!("invalid multisig proposal metadata: {err}"))
-            })?;
+        let proposal_state = norito::decode_from_bytes::<
+            iroha_executor_data_model::isi::multisig::MultisigProposalState,
+        >(value)
+        .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+        let proposal = iroha_executor_data_model::isi::multisig::MultisigProposalValue::new(
+            proposal_state.instructions,
+            proposal_state.proposed_at_ms,
+            proposal_state.expires_at_ms,
+            proposal_state.approvals,
+            proposal_state.is_relayed,
+        );
         if !multisig_proposal_is_nonterminal(spec, &proposal, now_ms) {
             continue;
         }
@@ -7374,7 +7295,8 @@ mod multisig_contract_call_tests {
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
 
-        let first = derive_multisig_contract_call_trigger_id(
+        let first = derive_contract_call_trigger_id(
+            "msig_cc",
             &multisig,
             "apps",
             "calc.v1",
@@ -7386,7 +7308,8 @@ mod multisig_contract_call_tests {
             &code_hash,
         )
         .expect("trigger id");
-        let second = derive_multisig_contract_call_trigger_id(
+        let second = derive_contract_call_trigger_id(
+            "msig_cc",
             &multisig,
             "apps",
             "calc.v1",
@@ -7400,7 +7323,8 @@ mod multisig_contract_call_tests {
         .expect("trigger id");
         assert_eq!(first, second);
 
-        let changed = derive_multisig_contract_call_trigger_id(
+        let changed = derive_contract_call_trigger_id(
+            "msig_cc",
             &multisig,
             "apps",
             "calc.v1",
@@ -7446,8 +7370,67 @@ mod multisig_contract_call_tests {
         )
         .expect("instructions");
 
-        assert_eq!(instructions.len(), 3);
+        assert_eq!(instructions.len(), 2);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod contract_entrypoint_validation_tests {
+    use iroha_data_model::smart_contract::manifest::{ContractManifest, EntrypointDescriptor};
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+
+    use super::*;
+
+    fn manifest_with_entrypoints(
+        entrypoints: Option<Vec<EntrypointDescriptor>>,
+    ) -> ContractManifest {
+        ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: Some("torii-tests".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints,
+            kotoba: None,
+            provenance: None,
+        }
+    }
+
+    fn expect_conversion(err: Error) -> String {
+        match err {
+            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))) => {
+                message
+            }
+            other => panic!("expected conversion error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_public_contract_entrypoint_rejects_missing_manifest_entrypoints() {
+        let manifest = manifest_with_entrypoints(None);
+        let err = ensure_public_contract_entrypoint(&manifest, "main")
+            .expect_err("missing entrypoints must fail");
+        let message = expect_conversion(err);
+        assert!(message.contains("does not advertise callable entrypoints"));
+    }
+
+    #[test]
+    fn ensure_public_contract_entrypoint_rejects_non_public_targets() {
+        let manifest = manifest_with_entrypoints(Some(vec![EntrypointDescriptor {
+            name: "boot".to_owned(),
+            kind: manifest::EntryPointKind::Hajimari,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }]));
+        let err = ensure_public_contract_entrypoint(&manifest, "boot")
+            .expect_err("non-public entrypoints must fail");
+        let message = expect_conversion(err);
+        assert!(message.contains("is not a public by-call entrypoint"));
     }
 }
 
@@ -7472,7 +7455,9 @@ mod multisig_selector_tests {
         permission, prelude as dm,
         query::error::QueryExecutionFail,
     };
-    use iroha_executor_data_model::isi::multisig::{MultisigProposalValue, MultisigSpec};
+    use iroha_executor_data_model::isi::multisig::{
+        MultisigAccountState, MultisigProposalValue, MultisigSpec,
+    };
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
@@ -7554,53 +7539,12 @@ mod multisig_selector_tests {
 
         let active_instructions = vec![dm::Log::new(dm::Level::INFO, "active".to_owned()).into()];
         let active_hash = HashOf::new(&active_instructions);
-        multisig_metadata.insert(
-            Name::from_str(&format!("{MULTISIG_PROPOSAL_METADATA_PREFIX}{active_hash}"))
-                .expect("proposal key"),
-            IrohaJson::new(MultisigProposalValue {
-                instructions: active_instructions,
-                proposed_at_ms: 1_700_000_000_000,
-                expires_at_ms: 4_000_000_000_000,
-                approvals: BTreeSet::from([signer_one_id.clone().into()]),
-                is_relayed: None,
-            }),
-        );
-
         let executed_instructions =
             vec![dm::Log::new(dm::Level::INFO, "executed".to_owned()).into()];
         let executed_hash = HashOf::new(&executed_instructions);
-        multisig_metadata.insert(
-            Name::from_str(&format!(
-                "{MULTISIG_PROPOSAL_METADATA_PREFIX}{executed_hash}"
-            ))
-            .expect("proposal key"),
-            IrohaJson::new(MultisigProposalValue {
-                instructions: executed_instructions,
-                proposed_at_ms: 1_700_000_000_001,
-                expires_at_ms: 4_000_000_000_000,
-                approvals: BTreeSet::from([
-                    signer_one_id.clone().into(),
-                    signer_two_id.clone().into(),
-                ]),
-                is_relayed: Some(true),
-            }),
-        );
 
         let expired_instructions = vec![dm::Log::new(dm::Level::INFO, "expired".to_owned()).into()];
         let expired_hash = HashOf::new(&expired_instructions);
-        multisig_metadata.insert(
-            Name::from_str(&format!(
-                "{MULTISIG_PROPOSAL_METADATA_PREFIX}{expired_hash}"
-            ))
-            .expect("proposal key"),
-            IrohaJson::new(MultisigProposalValue {
-                instructions: expired_instructions,
-                proposed_at_ms: 1_600_000_000_000,
-                expires_at_ms: 1,
-                approvals: BTreeSet::new(),
-                is_relayed: None,
-            }),
-        );
 
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
         let authority = signer_one_id.account().clone();
@@ -7612,12 +7556,59 @@ mod multisig_selector_tests {
         let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
         let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
 
+        let mut world = World::with(
+            [domain],
+            [multisig_account, signer_one_account, signer_two_account],
+            [],
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    active_hash,
+                    active_instructions,
+                    1_700_000_000_000,
+                    4_000_000_000_000,
+                    BTreeSet::from([signer_one_id.clone().into()]),
+                    None,
+                ),
+            )
+            .expect("encode active proposal state"),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &executed_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    executed_hash,
+                    executed_instructions,
+                    1_700_000_000_001,
+                    4_000_000_000_000,
+                    BTreeSet::from([signer_one_id.clone().into(), signer_two_id.clone().into()]),
+                    Some(true),
+                ),
+            )
+            .expect("encode executed proposal state"),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &expired_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    expired_hash,
+                    expired_instructions,
+                    1_600_000_000_000,
+                    1,
+                    BTreeSet::new(),
+                    None,
+                ),
+            )
+            .expect("encode expired proposal state"),
+        );
+
         (
-            World::with(
-                [domain],
-                [multisig_account, signer_one_account, signer_two_account],
-                [],
-            ),
+            world,
             multisig_account_id,
             signer_one_id.into(),
             signer_two_id.into(),
@@ -7627,18 +7618,34 @@ mod multisig_selector_tests {
     }
 
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 1,
             abi_version,
         };
         let mut out = meta.encode();
-        out.extend_from_slice(&code);
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "torii-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+        };
+        out.extend_from_slice(&interface.encode_section());
+        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         out
     }
 
@@ -7740,20 +7747,14 @@ mod multisig_selector_tests {
             .expect("grant CanEnactGovernance");
 
         let code = minimal_ivm_program(1);
+        let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
         let code_hash =
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
-        let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-        let manifest = manifest::ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: Some(abi_hash),
-            compiler_fingerprint: Some("torii-tests".to_owned()),
-            features_bitmap: Some(0),
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(authority_keypair);
+        assert_eq!(
+            verified.code_hash, code_hash,
+            "verified code hash must match stored bytes"
+        );
+        let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
         activate_instance(authority, namespace, contract_id, code_hash, &mut stx)
             .expect("activate instance");
@@ -7856,6 +7857,72 @@ mod multisig_selector_tests {
         .expect_err("non-multisig alias must fail");
         let message = expect_conversion(err);
         assert!(message.contains("resolved account is not a multisig authority"));
+    }
+
+    #[tokio::test]
+    async fn multisig_spec_falls_back_to_contract_state_when_metadata_is_missing() {
+        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let label_name: Name = "cbdc".parse().expect("label");
+
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let signer_one_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_one.public_key().clone());
+        let signer_two_id =
+            dm::ScopedAccountId::new(domain_id.clone(), signer_two.public_key().clone());
+
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let multisig_id = dm::ScopedAccountId::new_multisig(domain_id.clone(), policy);
+        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([
+                (signer_one_id.clone().into(), 1_u8),
+                (signer_two_id.clone().into(), 1_u8),
+            ]),
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+
+        let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name.clone());
+        let authority = signer_one_id.account().clone();
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let multisig_account = Account::new(multisig_id)
+            .with_label(Some(label))
+            .build(&authority);
+        let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
+        let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
+
+        let mut world = World::with(
+            [domain],
+            [multisig_account, signer_one_account, signer_two_account],
+            [],
+        );
+        let account_state =
+            MultisigAccountState::new(multisig_account_id.clone(), domain_id.clone(), spec.clone());
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_account_state_contract_key(&multisig_account_id),
+            norito::to_bytes(&account_state).expect("encode account state"),
+        );
+
+        let state = build_state(world);
+        let JsonBody(response) = handle_post_multisig_spec(
+            state,
+            NoritoJson(MultisigSpecRequestDto {
+                selector: alias_selector(&format!("{label_name}@{domain_id}")),
+            }),
+        )
+        .await
+        .expect("contract-state fallback should resolve spec");
+
+        assert_eq!(response.resolved_multisig_account_id, multisig_account_id);
+        assert_eq!(response.spec, spec);
     }
 
     #[tokio::test]
@@ -8087,6 +8154,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         abi_hash: _,
         manifest,
     } = prepared;
+    ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
         &namespace,
@@ -9259,36 +9327,6 @@ pub struct ContractCodeRecordDto {
     pub code_bytes: Option<Vec<u8>>,
 }
 
-/// Request body for submitting RegisterSmartContractCode via Torii.
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct RegisterContractCodeDto {
-    /// Account that authorizes the transaction
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key; Exposed for API transport
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Contract manifest to register on-chain
-    pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
-    /// Optional governance namespace metadata (`gov_namespace`).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub gov_namespace: Option<String>,
-    /// Optional governance contract id metadata (`gov_contract_id`).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub gov_contract_id: Option<String>,
-}
-
-#[allow(dead_code)]
-fn _assert_register_contract_code_dto_send() {
-    fn assert_send<T: Send>() {}
-    assert_send::<RegisterContractCodeDto>();
-}
-
 #[cfg(feature = "app_api")]
 #[allow(missing_copy_implementations)]
 #[derive(
@@ -9369,7 +9407,6 @@ struct PreparedContractDeployment {
 #[cfg(feature = "app_api")]
 fn prepare_contract_deployment(
     code_b64: &str,
-    manifest_override: Option<&manifest::ContractManifest>,
     signer: &KeyPair,
 ) -> core::result::Result<PreparedContractDeployment, Error> {
     let code_bytes = base64::engine::general_purpose::STANDARD
@@ -9382,68 +9419,17 @@ fn prepare_contract_deployment(
             ))
         })?;
 
-    let parsed = ivm::ProgramMetadata::parse(&code_bytes).map_err(|_| {
+    let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "invalid IVM header".into(),
-            ),
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    let code_hash = iroha_crypto::Hash::new(&code_bytes[parsed.header_len..]);
-    let metadata = parsed.metadata;
-
-    if metadata.abi_version != 1 {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "unsupported abi_version {}; expected 1",
-                metadata.abi_version
-            )),
-        )));
-    }
-
-    let abi_hash =
-        iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-
-    let mut manifest = manifest_override
-        .cloned()
-        .unwrap_or(manifest::ContractManifest {
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        });
-
-    if let Some(existing) = manifest.code_hash.as_ref() {
-        if existing != &code_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "manifest.code_hash mismatch with uploaded bytecode".into(),
-                ),
-            )));
-        }
-    }
-    manifest.code_hash = Some(code_hash);
-
-    if let Some(existing) = manifest.abi_hash.as_ref() {
-        if existing != &abi_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "manifest.abi_hash mismatch with computed ABI hash".into(),
-                ),
-            )));
-        }
-    }
-    manifest.abi_hash = Some(abi_hash);
-    let manifest = manifest.signed(signer);
+    let manifest = verified.manifest.signed(signer);
 
     Ok(PreparedContractDeployment {
         code_bytes,
-        code_hash,
-        abi_hash,
+        code_hash: verified.code_hash,
+        abi_hash: verified.abi_hash,
         manifest,
     })
 }
@@ -9455,7 +9441,6 @@ fn prepare_contract_call(
     contract_id: &str,
 ) -> core::result::Result<PreparedContractCall, Error> {
     use iroha_data_model::query::error::QueryExecutionFail;
-    use ivm::SyscallPolicy;
 
     let world = state.world_view();
     let binding = world
@@ -9478,76 +9463,32 @@ fn prepare_contract_call(
             ))
         })?;
 
-    let parsed = ivm::ProgramMetadata::parse(&code_bytes).map_err(|_| {
+    let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion("invalid IVM header".into()),
+            QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    let meta = parsed.metadata;
-    if meta.version_major != 1 {
+    let manifest = world
+        .contract_manifests()
+        .get(&binding)
+        .cloned()
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::NotFound,
+            ))
+        })?;
+    if manifest.signature_payload() != verified.manifest.signature_payload() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion(format!(
-                "unsupported program version {}.{}",
-                meta.version_major, meta.version_minor
-            )),
+            QueryExecutionFail::Conversion(
+                "stored manifest does not match the verified contract artifact".into(),
+            ),
         )));
-    }
-    if meta.abi_version != 1 {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion(format!(
-                "unsupported abi_version {}; expected 1",
-                meta.abi_version
-            )),
-        )));
-    }
-
-    let syscall_policy = SyscallPolicy::AbiV1;
-    let abi_hash = iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(syscall_policy));
-
-    let mut manifest =
-        world
-            .contract_manifests()
-            .get(&binding)
-            .cloned()
-            .unwrap_or(manifest::ContractManifest {
-                code_hash: None,
-                abi_hash: None,
-                compiler_fingerprint: None,
-                features_bitmap: None,
-                access_set_hints: None,
-                entrypoints: None,
-                kotoba: None,
-                provenance: None,
-            });
-
-    if let Some(existing) = manifest.code_hash {
-        if existing != binding {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::Conversion(
-                    "stored manifest.code_hash mismatch for instance binding".into(),
-                ),
-            )));
-        }
-    } else {
-        manifest.code_hash = Some(binding);
-    }
-
-    if let Some(existing) = manifest.abi_hash {
-        if existing != abi_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::Conversion(
-                    "stored manifest.abi_hash mismatch for bytecode".into(),
-                ),
-            )));
-        }
-    } else {
-        manifest.abi_hash = Some(abi_hash);
     }
 
     Ok(PreparedContractCall {
         code_bytes,
         code_hash: binding,
-        abi_hash,
+        abi_hash: verified.abi_hash,
         manifest,
     })
 }
@@ -9573,10 +9514,6 @@ pub struct DeployAndActivateInstanceDto {
     pub contract_id: String,
     /// Base64-encoded compiled `.to` bytecode
     pub code_b64: String,
-    /// Optional manifest overrides (compiler fingerprint, feature flags, access hints, etc.)
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<manifest::ContractManifest>,
 }
 
 #[cfg(feature = "app_api")]
@@ -10991,7 +10928,7 @@ pub async fn handle_post_contract_deploy(
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{isi::smart_contract_code, prelude as dm};
     let signer = KeyPair::from(req.private_key.0.clone());
-    let prepared = prepare_contract_deployment(&req.code_b64, None, &signer)?;
+    let prepared = prepare_contract_deployment(&req.code_b64, &signer)?;
 
     // Construct transaction: RegisterSmartContractCode + RegisterSmartContractBytes (store manifest + code)
     let isi_code = smart_contract_code::RegisterSmartContractCode {
@@ -13250,18 +13187,34 @@ mod deploy_tests {
     use super::*;
 
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 0,
             abi_version,
         };
         let mut out = meta.encode();
-        out.extend_from_slice(&code);
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "torii-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+        };
+        out.extend_from_slice(&interface.encode_section());
+        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         out
     }
 
@@ -24989,6 +24942,73 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("last_updated_ms", snap.commit_quorum.last_updated_ms),
     ]);
+    let commit_pipeline = json_object(vec![
+        json_entry("last_total_ms", snap.commit_pipeline.last_total_ms),
+        json_entry(
+            "last_validation_ms",
+            snap.commit_pipeline.last_validation_ms,
+        ),
+        json_entry(
+            "last_qc_rebuild_ms",
+            snap.commit_pipeline.last_qc_rebuild_ms,
+        ),
+        json_entry("last_gate_ms", snap.commit_pipeline.last_gate_ms),
+        json_entry("last_finalize_ms", snap.commit_pipeline.last_finalize_ms),
+        json_entry(
+            "last_drain_results_ms",
+            snap.commit_pipeline.last_drain_results_ms,
+        ),
+        json_entry(
+            "last_drain_qc_verify_ms",
+            snap.commit_pipeline.last_drain_qc_verify_ms,
+        ),
+        json_entry(
+            "last_drain_persist_ms",
+            snap.commit_pipeline.last_drain_persist_ms,
+        ),
+        json_entry(
+            "last_drain_kura_store_ms",
+            snap.commit_pipeline.last_drain_kura_store_ms,
+        ),
+        json_entry(
+            "last_drain_state_apply_ms",
+            snap.commit_pipeline.last_drain_state_apply_ms,
+        ),
+        json_entry(
+            "last_drain_state_commit_ms",
+            snap.commit_pipeline.last_drain_state_commit_ms,
+        ),
+        json_entry("ema_total_ms", snap.commit_pipeline.ema_total_ms),
+        json_entry("ema_validation_ms", snap.commit_pipeline.ema_validation_ms),
+        json_entry("ema_gate_ms", snap.commit_pipeline.ema_gate_ms),
+        json_entry("ema_finalize_ms", snap.commit_pipeline.ema_finalize_ms),
+    ]);
+    let round_gap = json_object(vec![
+        json_entry(
+            "last_deliver_to_state_commit_ms",
+            snap.round_gap.last_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "last_state_commit_to_next_propose_ms",
+            snap.round_gap.last_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "last_deliver_to_next_propose_ms",
+            snap.round_gap.last_deliver_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_state_commit_ms",
+            snap.round_gap.ema_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "ema_state_commit_to_next_propose_ms",
+            snap.round_gap.ema_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_next_propose_ms",
+            snap.round_gap.ema_deliver_to_next_propose_ms,
+        ),
+    ]);
     let settlement = settlement_snapshot_value(&snap.settlement);
     let dedup_evictions = json_object(vec![
         json_entry(
@@ -26224,6 +26244,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("locked_qc", locked_qc),
         json_entry("commit_qc", commit_qc),
         json_entry("commit_quorum", commit_quorum),
+        json_entry("commit_pipeline", commit_pipeline),
+        json_entry("round_gap", round_gap),
         json_entry("tx_queue", tx_queue),
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
@@ -27978,6 +28000,35 @@ pub async fn handle_v1_sumeragi_status(
                 signatures_set_b: snap.commit_quorum.signatures_set_b,
                 signatures_required: snap.commit_quorum.signatures_required,
                 last_updated_ms: snap.commit_quorum.last_updated_ms,
+            },
+            commit_pipeline: SumeragiCommitPipelineStatus {
+                last_total_ms: snap.commit_pipeline.last_total_ms,
+                last_validation_ms: snap.commit_pipeline.last_validation_ms,
+                last_qc_rebuild_ms: snap.commit_pipeline.last_qc_rebuild_ms,
+                last_gate_ms: snap.commit_pipeline.last_gate_ms,
+                last_finalize_ms: snap.commit_pipeline.last_finalize_ms,
+                last_drain_results_ms: snap.commit_pipeline.last_drain_results_ms,
+                last_drain_qc_verify_ms: snap.commit_pipeline.last_drain_qc_verify_ms,
+                last_drain_persist_ms: snap.commit_pipeline.last_drain_persist_ms,
+                last_drain_kura_store_ms: snap.commit_pipeline.last_drain_kura_store_ms,
+                last_drain_state_apply_ms: snap.commit_pipeline.last_drain_state_apply_ms,
+                last_drain_state_commit_ms: snap.commit_pipeline.last_drain_state_commit_ms,
+                ema_total_ms: snap.commit_pipeline.ema_total_ms,
+                ema_validation_ms: snap.commit_pipeline.ema_validation_ms,
+                ema_gate_ms: snap.commit_pipeline.ema_gate_ms,
+                ema_finalize_ms: snap.commit_pipeline.ema_finalize_ms,
+            },
+            round_gap: SumeragiRoundGapStatus {
+                last_deliver_to_state_commit_ms: snap.round_gap.last_deliver_to_state_commit_ms,
+                last_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .last_state_commit_to_next_propose_ms,
+                last_deliver_to_next_propose_ms: snap.round_gap.last_deliver_to_next_propose_ms,
+                ema_deliver_to_state_commit_ms: snap.round_gap.ema_deliver_to_state_commit_ms,
+                ema_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .ema_state_commit_to_next_propose_ms,
+                ema_deliver_to_next_propose_ms: snap.round_gap.ema_deliver_to_next_propose_ms,
             },
             view_change_proof_accepted_total: snap.view_change_proof_accepted_total,
             view_change_proof_stale_total: snap.view_change_proof_stale_total,
@@ -39380,6 +39431,9 @@ struct OfflineAllowanceListItem {
     certificate_id_hex: String,
     controller: AccountId,
     asset_id: String,
+    asset_definition_id: String,
+    asset_definition_name: String,
+    asset_definition_alias: Option<String>,
     registered_at_ms: u64,
     expires_at_ms: u64,
     policy_expires_at_ms: u64,
@@ -39636,32 +39690,46 @@ impl From<OfflineCounterSummary> for OfflineCounterSummaryListItem {
 }
 
 #[cfg(feature = "app_api")]
-impl From<OfflineAllowanceRecord> for OfflineAllowanceListItem {
-    fn from(record: OfflineAllowanceRecord) -> Self {
-        let certificate_id_hex = hex::encode(record.certificate_id().as_ref());
-        let controller = record.certificate.controller.clone();
-        let asset_id = record.certificate.allowance.asset.to_string();
-        let registered_at_ms = record.registered_at_ms;
-        let expires_at_ms = record.certificate.expires_at_ms;
-        let policy_expires_at_ms = record.certificate.policy.expires_at_ms;
-        let refresh_at_ms = allowance_refresh_at_ms(&record);
-        let verdict_id_hex = allowance_verdict_hex(&record);
-        let attestation_nonce_hex = allowance_attestation_nonce_hex(&record);
-        let remaining_amount = record.remaining_amount.clone();
-        Self {
-            certificate_id_hex,
-            controller,
-            asset_id,
-            registered_at_ms,
-            expires_at_ms,
-            policy_expires_at_ms,
-            refresh_at_ms,
-            verdict_id_hex,
-            attestation_nonce_hex,
-            remaining_amount,
-            record,
-        }
-    }
+fn project_offline_allowance_item(
+    record: OfflineAllowanceRecord,
+    world: &impl WorldReadOnly,
+) -> Result<OfflineAllowanceListItem> {
+    let certificate_id_hex = hex::encode(record.certificate_id().as_ref());
+    let controller = record.certificate.controller.clone();
+    let asset_id = record.certificate.allowance.asset.to_string();
+    let definition_id = record.certificate.allowance.asset.definition().clone();
+    let asset_definition_id = definition_id.to_string();
+    let definition = world.asset_definition(&definition_id).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "offline allowance `{certificate_id_hex}` references missing asset definition `{asset_definition_id}`",
+        )))
+    })?;
+    let registered_at_ms = record.registered_at_ms;
+    let expires_at_ms = record.certificate.expires_at_ms;
+    let policy_expires_at_ms = record.certificate.policy.expires_at_ms;
+    let refresh_at_ms = allowance_refresh_at_ms(&record);
+    let verdict_id_hex = allowance_verdict_hex(&record);
+    let attestation_nonce_hex = allowance_attestation_nonce_hex(&record);
+    let remaining_amount = record.remaining_amount.clone();
+    Ok(OfflineAllowanceListItem {
+        certificate_id_hex,
+        controller,
+        asset_id,
+        asset_definition_id,
+        asset_definition_name: definition.name().clone(),
+        asset_definition_alias: definition
+            .alias()
+            .as_ref()
+            .map(|alias| alias.as_ref().to_owned()),
+        registered_at_ms,
+        expires_at_ms,
+        policy_expires_at_ms,
+        refresh_at_ms,
+        verdict_id_hex,
+        attestation_nonce_hex,
+        remaining_amount,
+        record,
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -40101,6 +40169,20 @@ fn offline_allowance_item_to_json(item: &OfflineAllowanceListItem, now_ms: u64) 
     );
     map.insert("asset_id".into(), Value::from(item.asset_id.clone()));
     map.insert(
+        "asset_definition_id".into(),
+        Value::from(item.asset_definition_id.clone()),
+    );
+    map.insert(
+        "asset_definition_name".into(),
+        Value::from(item.asset_definition_name.clone()),
+    );
+    map.insert(
+        "asset_definition_alias".into(),
+        item.asset_definition_alias
+            .clone()
+            .map_or(Value::Null, Value::from),
+    );
+    map.insert(
         "registered_at_ms".into(),
         Value::from(item.registered_at_ms),
     );
@@ -40471,30 +40553,31 @@ pub async fn handle_v1_offline_allowances(
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
-    let mapped_iter = records.into_iter().filter_map({
-        let selectors = selectors;
-        let extra_filters = extra_filters;
-        move |record| {
-            if let Some(expr) = filter_ref {
-                if !offline_allowance_filter_object(expr, &record) {
-                    return None;
-                }
-            }
-            if !extra_filters.matches(&record) {
-                return None;
-            }
-            let item = OfflineAllowanceListItem::from(record);
-            if let Some(expr) = projection_ref {
-                if !offline_allowance_filter_projection(expr, &item) {
-                    return None;
-                }
-            }
-            let key = offline_allowance_sort_key(&item.record, &selectors);
-            Some((key, item))
+    let mut projected = Vec::new();
+    for record in records {
+        if let Some(expr) = filter_ref
+            && !offline_allowance_filter_object(expr, &record)
+        {
+            continue;
         }
-    });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+        if !extra_filters.matches(&record) {
+            continue;
+        }
+        let item = project_offline_allowance_item(record, &world)?;
+        if let Some(expr) = projection_ref
+            && !offline_allowance_filter_projection(expr, &item)
+        {
+            continue;
+        }
+        let key = offline_allowance_sort_key(&item.record, &selectors);
+        projected.push((key, item));
+    }
+    let (items, total) = collect_page_streaming(
+        projected.into_iter(),
+        pagination.offset,
+        pagination.limit,
+        None,
+    );
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -40653,26 +40736,28 @@ pub async fn handle_v1_offline_allowances_query(
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
-    let mapped_iter = records.into_iter().filter_map({
-        let selectors = selectors;
-        move |record| {
-            if let Some(expr) = filter_ref {
-                if !offline_allowance_filter_object(expr, &record) {
-                    return None;
-                }
-            }
-            let item = OfflineAllowanceListItem::from(record);
-            if let Some(expr) = projection_ref {
-                if !offline_allowance_filter_projection(expr, &item) {
-                    return None;
-                }
-            }
-            let key = offline_allowance_sort_key(&item.record, &selectors);
-            Some((key, item))
+    let mut projected = Vec::new();
+    for record in records {
+        if let Some(expr) = filter_ref
+            && !offline_allowance_filter_object(expr, &record)
+        {
+            continue;
         }
-    });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+        let item = project_offline_allowance_item(record, &world)?;
+        if let Some(expr) = projection_ref
+            && !offline_allowance_filter_projection(expr, &item)
+        {
+            continue;
+        }
+        let key = offline_allowance_sort_key(&item.record, &selectors);
+        projected.push((key, item));
+    }
+    let (items, total) = collect_page_streaming(
+        projected.into_iter(),
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+    );
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -46911,6 +46996,8 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     use crate::filter::FieldPath;
     use crate::{json_array, json_object, json_value};
+    #[cfg(feature = "app_api")]
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
 
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         json_object(pairs)
@@ -47114,7 +47201,7 @@ mod adapter_filter_tests {
 
     #[cfg(all(test, feature = "app_api"))]
     fn sample_allowance_record() -> OfflineAllowanceRecord {
-        use iroha_crypto::{PublicKey, Signature};
+        use iroha_crypto::Signature;
         use iroha_test_samples::ALICE_ID;
 
         let controller = ALICE_ID.clone();
@@ -47130,10 +47217,10 @@ mod adapter_filter_tests {
                     amount: Numeric::new(1_000, 0),
                     commitment: vec![0xAA; 32],
                 },
-                spend_public_key: PublicKey::from_str(
-                    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-                )
-                .expect("public key"),
+                spend_public_key: controller
+                    .try_signatory()
+                    .expect("single-signature controller")
+                    .clone(),
                 attestation_report: Vec::new(),
                 issued_at_ms: 1_700_000_000_000,
                 expires_at_ms: 1_900_000_000_000,
@@ -47158,6 +47245,47 @@ mod adapter_filter_tests {
         }
     }
 
+    #[cfg(all(test, feature = "app_api"))]
+    fn sample_allowance_world(record: &OfflineAllowanceRecord) -> World {
+        let domain_id = record
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone();
+        let controller = record.certificate.controller.clone();
+        let domain = Domain {
+            id: domain_id.clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: controller.clone(),
+        };
+        let account = Account {
+            id: controller.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::from([domain_id]),
+        };
+        let asset_definition = AssetDefinition {
+            id: record.certificate.allowance.asset.definition().clone(),
+            name: "Allowance Points".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Default::default(),
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: Default::default(),
+            owned_by: controller,
+            total_quantity: Numeric::zero(),
+            confidential_policy: Default::default(),
+        };
+        World::with([domain], [account], [asset_definition])
+    }
+
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_allowance_filter_validator_accepts_verdict_hex() {
@@ -47172,6 +47300,12 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_filters_match_new_metadata_fields() {
         let record = sample_allowance_record();
+        let state = CoreState::new_for_testing(
+            sample_allowance_world(&record),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
         let verdict_hex = allowance_verdict_hex(&record).expect("verdict id");
         let refresh_at = allowance_refresh_at_ms(&record).expect("refresh timestamp");
 
@@ -47180,7 +47314,7 @@ mod adapter_filter_tests {
             Value::from(verdict_hex.clone()),
         );
         assert!(offline_allowance_filter_object(&verdict_expr, &record));
-        let item = OfflineAllowanceListItem::from(record.clone());
+        let item = project_offline_allowance_item(record.clone(), &world).expect("projection");
         assert!(offline_allowance_filter_projection(&verdict_expr, &item));
 
         let refresh_expr = FilterExpr::Lt(
@@ -47188,7 +47322,7 @@ mod adapter_filter_tests {
             Value::from(refresh_at + 1),
         );
         assert!(offline_allowance_filter_object(&refresh_expr, &record));
-        let item = OfflineAllowanceListItem::from(record.clone());
+        let item = project_offline_allowance_item(record.clone(), &world).expect("projection");
         assert!(offline_allowance_filter_projection(&refresh_expr, &item));
     }
 
@@ -47196,13 +47330,48 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_item_json_includes_verdict_metadata() {
         let record = sample_allowance_record();
+        let state = CoreState::new_for_testing(
+            sample_allowance_world(&record),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
         let verdict_hex = allowance_verdict_hex(&record).expect("verdict id");
         let nonce_hex = allowance_attestation_nonce_hex(&record).expect("nonce");
         let refresh_at = allowance_refresh_at_ms(&record).expect("refresh timestamp");
-        let item = OfflineAllowanceListItem::from(record);
+        let expected_asset_id = record.certificate.allowance.asset.to_string();
+        let expected_definition_id = record.certificate.allowance.asset.definition().to_string();
+        let item = project_offline_allowance_item(record, &world).expect("projection");
         let now_ms = refresh_at.saturating_sub(500);
         let value = offline_allowance_item_to_json(&item, now_ms).expect("json");
         let object = value.as_object().expect("json object");
+        assert_eq!(
+            object
+                .get("asset_id")
+                .and_then(Value::as_str)
+                .expect("asset id"),
+            expected_asset_id
+        );
+        assert_eq!(
+            object
+                .get("asset_definition_id")
+                .and_then(Value::as_str)
+                .expect("asset definition id"),
+            expected_definition_id
+        );
+        assert_eq!(
+            object
+                .get("asset_definition_name")
+                .and_then(Value::as_str)
+                .expect("asset definition name"),
+            "Allowance Points"
+        );
+        assert!(
+            object
+                .get("asset_definition_alias")
+                .is_some_and(Value::is_null),
+            "asset_definition_alias should be present and null"
+        );
         assert_eq!(
             object
                 .get("verdict_id_hex")
@@ -47259,6 +47428,53 @@ mod adapter_filter_tests {
                 .expect("deadline remaining"),
             500
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn offline_allowance_projection_missing_asset_definition_returns_internal_error() {
+        let record = sample_allowance_record();
+        let domain_id = record
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone();
+        let controller = record.certificate.controller.clone();
+        let world = World::with(
+            [Domain {
+                id: domain_id.clone(),
+                logo: None,
+                metadata: Metadata::default(),
+                owned_by: controller.clone(),
+            }],
+            [Account {
+                id: controller,
+                metadata: Metadata::default(),
+                label: None,
+                uaid: None,
+                opaque_ids: Vec::new(),
+                linked_domains: BTreeSet::from([domain_id]),
+            }],
+            Vec::<AssetDefinition>::new(),
+        );
+
+        let state = CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
+        let err = match project_offline_allowance_item(record.clone(), &world) {
+            Ok(_) => panic!("projection must fail"),
+            Err(err) => err,
+        };
+        let expected_definition_id = record.certificate.allowance.asset.definition().to_string();
+        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = err else {
+            panic!("expected internal error");
+        };
+        assert!(message.contains(expected_definition_id.as_str()));
     }
 
     #[cfg(feature = "app_api")]
@@ -49481,7 +49697,10 @@ mod tests {
 
     use http::StatusCode;
     use http_body_util::BodyExt;
-    use iroha_core::{sumeragi::status, telemetry::StateTelemetry};
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::status,
+        telemetry::StateTelemetry,
+    };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         block::BlockHeader,

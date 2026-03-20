@@ -498,6 +498,12 @@ pub enum Instr {
     GetAuthority {
         dest: Temp,
     },
+    /// Resolve a stable `(label, domain)` alias to the current AccountId.
+    ResolveAccountAlias {
+        dest: Temp,
+        label: Temp,
+        domain: Temp,
+    },
     /// Load trigger event payload (`Json*`) into `dest` (host-provided).
     GetTriggerEvent {
         dest: Temp,
@@ -2965,6 +2971,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::Const { dest: t, value: 0 });
                     t
                 }
+                "resolve_account_alias" => {
+                    let label = lower_expr(ctx, &args[0], vars);
+                    let domain = lower_expr(ctx, &args[1], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::ResolveAccountAlias {
+                        dest,
+                        label,
+                        domain,
+                    });
+                    dest
+                }
                 "build_submit_ballot_inline" => {
                     let election_id = lower_expr(ctx, &args[0], vars);
                     let ciphertext = lower_expr(ctx, &args[1], vars);
@@ -4015,6 +4032,28 @@ mod tests {
         assert!(
             saw_trigger_event,
             "expected GetTriggerEvent instruction in lowered IR"
+        );
+    }
+
+    #[test]
+    fn lower_resolve_account_alias_builtin() {
+        let src =
+            "fn main() { let _acct = resolve_account_alias(name(\"banking\"), domain(\"sbp\")); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_resolve_account_alias = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::ResolveAccountAlias { .. } = instr {
+                    saw_resolve_account_alias = true;
+                }
+            }
+        }
+        assert!(
+            saw_resolve_account_alias,
+            "expected ResolveAccountAlias instruction in lowered IR"
         );
     }
 

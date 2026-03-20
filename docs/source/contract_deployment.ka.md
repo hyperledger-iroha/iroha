@@ -2,150 +2,161 @@
 lang: ka
 direction: ltr
 source: docs/source/contract_deployment.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 0f2b1d7d027d715eac5a3ca8be29dea8f0e76013e948947a4de66108ac561f34
-source_last_modified: "2026-01-22T14:58:53.689594+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 747a7ac905ca4b698ea6cc89d384a1ee11db13953440d3f35a1691ce78638e52
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 title: Contract Deployment (.to) — API & Workflow
 translator: machine-google-reviewed
 ---
 
-სტატუსი: განხორციელდა და განხორციელდა Torii, CLI და ძირითადი დაშვების ტესტებით (ნოე. 2025).
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-## მიმოხილვა
+# Contract Deployment (.to) — API & Workflow
 
-- განათავსეთ კომპილირებული IVM ბაიტეკოდი (`.to`) Torii-ზე გაგზავნით ან გაცემით
-  `RegisterSmartContractCode`/`RegisterSmartContractBytes` ინსტრუქციები
-  პირდაპირ.
-- კვანძები ხელახლა გამოთვლიან `code_hash` და კანონიკურ ABI ჰეშს ადგილობრივად; შეუსაბამობები
-  უარყოფენ დეტერმინისტულად.
-- შენახული არტეფაქტები ცხოვრობენ `contract_manifests`-ის ჯაჭვის ქვეშ და
-  `contract_code` რეესტრები. ავლენს მხოლოდ საცნობარო ჰეშებს და რჩება მცირე;
-  კოდის ბაიტი ჩაწერილია `code_hash`-ით.
-- დაცულ სახელთა სივრცეებს შეიძლება მოითხოვონ ამოქმედებული მმართველობის წინადადება ა
-  განლაგება დასაშვებია. დაშვების გზა ეძებს წინადადების დატვირთვას და
-  ახორციელებს `(namespace, contract_id, code_hash, abi_hash)` თანასწორობას, როდესაც
-  სახელთა სივრცე დაცულია.
+Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
 
-## შენახული არტეფაქტები და შენახვა
+## Overview
 
-- `RegisterSmartContractCode` აყენებს/ჩაწერს მანიფესტს მოცემულისთვის
-  `code_hash`. როდესაც იგივე ჰეში უკვე არსებობს, ის იცვლება ახლით
-  მანიფესტი.
-- `RegisterSmartContractBytes` ინახავს შედგენილ პროგრამას ქვეშ
-  `contract_code[code_hash]`. თუ ჰეშის ბაიტები უკვე არსებობს, ისინი უნდა ემთხვეოდეს
-  ზუსტად; განსხვავებული ბაიტი იწვევს უცვლელ დარღვევას.
-- კოდის ზომა იფარება მორგებული პარამეტრით `max_contract_code_bytes`
-  (ნაგულისხმევი 16 MiB). გააუქმეთ იგი ადრე `SetParameter(Custom)` ტრანზაქციის საშუალებით
-  უფრო დიდი არტეფაქტების რეგისტრაცია.
-- შენახვა შეუზღუდავია: მანიფესტები და კოდი ხელმისაწვდომი რჩება ცალსახად
-  ამოღებულია სამომავლო მმართველობის პროცესში. არ არსებობს TTL ან ავტომატური GC.
+- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
+  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
+  directly.
+- Contract `.to` artifacts are self-describing: the required `CNTR` section
+  embeds the contract interface ahead of the executable stream, and Torii
+  derives the on-chain `ContractManifest` from that section after verification.
+- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
+  reject deterministically.
+- Stored artifacts live under the on-chain `contract_manifests` and
+  `contract_code` registries. Manifests reference hashes only and remain small;
+  code bytes are keyed by `code_hash`.
+- Protected namespaces can require an enacted governance proposal before a
+  deployment is admitted. The admission path looks up the proposal payload and
+  enforces `(namespace, contract_id, code_hash, abi_hash)` equality when the
+  namespace is protected.
 
-## მისაღები მილსადენი
+## Stored Artifacts & Retention
 
-- ვალიდატორი აანალიზებს IVM სათაურს, ახორციელებს `version_major == 1`-ს და ამოწმებს
-  `abi_version == 1`. უცნობი ვერსიები დაუყოვნებლივ უარყოფენ; არ არის გაშვების დრო
-  გადართვა.
-- როდესაც მანიფესტი უკვე არსებობს `code_hash`-ისთვის, ვალიდაცია უზრუნველყოფს
-  შენახული `code_hash`/`abi_hash` უდრის გამოთვლილ მნიშვნელობებს წარმოდგენილიდან
-  პროგრამა. შეუსაბამობა წარმოშობს `Manifest{Code,Abi}HashMismatch` შეცდომებს.
-- დაცულ სახელთა სივრცეებზე გათვლილი ტრანზაქციები უნდა შეიცავდეს მეტამონაცემების გასაღებებს
-  `gov_namespace` და `gov_contract_id`. მისაღები გზა ადარებს მათ
-  ამოქმედებული `DeployContract` წინადადებების წინააღმდეგ; თუ შესატყვისი წინადადება არ არსებობს
-  ტრანზაქცია უარყოფილია `NotPermitted`-ით.
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash`. When the same hash already exists, it is replaced with the new
+  manifest.
+- `RegisterSmartContractBytes` stores the compiled program under
+  `contract_code[code_hash]`. If bytes for a hash already exist they must match
+  exactly; differing bytes raise an invariant violation.
+- Code size is capped by the custom parameter `max_contract_code_bytes`
+  (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
+  registering larger artifacts.
+- Retention is unbounded: manifests and code remain available until explicitly
+  removed in a future governance workflow. There is no TTL or automatic GC.
 
-## Torii საბოლოო წერტილები (მახასიათებელი `app_api`)- `POST /v1/contracts/deploy`
-  - მოთხოვნის ტექსტი: `DeployContractDto` (იხილეთ `docs/source/torii_contracts_api.md` ველის დეტალებისთვის).
-  - Torii დეკოდირებს base64 დატვირთვას, ითვლის ორივე ჰეშს, აშენებს მანიფესტს,
-    და წარუდგენს `RegisterSmartContractCode` პლუსს
-    `RegisterSmartContractBytes` ხელმოწერილი ტრანზაქციის სახელით
-    გამრეკელი.
-  - პასუხი: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - შეცდომები: არასწორი base64, მხარდაჭერილი ABI ვერსია, აკლია ნებართვა
-    (`CanRegisterSmartContractCode`), ზომის ლიმიტის გადაჭარბება, მართვის კარიბჭე.
-- `POST /v1/contracts/code`
-  - იღებს `RegisterContractCodeDto` (ავტორიტეტი, პირადი გასაღები, მანიფესტი) და წარადგენს მხოლოდ
-    `RegisterSmartContractCode`. გამოიყენეთ, როდესაც მანიფესტები დადგმულია ცალკე
-    ბაიტიკოდი.
+## Admission pipeline
+
+- Contract deployment parses the artifact, requires IVM `1.1`, requires the
+  embedded `CNTR` section, and verifies the embedded interface against the
+  decoded executable stream before any manifest is stored.
+- Verification fails closed on malformed sections, duplicate/invalid
+  entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
+  / ABI mismatches, or unsupported metadata.
+- The canonical manifest is built from the verified `CNTR` payload, signed by
+  the submitting key, and then stored together with the uploaded bytecode.
+- Transactions targeting protected namespaces must include metadata keys
+  `gov_namespace` and `gov_contract_id`. The admission path compares them
+  against enacted `DeployContract` proposals; if no matching proposal exists the
+  transaction is rejected with `NotPermitted`.
+
+## Torii endpoints (feature `app_api`)
+
+- `POST /v1/contracts/deploy`
+  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
+  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
+    derives the manifest from the artifact itself, and submits `RegisterSmartContractCode` plus
+    `RegisterSmartContractBytes` in a signed transaction on behalf of the
+    caller.
+  - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
+  - Errors: invalid base64, invalid contract artifact, missing permission
+    (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
 - `POST /v1/contracts/instance`
-  - იღებს `DeployAndActivateInstanceDto` (ავტორიტეტი, პირადი გასაღები, სახელთა სივრცე/contract_id, `code_b64`, არჩევითი მანიფესტის უგულებელყოფა) და ავრცელებს + ააქტიურებს ატომურად.
+  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`) and deploys + activates atomically.
 - `POST /v1/contracts/instance/activate`
-  - იღებს `ActivateInstanceDto` (ავტორიტეტი, პირადი გასაღები, სახელების სივრცე, contract_id, `code_hash`) და წარუდგენს მხოლოდ აქტივაციის ინსტრუქციას.
+  - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
 - `GET /v1/contracts/code/{code_hash}`
-  - აბრუნებს `{ manifest: { code_hash, abi_hash } }`.
-    დამატებითი მანიფესტის ველები შენახულია შინაგანად, მაგრამ აქ გამოტოვებული a
-    სტაბილური API.
+  - Returns `{ manifest: { code_hash, abi_hash } }`.
+    Additional manifest fields are preserved internally but omitted here for a
+    stable API.
 - `GET /v1/contracts/code-bytes/{code_hash}`
-  - აბრუნებს `{ code_b64 }` შენახული `.to` გამოსახულებით, რომელიც დაშიფრულია როგორც base64.
+  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-კონტრაქტის სასიცოცხლო ციკლის ყველა საბოლოო წერტილი იზიარებს სპეციალურ განლაგების შემზღუდველს, რომელიც კონფიგურირებულია მეშვეობით
-`torii.deploy_rate_per_origin_per_sec` (ჟეტონები წამში) და
-`torii.deploy_burst_per_origin` (ადიდებული ჟეტონები). ნაგულისხმევი არის 4 req/s ერთად ადიდებული
-8 `X-API-Token`-დან, დისტანციური IP-დან ან ბოლო წერტილის მინიშნებიდან მიღებული თითოეული ტოკენისთვის/გასაღებისთვის.
-დააყენეთ რომელიმე ველი `null`, რათა გამორთოთ ლიმიტერი სანდო ოპერატორებისთვის. როცა
-ლიმიტი ირთვება, Torii მატულობს
-`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` ტელემეტრიული მრიცხველი და
-აბრუნებს HTTP 429; დამმუშავებლის შეცდომის ნებისმიერი ზრდა
-`torii_contract_errors_total{endpoint=…}` გაფრთხილებისთვის.
+All contract lifecycle endpoints share a dedicated deploy limiter configured via
+`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
+`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
+8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
+Set either field to `null` to disable the limiter for trusted operators. When the
+limiter fires, Torii increments the
+`torii_contract_throttled_total{endpoint="deploy|instance|activate"}` telemetry counter and
+returns HTTP 429; any handler error increments
+`torii_contract_errors_total{endpoint=…}` for alerting.
 
-## მმართველობის ინტეგრაცია და დაცული სახელების სივრცეები- დააყენეთ მორგებული პარამეტრი `gov_protected_namespaces` (სახელთა სივრცის JSON მასივი
-  strings) დაშვების კარიბჭის გასააქტიურებლად. Torii ავლენს დამხმარეებს ქვეშ
-  `/v1/gov/protected-namespaces` და CLI ასახავს მათ მეშვეობით
+## Governance integration & protected namespaces
+
+- Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
+  strings) to enable admission gating. Torii exposes helpers under
+  `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- წინადადებები შექმნილი `ProposeDeployContract`-ით (ან Torii-ით
-  `/v1/gov/proposals/deploy-contract` საბოლოო წერტილი) დაჭერა
+- Proposals created with `ProposeDeployContract` (or the Torii
+  `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
-- რეფერენდუმის გავლის შემდეგ, `EnactReferendum` აღნიშნავს წინადადებას ამოქმედდა და
-  დაშვება მიიღებს განლაგებას, რომელიც შეიცავს შესაბამის მეტამონაცემებს და კოდს.
-- ტრანზაქციები უნდა მოიცავდეს მეტამონაცემების წყვილს `gov_namespace=a namespace` და
-  `gov_contract_id=an identifier` (და უნდა დააყენოთ `contract_namespace` /
-  `contract_id` ზარის დროის შესასრულებლად). CLI დამხმარეები ავსებენ მათ
-  ავტომატურად, როდესაც გაივლით `--namespace`/`--contract-id`.
-- როდესაც დაცული სახელთა სივრცეები ჩართულია, რიგში დაშვება უარყოფს მცდელობებს
-  არსებული `contract_id` ხელახლა დააკავშირეთ სხვა სახელთა სივრცეში; გამოიყენეთ ამოქმედებული
-  შესთავაზეთ ან გააუქმეთ წინა სავალდებულო მოქმედება სხვაგან განლაგებამდე.
-- თუ ხაზის მანიფესტმა დაადგინა ვალიდატორის კვორუმი ერთზე მეტი, ჩართეთ
-  `gov_manifest_approvers` (დამოწმების ანგარიშის ID-ების JSON მასივი), რათა რიგის დათვლა შეძლოს
-  დამატებითი დამტკიცებები გარიგების ორგანოსთან ერთად. შესახვევებიც უარყოფენ
-  მეტამონაცემები, რომლებიც მიმართავს სახელთა სივრცეებს, რომლებიც არ არის წარმოდგენილი manifest-ში
-  `protected_namespaces` კომპლექტი.
+- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
+  admission will accept deployments that carry matching metadata and code.
+- Transactions must include the metadata pair `gov_namespace=a namespace` and
+  `gov_contract_id=an identifier` (and should set `contract_namespace` /
+  `contract_id` for call-time binding). CLI helpers populate these
+  automatically when you pass `--namespace`/`--contract-id`.
+- When protected namespaces are enabled, queue admission rejects attempts to
+  rebind an existing `contract_id` to a different namespace; use the enacted
+  proposal or retire the previous binding before deploying elsewhere.
+- If the lane manifest sets a validator quorum above one, include
+  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
+  the additional approvals alongside the transaction authority. Lanes also reject
+  metadata that references namespaces not present in the manifest's
+  `protected_namespaces` set.
 
-## CLI დამხმარეები
+## CLI helpers
 
 - `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  წარუდგენს Torii განლაგების მოთხოვნას (ჰეშების გამოთვლა ფრენაზე).
+  submits the Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  აშენებს მანიფესტს (ხელმოწერილი მოწოდებული გასაღებით), აღრიცხავს ბაიტებს + მანიფესტს,
-  და ააქტიურებს `(namespace, contract_id)` დაკავშირებას ერთ ტრანზაქციაში. გამოყენება
-  `--dry-run` გამოთვლილი ჰეშებისა და ინსტრუქციების რაოდენობის დასაბეჭდად
-  გაგზავნა და `--manifest-out` ხელმოწერილი მანიფესტის JSON შესანახად.
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` ითვლის
-  `code_hash`/`abi_hash` კომპილირებული `.to`-ისთვის და სურვილისამებრ ხელს აწერს მანიფესტს,
-  ბეჭდვა JSON ან წერა `--out`-ზე.
+  verifies the embedded `CNTR`, derives the canonical manifest, registers bytes
+  + manifest, and activates the `(namespace, contract_id)` binding in one
+  transaction. Use `--dry-run` to print the computed hashes and instruction
+  count without submitting, and `--manifest-out` to save the signed manifest
+  JSON for inspection.
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+  `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
+  embedded `CNTR`, and optionally signs it for inspection, printing JSON or
+  writing to `--out`.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
-  აწარმოებს ოფლაინ VM საშვს და აცნობებს ABI/hash მეტამონაცემებს პლუს რიგში მდგომ ISI-ებს
-  (თვლები და ინსტრუქციის ID) ქსელთან შეხების გარეშე. მიამაგრეთ
-  `--namespace/--contract-id` ზარის დროის მეტამონაცემების ასახვის მიზნით.
-- `iroha_cli app contracts manifest get --code-hash <hex>` იღებს მანიფესტს Torii-ით
-  და სურვილისამებრ წერს დისკზე.
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` ჩამოტვირთვები
-  შენახული `.to` სურათი.
-- გააქტიურებულია `iroha_cli app contracts instances --namespace <ns> [--table]` სიები
-  კონტრაქტის შემთხვევები (მანიფესტი + მეტამონაცემების საფუძველზე).
-- მმართველობის დამხმარეები (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
-  `iroha_cli app gov protected set/get`) ორგანიზებას უწევს დაცული სახელების სივრცის სამუშაო პროცესს და
-  გამოავლინეთ JSON არტეფაქტები აუდიტისთვის.
+  runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
+  (counts and instruction ids) without touching the network. Attach
+  `--namespace/--contract-id` to mirror call-time metadata.
+- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+  and optionally writes it to disk.
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+  the stored `.to` image.
+- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
+  contract instances (manifest + metadata driven).
+- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
+  expose JSON artefacts for auditing.
 
-## ტესტირება და გაშუქება
+## Testing & coverage
 
-- ერთეულის ტესტები `crates/iroha_core/tests/contract_code_bytes.rs` საფარის კოდით
-  შენახვა, იმპოტენცია და ზომის ქუდი.
-- `crates/iroha_core/tests/gov_enact_deploy.rs` ადასტურებს მანიფესტის ჩასმას მეშვეობით
-  ამოქმედება და `crates/iroha_core/tests/gov_protected_gate.rs` სავარჯიშოები
-  დაცული სახელთა სივრცის დაშვება ბოლოდან ბოლომდე.
-- Torii მარშრუტები მოიცავს მოთხოვნის/პასუხის ერთეულის ტესტებს და CLI ბრძანებებს აქვს
-  ინტეგრაციის ტესტები უზრუნველყოფს JSON ორმხრივი მგზავრობის სტაბილურობას.
+- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
+  storage, idempotency, and the size cap.
+- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
+  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
+  protected-namespace admission end-to-end.
+- Torii routes include request/response unit tests, and the CLI commands have
+  integration tests ensuring JSON round-trips remain stable.
 
-იხილეთ `docs/source/governance_api.md` რეფერენდუმის დეტალური დატვირთვისთვის და
-კენჭისყრის სამუშაო პროცესები.
+Refer to `docs/source/governance_api.md` for detailed referendum payloads and
+ballot workflows.

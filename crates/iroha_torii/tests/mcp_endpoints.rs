@@ -1628,14 +1628,14 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     for (id, tool_name) in [
-        (10401, "iroha.contracts.code.register"),
-        (10402, "iroha.contracts.deploy"),
-        (10403, "iroha.contracts.instance.create"),
-        (10404, "iroha.contracts.instance.activate"),
-        (10405, "iroha.contracts.call"),
+        (10401, "iroha.contracts.deploy"),
+        (10402, "iroha.contracts.instance.create"),
+        (10403, "iroha.contracts.instance.activate"),
+        (10404, "iroha.contracts.call"),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -1654,6 +1654,10 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch() {
         .await;
 
         assert_eq!(status, StatusCode::OK);
+        assert!(
+            call.get("result").is_some(),
+            "contract alias `{tool_name}` should return a JSON-RPC result, got {call:?}"
+        );
         let structured = structured_content(&call);
         assert!(
             structured.get("status").and_then(Value::as_u64).is_some(),
@@ -1667,6 +1671,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_subm
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     let (status, call) = post_mcp(
@@ -1860,6 +1865,7 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.mcp.max_tools_per_list = 5;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
     let names = list_all_tool_names(&app).await;
@@ -2269,12 +2275,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .iter()
             .any(|name| name == "iroha.aliases.resolve_index"),
         "expected agent-friendly alias-resolve-index MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.code.register"),
-        "expected agent-friendly contract code registration MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.contracts.code.get"),

@@ -11,12 +11,7 @@ use axum::{
 };
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    queue::Queue,
-    state::{State, World},
-};
+use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::State};
 use tower::ServiceExt as _; // for Router::oneshot
 
 #[tokio::test]
@@ -27,10 +22,14 @@ async fn contracts_deploy_then_activate_and_list_instance() {
         );
         return;
     }
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
     // Minimal in-memory state and queue
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
@@ -107,7 +106,6 @@ async fn contracts_deploy_then_activate_and_list_instance() {
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&prog);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&prog);
     // Authority + private key
-    let creds = iroha_torii::test_utils::random_authority();
     let body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
     let req = http::Request::builder()
@@ -178,9 +176,13 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
         );
         return;
     }
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
@@ -246,7 +248,6 @@ async fn contracts_deploy_and_activate_via_single_endpoint() {
     let prog = iroha_torii::test_utils::minimal_ivm_program(1);
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&prog);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&prog);
-    let creds = iroha_torii::test_utils::random_authority();
     let body = iroha_torii::test_utils::deploy_and_activate_request_json(
         &creds.account,
         &creds.private_key,

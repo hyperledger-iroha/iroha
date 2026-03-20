@@ -339,6 +339,8 @@ pub const SYSCALL_GET_AUTHORITY: u32 = 0xA4;
 pub const SYSCALL_SUBSCRIPTION_BILL: u32 = 0xA5;
 /// Record subscription usage from trigger args payload.
 pub const SYSCALL_SUBSCRIPTION_RECORD_USAGE: u32 = 0xA6;
+/// Resolve a stable account alias `(label, domain)` to the current AccountId.
+pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
 /// Begin an atomic cross-transaction (AXT) envelope.
 pub const SYSCALL_AXT_BEGIN: u32 = 0xB0;
 /// Declare a DS touch within an active AXT.
@@ -521,6 +523,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_GET_AUTHORITY,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            SYSCALL_RESOLVE_ACCOUNT_ALIAS,
         ]);
         // Atomic cross-transaction (AXT) scaffolding
         v.extend_from_slice(&[
@@ -681,6 +684,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_GET_AUTHORITY => "GET_AUTHORITY",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
+        SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",
         SYSCALL_AXT_BEGIN => "AXT_BEGIN",
         SYSCALL_AXT_TOUCH => "AXT_TOUCH",
         SYSCALL_AXT_COMMIT => "AXT_COMMIT",
@@ -725,20 +729,11 @@ pub struct SyscallDoc {
 #[path = "syscalls_doc_gen.rs"]
 mod syscalls_doc_gen;
 
-// Minimal placeholder for gas spec documentation; avoid module dependency during tests.
-// When code generation is enabled (via `gen_syscalls_doc.rs`), a generated file
-// with the same items can be placed at `src/gas_spec.rs` and imported instead.
-pub mod gas_spec {
-    #[derive(Clone, Copy)]
-    pub struct GasAsset {
-        pub key: &'static str,
-        pub asset_id: &'static str,
-        pub unit: &'static str,
-        pub version: &'static str,
-        pub group: &'static str,
-    }
-    pub static GAS_ASSETS: &[GasAsset] = &[];
-}
+// Use the generated gas asset table if present (preferred). This file is
+// produced by the `gen_syscalls_doc` helper. It must define `GasAsset` and
+// `pub static GAS_ASSETS: &[GasAsset]`.
+#[path = "gas_spec.rs"]
+pub mod gas_spec;
 
 /// Render a markdown table with columns: Number, Name, Args, Return, Gas.
 pub fn render_syscalls_markdown_table() -> String {
@@ -763,7 +758,7 @@ pub fn render_syscalls_markdown_table() -> String {
     out
 }
 
-/// Re-export generated gas assets for tests/docs (disabled in this build).
+/// Re-export generated gas assets for tests/docs.
 pub use gas_spec as _gas_spec_placeholder;
 
 /// Render a markdown table with ABI policy names and their hashes.

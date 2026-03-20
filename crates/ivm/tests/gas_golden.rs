@@ -289,7 +289,7 @@ fn vector_and_sha_run_costs() {
     // Build a tiny program with metadata (VECTOR enabled)
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: MODE_VECTOR,
         vector_length: 0,
         max_cycles: 0,
@@ -312,7 +312,7 @@ fn vector_and_sha_run_costs() {
     // Now SHA256BLOCK: needs a state in two vector registers and a 64-byte block in memory
     let mut program2 = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: MODE_VECTOR,
         vector_length: 0,
         max_cycles: 0,
@@ -347,7 +347,7 @@ fn vector_vand_vxor_vor_run_costs() {
     let run_vec = |op_hi: u8| -> u64 {
         let mut program = ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: MODE_VECTOR,
             vector_length: 0,
             max_cycles: 0,
@@ -401,7 +401,7 @@ fn vector_vadd64_vrot32_run_costs() {
     // VADD64
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: MODE_VECTOR,
         vector_length: 0,
         max_cycles: 0,
@@ -422,7 +422,7 @@ fn vector_vadd64_vrot32_run_costs() {
     // VROT32 (rotate each lane by imm)
     let mut program2 = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: MODE_VECTOR,
         vector_length: 0,
         max_cycles: 0,
@@ -501,7 +501,7 @@ fn vector_vadd64_vl_override_gas() {
     // Set an explicit vector_length to a non-zero value and verify gas remains as per schedule
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: MODE_VECTOR,
         vector_length: 8,
         max_cycles: 0,
@@ -554,7 +554,7 @@ fn vector_vand_vxor_vor_vl_override_gas() {
     let run_vec = |op_hi: u8| -> u64 {
         let mut program = ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: MODE_VECTOR,
             vector_length: 8,
             max_cycles: 0,
@@ -739,7 +739,7 @@ fn vector_sequence_cumulative_gas() {
     use ivm::ProgramMetadata;
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: MODE_VECTOR,
         vector_length: 0,
         max_cycles: 0,
@@ -849,7 +849,7 @@ fn vector_long_chain_cumulative_gas() {
     // Build a longer vector chain and compare cumulative schedule vs runtime
     let mut program = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: MODE_VECTOR,
         vector_length: 0,
         max_cycles: 0,

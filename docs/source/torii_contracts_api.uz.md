@@ -2,65 +2,20 @@
 lang: uz
 direction: ltr
 source: docs/source/torii_contracts_api.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: c23da2a36d12529d92f51f46a82d9cc14c8c453401ac3e7bb55ad1a051adb8e5
-source_last_modified: "2026-01-22T16:26:46.597618+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: b0cde1721f31da19f78aff0391cda6366108c1039904c8e3ad28ce6a7b3ed703
+source_last_modified: "2026-03-20T08:32:54+00:00"
+translation_last_reviewed: 2026-03-20
 ---
 
-# Torii Contracts API (Manifests & Deploy)
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-This document describes the app-facing HTTP endpoints for publishing and fetching smart contract manifests. These endpoints are thin wrappers around on-chain transactions and read-only queries; consensus semantics remain on-chain.
+# Torii Contracts API (Bytecode Deploy & Fetch)
+
+This document describes the app-facing HTTP endpoints for deploying self-describing contract bytecode and fetching the stored manifest/bytecode. These endpoints are thin wrappers around on-chain transactions and read-only queries; consensus semantics remain on-chain.
 
 ## Endpoints
-
-- POST `/v1/contracts/code`
-  - Wraps `RegisterSmartContractCode` into a signed transaction and submits it.
-  - Request body: `RegisterContractCodeDto` (JSON or Norito JSON) — see schema below.
-  - Response: HTTP 202 Accepted on successful enqueue; standard transaction admission errors otherwise.
-  - Authorization: The `authority` must hold the `CanRegisterSmartContractCode` permission. Granting this permission is restricted by governance (default executor allows granting only in genesis).
-  - Telemetry: increments `torii_contract_errors_total{endpoint="code"}` on handler errors and `torii_contract_throttled_total{endpoint="code"}` on limiter hits.
-  - Failure responses:
-    | Scenario | HTTP status | Body | Notes |
-    | --- | --- | --- | --- |
-    | Successful enqueue | `202 Accepted` | _empty body_ | Transaction hash is available from the signed payload; poll pipeline status for the final outcome. |
-    | Authority lacks `CanRegisterSmartContractCode` | `202 Accepted` (initial response) | _see example below_ | The request is enqueued, but the pipeline later emits a rejection with `ValidationFail::NotPermitted`. |
-    | `manifest.code_hash` or `manifest.abi_hash` is not 32‑byte lowercase hex | `400 Bad Request` | `invalid JSON body: invalid hex string ... manifest.code_hash` | Parsing happens in the Norito JSON extractor before the transaction is built. |
-| Transaction queue is full | `429 Too Many Requests` | Queue rejection JSON (`code`, `message`, `queue`, optional `retry_after_seconds`) | Clients receive `Retry-After` along with queue depth/capacity headers; defer submission until load subsides or increase queue capacity. |
-
-    Example rejection emitted by `/v1/pipeline/transactions/status` when the authority lacks the required permission (pretty-printed for clarity):
-
-    ```json
-    {
-      "kind": "Transaction",
-      "content": {
-        "hash": "…",
-        "status": {
-          "kind": "Rejected",
-          "content": "<base64 TransactionRejectionReason>"
-        }
-      }
-    }
-    ```
-
-    The base64 `content` decodes to `TransactionRejectionReason::Validation(ValidationFail::NotPermitted("not permitted: CanRegisterSmartContractCode"))`.
-
-    Example queue rejection body:
-
-    ```json
-    {
-      "code": "queue_full",
-      "message": "transaction queue is at capacity",
-      "queue": {
-        "state": "saturated",
-        "queued": 65536,
-        "capacity": 65536,
-        "saturated": true
-      },
-      "retry_after_seconds": 1
-    }
-    ```
 
 - GET `/v1/contracts/code/{code_hash}`
   - Fetches the on-chain `ContractManifest` by its content-addressed `code_hash`.
@@ -68,9 +23,9 @@ This document describes the app-facing HTTP endpoints for publishing and fetchin
   - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated.
 
 - POST `/v1/contracts/deploy`
-  - Accepts base64 `.to` bytecode with authority and private key; computes `code_hash` (program body) and `abi_hash` (from header `abi_version`).
+  - Accepts base64 `.to` bytecode with authority and private key; verifies the embedded `CNTR` contract interface, then computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy declared by the verified header.
   - Request body: `DeployContractDto`; response body: `DeployContractResponseDto`.
-  - Submits two ISIs in a single transaction: `RegisterSmartContractCode` (manifest) and `RegisterSmartContractBytes` (code storage).
+  - Submits two ISIs in a single transaction: `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (code storage).
   - Body size is limited by the `max_contract_code_bytes` custom parameter (default 16 MiB); raise the cap before uploading larger programs.
   - Telemetry: increments `torii_contract_errors_total{endpoint="deploy"}` on handler errors and `torii_contract_throttled_total{endpoint="deploy"}` when the limiter fires.
 - POST `/v1/contracts/instance`
@@ -95,27 +50,6 @@ This document describes the app-facing HTTP endpoints for publishing and fetchin
 
 ## Schemas
 
-### RegisterContractCodeDto
-
-Represents a request to register a contract manifest by wrapping the instruction into a signed transaction.
-
-```jsonc
-{
-  "authority": "i105...",           // AccountId (string form)
-  "private_key": "ed25519:...",              // ExposedPrivateKey (bare or prefixed multihash hex)
-  "manifest": {
-    "code_hash": "0123…cdef",                // 32-byte hex (optional in model, recommended here)
-    "abi_hash":  "89ab…7654",                // 32-byte hex (optional)
-    "compiler_fingerprint": "rustc-1.79 llvm-16", // optional
-    "features_bitmap": 0                       // optional u64
-  }
-}
-```
-
-Notes:
-- If `manifest.code_hash` is provided, the node stores the manifest keyed by `code_hash`.
-- If present, `manifest.abi_hash` is validated against the node’s ABI policy.
-
 ### DeployContractDto
 
 Upload compiled bytecode and let Torii derive the manifest and hashes.
@@ -129,7 +63,7 @@ Upload compiled bytecode and let Torii derive the manifest and hashes.
 ```
 
 Notes:
-- `code_b64` must decode to a valid IVM program header with `abi_version == 1`.
+- `code_b64` must decode to a valid self-describing IVM `1.1` contract artifact with `abi_version == 1` and an embedded `CNTR` section.
 - The handler recomputes the manifest internally; callers do not provide one on this shortcut.
 - The decoded bytecode length must not exceed `max_contract_code_bytes`; exceeding the limit triggers an `InvariantViolation` (`code bytes exceed cap`) during transaction admission.
 
@@ -173,22 +107,13 @@ Represents a request to deploy bytecode and immediately bind `(namespace, contra
   "private_key": "ed25519:…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
-  "code_b64":    "…",
-  "manifest": {                      // optional override; code/ABI hashes are validated
-    "compiler_fingerprint": "rustc-1.79 llvm-16",
-    "features_bitmap": 0,
-    "access_set_hints": {
-      "read_keys": ["account:i105..."],
-      "write_keys": ["asset:usd#wonderland"]
-    }
-  }
+  "code_b64":    "…"
 }
 ```
 
 Notes:
-- The node computes the canonical `code_hash` and ensures any provided `manifest.code_hash` matches it.
-- The node recomputes the ABI hash from the IVM header (currently ABI v1). If `manifest.abi_hash` is supplied it must equal the computed hash; otherwise the computed value is inserted.
-- Additional manifest metadata (compiler fingerprint, features bitmap, access hints) is preserved verbatim.
+- The node verifies the embedded `CNTR` payload, derives the canonical manifest from the artifact itself, and computes the canonical `code_hash`/`abi_hash` pair before activation.
+- Callers do not provide a manifest override on this endpoint.
 
 ### Response: DeployAndActivateInstanceResponseDto
 
@@ -235,29 +160,17 @@ All DTOs derive both `JsonSerialize` and `NoritoSerialize`. Clients may submit e
 
 ### Rate limiting & telemetry
 
-- `torii.deploy_rate_per_origin_per_sec` and `torii.deploy_burst_per_origin` configure the token bucket shared by `/v1/contracts/{code,deploy,instance,instance/activate}`. Defaults: 4 req/s with a burst of 8 per origin token (`X-API-Token`, remote IP, endpoint tuple).
-- Requests rejected by the limiter increment `torii_contract_throttled_total{endpoint}` where `endpoint` is `code`, `deploy`, `instance`, or `activate`.
+- `torii.deploy_rate_per_origin_per_sec` and `torii.deploy_burst_per_origin` configure the token bucket shared by `/v1/contracts/{deploy,instance,instance/activate}`. Defaults: 4 req/s with a burst of 8 per origin token (`X-API-Token`, remote IP, endpoint tuple).
+- Requests rejected by the limiter increment `torii_contract_throttled_total{endpoint}` where `endpoint` is `deploy`, `instance`, or `activate`.
 - Any handler error (invalid body, permission missing, queue failure) increments `torii_contract_errors_total{endpoint}`. Track alongside queue metrics for alerting.
 
 ## Examples
-
-Register a manifest (wrap into signed tx):
-
-```bash
-curl -s -X POST \
-  -H 'Content-Type: application/json' \
-  -d '{
-        "authority": "i105...",
-        "private_key": "ed25519:…",  
-        "manifest": { "code_hash": "<32-byte-hex>", "abi_hash": null }
-      }' \
-  http://127.0.0.1:8080/v1/contracts/code
-```
 
 Fetch a manifest by hash:
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/contracts/code/<32-byte-hex> | jq .
+```
 
 Deploy code and then fetch code bytes:
 

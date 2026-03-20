@@ -78,6 +78,7 @@ fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics) {
 }
 
 /// Serialize a manifest to pretty JSON using Norito’s JSON helpers.
+/// The JSON is inspection-only; deploy flows derive manifests directly from the artifact.
 fn manifest_to_json(
     manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
 ) -> Result<String, String> {
@@ -93,7 +94,7 @@ fn print_usage() {
     eprintln!("  koto_compile --explain <code>");
     eprintln!("\nNotes:");
     eprintln!("  - First release supports only ABI 1. Use --abi 1.");
-    eprintln!("  - Use '--manifest-out -' to print the manifest JSON to stdout.");
+    eprintln!("  - Use '--manifest-out -' to print the inspection manifest JSON to stdout.");
     eprintln!(
         "  - Lint runs by default; pass --no-lint to skip or --deny-lint-warnings to fail on lint output."
     );

@@ -310,6 +310,54 @@ final class TxBuilderTests: XCTestCase {
                                       ttlMs: ttlMs)
     }
 
+    private func makeClaimIdentifierRequest(authority: String,
+                                            ttlMs: UInt64? = 30) throws -> ClaimIdentifierRequest {
+        let signatureHex =
+            "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900"
+        let payloadHex =
+            "2B000000000000000D000000000000000500000000000000656D61696C0E00000000000000060000000000000072657461696CDD000000000000001C0000000000000014000000000000000C00000000000000656D61696C5F72657461696C200000000000000075522459A6B0039705A18CE5D21050F39454F440203D6041C454658735DA1D070400000000000000020000000400000000000000000000002000000000000000E12E5429C9C8B146C4EC6DB972DCDEBD6BC84257A4503C0A152E052D345B303D2000000000000000444180A5ECCBC236041F1DC4D5E3BD220B0656261EB55B9D9AE32AA729B5437F0800000000000000987ABF0A9D0100001100000000000000010800000000000000780EC40A9D01000028000000000000002000000000000000D82F9EAB952F7A5241BB2339C0095EBC61958428164AB820FAD85952F35745852000000000000000032DF7E7370E04DDBABF0CD40932935A1D2C77A9B8D723BBB9F1472F2791CC7128000000000000002000000000000000C60973F731CCB57008687F9BC38CC712E3BE7AB46D99A1BEFFD1C9FD61E60A875A00000000000000000000004E00000000000000460000000000000065643031323035363334453930373145383636323937344132324631333739373236363343343634344443333534364131393338453143414335384445344342413844393635"
+        let receiptJSON = """
+        {
+          "policy_id":"phone#retail",
+          "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
+          "receipt_hash":"\(String(repeating: "55", count: 32))",
+          "uaid":"uaid:\(String(repeating: "66", count: 31))67",
+          "account_id":"\(authority)",
+          "resolved_at_ms":7,
+          "expires_at_ms":107,
+          "backend":"bfv-programmed-sha3-256-v1",
+          "signature":"\(signatureHex)",
+          "signature_payload_hex":"\(payloadHex)",
+          "signature_payload":{
+            "policy_id":"phone#retail",
+            "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
+            "receipt_hash":"\(String(repeating: "55", count: 32))",
+            "uaid":"uaid:\(String(repeating: "66", count: 31))67",
+            "account_id":"\(authority)",
+            "execution":{
+              "program_id":"identifier_lookup_retail",
+              "program_digest":"\(String(repeating: "11", count: 32))",
+              "backend":"bfv-programmed-sha3-256-v1",
+              "verification_mode":"signed",
+              "output_hash":"\(String(repeating: "22", count: 32))",
+              "associated_data_hash":"\(String(repeating: "33", count: 32))",
+              "executed_at_ms":7,
+              "expires_at_ms":107
+            }
+          }
+        }
+        """
+        let receipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(receiptJSON.utf8)
+        )
+        return ClaimIdentifierRequest(chainId: Self.fixtureChainId,
+                                      authority: authority,
+                                      accountId: authority,
+                                      receipt: receipt,
+                                      ttlMs: ttlMs)
+    }
+
     func testBuildSignedTransferProducesEnvelope() throws {
         try requireEd25519Encoder()
         let keypair = try Keypair.generate()
@@ -844,6 +892,16 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(envelope.transactionHash.count, 32)
     }
 
+    func testBuildClaimIdentifierProducesEnvelope() throws {
+        let keypair = try makeFixtureKeypair()
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 60)
+        let envelope = try sdk.buildClaimIdentifier(request: request, keypair: keypair)
+        XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
+        XCTAssertEqual(envelope.transactionHash.count, 32)
+    }
+
     func testVerifyingKeyIdReferenceValidation() {
         XCTAssertThrowsError(try VerifyingKeyIdReference(backend: "", name: "vk")) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .emptyBackend)
@@ -1084,6 +1142,39 @@ final class TxBuilderTests: XCTestCase {
             privateKey: keypair.privateKeyBytes
         ) else {
             XCTFail("Expected native bridge set metadata encoding")
+            return
+        }
+
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
+        XCTAssertEqual(native.hash, fallback.transactionHash)
+        XCTAssertEqual(normalized.norito, fallback.norito)
+    }
+
+    func testClaimIdentifierMatchesNativeBridge() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+                      "Native transaction encoder unavailable")
+
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 75)
+
+        let fallback = try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                         keypair: keypair,
+                                                                         creationTimeMs: Self.fixtureCreationTimeMs)
+
+        let receiptJSON = try JSONEncoder().encode(request.receipt)
+        guard let native = try? NoritoNativeBridge.shared.encodeClaimIdentifier(
+            chainId: request.chainId,
+            authority: request.authority,
+            creationTimeMs: Self.fixtureCreationTimeMs,
+            ttlMs: request.ttlMs,
+            accountId: request.accountId,
+            receiptJSON: receiptJSON,
+            privateKey: keypair.privateKeyBytes,
+            algorithm: .ed25519
+        ) else {
+            XCTFail("Expected native bridge claim identifier encoding")
             return
         }
 

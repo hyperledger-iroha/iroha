@@ -30,6 +30,8 @@ use crate::{
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
     error::VMError,
     ivm::IVM,
+    memory::Memory,
+    metadata::{CONTRACT_INTERFACE_SECTION_MAGIC, LITERAL_SECTION_MAGIC},
     parallel::{StateAccessSet, StateKey, StateUpdate},
     pointer_abi::{self, PointerType},
     syscalls,
@@ -382,15 +384,7 @@ impl DefaultHost {
 
     /// Validate a TLV pointer in register `reg` has the expected `PointerType`.
     fn expect_tlv(vm: &IVM, reg: usize, ty: PointerType) -> Result<(), VMError> {
-        let addr = vm.register(reg);
-        // Fast header check first
-        let hdr = vm.memory.load_region(addr, 7)?;
-        let raw_type = u16::from_be_bytes([hdr[0], hdr[1]]);
-        if raw_type != ty as u16 {
-            return Err(VMError::NoritoInvalid);
-        }
-        // Full TLV validation (bounds + hash) and type confirm
-        let tlv = vm.memory.validate_tlv(addr)?;
+        let tlv = Self::decode_any_tlv(vm, vm.register(reg))?;
         if tlv.type_id as u16 != ty as u16 {
             return Err(VMError::NoritoInvalid);
         }
@@ -402,6 +396,146 @@ impl DefaultHost {
             });
         }
         Ok(())
+    }
+
+    fn load_u64(vm: &IVM, addr: usize) -> Option<u64> {
+        let slice = vm.memory.load_region(addr as u64, 8).ok()?;
+        Some(u64::from_le_bytes(slice.try_into().ok()?))
+    }
+
+    fn literal_table_info(vm: &IVM) -> Option<(usize, usize, usize, usize, usize)> {
+        let limit = vm.pc() as usize;
+        let prefix = vm.memory.load_region(0, limit as u64).ok()?;
+        let mut literal_start = 0usize;
+        if vm.metadata().version_minor == 1 {
+            if limit >= 8 && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC {
+                let contract_payload_len =
+                    u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
+                let contract_section_len = 8usize.checked_add(contract_payload_len)?;
+                literal_start = contract_section_len;
+            }
+        }
+        if literal_start + 16 > limit
+            || prefix[literal_start..literal_start + 4] != LITERAL_SECTION_MAGIC
+        {
+            if crate::dev_env::decode_trace_enabled() {
+                eprintln!("[DefaultHost] literal table not found (limit=0x{limit:08x})");
+            }
+            return None;
+        }
+        let literal_count = u32::from_le_bytes(
+            prefix[literal_start + 4..literal_start + 8]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let post_pad = u32::from_le_bytes(
+            prefix[literal_start + 8..literal_start + 12]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let data_len = u32::from_le_bytes(
+            prefix[literal_start + 12..literal_start + 16]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let offsets_start = literal_start + 16;
+        let lits_bytes = literal_count.checked_mul(8)?;
+        let data_start = offsets_start.checked_add(lits_bytes)?;
+        let data_end = data_start.checked_add(data_len)?.checked_add(post_pad)?;
+        if data_end > limit {
+            return None;
+        }
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[DefaultHost] literal table start=0x{literal_start:08x} offsets=0x{offsets_start:08x} data=0x{data_start:08x}..0x{data_end:08x} count={literal_count}"
+            );
+        }
+        Some((
+            literal_start,
+            offsets_start,
+            data_start,
+            data_end,
+            literal_count,
+        ))
+    }
+
+    fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
+        let (start, offsets_start, data_start, data_end, count) = Self::literal_table_info(vm)?;
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[DefaultHost] resolve literal src=0x{src:08x} start=0x{start:08x} offsets=0x{offsets_start:08x} data=0x{data_start:08x}..0x{data_end:08x} count={count}"
+            );
+        }
+        if src >= data_start && src < data_end {
+            return Some(src);
+        }
+        if count == 0 {
+            return None;
+        }
+        if src >= offsets_start && src < data_start {
+            let idx = (src - offsets_start) / 8;
+            if idx >= count {
+                return None;
+            }
+            let offset = Self::load_u64(vm, offsets_start + idx * 8)? as usize;
+            let target = start.checked_add(offset)?;
+            return (target >= data_start && target < data_end).then_some(target);
+        }
+        if src < offsets_start {
+            let rel = start.checked_add(src)?;
+            if rel >= data_start && rel < data_end {
+                return Some(rel);
+            }
+            let offset = Self::load_u64(vm, offsets_start)? as usize;
+            let target = start.checked_add(offset)?;
+            return (target >= data_start && target < data_end).then_some(target);
+        }
+        None
+    }
+
+    fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
+        let input_lo = Memory::INPUT_START;
+        let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
+        if addr >= input_lo && addr < input_hi {
+            return addr;
+        }
+        Self::resolve_literal_pointer(vm, addr as usize)
+            .map(|resolved| resolved as u64)
+            .unwrap_or(addr)
+    }
+
+    fn decode_any_tlv<'a>(vm: &'a IVM, ptr: u64) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let resolved = Self::resolve_code_tlv_addr(vm, ptr);
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!("[DefaultHost] decode_any_tlv ptr=0x{ptr:08x} resolved=0x{resolved:08x}");
+        }
+        if let Ok(tlv) = vm.memory.validate_tlv(resolved) {
+            return Ok(tlv);
+        }
+        let code_len = vm.memory.code_len();
+        if resolved >= code_len || resolved + 7 > code_len {
+            return Err(VMError::NoritoInvalid);
+        }
+        let mut hdr = [0u8; 7];
+        vm.memory
+            .load_bytes(resolved, &mut hdr)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        if hdr[2] != 1 {
+            return Err(VMError::NoritoInvalid);
+        }
+        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::NoritoInvalid)?;
+        if resolved as usize + total > code_len as usize {
+            return Err(VMError::NoritoInvalid);
+        }
+        let envelope = vm
+            .memory
+            .load_region(resolved, total as u64)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        pointer_abi::validate_tlv_bytes(envelope)
     }
 
     fn alloc_blob_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
@@ -439,35 +573,7 @@ impl DefaultHost {
     }
 
     fn decode_numeric(vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
-        let tlv = match vm.memory.validate_tlv(ptr) {
-            Ok(tlv) => tlv,
-            Err(_) => {
-                let code_len = vm.memory.code_len();
-                if ptr >= code_len || ptr + 7 > code_len {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let mut hdr = [0u8; 7];
-                vm.memory
-                    .load_bytes(ptr, &mut hdr)
-                    .map_err(|_| VMError::NoritoInvalid)?;
-                if hdr[2] != 1 {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
-                let total = 7usize
-                    .checked_add(len)
-                    .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
-                    .ok_or(VMError::NoritoInvalid)?;
-                if ptr as usize + total > code_len as usize {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let envelope = vm
-                    .memory
-                    .load_region(ptr, total as u64)
-                    .map_err(|_| VMError::NoritoInvalid)?;
-                pointer_abi::validate_tlv_bytes(envelope)?
-            }
-        };
+        let tlv = Self::decode_any_tlv(vm, ptr)?;
         if tlv.type_id != PointerType::NoritoBytes {
             return Err(VMError::NoritoInvalid);
         }
@@ -674,7 +780,7 @@ impl IVMHost for DefaultHost {
                 if ptr == 0 {
                     return Ok(0);
                 }
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = Self::decode_any_tlv(vm, ptr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {

@@ -122,6 +122,7 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "sc_execute_unshield",
     "subscription_bill",
     "subscription_record_usage",
+    "resolve_account_alias",
     "build_submit_ballot_inline",
     "build_unshield_inline",
     "axt_begin",

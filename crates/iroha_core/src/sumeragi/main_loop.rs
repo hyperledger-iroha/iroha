@@ -4668,6 +4668,40 @@ impl Actor {
             .any(|vote| vote.block_hash == block_hash && vote.height == height && vote.view == view)
     }
 
+    fn pending_block_has_commit_votes(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        self.vote_log.values().any(|vote| {
+            matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
+                && vote.block_hash == block_hash
+                && vote.height == height
+                && vote.view == view
+                && vote.epoch == expected_epoch
+        })
+    }
+
+    fn pending_block_has_commit_qc(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        cached_qc_for(
+            &self.qc_cache,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            expected_epoch,
+        )
+        .is_some()
+    }
+
     fn pending_block_has_qc(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -4693,6 +4727,57 @@ impl Actor {
                 expected_epoch,
             )
             .is_some()
+    }
+
+    fn pending_block_has_delivered_rbc(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let key = (block_hash, height, view);
+        self.subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| !session.is_invalid() && session.delivered)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .status_handle
+                .get(&key)
+                .is_some_and(|summary| !summary.invalid && summary.delivered)
+    }
+
+    fn pending_block_validation_priority_reason(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+    ) -> Option<&'static str> {
+        let state_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        if !pending_extends_tip(
+            pending.height,
+            pending.block.header().prev_block_hash(),
+            state_height,
+            tip_hash,
+        ) {
+            return None;
+        }
+        if pending.commit_qc_seen
+            || self.pending_block_has_commit_qc(block_hash, pending.height, pending.view)
+        {
+            return Some("commit_qc");
+        }
+        if self.pending_block_has_commit_votes(block_hash, pending.height, pending.view) {
+            return Some("commit_votes");
+        }
+        if self.pending_block_has_delivered_rbc(block_hash, pending.height, pending.view) {
+            return Some("rbc_deliver");
+        }
+        None
     }
 
     fn slot_has_vote_backed_consensus_evidence(&self, height: u64, view: u64) -> bool {
@@ -4813,7 +4898,12 @@ impl Actor {
         self.frontier_non_missing_qc_recovery_cause(frontier_height) == Some("quorum_timeout")
     }
 
-    fn frontier_recovery_owns_height_window(&self, frontier_height: u64, now: Instant) -> bool {
+    fn frontier_recovery_owns_height_window_with_window(
+        &self,
+        frontier_height: u64,
+        now: Instant,
+        window: Duration,
+    ) -> bool {
         let Some(state) = self
             .frontier_recovery
             .filter(|state| state.frontier_height == frontier_height)
@@ -4823,10 +4913,16 @@ impl Actor {
         let Some(last_action_at) = state.last_action_at else {
             return false;
         };
-        let window = self
-            .frontier_recovery_window()
-            .max(Duration::from_millis(1));
+        let window = window.max(Duration::from_millis(1));
         now.saturating_duration_since(last_action_at) < window
+    }
+
+    fn frontier_recovery_owns_height_window(&self, frontier_height: u64, now: Instant) -> bool {
+        self.frontier_recovery_owns_height_window_with_window(
+            frontier_height,
+            now,
+            self.frontier_recovery_window(),
+        )
     }
 
     fn frontier_recovery_inbound_backlog_active(
@@ -4840,20 +4936,16 @@ impl Actor {
             || self.has_residual_round_backlog_for_height(frontier_height)
     }
 
-    fn frontier_recovery_same_height_dependency_backlog_active(
+    fn same_height_dependency_backlog_active_in_frontier_window(
         &self,
         frontier_height: u64,
         now: Instant,
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
-        let Some(state) = self
-            .frontier_recovery
-            .filter(|state| state.frontier_height == frontier_height)
-        else {
-            return false;
-        };
         let dependency_progress_at = match (
-            state.last_dependency_progress_at,
+            self.frontier_recovery
+                .filter(|state| state.frontier_height == frontier_height)
+                .and_then(|state| state.last_dependency_progress_at),
             self.same_height_no_proposal_storm_dependency_progress_at(frontier_height),
         ) {
             (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
@@ -4866,6 +4958,309 @@ impl Actor {
         dependency_progress_at
             .is_some_and(|progress| now.saturating_duration_since(progress) < window)
             && self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths)
+    }
+
+    fn frontier_recovery_same_height_dependency_backlog_active(
+        &self,
+        frontier_height: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        self.frontier_recovery_exists_at_height(frontier_height)
+            && self.same_height_dependency_backlog_active_in_frontier_window(
+                frontier_height,
+                now,
+                queue_depths,
+            )
+    }
+
+    fn frontier_recovery_same_slot_ingress_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
+            return false;
+        }
+
+        self.subsystems
+            .propose
+            .proposal_cache
+            .get_hint(frontier_height, frontier_view)
+            .is_some()
+            || self.slot_has_proposal_evidence(frontier_height, frontier_view)
+            || self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && pending.height == frontier_height
+                    && pending.view == frontier_view
+            })
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.height == frontier_height
+                        && inflight.pending.view == frontier_view
+                })
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .iter()
+                .any(|(key, session)| {
+                    key.1 == frontier_height
+                        && key.2 == frontier_view
+                        && !session.is_invalid()
+                        && !session.delivered
+                })
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .pending
+                .keys()
+                .any(|key| key.1 == frontier_height && key.2 == frontier_view)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .seed_inflight
+                .keys()
+                .any(|key| key.1 == frontier_height && key.2 == frontier_view)
+            || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+    }
+
+    fn frontier_recovery_same_height_rbc_sender_activity_active(
+        &self,
+        frontier_height: u64,
+        now: Instant,
+    ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
+        let same_height = |key: super::rbc_store::SessionKey| key.1 == frontier_height;
+        self.subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .iter()
+            .any(|(key, sent_at)| same_height(*key) && recent(*sent_at))
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .ready_rebroadcast_last_sent
+                .iter()
+                .any(|(key, sent_at)| same_height(*key) && recent(*sent_at))
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .deliver_rebroadcast_last_sent
+                .iter()
+                .any(|(key, sent_at)| same_height(*key) && recent(*sent_at))
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .ready_deferral
+                .iter()
+                .any(|(key, deferral)| same_height(*key) && recent(deferral.last_attempt))
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .deliver_deferral
+                .iter()
+                .any(|(key, deferral)| same_height(*key) && recent(deferral.last_attempt))
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .keys()
+                .any(|key| key.1 == frontier_height)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .persist_inflight
+                .iter()
+                .any(|key| key.1 == frontier_height)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .seed_inflight
+                .keys()
+                .any(|key| key.1 == frontier_height)
+    }
+
+    fn frontier_recovery_same_slot_vote_backed_recovery_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
+        let expected_epoch = self.epoch_for_height(frontier_height);
+        let committed_height = self.committed_height_snapshot();
+
+        self.pending
+            .missing_block_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height == frontier_height
+                    && request.view == frontier_view
+                    && matches!(
+                        request.phase,
+                        crate::sumeragi::consensus::Phase::Prepare
+                            | crate::sumeragi::consensus::Phase::Commit
+                    )
+                    && (recent(request.last_requested) || recent(request.last_dependency_progress))
+                    && self.missing_block_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.subsystems.validation.inflight.keys().any(|hash| {
+                self.pending
+                    .pending_blocks
+                    .get(hash)
+                    .is_some_and(|pending| {
+                        !pending.aborted
+                            && pending.height == frontier_height
+                            && pending.view == frontier_view
+                            && pending.validation_status == ValidationStatus::Pending
+                    })
+            })
+            || self
+                .deferred_block_sync_updates
+                .keys()
+                .any(|(height, view, _)| *height == frontier_height && *view == frontier_view)
+            || self.subsystems.vote_verify.inflight.keys().any(|key| {
+                matches!(
+                    key.phase,
+                    crate::sumeragi::consensus::Phase::Prepare
+                        | crate::sumeragi::consensus::Phase::Commit
+                ) && key.height == frontier_height
+                    && key.view == frontier_view
+                    && key.epoch == expected_epoch
+            })
+            || self.subsystems.vote_verify.pending.keys().any(|key| {
+                matches!(
+                    key.phase,
+                    crate::sumeragi::consensus::Phase::Prepare
+                        | crate::sumeragi::consensus::Phase::Commit
+                ) && key.height == frontier_height
+                    && key.view == frontier_view
+                    && key.epoch == expected_epoch
+            })
+            || self.subsystems.qc_verify.inflight.keys().any(|key| {
+                matches!(
+                    key.phase,
+                    crate::sumeragi::consensus::Phase::Prepare
+                        | crate::sumeragi::consensus::Phase::Commit
+                ) && key.height == frontier_height
+                    && key.view == frontier_view
+                    && key.epoch == expected_epoch
+            })
+            || self
+                .deferred_qcs
+                .keys()
+                .any(|(phase, _, height, view, epoch)| {
+                    matches!(
+                        phase,
+                        crate::sumeragi::consensus::Phase::Prepare
+                            | crate::sumeragi::consensus::Phase::Commit
+                    ) && *height == frontier_height
+                        && *view == frontier_view
+                        && *epoch == expected_epoch
+                })
+            || self
+                .known_block_qc_work
+                .keys()
+                .any(|(phase, _, height, view, epoch)| {
+                    matches!(
+                        phase,
+                        crate::sumeragi::consensus::Phase::Prepare
+                            | crate::sumeragi::consensus::Phase::Commit
+                    ) && *height == frontier_height
+                        && *view == frontier_view
+                        && *epoch == expected_epoch
+                })
+            || self
+                .subsystems
+                .propose
+                .highest_qc_missing_defer_markers
+                .iter()
+                .any(|(height, view, _)| *height == frontier_height && *view == frontier_view)
+    }
+
+    fn frontier_recovery_same_slot_missing_payload_recovery_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
+        let committed_height = self.committed_height_snapshot();
+
+        self.deferred_missing_payload_qcs.values().any(|entry| {
+            matches!(
+                entry.qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && entry.qc.height == frontier_height
+                && entry.qc.view == frontier_view
+                && (recent(entry.last_attempt) || recent(entry.first_seen))
+                && self.deferred_missing_payload_qc_has_actionable_dependency(
+                    entry,
+                    committed_height,
+                    now,
+                )
+        })
+    }
+
+    fn frontier_recovery_quorum_timeout_same_height_recovery_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        self.frontier_recovery_same_height_dependency_backlog_active(
+            frontier_height,
+            now,
+            queue_depths,
+        ) || self.frontier_recovery_same_slot_ingress_active(
+            frontier_height,
+            frontier_view,
+            queue_depths,
+        ) || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
+            || self.frontier_recovery_same_slot_vote_backed_recovery_active(
+                frontier_height,
+                frontier_view,
+                now,
+            )
+            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
+                frontier_height,
+                frontier_view,
+                now,
+            )
     }
 
     fn frontier_dependency_recovery_cause(
@@ -4957,6 +5352,34 @@ impl Actor {
             last_view: view,
             last_rotation_view: None,
             last_cause: "quorum_timeout",
+        });
+        true
+    }
+
+    fn seed_frontier_recovery_for_missing_payload(
+        &mut self,
+        frontier_height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if self.frontier_recovery_exists_at_height(frontier_height) {
+            return false;
+        }
+
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
+        self.frontier_recovery = Some(FrontierRecoveryState {
+            frontier_height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: now,
+            last_progress_at: now,
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: None,
+            no_progress_windows: 0,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: "missing_payload",
         });
         true
     }
@@ -5129,6 +5552,100 @@ impl Actor {
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         self.rbc_rebroadcast_active_with_tip(key, tip_height, tip_hash)
+    }
+
+    fn rbc_payload_backpressure_exempt_with_tip(
+        &self,
+        key: super::rbc_store::SessionKey,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+            return false;
+        };
+        if session.is_invalid() || session.delivered {
+            return false;
+        }
+        if !self.rbc_rebroadcast_active_with_tip_and_session(
+            key,
+            tip_height,
+            tip_hash,
+            Some(session),
+        ) {
+            return false;
+        }
+        let tip_height_u64 = u64::try_from(tip_height).unwrap_or(u64::MAX);
+        if !self.rbc_rebroadcast_session_urgent_near_tip(key, session, tip_height_u64) {
+            return false;
+        }
+
+        let missing_chunks =
+            session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();
+        if missing_chunks {
+            return true;
+        }
+
+        let roster = self.rbc_session_roster(key);
+        let roster_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Init);
+        if roster.is_empty() || !roster_source.is_authoritative() {
+            return self.rbc_session_matches_pending_block(key);
+        }
+
+        let topology = super::network_topology::Topology::new(roster);
+        session.ready_signatures.len() < self.rbc_deliver_quorum(&topology)
+    }
+
+    fn rbc_payload_backpressure_exempt(&self, key: super::rbc_store::SessionKey) -> bool {
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        self.rbc_payload_backpressure_exempt_with_tip(key, tip_height, tip_hash)
+    }
+
+    fn rbc_blocks_proposal_with_tip(
+        &self,
+        key: super::rbc_store::SessionKey,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        if let Some(pending) = self.pending.pending_blocks.get(&key.0) {
+            return !pending.aborted
+                && pending.height == key.1
+                && pending.view == key.2
+                && self.pending_block_is_active_for_tip(key.0, pending, tip_height, tip_hash);
+        }
+        if let Some(inflight) = self.subsystems.commit.inflight.as_ref() {
+            return inflight.block_hash == key.0
+                && !inflight.pending.aborted
+                && inflight.pending.height == key.1
+                && inflight.pending.view == key.2
+                && self.pending_block_is_active_for_tip(
+                    key.0,
+                    &inflight.pending,
+                    tip_height,
+                    tip_hash,
+                );
+        }
+        if self
+            .pending
+            .pending_processing
+            .get()
+            .is_some_and(|hash| hash == key.0)
+        {
+            return self
+                .pending
+                .pending_blocks
+                .get(&key.0)
+                .is_some_and(|pending| {
+                    !pending.aborted
+                        && pending.height == key.1
+                        && pending.view == key.2
+                        && self
+                            .pending_block_is_active_for_tip(key.0, pending, tip_height, tip_hash)
+                });
+        }
+        false
     }
 
     fn rbc_session_matches_pending_block(&self, key: super::rbc_store::SessionKey) -> bool {
@@ -5368,6 +5885,59 @@ impl Actor {
                     || key.1 == tip_height_u64
                     || key.1 == tip_height_u64.saturating_add(1)
             })
+            .count();
+        summary.sessions_pending = summary
+            .sessions_pending
+            .saturating_add(pending_payload_sessions);
+        summary
+    }
+
+    fn proposal_rbc_backlog_summary(&self) -> RbcBacklogSummary {
+        if !self.runtime_da_enabled() {
+            return RbcBacklogSummary::default();
+        }
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let mut summary = RbcBacklogSummary::default();
+        for (key, session) in &self.subsystems.da_rbc.rbc.sessions {
+            if !self.rbc_blocks_proposal_with_tip(*key, tip_height, tip_hash) {
+                continue;
+            }
+            if session.is_invalid() {
+                continue;
+            }
+            let total_chunks = session.total_chunks();
+            let received_chunks = session.received_chunks();
+            let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
+            let roster = self.rbc_session_roster(*key);
+            let roster_source = self
+                .rbc_session_roster_source(*key)
+                .unwrap_or(RbcRosterSource::Init);
+            let ready_quorum = if !roster.is_empty() && roster_source.is_authoritative() {
+                let topology = super::network_topology::Topology::new(roster);
+                session.ready_signatures.len() >= self.rbc_deliver_quorum(&topology)
+            } else {
+                false
+            };
+            let payload_available =
+                self.block_payload_available_locally(key.0) || session.delivered;
+            if missing_chunks || !ready_quorum || !payload_available {
+                summary.sessions_pending = summary.sessions_pending.saturating_add(1);
+                if missing_chunks {
+                    let missing = total_chunks.saturating_sub(received_chunks);
+                    summary.missing_chunks_total = summary
+                        .missing_chunks_total
+                        .saturating_add(usize::try_from(missing).unwrap_or(usize::MAX));
+                }
+            }
+        }
+        let pending_payload_sessions = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .keys()
+            .filter(|key| self.rbc_blocks_proposal_with_tip(**key, tip_height, tip_hash))
             .count();
         summary.sessions_pending = summary
             .sessions_pending
@@ -6082,6 +6652,21 @@ enum RoundRecoveryBundleSource {
     PayloadMismatchRecovery,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoundRecoveryBundleGateClass {
+    Commit,
+    NonCommit,
+}
+
+impl RoundRecoveryBundleGateClass {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::NonCommit => "non_commit",
+        }
+    }
+}
+
 impl RoundRecoveryBundleSource {
     const fn as_str(self) -> &'static str {
         match self {
@@ -6091,17 +6676,31 @@ impl RoundRecoveryBundleSource {
             Self::PayloadMismatchRecovery => "payload_mismatch_recovery",
         }
     }
+
+    const fn gate_class(self) -> RoundRecoveryBundleGateClass {
+        match self {
+            Self::CommitQuorumReschedule => RoundRecoveryBundleGateClass::Commit,
+            Self::RosterProofFallback | Self::RangePullExpiry | Self::PayloadMismatchRecovery => {
+                RoundRecoveryBundleGateClass::NonCommit
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct RoundRecoveryBundleWindowGateState {
     height: u64,
     entered_at: Instant,
-    last_window_at: Instant,
-    window_index: u64,
-    last_bundle_window_index: Option<u64>,
-    last_bundle_source: Option<RoundRecoveryBundleSource>,
-    last_bundle_at: Option<Instant>,
+    last_commit_window_at: Instant,
+    commit_window_index: u64,
+    last_non_commit_window_at: Instant,
+    non_commit_window_index: u64,
+    last_commit_bundle_window_index: Option<u64>,
+    last_commit_bundle_source: Option<RoundRecoveryBundleSource>,
+    last_commit_bundle_at: Option<Instant>,
+    last_non_commit_bundle_window_index: Option<u64>,
+    last_non_commit_bundle_source: Option<RoundRecoveryBundleSource>,
+    last_non_commit_bundle_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -6110,6 +6709,7 @@ struct RoundRecoveryBundleWindowSnapshot {
     entered_at: Instant,
     window: Duration,
     window_index: u64,
+    gate_class: RoundRecoveryBundleGateClass,
     last_bundle_window_index: Option<u64>,
     last_bundle_source: Option<RoundRecoveryBundleSource>,
     last_bundle_at: Option<Instant>,
@@ -10098,6 +10698,103 @@ impl Actor {
             self.record_rbc_session_roster(key, roster.clone(), RbcRosterSource::Derived);
         }
         Some((roster, updated || !existing_roster.is_empty()))
+    }
+
+    fn promote_rbc_session_roster_and_retry(&mut self, key: super::rbc_store::SessionKey) -> bool {
+        let existing_source = self
+            .rbc_session_roster_source(key)
+            .unwrap_or(RbcRosterSource::Init);
+        if existing_source.is_authoritative() {
+            return false;
+        }
+        let Some((_roster, refreshed)) = self.refresh_derived_rbc_session_roster(key) else {
+            return false;
+        };
+        if !self
+            .rbc_session_roster_source(key)
+            .is_some_and(RbcRosterSource::is_authoritative)
+        {
+            return false;
+        }
+
+        let mut progressed = refreshed;
+        if self.flush_pending_rbc_if_roster_ready(key) {
+            progressed = true;
+        }
+
+        let was_ready_sent = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| session.sent_ready);
+        let retry_ready = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| {
+                !session.sent_ready && !session.is_invalid() && !session.delivered
+            });
+        if retry_ready {
+            if let Err(err) = self.maybe_emit_rbc_ready(key) {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    ?err,
+                    "failed to retry RBC READY after promoting derived roster"
+                );
+            }
+            let now_ready_sent = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&key)
+                .is_some_and(|session| session.sent_ready);
+            if !was_ready_sent && now_ready_sent {
+                progressed = true;
+            }
+        }
+
+        let was_delivered = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| session.delivered);
+        let retry_deliver = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| !session.delivered && !session.is_invalid());
+        if retry_deliver {
+            if let Err(err) = self.maybe_emit_rbc_deliver(key) {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    ?err,
+                    "failed to retry RBC DELIVER after promoting derived roster"
+                );
+            }
+            let now_delivered = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&key)
+                .is_some_and(|session| session.delivered);
+            if !was_delivered && now_delivered {
+                progressed = true;
+            }
+        }
+
+        progressed
     }
 
     #[allow(clippy::too_many_lines)]
@@ -15841,7 +16538,7 @@ impl Actor {
         let cooldown = self.payload_rebroadcast_cooldown();
         let queue_drop = self.queue_drop_backpressure_active(now, cooldown);
         let queue_block = self.queue_block_backpressure_active(now, cooldown);
-        if queue_drop || queue_block {
+        if (queue_drop || queue_block) && !self.rbc_payload_backpressure_exempt(key) {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             trace!(
                 height = key.1,
@@ -16008,7 +16705,7 @@ impl Actor {
         let cooldown = self.payload_rebroadcast_cooldown();
         let queue_drop = self.queue_drop_backpressure_active(now, cooldown);
         let queue_block = self.queue_block_backpressure_active(now, cooldown);
-        if queue_drop || queue_block {
+        if (queue_drop || queue_block) && !self.rbc_payload_backpressure_exempt(key) {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             trace!(
                 height = key.1,
@@ -16130,7 +16827,8 @@ impl Actor {
         }
         let queue_drop = self.queue_drop_backpressure_active(now, payload_cooldown);
         let queue_block = self.queue_block_backpressure_active(now, payload_cooldown);
-        let payload_backpressure = relay_backpressure || queue_drop || queue_block;
+        let queue_backpressure = queue_drop || queue_block;
+        let payload_backpressure = relay_backpressure || queue_backpressure;
         if payload_backpressure {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             trace!(
@@ -16349,7 +17047,9 @@ impl Actor {
             }
             let should_rebroadcast_payload = missing_chunks || !ready_quorum;
             let payload_bundle = if should_rebroadcast_payload
-                && !payload_backpressure
+                && !relay_backpressure
+                && (!queue_backpressure
+                    || self.rbc_payload_backpressure_exempt_with_tip(key, tip_height, tip_hash))
                 && self.should_rebroadcast_rbc_payload(&roster, key)
                 && self.rbc_payload_rebroadcast_due(&key, now, payload_cooldown)
             {
@@ -16399,7 +17099,21 @@ impl Actor {
         }
         let queue_drop = self.queue_drop_backpressure_active(now, cooldown);
         let queue_block = self.queue_block_backpressure_active(now, cooldown);
-        if queue_drop || queue_block {
+        let queue_backpressure = queue_drop || queue_block;
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let allow_under_backpressure = if queue_backpressure {
+            self.subsystems
+                .da_rbc
+                .rbc
+                .outbound_chunks
+                .keys()
+                .copied()
+                .any(|key| self.rbc_payload_backpressure_exempt_with_tip(key, tip_height, tip_hash))
+        } else {
+            false
+        };
+        if queue_backpressure && !allow_under_backpressure {
             let queue_depths = super::status::worker_queue_depth_snapshot();
             trace!(
                 block_payload_rx_depth = queue_depths.block_payload_rx,
@@ -16447,6 +17161,11 @@ impl Actor {
         for key in keys {
             if remaining == 0 {
                 break;
+            }
+            if queue_backpressure
+                && !self.rbc_payload_backpressure_exempt_with_tip(key, tip_height, tip_hash)
+            {
+                continue;
             }
             let (targets, chunks_to_send, exhausted, to_send) = {
                 let Some(entry) = self.subsystems.da_rbc.rbc.outbound_chunks.get_mut(&key) else {
@@ -16889,6 +17608,9 @@ impl Actor {
         };
 
         let first_deliver = session.record_deliver(deliver.sender, deliver.signature.clone());
+        if first_deliver {
+            status::record_round_gap_deliver(key.1, key.2, key.0);
+        }
         let delivered_bytes = session.delivered_payload_bytes();
         let ready_count = session.ready_signatures.len();
         let ready_senders: Vec<_> = session
@@ -17241,24 +17963,29 @@ impl Actor {
             .max(Duration::from_millis(1))
     }
 
-    fn prune_round_recovery_bundle_windows(&mut self, now: Instant) {
+    fn prune_round_recovery_bundle_windows(&mut self, now: Instant, window: Duration) {
         let committed_height = self.committed_height_snapshot();
-        let retention = saturating_mul_duration(self.round_recovery_bundle_window(), 8)
-            .max(self.round_recovery_bundle_window());
+        let retention_window = self.round_recovery_bundle_window().max(window);
+        let retention = saturating_mul_duration(retention_window, 8).max(retention_window);
         self.round_recovery_bundle_window_gates
             .retain(|height, state| {
+                let last_window_at = state
+                    .last_commit_window_at
+                    .max(state.last_non_commit_window_at);
                 *height >= committed_height.saturating_sub(1)
-                    && now.saturating_duration_since(state.last_window_at) <= retention
+                    && now.saturating_duration_since(last_window_at) <= retention
             });
     }
 
-    fn round_recovery_bundle_window_snapshot(
+    fn round_recovery_bundle_window_snapshot_with_window(
         &mut self,
         height: u64,
+        source: RoundRecoveryBundleSource,
+        window: Duration,
         now: Instant,
     ) -> RoundRecoveryBundleWindowSnapshot {
-        self.prune_round_recovery_bundle_windows(now);
-        let window = self.round_recovery_bundle_window();
+        let window = window.max(Duration::from_millis(1));
+        self.prune_round_recovery_bundle_windows(now, window);
         let mut state = self
             .round_recovery_bundle_window_gates
             .get(&height)
@@ -17266,37 +17993,80 @@ impl Actor {
             .unwrap_or(RoundRecoveryBundleWindowGateState {
                 height,
                 entered_at: now,
-                last_window_at: now,
-                window_index: 0,
-                last_bundle_window_index: None,
-                last_bundle_source: None,
-                last_bundle_at: None,
+                last_commit_window_at: now,
+                commit_window_index: 0,
+                last_non_commit_window_at: now,
+                non_commit_window_index: 0,
+                last_commit_bundle_window_index: None,
+                last_commit_bundle_source: None,
+                last_commit_bundle_at: None,
+                last_non_commit_bundle_window_index: None,
+                last_non_commit_bundle_source: None,
+                last_non_commit_bundle_at: None,
             });
 
+        let gate_class = source.gate_class();
+        let (last_window_at, window_index) = match gate_class {
+            RoundRecoveryBundleGateClass::Commit => (
+                &mut state.last_commit_window_at,
+                &mut state.commit_window_index,
+            ),
+            RoundRecoveryBundleGateClass::NonCommit => (
+                &mut state.last_non_commit_window_at,
+                &mut state.non_commit_window_index,
+            ),
+        };
         let elapsed_window_count = {
             let window_nanos = window.as_nanos().max(1);
-            let elapsed = now
-                .saturating_duration_since(state.last_window_at)
-                .as_nanos()
-                / window_nanos;
+            let elapsed = now.saturating_duration_since(*last_window_at).as_nanos() / window_nanos;
             u64::try_from(elapsed).unwrap_or(u64::MAX)
         };
         if elapsed_window_count > 0 {
-            state.last_window_at = now;
-            state.window_index = state.window_index.saturating_add(elapsed_window_count);
+            *last_window_at = now;
+            *window_index = (*window_index).saturating_add(elapsed_window_count);
         }
         state.height = height;
         self.round_recovery_bundle_window_gates
             .insert(height, state);
+        let (last_bundle_window_index, last_bundle_source, last_bundle_at) = match gate_class {
+            RoundRecoveryBundleGateClass::Commit => (
+                state.last_commit_bundle_window_index,
+                state.last_commit_bundle_source,
+                state.last_commit_bundle_at,
+            ),
+            RoundRecoveryBundleGateClass::NonCommit => (
+                state.last_non_commit_bundle_window_index,
+                state.last_non_commit_bundle_source,
+                state.last_non_commit_bundle_at,
+            ),
+        };
         RoundRecoveryBundleWindowSnapshot {
             height: state.height,
             entered_at: state.entered_at,
             window,
-            window_index: state.window_index,
-            last_bundle_window_index: state.last_bundle_window_index,
-            last_bundle_source: state.last_bundle_source,
-            last_bundle_at: state.last_bundle_at,
+            window_index: match gate_class {
+                RoundRecoveryBundleGateClass::Commit => state.commit_window_index,
+                RoundRecoveryBundleGateClass::NonCommit => state.non_commit_window_index,
+            },
+            gate_class,
+            last_bundle_window_index,
+            last_bundle_source,
+            last_bundle_at,
         }
+    }
+
+    fn round_recovery_bundle_window_snapshot(
+        &mut self,
+        height: u64,
+        source: RoundRecoveryBundleSource,
+        now: Instant,
+    ) -> RoundRecoveryBundleWindowSnapshot {
+        self.round_recovery_bundle_window_snapshot_with_window(
+            height,
+            source,
+            self.round_recovery_bundle_window(),
+            now,
+        )
     }
 
     fn note_round_recovery_bundle_source(
@@ -17305,10 +18075,18 @@ impl Actor {
         source: RoundRecoveryBundleSource,
         now: Instant,
     ) {
-        let _ = self.round_recovery_bundle_window_snapshot(height, now);
+        let _ = self.round_recovery_bundle_window_snapshot(height, source, now);
         if let Some(state) = self.round_recovery_bundle_window_gates.get_mut(&height) {
-            state.last_bundle_source = Some(source);
-            state.last_bundle_at = Some(now);
+            match source.gate_class() {
+                RoundRecoveryBundleGateClass::Commit => {
+                    state.last_commit_bundle_source = Some(source);
+                    state.last_commit_bundle_at = Some(now);
+                }
+                RoundRecoveryBundleGateClass::NonCommit => {
+                    state.last_non_commit_bundle_source = Some(source);
+                    state.last_non_commit_bundle_at = Some(now);
+                }
+            }
         }
     }
 
@@ -17318,11 +18096,28 @@ impl Actor {
         source: RoundRecoveryBundleSource,
         now: Instant,
     ) -> bool {
-        let snapshot = self.round_recovery_bundle_window_snapshot(height, now);
+        self.try_reserve_round_recovery_bundle_window_with_window(
+            height,
+            source,
+            self.round_recovery_bundle_window(),
+            now,
+        )
+    }
+
+    fn try_reserve_round_recovery_bundle_window_with_window(
+        &mut self,
+        height: u64,
+        source: RoundRecoveryBundleSource,
+        window: Duration,
+        now: Instant,
+    ) -> bool {
+        let snapshot =
+            self.round_recovery_bundle_window_snapshot_with_window(height, source, window, now);
         if snapshot.last_bundle_window_index == Some(snapshot.window_index) {
             debug!(
                 height = snapshot.height,
                 source = source.as_str(),
+                gate_class = snapshot.gate_class.as_str(),
                 reserved_source = ?snapshot.last_bundle_source.map(|value| value.as_str()),
                 window_index = snapshot.window_index,
                 window_ms = snapshot.window.as_millis(),
@@ -17335,9 +18130,18 @@ impl Actor {
             return false;
         }
         if let Some(state) = self.round_recovery_bundle_window_gates.get_mut(&height) {
-            state.last_bundle_window_index = Some(snapshot.window_index);
-            state.last_bundle_source = Some(source);
-            state.last_bundle_at = Some(now);
+            match source.gate_class() {
+                RoundRecoveryBundleGateClass::Commit => {
+                    state.last_commit_bundle_window_index = Some(snapshot.window_index);
+                    state.last_commit_bundle_source = Some(source);
+                    state.last_commit_bundle_at = Some(now);
+                }
+                RoundRecoveryBundleGateClass::NonCommit => {
+                    state.last_non_commit_bundle_window_index = Some(snapshot.window_index);
+                    state.last_non_commit_bundle_source = Some(source);
+                    state.last_non_commit_bundle_at = Some(now);
+                }
+            }
         }
         true
     }
@@ -23866,12 +24670,33 @@ impl Actor {
             return FrontierRecoveryAdvance::None;
         }
         let queue_depths = super::status::worker_queue_depth_snapshot();
-        if self.frontier_recovery_same_height_dependency_backlog_active(
-            frontier_height,
-            now,
-            queue_depths,
-        ) && (state.no_progress_windows >= 2
-            || matches!(state.phase, FrontierRecoveryPhase::RotateArmed))
+        let same_height_dependency_backlog_active = self
+            .frontier_recovery_same_height_dependency_backlog_active(
+                frontier_height,
+                now,
+                queue_depths,
+            );
+        let same_slot_ingress_active =
+            self.frontier_recovery_same_slot_ingress_active(frontier_height, view, queue_depths);
+        let same_slot_missing_payload_recovery_active = self
+            .frontier_recovery_same_slot_missing_payload_recovery_active(
+                frontier_height,
+                view,
+                now,
+            );
+        let quorum_timeout_same_height_recovery_active = reason == "quorum_timeout"
+            && self.frontier_recovery_quorum_timeout_same_height_recovery_active(
+                frontier_height,
+                view,
+                now,
+                queue_depths,
+            );
+        if (same_height_dependency_backlog_active
+            || same_slot_ingress_active
+            || same_slot_missing_payload_recovery_active
+            || quorum_timeout_same_height_recovery_active)
+            && (state.no_progress_windows >= 2
+                || matches!(state.phase, FrontierRecoveryPhase::RotateArmed))
         {
             self.frontier_recovery = Some(state);
             return FrontierRecoveryAdvance::None;
@@ -25552,9 +26377,34 @@ impl Actor {
         height: u64,
         view: u64,
     ) {
+        self.clear_rbc_runtime_state(key, true);
+        if self.ensure_rbc_chunk_store() {
+            if let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() {
+                if let Err(err) = store.remove(&key) {
+                    warn!(
+                        ?err,
+                        ?block_hash,
+                        height,
+                        view,
+                        "failed to purge persisted RBC session"
+                    );
+                }
+            }
+        }
+
+        self.publish_rbc_backlog_snapshot();
+    }
+
+    fn clear_rbc_runtime_state(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        clear_status_summary: bool,
+    ) {
         self.subsystems.da_rbc.rbc.sessions.remove(&key);
         self.clear_rbc_session_roster(&key);
-        self.subsystems.da_rbc.rbc.status_handle.remove(&key);
+        if clear_status_summary {
+            self.subsystems.da_rbc.rbc.status_handle.remove(&key);
+        }
         self.subsystems.da_rbc.rbc.pending.remove(&key);
         self.subsystems
             .da_rbc
@@ -25584,21 +26434,6 @@ impl Actor {
             .remove(&key);
         self.subsystems.da_rbc.rbc.persist_inflight.remove(&key);
         self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
-        if self.ensure_rbc_chunk_store() {
-            if let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() {
-                if let Err(err) = store.remove(&key) {
-                    warn!(
-                        ?err,
-                        ?block_hash,
-                        height,
-                        view,
-                        "failed to purge persisted RBC session"
-                    );
-                }
-            }
-        }
-
-        self.publish_rbc_backlog_snapshot();
     }
 
     fn trigger_view_change_after_validation_reject(

@@ -1,6 +1,156 @@
 # Status
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
+
+## 2026-03-20 Follow-up: manifest-declared data triggers now cover structured core-ledger filters
+- Extended manifest-declared trigger support across `crates/iroha_data_model`,
+  `crates/kotodama_lang`, `crates/iroha_core/tests`, and
+  `crates/ivm/docs` so contracts can declare structured data triggers without
+  raw trigger-registration tooling:
+  - `AssetEventFilter` now supports an `asset_definition_matcher` alongside
+    the existing `id_matcher`, with AND semantics across asset id, asset
+    definition id, and event kind.
+  - Kotodama trigger declarations now accept structured data-trigger blocks of
+    the form `on data <family> <event_kind> { ... }` for the core ledger
+    families (`peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`,
+    `trigger`, `role`, `configuration`, `executor`) while preserving the
+    existing flat forms (`on data any`, `on pipeline block`, etc.).
+  - Structured matcher literals now lower directly into manifest
+    `TriggerDescriptor.filter: EventFilterBox`, including the interceptor shape
+    `on data asset added { asset_definition "aid:..." }`, and explicit trigger
+    authority remains supported.
+  - Core activation/deactivation regressions now verify manifest registration
+    for both Data and Pipeline triggers and preserve the existing
+    contract-origin metadata/bookkeeping on installed trigger actions.
+- Validation:
+  - `cargo fmt --all --check` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_data_model asset_filter -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang trigger_decl_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang manifest_trigger_decl_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture` (pass)
+
+## 2026-03-20 Follow-up: self-describing contract artifacts are now mandatory, and Torii deploy/call no longer accept manifest fallbacks
+- Reworked the IVM contract artifact path around a required embedded `CNTR`
+  section in 1.1 `.to` artifacts:
+  - `crates/ivm_abi/src/metadata.rs` now decodes ordered prefix sections and
+    returns both the real code offset and the embedded contract-interface
+    payload,
+  - `crates/ivm/src/contract_artifact.rs` now verifies the embedded interface
+    against decoded bytecode and builds the canonical `ContractManifest`,
+    rejecting missing/malformed `CNTR`, duplicate entrypoints, invalid
+    `entry_pc` targets, invalid trigger callbacks, ABI mismatches, and other
+    structurally unsafe artifacts.
+- Updated the compiler/runtime side to treat self-description as the only
+  contract deploy format:
+  - `crates/kotodama_lang/src/compiler.rs` now always emits 1.1 artifacts with
+    embedded `EmbeddedContractInterfaceV1`,
+  - `crates/ivm/src/{core_host.rs,host.rs,ivm.rs}` now execute prefixed
+    `CNTR + LTLB + code` artifacts correctly by honoring the real code offset,
+    resolving literal pointers from prefixed bodies, and preserving correct
+    call/return alignment for prefixed programs.
+- Removed the public manifest sidecar/fallback path from Torii and CLI:
+  - `/v1/contracts/deploy` and `/v1/contracts/instance` now accept bytecode
+    only and derive/sign the on-chain manifest from verified artifact bytes,
+  - the legacy `POST /v1/contracts/code` manifest-only Torii endpoint and its
+    MCP exposure are removed, so contract publication no longer has a public
+    manifest-only bypass,
+  - `/v1/contracts/call` now requires the stored manifest to advertise the
+    requested entrypoint and no longer falls back to raw `Executable::Ivm`,
+  - the CLI manifest output path is inspection-only; it is no longer part of
+    deploy submission.
+- Tightened the generic artifact policy to match first-release IVM behavior:
+  - `crates/ivm_abi/src/metadata.rs` now accepts only IVM `1.1` headers,
+    while contract deploy verification still separately requires `CNTR`,
+  - remaining test fixtures/build helpers/predecoder exports were updated from
+    `version_minor = 0` to `1`, and the generated predecoder fixtures were
+    refreshed under `crates/ivm/tests/fixtures/predecoder/mixed/`.
+- Synced the contract/governance doc families to the shipped behavior:
+  - canonical English docs now describe bytecode-only deploy/instance flows,
+    derived manifests, mandatory `CNTR`, and the `1.1`-only artifact policy,
+  - translated/source and portal copies for the affected contract/governance
+    docs now mirror the corrected English text and are marked `needs-update`
+    until refreshed native-language translations are available.
+- Tightened the Torii contract-call transaction shape to match first-release
+  semantics:
+  - direct contract calls now register and execute an exactly-once trigger
+    without a redundant explicit unregister, avoiding post-execution repetition
+    failures once the trigger self-expires.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test metadata --test cli_smoke --test contract_artifact --test ivm_header_doc_sync -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama compile_and_run_add -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama call_function_with_tuple_return -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama manifest_includes_entrypoints_and_features -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib contract_entrypoint_validation_tests -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib deploy_tests::deploy_endpoint_returns_hashes -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib multisig_contract_call_instruction_envelope_hashes_deterministically -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_submit_error -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture` (pass)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture` (pass)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_activate_integration contracts_deploy_and_activate_via_single_endpoint -- --nocapture` (pass)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_call_integration contracts_call_enqueues_transaction -- --nocapture` (pass)
+  - `bash /Users/takemiyamakoto/dev/pk-cbdc-core-api/scripts/build_kotodama_contracts.sh` (pass; downstream `.to` artifacts emitted with inspection-only manifest dumps)
+  - `CARGO_TARGET_DIR=/tmp/pk-cbdc-core-api-contract-artifact-target cargo test --test mint_flow mint_flow_contract_artifacts_exist -- --nocapture` in `../pk-cbdc-core-api` (pass)
+- Broader workspace execution coverage is still being exercised separately; the
+  targeted IVM, Torii, MCP, and downstream consumer slices that directly cover
+  the new `.to`-only deploy/call model are green.
+
+## 2026-03-20 Follow-up: Torii multisig selector tests no longer reach into `World` private storage
+- Added a narrow smart-contract-state test/API scaffolding accessor in
+  `crates/iroha_core/src/state.rs` so cross-crate callers can seed durable
+  contract state without reopening the `World` field visibility.
+- Updated the multisig selector regression coverage in
+  `crates/iroha_torii/src/routing.rs` to use that accessor when seeding the
+  fallback `MultisigAccountState`, fixing the `E0616` build break after
+  `World.smart_contract_state` became private.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib --no-run` (pass)
+  - `cargo test -p iroha_torii multisig_spec_falls_back_to_contract_state_when_metadata_is_missing -- --nocapture` (pass)
+
+## 2026-03-20 Follow-up: retained RBC session summaries now survive commit cleanup, and multilane Kura again provisions per-lane merge logs
+- Restored per-lane merge-ledger file naming in
+  `crates/iroha_config/src/parameters/actual.rs` so multilane Kura layouts now
+  provision `merge_ledger/lane_*_merge.log` again instead of collapsing every
+  lane onto a shared `universal.log`.
+- Fixed the DA/RBC observability regression in
+  `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,tests.rs}` and
+  `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - commit cleanup still drains the runtime RBC session state, but it now keeps
+    the retained status summary written during cleanup instead of immediately
+    deleting that summary when clearing auxiliary caches such as rebroadcast
+    cooldowns, persisted-session markers, and seed-worker state,
+  - this restores the evidence expected by the cross-peer consistency and
+    restart-recovery tests, which read `/v1/sumeragi/rbc/sessions` and the
+    persisted `rbc_sessions/sessions.norito` snapshot after commit/restart.
+- Added focused regression coverage for both fixes:
+  - config assertions now lock the canonical per-lane merge-log paths,
+  - Sumeragi unit tests now verify that `clean_rbc_sessions_for_block(...)`
+    clears stale runtime-only RBC state without erasing the retained summary.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config lane_config_from_catalog_preserves_alias_metadata -- --nocapture` (pass)
+  - `cargo test -p iroha_core clean_rbc_sessions_for_block_ -- --nocapture` (pass)
+  - `cargo test -p integration_tests multilane_kura_layout::kura_prepares_multilane_storage_layout -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod extra_functional::seven_peer_consistency::seven_peer_cross_peer_consistency_basic -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture` (pass)
+
+## 2026-03-19 Follow-up: merge conflicts are resolved and the workspace compile gate is green
+- Resolved the remaining merge conflicts across the Rust workspace, SDKs,
+  docs, and build/config files, with manual reconciliation in:
+  - `.gitignore`,
+  - `Cargo.toml`,
+  - `Dockerfile.cross`, and
+  - `crates/iroha_torii/src/routing.rs`.
+- Preserved the newer branch-side Torii/OpenAPI/API changes while restoring the
+  Sumeragi status wire fields for `commit_pipeline` and `round_gap` in the
+  Torii routing path so the consensus status response stays coherent with the
+  merged data model.
+- Validation so far:
+  - `git diff --name-only --diff-filter=U` (clean)
+  - `git diff --check` (clean)
+  - `cargo check --workspace` (pass)
 
 ## 2026-03-19 Follow-up: generic hidden-program RAM-LFE program-policy foundations now exist in `iroha_crypto`, `iroha_data_model`, `iroha_core`, and the identifier Torii path
 - Extended `crates/iroha_crypto/src/ram_lfe.rs` from an identifier-only
@@ -108,6 +258,23 @@ Last updated: 2026-03-19
   - `cargo test -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture` (pass)
   - `cargo check -p iroha_crypto -p iroha_torii` (pass)
   - `cargo clippy -p iroha_crypto -p iroha_torii --all-targets -- -D warnings` (pass)
+
+## 2026-03-18 Follow-up: offline allowance list/query payloads now expose asset-definition metadata across Torii and SDKs
+- Updated `crates/iroha_torii/src/routing.rs` so offline allowance projection resolves the referenced asset definition once per record, injects `asset_definition_id`, `asset_definition_name`, and nullable `asset_definition_alias` into list/query JSON, and fails with an internal error when an allowance references a missing asset definition.
+- Updated `crates/iroha_torii/src/openapi.rs` plus the checked-in Torii OpenAPI JSON snapshots so `OfflineAllowanceItem` documents the concrete `asset_id` separately from the human-facing asset-definition metadata.
+- Updated Android offline allowance parsing/model types in `java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/` and adjusted affected tests/call sites to require the new constructor/parser fields.
+- Updated JavaScript offline allowance normalization/types in `javascript/iroha_js/src/toriiClient.js`, `javascript/iroha_js/index.d.ts`, regenerated `javascript/iroha_js/dist/`, and extended allowance normalization assertions in `javascript/iroha_js/test/toriiClient.test.js`.
+- Updated Python offline allowance parsing in `python/iroha_torii_client/client.py` and the corresponding payload test in `python/iroha_torii_client/tests/test_client.py`.
+- Updated Android offline allowance docs in `java/iroha_android/README.md` and `docs/source/sdk/android/offline_signing.md` to use `assetDefinitionName()` and describe the `asset_id` vs `asset_definition_id` split.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii offline_allowance_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test offline_app_api -- --nocapture` (pass)
+  - `/bin/zsh -lc 'JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :jvm:test --console=plain'` from `java/iroha_android` (pass)
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "OfflineAllowances|OfflineAllowance" test/toriiClient.test.js` from `javascript/iroha_js` (pass)
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js` from `javascript/iroha_js` (fails in 4 pre-existing non-offline tests: three governance owner-validation assertions and one `extractToriiFeatureConfig` validation case)
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k offline_allowances` could not run because `pytest` is not installed in this environment
+  - `PYTHONPATH=python python3 -c '...'` offline allowance smoke-check could not run because the environment is also missing `requests`
 
 ## 2026-03-18 Follow-up: deterministic BFV acceleration landed, and the workspace lint/compile gates are green
 - Replaced the old scalar-only BFV multiplication baseline in
