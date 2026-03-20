@@ -111,7 +111,7 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
     let variants: Vec<ProgramMetadata> = vec![
         ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0x00,
             vector_length: 0,
             max_cycles: 0,
@@ -119,7 +119,7 @@ pub fn generate_predecoder_mixed_fixtures(root: &Path) -> Result<(), Box<dyn std
         },
         ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0x03,
             vector_length: 8,
             max_cycles: 1_000,

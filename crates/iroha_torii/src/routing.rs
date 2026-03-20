@@ -6034,261 +6034,6 @@ mod nts_tests {
     }
 }
 
-// Note: endpoint behavior is covered by unit tests in ivm_cli and doc-sync tests.
-
-fn protected_contract_namespaces_from_custom_parameter(state: &CoreState) -> Vec<String> {
-    use iroha_data_model::{name::Name, parameter::CustomParameterId};
-
-    let world = state.world_view();
-    let params = world.parameters();
-    let Ok(name) = Name::from_str("gov_protected_namespaces") else {
-        return Vec::new();
-    };
-    let id = CustomParameterId(name);
-    params
-        .custom()
-        .get(&id)
-        .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
-        .unwrap_or_default()
-}
-
-fn lane_manifest_protected_namespaces(state: &CoreState, lane_id: LaneId) -> Vec<String> {
-    let manifests = state.lane_manifests.read().clone();
-    manifests
-        .status(lane_id)
-        .and_then(|status| status.rules())
-        .map(|rules| {
-            rules
-                .protected_namespaces
-                .iter()
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn all_lane_manifest_protected_namespaces(state: &CoreState) -> Vec<String> {
-    let manifests = state.lane_manifests.read().clone();
-    let mut namespaces = BTreeSet::new();
-    for status in manifests.statuses() {
-        if let Some(rules) = status.rules() {
-            for namespace in &rules.protected_namespaces {
-                namespaces.insert(namespace.to_string());
-            }
-        }
-    }
-    namespaces.into_iter().collect()
-}
-
-fn protected_contract_namespaces(
-    state: &CoreState,
-    tx: &iroha_data_model::transaction::signed::SignedTransaction,
-) -> Vec<String> {
-    let accepted =
-        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(tx));
-    let nexus = state.nexus.read().clone();
-    let routing = iroha_core::queue::evaluate_policy_with_catalog(
-        &nexus.routing_policy,
-        &nexus.lane_catalog,
-        &nexus.dataspace_catalog,
-        &accepted,
-    )
-    .map_err(|err| {
-        iroha_logger::warn!(
-            reason = %err,
-            reason_label = err.as_label(),
-            "unable to resolve lane route while loading protected contract namespaces"
-        );
-        err
-    })
-    .ok();
-
-    let mut namespaces = routing
-        .map(|routing| lane_manifest_protected_namespaces(state, routing.lane_id))
-        .unwrap_or_else(|| all_lane_manifest_protected_namespaces(state));
-    if namespaces.is_empty() {
-        namespaces = all_lane_manifest_protected_namespaces(state);
-    }
-    if namespaces.is_empty() {
-        return protected_contract_namespaces_from_custom_parameter(state);
-    }
-    namespaces
-}
-
-fn fallback_contract_registration_id(
-    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
-) -> String {
-    manifest
-        .code_hash
-        .as_ref()
-        .map(|code_hash| {
-            let code_hash_hex = hex::encode(code_hash.as_ref());
-            format!("manifest_{}", &code_hash_hex[..16])
-        })
-        .unwrap_or_else(|| "manifest_registration".to_owned())
-}
-
-fn resolve_contract_registration_metadata(
-    requested_namespace: Option<&str>,
-    requested_contract_id: Option<&str>,
-    protected_namespaces: &[String],
-    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
-) -> Option<(String, String)> {
-    let requested_namespace = requested_namespace
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let requested_contract_id = requested_contract_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    if requested_namespace.is_none()
-        && requested_contract_id.is_none()
-        && protected_namespaces.is_empty()
-    {
-        return None;
-    }
-
-    let namespace = requested_namespace.or_else(|| {
-        protected_namespaces.iter().find_map(|candidate| {
-            let trimmed = candidate.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            iroha_data_model::name::Name::from_str(trimmed).ok()?;
-            Some(trimmed.to_owned())
-        })
-    })?;
-    let contract_id =
-        requested_contract_id.unwrap_or_else(|| fallback_contract_registration_id(manifest));
-    Some((namespace, contract_id))
-}
-
-/// Submit RegisterSmartContractCode as a signed transaction.
-#[iroha_futures::telemetry_future]
-pub async fn handle_post_contract_code(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<RegisterContractCodeDto>,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::{
-        isi::smart_contract_code, metadata::Metadata, name::Name, prelude as dm,
-    };
-
-    // Build the ISI
-    let isi = smart_contract_code::RegisterSmartContractCode {
-        manifest: req.manifest.clone(),
-    };
-    let mut tx_builder =
-        dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
-            .with_instructions(core::iter::once(dm::InstructionBox::from(isi)));
-    let preview_tx = tx_builder.clone().sign(&req.private_key.0);
-    let protected_namespaces = protected_contract_namespaces(&state, &preview_tx);
-    let mut metadata_attached = false;
-
-    if let Some((namespace, contract_id)) = resolve_contract_registration_metadata(
-        req.gov_namespace.as_deref(),
-        req.gov_contract_id.as_deref(),
-        &protected_namespaces,
-        &req.manifest,
-    ) {
-        let mut metadata = Metadata::default();
-        let gov_namespace_key =
-            Name::from_str("gov_namespace").expect("static metadata key `gov_namespace`");
-        metadata.insert(gov_namespace_key, IrohaJson::new(namespace.clone()));
-        let gov_contract_id_key =
-            Name::from_str("gov_contract_id").expect("static metadata key `gov_contract_id`");
-        metadata.insert(gov_contract_id_key, IrohaJson::new(contract_id.clone()));
-        let contract_namespace_key =
-            Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
-        metadata.insert(contract_namespace_key, IrohaJson::new(namespace));
-        let contract_id_key =
-            Name::from_str("contract_id").expect("static metadata key `contract_id`");
-        metadata.insert(contract_id_key, IrohaJson::new(contract_id));
-        tx_builder = tx_builder.with_metadata(metadata);
-        metadata_attached = true;
-    }
-
-    // Construct and sign a transaction
-    let tx = if metadata_attached {
-        tx_builder.sign(&req.private_key.0)
-    } else {
-        preview_tx
-    };
-
-    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, "/v1/contracts/code")
-        .await
-        .map(|_| (StatusCode::ACCEPTED, ()))
-}
-
-#[cfg(test)]
-mod contract_registration_metadata_tests {
-    use iroha_crypto::Hash;
-
-    use super::*;
-
-    fn manifest_with_code_hash(
-        code_hash: Option<Hash>,
-    ) -> iroha_data_model::smart_contract::manifest::ContractManifest {
-        iroha_data_model::smart_contract::manifest::ContractManifest {
-            code_hash,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-    }
-
-    #[test]
-    fn registration_metadata_uses_first_valid_protected_namespace() {
-        let code_hash = Hash::new(b"manifest-test");
-        let manifest = manifest_with_code_hash(Some(code_hash));
-        let protected = vec![
-            "   ".to_owned(),
-            "not valid namespace".to_owned(),
-            "treasury".to_owned(),
-        ];
-
-        let resolved = resolve_contract_registration_metadata(None, None, &protected, &manifest)
-            .expect("metadata should resolve");
-
-        let expected_contract_id = format!("manifest_{}", &hex::encode(code_hash.as_ref())[..16]);
-        assert_eq!(resolved, ("treasury".to_owned(), expected_contract_id));
-    }
-
-    #[test]
-    fn registration_metadata_prefers_request_values() {
-        let manifest = manifest_with_code_hash(None);
-        let protected = vec!["treasury".to_owned()];
-
-        let resolved = resolve_contract_registration_metadata(
-            Some("  contracts  "),
-            Some("  demo.contract  "),
-            &protected,
-            &manifest,
-        )
-        .expect("metadata should resolve");
-
-        assert_eq!(
-            resolved,
-            ("contracts".to_owned(), "demo.contract".to_owned())
-        );
-    }
-
-    #[test]
-    fn registration_metadata_absent_without_request_or_protected_namespaces() {
-        let manifest = manifest_with_code_hash(None);
-        let resolved = resolve_contract_registration_metadata(None, None, &[], &manifest);
-        assert!(resolved.is_none());
-    }
-}
-
 /// Fetch on-chain contract manifest by code_hash.
 #[iroha_futures::telemetry_future]
 pub async fn handle_get_contract_code(
@@ -6740,11 +6485,10 @@ pub async fn handle_post_contract_instance(
         namespace,
         contract_id,
         code_b64,
-        manifest,
     } = req;
 
     let signer = KeyPair::from(private_key.0.clone());
-    let prepared = prepare_contract_deployment(&code_b64, manifest.as_ref(), &signer)?;
+    let prepared = prepare_contract_deployment(&code_b64, &signer)?;
 
     let instructions = [
         dm::InstructionBox::from(smart_contract_code::RegisterSmartContractCode {
@@ -6831,12 +6575,14 @@ pub async fn handle_post_contract_call(
         abi_hash,
         manifest,
     } = prepared;
+    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
+    ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
 
     let metadata = build_contract_call_metadata(
         &manifest,
         &namespace,
         &contract_id,
-        entrypoint.as_deref(),
+        Some(resolved_entrypoint),
         payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
@@ -6846,51 +6592,23 @@ pub async fn handle_post_contract_call(
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let resolved_entrypoint = match (entrypoint.as_deref(), manifest.entrypoints.as_ref()) {
-        (Some(selector), Some(entrypoints)) => {
-            let descriptor = entrypoints
-                .iter()
-                .find(|candidate| candidate.name == selector)
-                .ok_or_else(|| {
-                    conversion_error(format!("unknown contract entrypoint `{selector}`"))
-                })?;
-            match descriptor.kind {
-                iroha_data_model::smart_contract::manifest::EntryPointKind::Public => {
-                    Some(selector)
-                }
-                _ => {
-                    return Err(conversion_error(format!(
-                        "contract entrypoint `{selector}` is not a public by-call entrypoint"
-                    )));
-                }
-            }
-        }
-        (Some(_), None) | (None, _) => None,
-    };
-    let builder = if let Some(selector) = resolved_entrypoint {
-        let instructions = build_direct_contract_call_instructions(
-            &authority,
-            &namespace,
-            &contract_id,
-            selector,
-            payload.as_ref(),
-            gas_asset_id.as_deref(),
-            fee_sponsor.as_ref(),
-            gas_limit,
-            &manifest,
-            &code_hash,
-            code_bytes,
-        )?;
-        builder
-            .with_metadata(metadata)
-            .with_instructions(instructions)
-    } else {
-        builder
-            .with_metadata(metadata)
-            .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
-                code_bytes,
-            )))
-    };
+    let instructions = build_direct_contract_call_instructions(
+        &authority,
+        &namespace,
+        &contract_id,
+        resolved_entrypoint,
+        payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+        &manifest,
+        &code_hash,
+        code_bytes,
+    )?;
+    let builder = builder
+        .with_metadata(metadata)
+        .with_instructions(instructions);
+    let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let response =
@@ -6917,7 +6635,7 @@ pub async fn handle_post_contract_call(
                 tx_hash_hex: Some(tx_hash_hex),
                 signed_transaction_b64: None,
                 signing_message_b64: None,
-                entrypoint,
+                entrypoint: response_entrypoint.clone(),
             }
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
@@ -6984,7 +6702,7 @@ pub async fn handle_post_contract_call(
                 tx_hash_hex: Some(tx_hash_hex),
                 signed_transaction_b64: None,
                 signing_message_b64: None,
-                entrypoint,
+                entrypoint: response_entrypoint.clone(),
             }
         } else {
             let scaffold_key =
@@ -7007,7 +6725,7 @@ pub async fn handle_post_contract_call(
                 tx_hash_hex: None,
                 signed_transaction_b64: Some(signed_transaction_b64),
                 signing_message_b64: Some(signing_message_b64),
-                entrypoint,
+                entrypoint: response_entrypoint,
             }
         };
 
@@ -7029,6 +6747,31 @@ fn current_time_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_public_contract_entrypoint(
+    manifest: &manifest::ContractManifest,
+    selector: &str,
+) -> Result<()> {
+    let advertised_entrypoints = manifest.entrypoints.as_ref().ok_or_else(|| {
+        conversion_error(
+            "stored contract manifest does not advertise callable entrypoints".to_owned(),
+        )
+    })?;
+    let descriptor = advertised_entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{selector}`")))?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(conversion_error(format!(
+            "contract entrypoint `{selector}` is not a public by-call entrypoint"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -7162,14 +6905,13 @@ fn build_contract_call_trigger_instructions(
     } else {
         iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone())
     };
+    // Exactly-once triggers self-expire after execution; an explicit unregister would
+    // race with that cleanup and reject the enclosing transaction on success.
     let instructions = vec![
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
             trigger,
         )),
         iroha_data_model::isi::InstructionBox::from(execute_trigger),
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Unregister::trigger(
-            trigger_id,
-        )),
     ];
     Ok(instructions)
 }
@@ -7553,7 +7295,8 @@ mod multisig_contract_call_tests {
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
 
-        let first = derive_multisig_contract_call_trigger_id(
+        let first = derive_contract_call_trigger_id(
+            "msig_cc",
             &multisig,
             "apps",
             "calc.v1",
@@ -7565,7 +7308,8 @@ mod multisig_contract_call_tests {
             &code_hash,
         )
         .expect("trigger id");
-        let second = derive_multisig_contract_call_trigger_id(
+        let second = derive_contract_call_trigger_id(
+            "msig_cc",
             &multisig,
             "apps",
             "calc.v1",
@@ -7579,7 +7323,8 @@ mod multisig_contract_call_tests {
         .expect("trigger id");
         assert_eq!(first, second);
 
-        let changed = derive_multisig_contract_call_trigger_id(
+        let changed = derive_contract_call_trigger_id(
+            "msig_cc",
             &multisig,
             "apps",
             "calc.v1",
@@ -7625,8 +7370,67 @@ mod multisig_contract_call_tests {
         )
         .expect("instructions");
 
-        assert_eq!(instructions.len(), 3);
+        assert_eq!(instructions.len(), 2);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod contract_entrypoint_validation_tests {
+    use iroha_data_model::smart_contract::manifest::{ContractManifest, EntrypointDescriptor};
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+
+    use super::*;
+
+    fn manifest_with_entrypoints(
+        entrypoints: Option<Vec<EntrypointDescriptor>>,
+    ) -> ContractManifest {
+        ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: Some("torii-tests".to_owned()),
+            features_bitmap: Some(0),
+            access_set_hints: None,
+            entrypoints,
+            kotoba: None,
+            provenance: None,
+        }
+    }
+
+    fn expect_conversion(err: Error) -> String {
+        match err {
+            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))) => {
+                message
+            }
+            other => panic!("expected conversion error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_public_contract_entrypoint_rejects_missing_manifest_entrypoints() {
+        let manifest = manifest_with_entrypoints(None);
+        let err = ensure_public_contract_entrypoint(&manifest, "main")
+            .expect_err("missing entrypoints must fail");
+        let message = expect_conversion(err);
+        assert!(message.contains("does not advertise callable entrypoints"));
+    }
+
+    #[test]
+    fn ensure_public_contract_entrypoint_rejects_non_public_targets() {
+        let manifest = manifest_with_entrypoints(Some(vec![EntrypointDescriptor {
+            name: "boot".to_owned(),
+            kind: manifest::EntryPointKind::Hajimari,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }]));
+        let err = ensure_public_contract_entrypoint(&manifest, "boot")
+            .expect_err("non-public entrypoints must fail");
+        let message = expect_conversion(err);
+        assert!(message.contains("is not a public by-call entrypoint"));
     }
 }
 
@@ -7757,7 +7561,7 @@ mod multisig_selector_tests {
             [multisig_account, signer_one_account, signer_two_account],
             [],
         );
-        world.smart_contract_state.insert(
+        world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
             norito::to_bytes(
                 &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
@@ -7772,7 +7576,7 @@ mod multisig_selector_tests {
             )
             .expect("encode active proposal state"),
         );
-        world.smart_contract_state.insert(
+        world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_contract_key(&multisig_account_id, &executed_hash),
             norito::to_bytes(
                 &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
@@ -7787,7 +7591,7 @@ mod multisig_selector_tests {
             )
             .expect("encode executed proposal state"),
         );
-        world.smart_contract_state.insert(
+        world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_contract_key(&multisig_account_id, &expired_hash),
             norito::to_bytes(
                 &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
@@ -7814,18 +7618,34 @@ mod multisig_selector_tests {
     }
 
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 1,
             abi_version,
         };
         let mut out = meta.encode();
-        out.extend_from_slice(&code);
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "torii-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+        };
+        out.extend_from_slice(&interface.encode_section());
+        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         out
     }
 
@@ -7927,20 +7747,14 @@ mod multisig_selector_tests {
             .expect("grant CanEnactGovernance");
 
         let code = minimal_ivm_program(1);
+        let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
         let code_hash =
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
-        let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-        let manifest = manifest::ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: Some(abi_hash),
-            compiler_fingerprint: Some("torii-tests".to_owned()),
-            features_bitmap: Some(0),
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(authority_keypair);
+        assert_eq!(
+            verified.code_hash, code_hash,
+            "verified code hash must match stored bytes"
+        );
+        let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
         activate_instance(authority, namespace, contract_id, code_hash, &mut stx)
             .expect("activate instance");
@@ -8340,6 +8154,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         abi_hash: _,
         manifest,
     } = prepared;
+    ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
         &namespace,
@@ -9512,36 +9327,6 @@ pub struct ContractCodeRecordDto {
     pub code_bytes: Option<Vec<u8>>,
 }
 
-/// Request body for submitting RegisterSmartContractCode via Torii.
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-pub struct RegisterContractCodeDto {
-    /// Account that authorizes the transaction
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key; Exposed for API transport
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Contract manifest to register on-chain
-    pub manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
-    /// Optional governance namespace metadata (`gov_namespace`).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub gov_namespace: Option<String>,
-    /// Optional governance contract id metadata (`gov_contract_id`).
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub gov_contract_id: Option<String>,
-}
-
-#[allow(dead_code)]
-fn _assert_register_contract_code_dto_send() {
-    fn assert_send<T: Send>() {}
-    assert_send::<RegisterContractCodeDto>();
-}
-
 #[cfg(feature = "app_api")]
 #[allow(missing_copy_implementations)]
 #[derive(
@@ -9622,7 +9407,6 @@ struct PreparedContractDeployment {
 #[cfg(feature = "app_api")]
 fn prepare_contract_deployment(
     code_b64: &str,
-    manifest_override: Option<&manifest::ContractManifest>,
     signer: &KeyPair,
 ) -> core::result::Result<PreparedContractDeployment, Error> {
     let code_bytes = base64::engine::general_purpose::STANDARD
@@ -9635,68 +9419,17 @@ fn prepare_contract_deployment(
             ))
         })?;
 
-    let parsed = ivm::ProgramMetadata::parse(&code_bytes).map_err(|_| {
+    let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "invalid IVM header".into(),
-            ),
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    let code_hash = iroha_crypto::Hash::new(&code_bytes[parsed.header_len..]);
-    let metadata = parsed.metadata;
-
-    if metadata.abi_version != 1 {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "unsupported abi_version {}; expected 1",
-                metadata.abi_version
-            )),
-        )));
-    }
-
-    let abi_hash =
-        iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-
-    let mut manifest = manifest_override
-        .cloned()
-        .unwrap_or(manifest::ContractManifest {
-            code_hash: None,
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        });
-
-    if let Some(existing) = manifest.code_hash.as_ref() {
-        if existing != &code_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "manifest.code_hash mismatch with uploaded bytecode".into(),
-                ),
-            )));
-        }
-    }
-    manifest.code_hash = Some(code_hash);
-
-    if let Some(existing) = manifest.abi_hash.as_ref() {
-        if existing != &abi_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "manifest.abi_hash mismatch with computed ABI hash".into(),
-                ),
-            )));
-        }
-    }
-    manifest.abi_hash = Some(abi_hash);
-    let manifest = manifest.signed(signer);
+    let manifest = verified.manifest.signed(signer);
 
     Ok(PreparedContractDeployment {
         code_bytes,
-        code_hash,
-        abi_hash,
+        code_hash: verified.code_hash,
+        abi_hash: verified.abi_hash,
         manifest,
     })
 }
@@ -9708,7 +9441,6 @@ fn prepare_contract_call(
     contract_id: &str,
 ) -> core::result::Result<PreparedContractCall, Error> {
     use iroha_data_model::query::error::QueryExecutionFail;
-    use ivm::SyscallPolicy;
 
     let world = state.world_view();
     let binding = world
@@ -9731,76 +9463,32 @@ fn prepare_contract_call(
             ))
         })?;
 
-    let parsed = ivm::ProgramMetadata::parse(&code_bytes).map_err(|_| {
+    let verified = ivm::verify_contract_artifact(&code_bytes).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion("invalid IVM header".into()),
+            QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    let meta = parsed.metadata;
-    if meta.version_major != 1 {
+    let manifest = world
+        .contract_manifests()
+        .get(&binding)
+        .cloned()
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::NotFound,
+            ))
+        })?;
+    if manifest.signature_payload() != verified.manifest.signature_payload() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion(format!(
-                "unsupported program version {}.{}",
-                meta.version_major, meta.version_minor
-            )),
+            QueryExecutionFail::Conversion(
+                "stored manifest does not match the verified contract artifact".into(),
+            ),
         )));
-    }
-    if meta.abi_version != 1 {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            QueryExecutionFail::Conversion(format!(
-                "unsupported abi_version {}; expected 1",
-                meta.abi_version
-            )),
-        )));
-    }
-
-    let syscall_policy = SyscallPolicy::AbiV1;
-    let abi_hash = iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(syscall_policy));
-
-    let mut manifest =
-        world
-            .contract_manifests()
-            .get(&binding)
-            .cloned()
-            .unwrap_or(manifest::ContractManifest {
-                code_hash: None,
-                abi_hash: None,
-                compiler_fingerprint: None,
-                features_bitmap: None,
-                access_set_hints: None,
-                entrypoints: None,
-                kotoba: None,
-                provenance: None,
-            });
-
-    if let Some(existing) = manifest.code_hash {
-        if existing != binding {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::Conversion(
-                    "stored manifest.code_hash mismatch for instance binding".into(),
-                ),
-            )));
-        }
-    } else {
-        manifest.code_hash = Some(binding);
-    }
-
-    if let Some(existing) = manifest.abi_hash {
-        if existing != abi_hash {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                QueryExecutionFail::Conversion(
-                    "stored manifest.abi_hash mismatch for bytecode".into(),
-                ),
-            )));
-        }
-    } else {
-        manifest.abi_hash = Some(abi_hash);
     }
 
     Ok(PreparedContractCall {
         code_bytes,
         code_hash: binding,
-        abi_hash,
+        abi_hash: verified.abi_hash,
         manifest,
     })
 }
@@ -9826,10 +9514,6 @@ pub struct DeployAndActivateInstanceDto {
     pub contract_id: String,
     /// Base64-encoded compiled `.to` bytecode
     pub code_b64: String,
-    /// Optional manifest overrides (compiler fingerprint, feature flags, access hints, etc.)
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<manifest::ContractManifest>,
 }
 
 #[cfg(feature = "app_api")]
@@ -11244,7 +10928,7 @@ pub async fn handle_post_contract_deploy(
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{isi::smart_contract_code, prelude as dm};
     let signer = KeyPair::from(req.private_key.0.clone());
-    let prepared = prepare_contract_deployment(&req.code_b64, None, &signer)?;
+    let prepared = prepare_contract_deployment(&req.code_b64, &signer)?;
 
     // Construct transaction: RegisterSmartContractCode + RegisterSmartContractBytes (store manifest + code)
     let isi_code = smart_contract_code::RegisterSmartContractCode {
@@ -13503,18 +13187,34 @@ mod deploy_tests {
     use super::*;
 
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-        let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let meta = ivm::ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0,
             vector_length: 0,
             max_cycles: 0,
             abi_version,
         };
         let mut out = meta.encode();
-        out.extend_from_slice(&code);
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "torii-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "main".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+        };
+        out.extend_from_slice(&interface.encode_section());
+        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         out
     }
 

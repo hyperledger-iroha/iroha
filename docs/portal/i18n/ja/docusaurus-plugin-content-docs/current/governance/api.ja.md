@@ -2,136 +2,131 @@
 lang: ja
 direction: ltr
 source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/governance/api.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 80ad5a47d1efdd6812db64758e5b9b56385c7efce01db04786b3561217b393e9
-source_last_modified: "2026-01-22T16:09:51+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 20696eb987b900e29649753f05b1491b1fbac1b40e6f951d11c9aa24f6b0c857
+source_last_modified: "2026-03-20T08:32:54+00:00"
+translation_last_reviewed: 2026-03-20
 ---
 
----
-id: api
-lang: ja
-direction: ltr
-source: docs/portal/docs/governance/api.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
----
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-ステータス: ガバナンス実装タスクに伴うドラフト/スケッチ。実装中に形は変更される可能性があります。決定性とRBACポリシーは規範制約です。`authority` と `private_key` が提供される場合、Torii はトランザクションに署名して送信できます。それ以外はクライアントが組み立てて `/transaction` に送信します。
+# Governance App API — Endpoints (Draft)
 
-概要
-- すべてのエンドポイントはJSONを返します。トランザクション生成フローのレスポンスには `tx_instructions` - 1つ以上の命令スケルトン配列が含まれます:
-  - `wire_id`: 命令タイプのレジストリ識別子
-  - `payload_hex`: Norito payload バイト (hex)
-- `authority` と `private_key` (または ballot DTO の `private_key`) が提供されると、Torii は署名・送信し、`tx_instructions` も返します。
-- それ以外は、クライアントが authority と chain_id を用いて SignedTransaction を構築し、署名して `/transaction` にPOSTします。
-- SDKカバレッジ:
-- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` は `GovernanceProposalResult` (status/kind を正規化) を返し、`ToriiClient.get_governance_referendum_typed` は `GovernanceReferendumResult`、`ToriiClient.get_governance_tally_typed` は `GovernanceTally`、`ToriiClient.get_governance_locks_typed` は `GovernanceLocksResult`、`ToriiClient.get_governance_unlock_stats_typed` は `GovernanceUnlockStats`、`ToriiClient.list_governance_instances_typed` は `GovernanceInstancesPage` を返し、ガバナンス面の型付きアクセスをREADMEの使用例とともに提供します。
-- Python軽量クライアント (`iroha_torii_client`): `ToriiClient.finalize_referendum` と `ToriiClient.enact_proposal` は `GovernanceInstructionDraft` 型のバンドル (Toriiの `tx_instructions` スケルトンをラップ) を返し、Finalize/Enact のフローを組み合わせるスクリプトの手動JSON解析を回避します。
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` は proposals/referenda/tallies/locks/unlock stats の型付きヘルパーに加え、`listGovernanceInstances(namespace, options)` と council用エンドポイント (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) を提供し、Node.js クライアントが `/v1/gov/instances/{ns}` をページングし、既存の契約インスタンス一覧と並行して VRF ベースのワークフローを扱えるようにします。
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/transaction`.
 
-エンドポイント
+Overview
+- All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
+  - `wire_id`: registry identifier for the instruction type
+  - `payload_hex`: Norito payload bytes (hex)
+- If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
+- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
+- SDK coverage:
+- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` returns `GovernanceUnlockStats`, and `ToriiClient.list_governance_instances_typed` returns `GovernanceInstancesPage`, enforcing typed access across the governance surface with README usage examples.
+- Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and now `listGovernanceInstances(namespace, options)` plus the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) so Node.js clients can paginate `/v1/gov/instances/{ns}` and drive VRF-backed workflows alongside the existing contract-instance listing.
+
+Endpoints
 
 - POST `/v1/gov/proposals/deploy-contract`
-  - リクエスト (JSON):
+  - Request (JSON):
     {
       "namespace": "apps",
       "contract_id": "my.contract.v1",
-      "code_hash": "blake2b32:..." | "...64hex",
-      "abi_hash": "blake2b32:..." | "...64hex",
+      "code_hash": "blake2b32:…" | "…64hex",
+      "abi_hash": "blake2b32:…" | "…64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
       "authority": "i105…?",
-      "private_key": "...?"
+      "private_key": "…?"
     }
-  - レスポンス (JSON):
-    { "ok": true, "proposal_id": "...64hex", "tx_instructions": [{ "wire_id": "...", "payload_hex": "..." }] }
-  - 検証: ノードは指定された `abi_version` の `abi_hash` を正規化し、不一致を拒否します。`abi_version = "v1"` の期待値は `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` です。
+  - Response (JSON):
+    { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
+  - Validation: nodes canonicalise `abi_hash` for the provided `abi_version` and reject mismatches. For `abi_version = "v1"`, the expected value is `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
 
-契約API (deploy)
+Contracts API (deploy)
 - POST `/v1/contracts/deploy`
-  - リクエスト: { "authority": "i105...", "private_key": "...", "code_b64": "..." }
-  - 振る舞い: IVMプログラム本体から `code_hash` を、ヘッダ `abi_version` から `abi_hash` を計算し、`RegisterSmartContractCode` (manifest) と `RegisterSmartContractBytes` (完全な `.to` バイト) を `authority` として送信します。
-  - レスポンス: { "ok": true, "code_hash_hex": "...", "abi_hash_hex": "..." }
-  - 関連:
-    - GET `/v1/contracts/code/{code_hash}` -> 保存された manifest を返す
-    - GET `/v1/contracts/code-bytes/{code_hash}` -> `{ code_b64 }` を返す
+  - Request: { "authority": "i105...", "private_key": "…", "code_b64": "…" }
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, then submits `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
+  - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
+  - Related:
+    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
+    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - リクエスト: { "authority": "i105...", "private_key": "...", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "..." }
-  - 振る舞い: 供給された bytecode をデプロイし、`ActivateContractInstance` で `(namespace, contract_id)` マッピングを即時有効化します。
-  - レスポンス: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "...", "abi_hash_hex": "..." }
+  - Request: { "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
+  - Behavior: Deploys the supplied bytecode and immediately activates the `(namespace, contract_id)` mapping via `ActivateContractInstance`.
+  - Response: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
 
-エイリアスサービス
+Alias Service
 - POST `/v1/aliases/voprf/evaluate`
-  - リクエスト: { "blinded_element_hex": "..." }
-  - レスポンス: { "evaluated_element_hex": "...128hex", "backend": "blake2b512-mock" }
-    - `backend` は評価器の実装を示します。現行値: `blake2b512-mock`。
-  - 注記: ドメイン分離 `iroha.alias.voprf.mock.v1` を使う Blake2b512 の決定的モック評価器。プロダクションのVOPRFパイプラインがIrohaに接続されるまでのテスト用。
-  - エラー: 不正なhex入力はHTTP `400`。Toriiは Norito の `ValidationFail::QueryFailed::Conversion` エンベロープとデコーダのエラーメッセージを返します。
+  - Request: { "blinded_element_hex": "…" }
+  - Response: { "evaluated_element_hex": "…128hex", "backend": "blake2b512-mock" }
+    - `backend` reflects the evaluator implementation. Current value: `blake2b512-mock`.
+  - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
+  - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
 - POST `/v1/aliases/resolve`
-  - リクエスト: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - レスポンス: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
-  - 注記: ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`) が必要。Toriiは空白を削除して大文字化してから照合します。存在しない場合は404、ISO bridge runtimeが無効の場合は503を返します。
+  - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
+  - Response: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
+  - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
 - POST `/v1/aliases/resolve_index`
-  - リクエスト: { "index": 0 }
-  - レスポンス: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
-  - 注記: エイリアスのインデックスは設定順に決定的に割り当てられます (0-based)。クライアントはレスポンスをオフラインでキャッシュし、エイリアスのアテステーションイベントの監査トレイルを構築できます。
+  - Request: { "index": 0 }
+  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
+  - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
 
-コードサイズ上限
-- カスタムパラメータ: `max_contract_code_bytes` (JSON u64)
-  - オンチェーンで保存できる契約コードサイズ上限 (バイト) を制御します。
-  - デフォルト: 16 MiB。`.to` イメージ長が上限を超える場合、ノードは `RegisterSmartContractBytes` を不変条件違反で拒否します。
-  - オペレータは `SetParameter(Custom)` で `id = "max_contract_code_bytes"` と数値payloadを送信して調整できます。
+Code Size Cap
+- Custom parameter: `max_contract_code_bytes` (JSON u64)
+  - Controls the maximum allowed size (in bytes) for on-chain contract code storage.
+  - Default: 16 MiB. Nodes reject `RegisterSmartContractBytes` when the `.to` image length exceeds the cap with an invariant violation error.
+  - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/zk`
-  - リクエスト: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "election_id": "e1", "proof_b64": "...", "public": {...} }
-  - レスポンス: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
-  - 注記:
-    - 回路の公開入力が `owner`、`amount`、`duration_blocks` を含み、証明が設定されたVKで検証できる場合、ノードは `election_id` に対するガバナンスロックを `owner` で作成/延長します。方向は隠蔽 (`unknown`) され、amount/expiry だけ更新します。再投票は単調で、amount と expiry は増えるだけです (ノードは max(amount, prev.amount) と max(expiry, prev.expiry) を適用)。
-    - amount/expiry を減らそうとする ZK 再投票は `BallotRejected` 診断でサーバ側が拒否します。
-    - コントラクト実行は `SubmitBallot` をキューする前に `ZK_VOTE_VERIFY_BALLOT` を呼び出す必要があり、ホストはワンショット・ラッチを強制します。
+  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes:
+    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`); only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
+    - ZK re-votes that attempt to shrink amount or expiry are rejected server-side with `BallotRejected` diagnostics.
+    - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/plain`
-  - リクエスト: { "authority": "i105...", "private_key": "...?", "chain_id": "...", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
-  - レスポンス: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
-  - 注記: 再投票は延長のみで、新しい ballot は既存ロックの amount/expiry を減らせません。`owner` はトランザクションの authority と一致する必要があります。最小期間は `conviction_step_blocks` です。
+  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - リクエスト: { "referendum_id": "r1", "proposal_id": "...64hex", "authority": "i105…?", "private_key": "...?" }
-  - レスポンス: { "ok": true, "tx_instructions": [{ "wire_id": "...FinalizeReferendum", "payload_hex": "..." }] }
-  - オンチェーン効果 (現在のスキャフォールド): 承認済みのdeploy提案をenactすると、`code_hash` をキーにした最小 `ContractManifest` を `abi_hash` 期待値で挿入し、提案を Enacted にします。`code_hash` に異なる `abi_hash` の manifest が既に存在する場合、enactment は拒否されます。
-  - 注記:
-    - ZK選挙では、コントラクト経路は `FinalizeElection` の前に `ZK_VOTE_VERIFY_TALLY` を呼ぶ必要があり、ホストはワンショット・ラッチを強制します。`FinalizeReferendum` は選挙集計が確定するまで ZK レファレンダムを拒否します。
-    - `h_end` の自動クローズは Plain レファレンダムのみ Approved/Rejected を発行します。ZK は集計が確定して `FinalizeReferendum` が実行されるまで Closed のままです。
-    - ターンアウト判定は approve+reject のみを使用し、abstain はカウントしません。
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105…?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
+  - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
+  - Notes:
+    - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
+    - Auto-close at `h_end` emits Approved/Rejected only for Plain referenda; ZK referenda remain closed until a finalized tally is submitted and `FinalizeReferendum` is executed.
+    - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  - リクエスト: { "proposal_id": "...64hex", "preimage_hash": "...64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "...?" }
-  - レスポンス: { "ok": true, "tx_instructions": [{ "wire_id": "...EnactReferendum", "payload_hex": "..." }] }
-  - 注記: `authority`/`private_key` が提供されるとToriiが署名済みトランザクションを送信します。それ以外はクライアントが署名・送信するためのスケルトンを返します。preimage は任意で現状は情報用途です。
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105…?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
+  - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
 - GET `/v1/gov/proposals/{id}`
   - Path `{id}`: proposal id hex (64 chars)
-  - レスポンス: { "found": bool, "proposal": { ... }? }
+  - Response: { "found": bool, "proposal": { … }? }
 
 - GET `/v1/gov/locks/{rid}`
   - Path `{rid}`: referendum id string
-  - レスポンス: { "found": bool, "referendum_id": "rid", "locks": { ... }? }
+  - Response: { "found": bool, "referendum_id": "rid", "locks": { … }? }
 
 - GET `/v1/gov/council/current`
-  - レスポンス: { "epoch": N, "members": [{ "account_id": "..." }, ...] }
-  - 注記: 永続化された council があればそれを返し、なければ設定された stake asset としきい値を使って決定的なフォールバックを導出します (VRFの実証がオンチェーンに保存されるまで仕様を反映)。
+  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
+  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback using the configured stake asset and thresholds (mirrors the VRF spec until live VRF proofs are persisted on chain).
 
 - POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
-  - リクエスト: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "...", "variant": "Normal|Small", "pk_b64": "...", "proof_b64": "..." }, ...] }
-  - 振る舞い: 各候補のVRF証明を `chain_id`、`epoch`、最新ブロックハッシュのビーコンから導出した正規入力で検証し、出力バイト降順でタイブレークし、上位 `committee_size` を返します。永続化はしません。
-  - レスポンス: { "epoch": N, "members": [{ "account_id": "..." } ...], "total_candidates": M, "verified": K }
-  - 注記: Normal = pkはG1、proofはG2 (96 bytes)。Small = pkはG2、proofはG1 (48 bytes)。入力はドメイン分離され `chain_id` を含みます。
+  - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
+  - Behavior: Verifies each candidate’s VRF proof against the canonical input derived from `chain_id`, `epoch`, and the latest block hash beacon; sorts by output bytes desc with tiebreakers; returns the top `committee_size` members. Does not persist.
+  - Response: { "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
+  - Notes: Normal = pk in G1, proof in G2 (96 bytes). Small = pk in G2, proof in G1 (48 bytes). Inputs are domain-separated and include `chain_id`.
 
-### ガバナンスのデフォルト (iroha_config `gov.*`)
+### Governance defaults (iroha_config `gov.*`)
 
-Torii が永続化された roster を持たない場合のフォールバック council は `iroha_config` でパラメータ化されます:
+The council fallback used by Torii when no persisted roster exists is parameterised via `iroha_config`:
 
 ```toml
 [gov]
@@ -151,7 +146,7 @@ Torii が永続化された roster を持たない場合のフォールバック
   parliament_eligibility_asset_id = "SORA#stake"
 ```
 
-環境変数の同等オーバーライド:
+Equivalent environment overrides:
 
 ```
 GOV_VK_BACKEND=halo2/ipa
@@ -164,140 +159,148 @@ GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
 
-`parliament_committee_size` は council が永続化されていない場合に返されるフォールバックメンバー数を制限し、`parliament_term_blocks` はシード導出のエポック長 (`epoch = floor(height / term_blocks)`)、`parliament_min_stake` は資格資産の最小stake (最小単位) を強制し、`parliament_eligibility_asset_id` は候補集合の構築時にスキャンする資産残高を選択します。
+`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`), `parliament_min_stake` enforces the minimum stake (in smallest units) on the eligibility asset, and `parliament_eligibility_asset_id` selects which asset balance is scanned when building the candidate set.
 
-ガバナンスVK検証にバイパスはありません。ballot検証は常に `Active` の検証鍵とインラインバイトを必要とし、環境はテスト用トグルで検証を回避してはいけません。
+Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
 
 RBAC
-- オンチェーン実行に必要な権限:
+- On-chain execution requires permissions:
   - Proposals: `CanProposeContractDeployment{ contract_id }`
   - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
   - Enactment: `CanEnactGovernance`
-  - Council management (将来): `CanManageParliament`
+  - Council management (future): `CanManageParliament`
 
-保護されたNamespaces
-- カスタムパラメータ `gov_protected_namespaces` (JSON array of strings) により、列挙されたnamespaceへのdeployをadmissionでゲートします。
-- 保護namespaceへのdeployでは、クライアントはトランザクションmetadataキーを含める必要があります:
-  - `gov_namespace`: 対象namespace (例: "apps")
-  - `gov_contract_id`: namespace内の論理contract id
-- `gov_manifest_approvers`: オプションのJSON array (validatorのaccount ID)。lane manifest がquorum>1を宣言する場合、admissionはトランザクションauthorityに加えて一覧アカウントによるquorum満足を要求します。
-- テレメトリは `governance_manifest_admission_total{result}` を通じてadmissionの合否を公開し、`missing_manifest`、`non_validator_authority`、`quorum_rejected`、`protected_namespace_rejected`、`runtime_hook_rejected` を識別できます。
-- テレメトリは `governance_manifest_quorum_total{outcome}` (値 `satisfied` / `rejected`) により、承認不足の監査を可能にします。
-- Lanes は manifest に公開された namespace allowlist を適用します。`gov_namespace` を設定するトランザクションは `gov_contract_id` を必須とし、namespace は manifest の `protected_namespaces` セットに含まれている必要があります。このmetadataがない `RegisterSmartContractCode` は保護有効時に拒否されます。
-- Admission は `(namespace, contract_id, code_hash, abi_hash)` に対する Enacted なガバナンス提案の存在を強制し、存在しない場合は NotPermitted エラーで検証失敗します。
+Protected Namespaces
+- Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
+- Clients must include transaction metadata keys for deploys targeting protected namespaces:
+  - `gov_namespace`: the target namespace (e.g., `"apps"`)
+  - `gov_contract_id`: the logical contract id within the namespace
+- `gov_manifest_approvers`: optional JSON array of validator account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
+- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_validator_authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
+- Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
+- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_namespace` must provide `gov_contract_id`, and the namespace must appear in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
+- Admission enforces that an Enacted governance proposal exists for the tuple `(namespace, contract_id, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
 
 Runtime Upgrade Hooks
-- lane manifest は `hooks.runtime_upgrade` を宣言して runtime upgrade 命令 (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`) をゲートできます。
-- Hookフィールド:
-  - `allow` (bool, default `true`): `false` の場合、すべてのruntime upgrade命令を拒否します。
-  - `require_metadata` (bool, default `false`): `metadata_key` で指定されたmetadataエントリを要求します。
-  - `metadata_key` (string): hookが強制するmetadata名。metadataが必要またはallowlistが存在する場合のデフォルトは `gov_upgrade_id`。
-  - `allowed_ids` (array of strings): metadata値のallowlist (trim後)。値がリストにない場合は拒否します。
-- Hookが存在する場合、キューadmissionはトランザクションがキューに入る前にmetadataポリシーを強制します。metadata欠落、空値、allowlist外値は決定的な NotPermitted エラーになります。
-- テレメトリは `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` を通じて結果を追跡します。
-- Hook条件を満たすトランザクションは `gov_upgrade_id=<value>` (またはmanifestで定義されたキー) を含み、manifest quorumに必要なvalidator承認も併せて必要です。
+- Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- Hook fields:
+  - `allow` (bool, default `true`): when `false`, all runtime-upgrade instructions are rejected.
+  - `require_metadata` (bool, default `false`): require the transaction metadata entry specified by `metadata_key`.
+  - `metadata_key` (string): metadata name enforced by the hook. Defaults to `gov_upgrade_id` when metadata is required or an allowlist is present.
+  - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
+- When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
+- Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
+- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any validator approvals required by the manifest quorum.
 
-便利なエンドポイント
-- POST `/v1/gov/protected-namespaces` - `gov_protected_namespaces` をノードに直接適用します。
-  - リクエスト: { "namespaces": ["apps", "system"] }
-  - レスポンス: { "ok": true, "applied": 1 }
-  - 注記: 管理/テスト向け。設定されていればAPIトークンが必要です。本番では `SetParameter(Custom)` を署名して送信する方を推奨します。
+Convenience Endpoint
+- POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
+  - Request: { "namespaces": ["apps", "system"] }
+  - Response: { "ok": true, "applied": 1 }
+  - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
 
-CLIヘルパー
+CLI Helpers
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
-  - namespace の契約インスタンスを取得し、次をクロスチェックします:
-    - Torii が各 `code_hash` の bytecode を保存し、その Blake2b-32 digest が `code_hash` と一致すること。
-    - `/v1/contracts/code/{code_hash}` の manifest が `code_hash` と `abi_hash` の一致を報告すること。
-    - ノードが使う proposal-id ハッシュと同一の導出で `(namespace, contract_id, code_hash, abi_hash)` の enacted ガバナンス提案が存在すること。
-  - 契約ごとの `results[]` (issues, manifest/code/proposal のサマリ) を含む JSON レポートと、抑制されない限り1行サマリ (`--no-summary`) を出力。
-  - 保護されたnamespaceの監査やガバナンス制御デプロイフローの検証に有用。
-- `iroha app gov deploy-meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
-  - 保護namespaceへのデプロイ時に使うmetadata JSONスケルトンを出力し、manifest quorum を満たすための `gov_manifest_approvers` を任意で含めます。
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — `min_bond_amount > 0` の場合は lock hints が必須であり、提供する場合は `owner` / `amount` / `duration_blocks` をすべて含める必要があります。
+  - Fetches contract instances for the namespace and cross-checks that:
+    - Torii stores bytecode for each `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
+    - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
+    - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
+  - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
+  - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
+  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints are required when `min_bond_amount > 0`, and any provided hint set must include `owner`, `amount`, and `duration_blocks`.
   - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
-  - 1行サマリは、`CastZkBallot` から導出された決定的な `fingerprint=<hex>` と、デコードされたヒント (`owner`, `amount`, `duration_blocks`, `direction` 提供時) を表示します。
-  - CLIレスポンスは `tx_instructions[]` に `payload_fingerprint_hex` とデコード済みフィールドを付与し、下流ツールがNoritoデコードを再実装せずスケルトンを検証できます。
-  - ロックヒントを提供すると、回路が同じ値を公開した際にZK ballotに対して `LockCreated`/`LockExtended` イベントが発行されます。
+  - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
+  - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
+  - Supplying the lock hints allows the node to emit `LockCreated`/`LockExtended` events for ZK ballots once the circuit exposes the same values.
 - `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--lock-amount`/`--lock-duration-blocks` エイリアスは ZK のフラグ名と揃えてスクリプト互換性を確保します。
-  - サマリ出力は `vote --mode zk` と同様に、エンコード済み命令の fingerprint と人間可読の ballot フィールド (`owner`, `amount`, `duration_blocks`, `direction`) を含み、署名前の迅速確認を提供します。
+  - `--owner` accepts canonical I105 literals; optional `@<domain>` suffixes are routing hints only.
+  - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
+  - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
-インスタンス一覧
-- GET `/v1/gov/instances/{ns}` - namespace のアクティブな契約インスタンスを一覧表示します。
+Instances Listing
+- GET `/v1/gov/instances/{ns}` — lists active contract instances for a namespace.
   - Query params:
-    - `contains`: `contract_id` の部分一致でフィルタ (case-sensitive)
-    - `hash_prefix`: `code_hash_hex` のhexプレフィックスでフィルタ (lowercase)
+    - `contains`: filter by substring of `contract_id` (case-sensitive)
+    - `hash_prefix`: filter by hex prefix of `code_hash_hex` (lowercase)
     - `offset` (default 0), `limit` (default 100, max 10_000)
-    - `order`: `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-  - レスポンス: { "namespace": "ns", "instances": [{ "contract_id": "...", "code_hash_hex": "..." }, ...], "total": N, "offset": n, "limit": m }
-  - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) または `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
+    - `order`: one of `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
+  - Response: { "namespace": "ns", "instances": [{ "contract_id": "…", "code_hash_hex": "…" }, …], "total": N, "offset": n, "limit": m }
+  - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) or `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
 
-Unlock sweep (オペレータ/監査)
+Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
-  - レスポンス: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
-  - 注記: `last_sweep_height` は期限切れロックがスイープされ永続化された最新のブロック高。`expired_locks_now` は `expiry_height <= height_current` のロックレコードをスキャンして算出します。
+  - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
+  - Notes: `last_sweep_height` reflects the most recent block height where expired locks were swept and persisted. `expired_locks_now` is computed by scanning lock records with `expiry_height <= height_current`.
 - POST `/v1/gov/ballots/zk-v1`
-  - リクエスト (v1スタイルDTO):
+  - Request (v1-style DTO):
     {
       "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "...?",
+      "private_key": "…?",
       "election_id": "ref-1",
       "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "root_hint": "0x...64hex?",
-      "owner": "i105…?",
-      "nullifier": "blake2b32:...64hex?"
+      "root_hint": "0x…64hex?",
+      "owner": "i105…?",          // canonical AccountId (I105 literal)
+      "amount": "100?",
+      "duration_blocks": 6000?,
+      "direction": "Aye|Nay|Abstain?",
+      "nullifier": "blake2b32:…64hex?"
     }
-  - レスポンス: { "ok": true, "accepted": true, "tx_instructions": [{...}] }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
 
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
-  - `BallotProof` JSONを直接受け取り、`CastZkBallot` スケルトンを返します。
-  - リクエスト:
+  - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
+  - Request:
     {
       "authority": "i105...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
-      "private_key": "...?",
+      "private_key": "…?",
       "election_id": "ref-1",
       "ballot": {
         "backend": "halo2/ipa",
-        "envelope_bytes": "AAECAwQ=",   // ZK1 または H2* コンテナのbase64
+        "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
         "root_hint": null,                // optional 32-byte hex string (eligibility root)
-        "owner": null,                    // 回路が owner をコミットする場合のAccountId
-        "nullifier": null                 // optional 32-byte hex string (nullifier hint)
+        "owner": null,                    // optional canonical AccountId (I105 literal)
+        "nullifier": null,                // optional 32-byte hex string (nullifier hint)
+        "amount": "100",                  // optional lock amount hint (decimal string)
+        "duration_blocks": 6000,          // optional lock duration hint
+        "direction": "Aye"                // optional direction hint
       }
     }
-  - レスポンス:
+  - Response:
     {
       "ok": true,
       "accepted": true,
       "reason": "build transaction skeleton",
       "tx_instructions": [
-        { "wire_id": "CastZkBallot", "payload_hex": "..." }
+        { "wire_id": "CastZkBallot", "payload_hex": "…" }
       ]
     }
-  - 注記:
-    - サーバは ballot の `root_hint`/`owner`/`nullifier` を `CastZkBallot` の `public_inputs_json` にマップします。
-    - envelope bytes は命令payloadのためにbase64で再エンコードされます。
-    - Torii が ballot を送信すると `reason` は `submitted transaction` に変わります。
-    - この endpoint は `zk-ballot` feature が有効な場合のみ利用可能です。
+  - Notes:
+    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
+    - The envelope bytes are re-encoded as base64 for the instruction payload.
+    - The response `reason` changes to `submitted transaction` when Torii submits the ballot.
+    - This endpoint is only available when the `zk-ballot` feature is enabled.
 
-CastZkBallot 検証パス
-- `CastZkBallot` は提供された base64 proof をデコードし、空または不正なpayloadを拒否します (`BallotRejected` with `invalid or empty proof`)。
-- ホストは referendum (`vk_ballot`) またはガバナンスデフォルトから ballot 検証鍵を解決し、レコードが存在し `Active` でインラインバイトを持つことを要求します。
-- 保存された検証鍵バイトは `hash_vk` で再ハッシュされ、コミットメント不一致は検証前に実行を中断して改ざんされたレジストリエントリを防ぎます (`BallotRejected` with `verifying key commitment mismatch`)。
-- proof bytes は `zk::verify_backend` により登録済みバックエンドへ送られ、無効なトランスクリプトは `BallotRejected` の `invalid proof` として決定的に失敗します。
+CastZkBallot Verification Path
+- `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
+- If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
+- The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
+- Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
+- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
 - The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
-- 成功したproofは `BallotAccepted` を発行し、重複nullifier、古いeligibility root、lockの退行は本書の既存の拒否理由が適用されます。
+- Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
 
-## バリデータ不正と共同コンセンサス
+## Validator Misbehaviour & Joint Consensus
 
-### Slashing と Jailing のフロー
+### Slashing and Jailing Workflow
 
-コンセンサスはバリデータがプロトコル違反した際に Norito エンコードされた `Evidence` を発行します。各payloadはメモリ内の `EvidenceStore` に入り、未見ならWSVバックの `consensus_evidence` に具体化されます。`sumeragi.npos.reconfig.evidence_horizon_blocks` (デフォルト `7200` ブロック) より古い記録はアーカイブを有限に保つため拒否されますが、その拒否は運用者向けにログ化されます。 Evidence within the horizon also respects `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) and the slashing delay `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`); governance can cancel penalties with `CancelConsensusEvidencePenalty` before slashing applies; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`.
+Consensus emits Norito-encoded `Evidence` whenever a validator violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7 200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
 
-認識される違反は `EvidenceKind` と1対1で対応し、識別子はデータモデルによって安定的に強制されます:
+Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
 ```rust
 use iroha_data_model::block::consensus::EvidenceKind;
@@ -315,29 +318,32 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** - 同じ `(phase,height,view,epoch)` で矛盾するハッシュに署名。
-- **InvalidQc** - 集約者が deterministic チェックに失敗するcommit certificateをゴシップ (例: 空の署名ビットマップ)。
-- **InvalidProposal** - リーダが locked-chain ルールを破るなど、構造検証に失敗するブロックを提案。
+- **DoublePrepare/DoubleCommit** — the validator signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **InvalidQc** — an aggregator gossiped a commit certificate whose shape fails deterministic checks (e.g., empty signer bitmap).
+- **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
 - **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
-運用者とツールは次でペイロードを確認・再送できます:
+VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
 
-- Torii: `GET /v1/sumeragi/evidence` と `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha ops sumeragi evidence list`, `... count`, `... submit --evidence-hex <payload>`.
+Operators and tooling can inspect and re-broadcast payloads through:
 
-ガバナンスは evidence bytes を正規の証拠として扱う必要があります:
+- Torii: `GET /v1/sumeragi/evidence` and `GET /v1/sumeragi/evidence/count`.
+- CLI: `iroha ops sumeragi evidence list`, `… count`, and `… submit --evidence-hex <payload>`.
 
-1. **ペイロード収集** 期限切れ前に回収し、Norito生バイトをheight/viewメタデータと共に保存。
-2. **ペナルティ段取り** payload を referendum や sudo 命令 (例: `Unregister::peer`) に埋め込みます。実行時に再検証され、不正/古い evidence は決定的に拒否されます。
-3. **フォローアップトポロジ** 違反バリデータが即時復帰できないようにします。典型的には `SetParameter(Sumeragi::NextMode)` と `SetParameter(Sumeragi::ModeActivationHeight)` を更新 roster と共にキューします。
-4. **結果監査** `/v1/sumeragi/evidence` と `/v1/sumeragi/status` を監視し、evidence カウンタが進み除外が実行されたことを確認します。
+Governance must treat the evidence bytes as canonical proof:
 
-### 共同コンセンサスのシーケンス
+1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
+2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
+3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
+4. **Schedule the follow-up topology** so the offending validator cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
-共同コンセンサスは、旧バリデータセットが境界ブロックを確定してから新セットが提案を開始することを保証します。ランタイムは次のペアでルールを強制します:
+### Joint-Consensus Sequencing
 
-- `SumeragiParameter::NextMode` と `SumeragiParameter::ModeActivationHeight` は**同じブロック**でコミットされる必要があります。`mode_activation_height` は更新ブロックより厳密に大きく、最低1ブロックの遅延を提供します。
-- `sumeragi.npos.reconfig.activation_lag_blocks` (デフォルト `1`) はゼロラグの引き継ぎを防ぐ設定ガードです:
+Joint consensus guarantees that the outgoing validator set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
+
+- `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
+- `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
 - `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
@@ -345,19 +351,22 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- ランタイムとCLIは `/v1/sumeragi/params` と `iroha --output-format text ops sumeragi params` で staged パラメータを公開し、運用者が活性化高さとバリデータロスターを確認できます。
-- ガバナンス自動化は常に:
-  1. evidenceに基づく除外/復帰決定を確定する。
-  2. `mode_activation_height = h_current + activation_lag_blocks` で後続リコンフィグをキューする。
-  3. `/v1/sumeragi/status` を監視し、`effective_consensus_mode` が想定高さで切り替わるまで確認する。
+- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha --output-format text ops sumeragi params`, so operators can confirm activation heights and validator rosters.
+- Governance automation should always:
+  1. Finalise the evidence-backed removal (or reinstatement) decision.
+  2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
+  3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
 
-バリデータローテーションやslashingを行うスクリプトは**ゼロラグ有効化やhand-offパラメータの省略を行ってはいけません**。それらは拒否され、ネットワークは旧モードのままになります。
+Any script that rotates validators or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
 
-## テレメトリ面
+## Telemetry surfaces
 
-- Prometheusメトリクスがガバナンス活動をエクスポート:
-  - `governance_proposals_status{status}` (gauge) は提案数を状態別に追跡。
-  - `governance_protected_namespace_total{outcome}` (counter) は保護namespaceのadmissionが許可/拒否されたときに増加。
-  - `governance_manifest_activations_total{event}` (counter) は manifest 挿入 (`event="manifest_inserted"`) と namespace バインド (`event="instance_bound"`) を記録。
-- `/status` は `governance` オブジェクトを含み、提案数、保護namespace合計、最近のmanifest活性化 (namespace, contract id, code/ABI hash, block height, activation timestamp) を報告します。運用者はこのフィールドを監視し、enactmentがmanifestを更新し保護namespaceゲートが適用されていることを確認できます。
-- Grafanaテンプレート (`docs/source/grafana_governance_constraints.json`) と `telemetry.md` のテレメトリrunbookは、提案の停滞、manifest活性化の欠落、runtime upgrade中の保護namespace拒否の予期せぬ増加に対するアラートの配線方法を示します。
+- Prometheus metrics export governance activity:
+  - `governance_proposals_status{status}` (gauge) tracks proposal counts by status.
+  - `governance_protected_namespace_total{outcome}` (counter) increments when protected namespace admission allows or rejects a deploy.
+  - `governance_manifest_activations_total{event}` (counter) records manifest insertions (`event="manifest_inserted"`) and namespace bindings (`event="instance_bound"`).
+- `/status` includes a `governance` object mirroring the proposal counts, reporting protected namespace totals, and listing recent manifest activations (namespace, contract id, code/ABI hash, block height, activation timestamp). Operators can poll this field to confirm that enactments updated manifests and that protected namespace gates are enforced.
+- A Grafana template (`docs/source/grafana_governance_constraints.json`) and the
+  telemetry runbook in `telemetry.md` show how to wire alarms for stuck
+  proposals, missing manifest activations, or unexpected protected-namespace
+  rejections during runtime upgrades.

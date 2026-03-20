@@ -2,6 +2,58 @@
 
 Last updated: 2026-03-20
 
+Latest sync (2026-03-20 self-describing `.to` contract artifacts, no deploy/call fallbacks):
+`crates/ivm_abi/src/metadata.rs`,
+`crates/ivm/src/{contract_artifact.rs,core_host.rs,host.rs,ivm.rs,lib.rs}`,
+`crates/kotodama_lang/src/compiler.rs`,
+`crates/iroha_cli/src/contracts.rs`,
+`crates/iroha_torii/src/{routing.rs,test_utils.rs,lib.rs}`,
+and the contract deployment docs/tests now close the first-release contract
+artifact/deploy slice:
+
+- contract `.to` artifacts now have a mandatory embedded `CNTR` interface
+  section and are emitted as IVM 1.1 artifacts,
+- generic IVM artifact parsing is now `1.1`-only as well, and the remaining
+  `1.0` fixture/build helpers plus tracked predecoder exports were removed,
+- Torii deploy and single-step instance activation now accept bytecode only,
+  derive the canonical manifest from the verified artifact, and reject missing
+  or dishonest embedded interfaces,
+- the legacy public `POST /v1/contracts/code` manifest-registration endpoint
+  and its MCP alias are removed, so there is no manifest-only publication
+  bypass left in the first-release contract surface,
+- Torii contract calls now require a stored manifest entrypoint match and no
+  longer fall back to raw `Executable::Ivm`,
+- the runtime and literal loader paths now execute prefixed
+  `CNTR + LTLB + code` artifacts correctly,
+- the affected source and portal contract/governance docs were resynced to the
+  corrected English canon and marked `needs-update` where older translations
+  had still documented removed manifest-sidecar paths or `1.0` header policy,
+- the real in-memory deploy, activate, and call integration tests now seed a
+  concrete contract operator account/permission set and pass against the new
+  `.to`-only flow.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test metadata --test cli_smoke --test contract_artifact --test ivm_header_doc_sync -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama compile_and_run_add -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama call_function_with_tuple_return -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama manifest_includes_entrypoints_and_features -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib contract_entrypoint_validation_tests -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib deploy_tests::deploy_endpoint_returns_hashes -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib multisig_contract_call_instruction_envelope_hashes_deterministically -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_submit_error -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture`
+- `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture`
+- `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_activate_integration contracts_deploy_and_activate_via_single_endpoint -- --nocapture`
+- `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_call_integration contracts_call_enqueues_transaction -- --nocapture`
+- `bash /Users/takemiyamakoto/dev/pk-cbdc-core-api/scripts/build_kotodama_contracts.sh`
+- `CARGO_TARGET_DIR=/tmp/pk-cbdc-core-api-contract-artifact-target cargo test --test mint_flow mint_flow_contract_artifacts_exist -- --nocapture` in `../pk-cbdc-core-api`
+
+Open work for this slice now remains:
+- finish and monitor the broader `cargo test --workspace` validation sweep for
+  unrelated cross-workspace fallout outside the contract slice.
+
 Latest sync (2026-03-20 Torii multisig selector private-field compile fix):
 `crates/iroha_core/src/state.rs` and `crates/iroha_torii/src/routing.rs`
 now close the immediate `E0616` regression from the recent `World` visibility

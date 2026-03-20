@@ -368,10 +368,7 @@ mod tests {
 
     #[test]
     fn receipt_payload_bytes_match_signed_encode_bytes() {
-        let account_signatory = PublicKey::from_str(
-            "ed0120726654A541B0D9AC7466975A924DF6B5F47057287AC98FDC5B39350E6A4E68",
-        )
-        .expect("valid account signatory");
+        let account_signatory = KeyPair::random().public_key().clone();
         let payload = IdentifierResolutionReceiptPayload {
             policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
             execution: RamLfeExecutionReceiptPayload {

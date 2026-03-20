@@ -2,126 +2,138 @@
 lang: dz
 direction: ltr
 source: docs/source/governance_api.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: eea277d4aae6a7b29b5be539ef9d8e63948ccdd89a152de5af4a3cb357fe543a
-source_last_modified: "2026-01-22T16:26:46.569356+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: c169c69f99daf761a5c240e94b11d2ec768224b1b6dc3ad75bb642fa806fec13
+source_last_modified: "2026-03-20T08:32:54+00:00"
+translation_last_reviewed: 2026-03-20
 title: Governance App API — Endpoints (Draft)
 translator: machine-google-reviewed
 ---
 
-གནས་ཚད་: གཞུང་སྐྱོང་ལག་ལེན་འཐབ་ནིའི་ལཱ་ཚུ་དང་གཅིག་ཁར་ ཟིན་བྲིས་/རི་མོ། ལག་ལེན་འཐབ་པའི་སྐབས་ དབྱིབས་ཚུ་འགྱུར་བཅོས་འགྱོ་འོང་། གཏན་འབེབས་རིང་ལུགས་དང་ RBAC སྲིད་བྱུས་འདི་ ཚད་ལྡན་གྱི་བཀག་ཆ་ཨིན། Torii གིས་ `authority` དང་ `private_key` བྱིན་པའི་སྐབས་ ཚོང་འབྲེལ་ཚུ་ མཚན་རྟགས་བཀོད་ནི་/ཡན་ལག་བཙུགས་ཚུགས།
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-གལ་ཆེ་ཤོས་: ང་བཅས་ཀྱིས་ ལངས་གནས་ཚོགས་སྡེ་ཡང་ན་ “སྔོན་སྒྲིག་” གཞུང་སྐྱོང་ཐོ་ཡིག་ཅིག་ མ་གཏང་། སྒྲོམ་ནང་ལས་ ཚོགས་སྡེ་གི་མཐའ་མ་ཚུ་གིས་ སྟོངམ་/བསྒུག་སྡོད་མི་གནས་སྟངས་ཅིག་སླར་ལོག་འབད་ཡོདཔ་དང་ ཡང་ན་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ཚད་གཞི་ཚུ་ལས་ གཏན་འཁེལ་གྱི་ མར་ཕབ་ཅིག་ ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ བཏོན་ཡོདཔ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གཞུང་སྐྱོང་རྒྱུན་རིམ་བརྒྱུད་དེ་ རང་སོའི་ཐོ་ཡིག་ཚུ་ གནས་དགོཔ་ཨིན། མཛོད་ཁང་འདི་ནང་ སྣ་མང་སིག་དང་ གསང་བའི་ལྡེ་མིག་ ཡང་ན་ ཐོབ་དབང་ཅན་གྱི་ཚོགས་སྡེ་གི་རྩིས་ཁྲ་ནང་ བཀག་ཆ་འབད་དེ་མེདཔ་ཨིན།
+# Governance App API — Endpoints (Draft)
 
-བལྟབ༌ནི༌
-- མཐའ་མཇུག་ཆ་མཉམ་ JSON སླར་ལོག་འབད། ཚོང་འབྲེལ་ཐོན་སྐྱེད་ཀྱི་རྒྱུན་འབབ་ཚུ་གི་དོན་ལུ་ ལན་ཚུ་ཡང་ `tx_instructions` ཚུ་ཚུདཔ་ཨིན།
-  - `wire_id`: བཀོད་རྒྱ་དབྱེ་བ་གི་དོན་ལུ་ ཐོ་བཀོད་ངོས་འཛིན་པ།
-  - `payload_hex`: Norito པེ་ལེསི་བཱའིཊི།(hex)
-- `authority` དང་ `private_key` བྱིན་ཡོདཔ་ཨིན། (ཡང་ན་ `private_key` ཚོགས་རྒྱན་ DTOs གུ་ `private_key`) Torii བརྡ་མཚོན་ཕུལ་ཞིནམ་ལས་ བརྗེ་སོར་འབདཝ་ཨིནམ་དང་ ད་ལྟོ་ཡང་ `tx_instructions` སླར་ལོག་འབདཝ་ཨིན།
-- དེ་མེན་པ་ཅིན་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ ཁོང་རའི་དབང་ཚད་དང་ རིམ་སྒྲིག་_id ལག་ལེན་འཐབ་སྟེ་ མཚན་རྟགས་བཀོད་ཞིནམ་ལས་ མཚན་རྟགས་དང་ POST ལས་ `/transaction` ཚུ་ བསྡུ་སྒྲིག་འབད་ནི།
-- ཨེསི་ཌི་ཀེ་ཁྱབ་ཁོངས།
-- པའི་ཐོན་ (`iroha_python`): `ToriiClient.get_governance_proposal_typed` `GovernanceProposalResult` (ཚད་ལྡན་གནས་རིམ་/རིགས་ཚན་ས་སྒོ་) སླར་ལོག་འབདཝ་ཨིན། `GovernanceTally`, `ToriiClient.get_governance_locks_typed` གིས་ `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` གིས་ `ToriiClient.get_governance_unlock_stats_typed` སླར་ལོག་འབདཝ་ཨིན་ `GovernanceUnlockStats` དང་ `ToriiClient.list_governance_instances_typed` Norito གིས་ `GovernanceInstancesPage` གིས་ ཡིག་དཔར་གྱི་འཛུལ་སྤྱོད་ཚུ་ སླར་ལོག་འབདཝ་ཨིན། གཞུང་སྐྱོང་ཁ་ཐོག་ལུ་ README ལག་ལེན་གྱི་དཔེ་ཚུ་དང་གཅིག་ཁར་ཨིན།
-- པའི་ཐོན་གྱི་ ལྗིད་ཚད་མར་ཕབ་ཀྱི་ མཁོ་སྤྲོད་པ་ (`iroha_torii_client`): Norito དང་ `ToriiClient.enact_proposal` ལོག་ཡིག་དཔར་རྐྱབས་ཡོད་པའི་ `GovernanceInstructionDraft` བཱན་ཌལ་ (Torii skeleton `tx_instructions`) མཇུག་བསྡུའི་/ལྕོགས་ཅན་ཚུ་ བརྩམ་པའི་སྐབས་ ཡིག་གཟུགས་ཚུ་གིས་ བརྩམ་པའི་སྐབས་ JSON དབྱེ་དཔྱད་འབད་ནི།
-- JavaScript (`@iroha/iroha-js`): གྲོས་འཆར་དང་ འོས་བསྡུའི་ tallies ལྡེ་མིག་ ལྡེ་མིག་ ལྡེ་མིག་ ལྡེ་མིག་ཕྱེ་ཡོད་པའི་གནས་སྡུད་ཚུ་གི་དོན་ལུ་ `ToriiClient` ཁ་ཐོག་གིས་ ཡིག་དཔར་རྐྱབ་ཡོད་པའི་གྲོགས་རམ་པ་ཚུ་ ད་ལྟོ་ `getGovernanceCouncilCurrent`, Grafana, `governancePersistCouncil`, `getGovernanceCouncilAudit`) དེ་ལས་ Node.js མཁོ་མངགས་འབད་མི་ཚུ་གིས་ Norito དང་ ད་ལྟོ་ཡོད་པའི་གན་རྒྱ་གི་ཐོ་བཀོད་དང་གཅིག་ཁར་ VRF-backed ལཱ་གི་རྒྱུན་རིམ་ཚུ་ བཏང་ཚུགས། `governanceFinalizeReferendumTyped` དང་ `governanceEnactProposalTyped` གིས་ པའེ་ཐོན་གྲོགས་རམ་པ་ཚུ་ དུས་རྒྱུན་དུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ཟིན་བྲིས་ཅིག་ ལོག་སྤྲོད་ཐོག་ལས་ (Iroha) གིས་ `204 No Content` གིས་ `null` ཚུ་ Norito གི་ ཡན་ལག་ལས་ རང་བཞིན་གྱིས་ བཞགཔ་ཨིན། གྱལ་རིམ་ཚོང་འབྲེལ་ཡང་ན་ ཊི་གར་ཚུ་ཨིན། ད་ལྟོ་ Sumeragi གིས་ `404 Not Found` ལན་ཚུ་ `{found: false, locks: {}, referendum_id: <id>}` ནང་ལུ་ སྤྱིར་བཏང་སྦེ་བཟོཝ་ཨིན།
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/transaction`.
 
-མཐའ་ཐིག་ཚུ།- POST `/v1/gov/proposals/deploy-contract`
-  - ཞུ་བ་ (JSON):
+Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the configured parameters (stake asset, term, committee size) when enabled. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
+
+Overview
+- All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
+  - `wire_id`: registry identifier for the instruction type
+  - `payload_hex`: Norito payload bytes (hex)
+- If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
+- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
+- SDK coverage:
+- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` returns `GovernanceUnlockStats`, and `ToriiClient.list_governance_instances_typed` returns `GovernanceInstancesPage`, enforcing typed access across the governance surface with README usage examples.
+- Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and now `listGovernanceInstances(namespace, options)` plus the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) so Node.js clients can paginate `/v1/gov/instances/{ns}` and drive VRF-backed workflows alongside the existing contract-instance listing. `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers. `getGovernanceLocksTyped` now normalises `404 Not Found` responses into `{found: false, locks: {}, referendum_id: <id>}` so JS callers get the same shaped result as the Python helper when a referendum has no locks.
+
+Endpoints
+
+- POST `/v1/gov/proposals/deploy-contract`
+  - Request (JSON):
     {
-      "namepace": "གློག་རིམ་ཚུ།",
-      "ཁག་འབགཔ་_id": "ངེའི་.ཁ་འབག་གི་.v1",", ཨིན།
-      "code_hash": "བེལེཀ་༢བ༣༢:..." | "...༦༤ཧེགསི་", "...༦༤ཧེགསི་",
-      "abi_hash": "བླེཀ་༢བ༣༢:..." | "...༦༤ཧེགསི་", "...༦༤ཧེགསི་",
-      "abi_version": "1", "1", "1", "1", "1".
-      "སྒོ་སྒྲིག་": { "དམའ་":: ༡༢༣༤༥, "ཡར་": ༡༢༤༠༠ },,":
-      "རང་དབང་།: "i105...?"
-      "private_key": "...?"
-    } # .
-  - ལན་ (JSON):
-    { "ok": དྲང་བདེན, "གྲོས་འཆར་_ཨའི་ཌི་": "...༦༤ཧེགསི་", "tx_སྒྲིག་བཀོད་": [{ "wire_id": "...", "payload_hex": "... }] }.
-  - བདེན་དཔྱད་: མཐུད་མཚམས་ཀེ་ནོ་ནི་ཀཱ་ནི་སི་ `abi_hash` བྱིན་ཡོད་པའི་ `abi_version` དང་ མ་མཐུནམ་ཚུ་ ངོས་ལེན་མ་འབད། `abi_version = "v1"` གི་དོན་ལུ་ རེ་བ་བསྐྱེད་པའི་གནས་གོང་འདི་ `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))` ཨིན།
+      "namespace": "apps",
+      "contract_id": "my.contract.v1",
+      "code_hash": "blake2b32:…" | "…64hex",
+      "abi_hash": "blake2b32:…" | "…64hex",
+      "abi_version": "1",
+      "window": { "lower": 12345, "upper": 12400 },
+      "authority": "i105...?",
+      "private_key": "…?"
+    }
+  - Response (JSON):
+    { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
+  - Validation: nodes canonicalise `abi_hash` for the provided `abi_version` and reject mismatches. For `abi_version = "v1"`, the expected value is `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
 
-གན་རྒྱ་ཨེ་པི་ཨའི་ (བཀྲམ་སྤེལ་)།
+Contracts API (deploy)
 - POST `/v1/contracts/deploy`
-  - ཞུ་བ་: { "དྲུག": "i105...", "private_key": "...", "ཀོཌི་_བི་༦༤": "..." }
-  -སྤྱོད་ལམ་: IVM ལས་རིམ་གྱི་གཟུགས་དང་ `abi_version` དེ་ལས་ `abi_version` ལས་ Prometheus རྩིས་སྟོན་འབདཝ་ཨིན། `.to` bytes) `authority` གི་ཚབ་ལུ་ `.to` bytes.
-  - ལན་འདེབས་: { "ཨོ་ཀ": དྲང་བ, "ཀོཌ_ཧཤ་_ཧེགསི་": "...", "abi_hash_hex": "..." }
-  - འབརེལ༌བ༌ཡོདཔ:
-    - GET `/v1/contracts/code/{code_hash}` → སླར་ལོག་གསོག་འཇོག་འབད་ཡོད་པའི་གསལ་སྟོན་།
-    - GET `/v1/contracts/code-bytes/{code_hash}` → `{ code_b64 }` ལོག་ཐོབ་ཡོད།
+  - Request: { "authority": "i105...", "private_key": "…", "code_b64": "…" }
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, then submits `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
+  - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
+  - Related:
+    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
+    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - ཞུ་བ་: { "དྲུག": "ཨི་ཧ༥༨...", "private_key": "...": "མིང་གནས་": "གློག་རིམ་": "ཁ་འབག་": "calc.v1,", "code_b64": "..." }
-  - སྤྱོད་ལམ་: བཀྲམ་སྤེལ་འབད་ཡོད་པའི་བཱའིཊི་ཀོཌི་འདི་བཀྲམ་སྤེལ་འབདཝ་ཨིནམ་དང་ དེ་འཕྲོ་ལས་ `(namespace, contract_id)` སབ་ཁྲ་འདི་ `ActivateContractInstance` བརྒྱུད་དེ་ ཤུགས་ལྡན་བཟོཝ་ཨིན།
-  - ལན་: { "ok": དྲང་བདེན, "མིང་ས་སྟོང་": "ཁ་འབག་": "calc.v1, "code_hash_hex": "...", "abi_hash_hex": "..." }
+  - Request: { "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
+  - Behavior: Deploys the supplied bytecode and immediately activates the `(namespace, contract_id)` mapping via `ActivateContractInstance`.
+  - Response: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
 
-ཨ་ལི་ཡས་ཞབས་ཏོག།
+Alias Service
 - POST `/v1/aliases/voprf/evaluate`
-  - ཞུ་བ་: { "མིག་བཙུམ་བཞག་པའི་_Element_hex": "..." }
-  - ལན་: { "དབྱེ་ཞིབ་_ཡན་ལག་_ཧེགསི་": "...༡༢༨ཧེགསི་", "རྒྱབ་ལྗོང": "བེལེཀ་༢བ༥༡༢-མོཀ་" }
-    - `backend` གིས་ བརྟག་ཞིབ་ལག་ལེན་འཐབ་མི་འདི་ གསལ་སྟོན་འབདཝ་ཨིན། ད་ལྟོའི་གནས་གོང་: `blake2b512-mock`.
-  - དྲན་འཛིན་: ཌོ་མེན་དབྱེ་འབྱེད་ `iroha.alias.voprf.mock.v1` དང་ཅིག་ཁར་ Blake2b512 འཇུག་སྤྱོད་འབད་མི་ གཏན་འབེབས་མཛུབ་མོ་བརྟག་ཞིབ་འབད་མི་གིས་ འཇུག་སྤྱོད་འབདཝ་ཨིན། བརྟག་དཔྱད་ཀྱི་ལག་ཆས་ VOPRF གི་ཆུ་ལམ་འདི་ Iroha བརྒྱུད་དེ་ གློག་ཐག་མ་བཏང་ཚུན་ཚོད་ བརྡ་སྟོན།
-  - འཛོལ་བ: ཨེཆ་ཊི་ཊི་པི་ `400` གིས་ ཧེགསི་ཨིན་པུཊི་གུ་ སྐྱོན་བརྗོད་འབད་ཡོདཔ། Torii གིས་ ཌི་ཀོ་ཌར་འཛོལ་བའི་འཕྲིན་དོན་དང་གཅིག་ཁར་ Norito `ValidationFail::QueryFailed::Conversion` གི་ ཡིག་ཤུབས་ཅིག་སླར་ལོག་འབདཝ་ཨིན།
+  - Request: { "blinded_element_hex": "…" }
+  - Response: { "evaluated_element_hex": "…128hex", "backend": "blake2b512-mock" }
+    - `backend` reflects the evaluator implementation. Current value: `blake2b512-mock`.
+  - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
+  - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
 - POST `/v1/aliases/resolve`
-  - ཞུ་བ་: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - ལན་འདེབས་: { "alias": "ཇི་བི་༨༢ཝེསཊི་༡༢༣༤༥༦༩༨༧༦༥༤༣, "རྩིས་ཐོ་_ཨའི་ཌི་": "i105..., "index": ༠, "འབྱུང་ཁུངས་": "iso_bridg" }
-  - དྲན་འཛིན་ཚུ་: ཨའི་ཨེསི་ཨོ་ཟམ་གྱི་རྒྱུག་ཚད་གནས་རིམ་དགོཔ་ཨིན། Torii གིས་ མ་བལྟ་བའི་ཧེ་མ་ ས་སྟོང་དཀརཔོ་དང་ གོང་མའི་རྩོད་གཞི་ཚུ་ བཏོན་བཏང་ཐོག་ལས་ མིང་ཚིག་ཚུ་ སྤྱིར་བཏང་བཟོཝ་ཨིན། མིང་གཞན་ཚུ་མེད་པའི་སྐབས་ལུ་ ༤༠༤ སླར་ལོག་འབདཝ་ཨིན།
+  - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
+  - Response: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
+  - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
 - POST `/v1/aliases/resolve_index`
-  - ཞུ་བ་: { "ཟུར་ཐོ": ༠ }
-  - ལན་: { "ཟུར་ཐོ་": ༠, "alia": "ཇི་བི་༨༢ཝེསཊི་༡༢༣༤༥༦༩༨༧༦༥༤༣", "རྩིས་ཐོ་_ཨའི་ཌི་": "འབྱུང་ཁུངས་": "iso_bridg" }
-  - དྲན་འཛིན་: མིང་གཞན་ཟུར་ཐོ་ཚུ་ རིམ་སྒྲིག་གོ་རིམ་ལས་ གཏན་འབེབས་སྦེ་ འགན་སྤྲོད་འབད་ཡོདཔ་ཨིན་ (༠-གཞི་བསྟུན་)། མཁོ་མངགས་འབད་མི་ཚུ་གིས་ མིང་གཞན་བདེན་ཁུངས་ཅན་གྱི་བྱུང་རིམ་ཚུ་གི་དོན་ལུ་ རྩིས་ཞིབ་ལམ་ཚུ་བཟོ་ནི་གི་དོན་ལུ་ ལན་ཚུ་ ཡོངས་འབྲེལ་ནང་ལུ་ འདྲ་མཛོད་འབད་ཚུགས།གསང་གྲངས་ཚད་གཞི།
-- སྲོལ་སྒྲིག་ཚད་གཞི་: `max_contract_code_bytes` (JSON u64)
-  - རྒྱུན་རིམ་གན་རྒྱ་ཨང་རྟགས་གསོག་འཇོག་གི་དོན་ལུ་ གནང་བ་བྱིན་ཡོད་པའི་ཚད་མཐོ་ཤོས་(བཱའིཊི་ནང་)ཚད་འཛིན་འབདཝ་ཨིན།
-  - སྔོན་སྒྲིག་: 16 MiB. ནོ་ཌིསི་གིས་ `RegisterSmartContractBytes` འདི་ འགྱུར་ལྡོག་མེད་པའི་ཁྲིམས་འགལ་འཛོལ་བ་དང་གཅིག་ཁར་ མགོ་ཡིག་ལས་ལྷག་སྟེ་ཡོད་པའི་སྐབས་ `RegisterSmartContractBytes` ངོས་ལེན་མི་འབད།
-  - བཀོལ་སྤྱོད་པ་ཚུ་གིས་ `SetParameter(Custom)` དང་ `id = "max_contract_code_bytes"` དང་ ཨང་གྲངས་ཀྱི་ པེ་ལོཌ་ཚུ་ བཙུགས་ཏེ་ བདེ་སྒྲིག་འབད་ཚུགས།
+  - Request: { "index": 0 }
+  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
+  - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
+
+Code Size Cap
+- Custom parameter: `max_contract_code_bytes` (JSON u64)
+  - Controls the maximum allowed size (in bytes) for on-chain contract code storage.
+  - Default: 16 MiB. Nodes reject `RegisterSmartContractBytes` when the `.to` image length exceeds the cap with an invariant violation error.
+  - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/zk`
-  ཞུ་བ་: { "དྲང་བདེན": "i105...", "private_key": "...": "གདམ་ཁ": "གདམ་ཁ": "ཨི༡", "བདེན་དཔང་_བི་༦༤": "...", "མི་མང་": {...}
-  - ལན་: { "ཨོ་ཀ": དྲང་བདེན, "ངོས་ལེན་འབད་ཡོདཔ་": "tx_སྒྲིག་བཀོད་": [{...}] }
-  - དྲན་ཐོ།
-    - གློག་ལམ་འདི་གི་ མི་མང་ཨིན་པུཊི་ཚུ་ནང་ `owner` དང་ `amount` དེ་ལས་ `duration_blocks`, དེ་ལས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ VK ལུ་ བདེན་ཁུངས་བདེན་དཔྱད་འབད་བའི་སྐབས་ མཐུད་མཚམས་འདི་གིས་ `election_id` འདི་ `election_id` ལུ་ `election_id` འདི་ Grafana ལུ་ གསར་བསྐྲུན་འབདཝ་ཨིན། ལམ་སྟོན་འདི་ གསང་བ་སྦེ་ལུས་ཡོདཔ་ཨིན། (`unknown`) བརྡ་སྟོན་མ་འབད་ཚུན་ཚོད་; དངུལ་བསྡོམས་/འཐོར་འགྱོ་ནི་རྐྱངམ་ཅིག་དུས་མཐུན་བཟོཝ་ཨིན། ལོག་ཚོགས་རྒྱན་བཙུགས་མི་ཚུ་ མོ་ནོ་ཊོ་ནིག་ཨིན་: དངུལ་ཚད་དང་ དུས་ཡུན་ཡར་སེང་རྐྱངམ་ཅིག་ (མཐུད་མཚམས་དེ་ མཐོ་ཤོས་(དངུལ་བསྡོམས་, པི་རི་ཝ་.ཨའུན་) དང་ མཐོ་ཤོས་(expiry, prev.expiry)))
-    - ལྡེ་མིག་གང་རུང་ཅིག་བྱིན་པའི་སྐབས་ ཚོགས་རྒྱན་འདི་གིས་ `owner`, `amount`, དང་ `duration_blocks` བཀྲམ་སྤེལ་འབད་དགོ། ཆ་ཤས་ཅིག་བརྡ་སྟོན་ཚུ་ ངོས་ལེན་མ་འབད་བས། `min_bond_amount > 0` ལུ་ ལྡེ་མིག་བསླབ་སྟོན་ཚུ་དགོཔ་ཨིན།
-    - དངུལ་ཆུང་ཆུང་དང་ ཡང་ན་ དུས་ཡུན་ཚང་ནི་གི་དཔའ་བཅམ་མི་ ZK re-votes འདི་ `BallotRejected` བརྟག་དཔྱད་དང་གཅིག་ཁར་ ངོས་ལེན་མེད་པའི་སར་བར་ཕྱོགས་ལུ་ ངོས་ལེན་འབདཝ་ཨིན།
-    - གན་ཡིག་ལག་ལེན་འཐབ་མི་འདི་གིས་ `SubmitBallot` བཀག་ཆ་འབད་བའི་ཧེ་མ་ `ZK_VOTE_VERIFY_BALLOT` ཟེར་སླབ་དགོ། ཧོསིཊི་ཚུ་གིས་ གཅིག་པའི་ ལེཊི་ཆི་ཅིག་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes:
+    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
+    - When any lock hint is provided, the ballot must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required.
+    - ZK re-votes that attempt to shrink amount or expiry are rejected server-side with `BallotRejected` diagnostics.
+    - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
-- པི་ཨོ་ཨེསི་ཊི་ `/v1/gov/ballots/plain`
-  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" } # .
-  - ལན་: { "ཨོ་ཀ": དྲང་བདེན, "ངོས་ལེན་འབད་ཡོདཔ་": "tx_སྒྲིག་བཀོད་": [{...}] }
-  - དྲན་འཛིན་: ལོག་སྟེ་ཚོགས་རྒྱན་བཙུགས་མི་ཚུ་ རྒྱ་སྐྱེད་རྐྱངམ་ཅིག་ཨིན། `owner` ཚོང་འབྲེལ་དབང་འཛིན་དང་འདྲ་མཉམ་བཟོ་དགོ། དུས་ཡུན་ཉུང་མཐའ་ `conviction_step_blocks` ཡིན།- POST `/v1/gov/finalize`
-  - ཞུ་བ་: { "referendum_id": "r1", "གྲོས་འཆར་_ཨའི་ཌི་": "...༦༤ཧེགསི་", "དབང་ཆ་": "i105...", "private_key": "...?" } # .
-  - ལན་: { "ok": དྲང་བདེན, "tx_སྒྲིག་བཀོད་": [ "wire_id": "...མཇུག་བསྡུའི་གཞི་བསྟུན་", "payload_hex": "..." }
-  - རྒྱུན་རིམ་གྱི་ནུས་པ་ (ད་ལྟོའི་སྒྱིད་ལུག): ཆ་འཇོག་འབད་ཡོད་པའི་བཀྲམ་སྤེལ་གྲོས་འཆར་བཙུགས་མི་འདི་གིས་ རེ་བ་བསྐྱེད་མི་ `abi_hash` གིས་ ཉུང་མཐའ་ `code_hash` གིས་ ལྡེ་མིག་བཙུགས་ཡོདཔ་དང་ གྲོས་འཆར་འདི་ དཔང་པོ་འབད་ཡོདཔ་ཨིན། `code_hash` གི་དོན་ལུ་ `abi_hash` སོ་སོ་ཅིག་དང་གཅིག་ཁར་ ཧེ་མ་ལས་ གསལ་སྟོན་ཅིག་ཡོདཔ་ཨིན་པ་ཅིན་ བཅའ་ཁྲིམས་འདི་ ངོས་ལེན་མ་འབད་བས།
-  - དྲན་ཐོ།
-    - ZK བཙག་འཐུ་གི་དོན་ལུ་ གན་ཡིག་ལམ་ལུགས་ཚུ་གིས་ `FinalizeElection` ལག་ལེན་མ་འཐབ་པའི་ཧེ་མ་ `ZK_VOTE_VERIFY_TALLY` ཟེར་སླབ་དགོ། ཧོསིཊི་ཚུ་གིས་ གཅིག་པའི་ ལེཊི་ཆི་ཅིག་ བསྟར་སྤྱོད་འབདཝ་ཨིན། `FinalizeReferendum` བཙག་འཐུའི་དབྱེ་ཞིབ་འདི་ མཇུག་མ་བསྡུ་ཚུན་ཚོད་ ZK གི་འོས་འདེམས་འདི་ ངོས་ལེན་མ་འབད་བས།
-    - རང་བཞིན་ཁ་བསྡམས་ཏེ་ `h_end` གིས་ ཆ་འཇོག་འབད་ཡོདཔ་/བཀག་ཆ་འབད་ཡོདཔ་ པེལེནསི་གི་སྤྱི་ཁྱབ་འོས་འཚམ། ZK གི་གཞི་བསྟུན་འདི་ མཐའ་དཔྱད་ཀྱི་ ཐོག་ཁར་མ་བཙུགས་ཚུན་ཚོད་ སྒོ་བསྡམ་བཞག་ཡོདཔ་དང་ `FinalizeReferendum` འདི་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
-    - ཊར་ནའུཊི་ཞིབ་དཔྱད་ཚུ་གིས་ ཆ་འཇོག་+བཀག་ཆ་རྐྱངམ་ཅིག་ལག་ལེན་འཐབ་ཨིན། abtast གིས་ ཚོགས་རྒྱན་བཙུགས་ནི་ལུ་ རྩིས་མ་རྐྱབ།
+- POST `/v1/gov/ballots/plain`
+  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
+
+- POST `/v1/gov/finalize`
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
+  - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
+  - Notes:
+    - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
+    - Auto-close at `h_end` emits Approved/Rejected only for Plain referenda; ZK referenda remain closed until a finalized tally is submitted and `FinalizeReferendum` is executed.
+    - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  ཞུ་བ་: { "གྲོས་འཆར་_ཨའི་ཌི་": "...༦༤ཧེགསི་": "preimage_hash": "...༦༤ཧེགསི་?": { "དམརཔོ": ༠, "དམའ་བ་": ༠ }?, "རང་དབང་ཅན་": "ཨིཧ༥༨...", "སྒེར་སྡེ་_ཁིར": "...":" } # .
-  - ལན་: { "ཨོ་ཀ": དྲང་བདེན, "tx_སྒྲིག་བཀོད་": [ "wire_id": "...བཙུགསཔ་ཨིན་", "payload_hex": "..." }] }.
-  - དྲན་འཛིན་: Torii `authority`/`private_key` བྱིན་པའི་སྐབས་ མིང་རྟགས་བཀོད་པའི་ཚོང་འབྲེལ་འདི་ཕུལ་ཡོདཔ་ཨིན། དེ་མེན་པ་ཅིན་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ མཚན་རྟགས་བཀོད་ནི་དང་ བཙུགས་ནིའི་དོན་ལུ་ ཀེང་རུས་ཅིག་སླར་ལོག་འབདཝ་ཨིན། སྔོན་བརྡ་འདི་གདམ་ཁ་ཅན་དང་ད་ལྟོ་བརྡ་དོན་ཨིན།
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
+  - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
 - GET `/v1/gov/proposals/{id}`
-  - འགྲུལ་ལམ་ `{id}`: གྲོས་འཆར་ཨའི་ཌི་ཧེགསི་ (༦༤)
-  - ལན་: { "འཐོབ": བུལ་, "གྲོས་འཆར་": { ... }? } # .
+  - Path `{id}`: proposal id hex (64 chars)
+  - Response: { "found": bool, "proposal": { … }? }
 
 - GET `/v1/gov/locks/{rid}`
-  - འགྲུལ་ལམ་ `{rid}`: སྤྱི་སྙོམས་ཨའི་ཌི་ཡིག་རྒྱུན་།
-  - ལན་གསལ་: { "འཚོལ་": བུལ་, "referendum_id": "རིན", "ལྡེ་མིག་": { ... }? } # .
+  - Path `{rid}`: referendum id string
+  - Response: { "found": bool, "referendum_id": "rid", "locks": { … }? }
 
 - GET `/v1/gov/council/current`
-  - ལན་: { "epoch": ཨེན་, "འཐུས་མི་": [ "རྩིས་ཐོ་_ཨའི་ཌི་": "... }, ... }
-  - དྲན་ཐོ། ཡོད་པའི་སྐབས་ གནས་ཏེ་ཡོད་པའི་ ཚོགས་སྡེ་ཚུ་ ལོག་སྤྲོདཔ་ཨིན། དེ་མེན་པ་ཅིན་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ བགོ་བཤའ་གི་རྒྱུ་དངོས་དང་ ཚད་གཞི་ཚུ་ལག་ལེན་འཐབ་སྟེ་ གཏན་འབེབས་ཀྱི་ མར་ཕབ་འདི་ བཏོནམ་ཨིན།
+  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
+  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback using the configured stake asset and thresholds (mirrors the VRF spec until live VRF proofs are persisted on chain).
 
-- POST `/v1/gov/council/derive-vrf` (ཁྱད་ཆོས།: gov_vrf)
-  - ཞུ་བ་: { "committee_size": 21, "epoch": 123? , "གཟུགས་བརྙན་": [" [ "རྩིས་ཁྲ་_ཨའི་ཌི་": "...", "མི་འདྲ་བ": "སྤྱིར་བཏང་གི་", "pk_b64": "...", "བདེན་དཔང་_b6": "..." }, ... }
-  - སྤྱོད་ལམ།: `chain_id` ལས་བྱུང་བའི་ འདེམས་ངོ་རེ་རེ་བཞིན་གྱི་ VRF བདེན་དཔང་འདི་ བདེན་བཤད་འབདཝ་ཨིན། ཐོན་འབྲས་ཌེསི་སི་ ཊེབ་བེརེཀ་ཚུ་དང་གཅིག་ཁར་ དབྱེ་སེལ་འབདཝ་ཨིན། མཐོ་ཤོས་ `committee_size` འཐུས་མི་ཚུ་སླར་ལོག་འབདཝ་ཨིན། གནས་ཡུན་མི་འགྱོ།
-  - ལན་འདེབས་: { "epoch": N, "འཐུས་མི་": [{ "རྩིས་ཐོ་_ཨའི་ཌི་": "..." } ...], "བསྡོམས་_འདེམས་ངོ་": ཨེམ་, "བདེན་དཔྱད་": K } }
-  - དྲན་འཛིན་: སྤྱིར་བཏང་ = ཇི་༡ ནང་ pk, ཇི་༢ ནང་བདེན་དཔང་ (༩༦ བཱའིཊི་ ༩༦)། ཆུང་ = pk ནང་ G2, ཇི་༡ ནང་བདེན་དཔང་ (བཱའིཊི་༤༨) ནང་བདེན་དཔང་འབད་ཡོདཔ། ཨིན་པུཊི་ཚུ་ མངའ་ཁོངས་སོ་སོ་སྦེ་ཡོདཔ་ད་ `chain_id` ཚུ་ཚུདཔ་ཨིན།
+- POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
+  - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
+  - Behavior: Verifies each candidate’s VRF proof against the canonical input derived from `chain_id`, `epoch`, and the latest block hash beacon; sorts by output bytes desc with tiebreakers; returns the top `committee_size` members. Does not persist.
+  - Response: { "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
+  - Notes: Normal = pk in G1, proof in G2 (96 bytes). Small = pk in G2, proof in G1 (48 bytes). Inputs are domain-separated and include `chain_id`.
 
-### གཞུང་སྐྱོང་སྔོན་སྒྲིག་ (iroha_config `gov.*`)
+### Governance defaults (iroha_config `gov.*`)
 
-ཚོགས་སྡེ་གིས་ Torii གིས་ ལག་ལེན་འཐབ་མི་ ཐོ་ཡིག་ཚུ་ གནས་ཏེ་མེད་པའི་སྐབས་ `iroha_config` བརྒྱུད་དེ་ ཚད་གཞི་བཟོཝ་ཨིན།```toml
+The council fallback used by Torii when no persisted roster exists is parameterised via `iroha_config`:
+
+```toml
 [gov]
   vk_ballot.backend = "halo2/ipa"
   vk_ballot.name    = "ballot_v1"
@@ -146,7 +158,7 @@ translator: machine-google-reviewed
   parliament_eligibility_asset_id = "SORA#stake"
 ```
 
-འདྲ་མཉམ་མཐའ་འཁོར་འདི་:
+Equivalent environment overrides:
 
 ```
 GOV_VK_BACKEND=halo2/ipa
@@ -166,147 +178,157 @@ GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
 
-སོ་ར་ Nexus སྔོན་སྒྲིག་: ཚོགས་རྒྱན་ཚུ་གིས་ `min_bond_amount` གི་ `voting_asset_id` འདི་ ཨིན་ ༡༠ ནང་ལུ་བཙུགས་ཡོདཔ་ཨིན།
-རིམ་སྒྲིག་འབད་ཡོད་པའི་ བཀག་འཛིན་རྩིས་ཐོ་། ལྡེ་མིག་ཚུ་ གསར་བསྐྲུན་ཡང་ན་ རྒྱ་སྐྱེད་འབད་ཡོདཔ་ད་ ཚོགས་རྒྱན་ཚུ་ ས་ཆ་དང་།
-དུས་ཡུན་ཚང་ཞིནམ་ལས་ གསར་བཏོན་འབད་ཡོདཔ། བུན་གྱི་མི་ཚེ་འཁོར་རིམ་འདི་ `governance_bond_events_total` བརྒྱུད་དེ་བཏོན་ཡོདཔ་ཨིན།
-telemetry (ལྡེ་མིག་_གསར་བསྐྲུན་|ལོག་_ཕྱིར་ལོག་|ལོག་ལྕགས་ཐག་_བཀག་བཞག་ཡོད།|ལོག་_བསྐྱར་བཟོ་འབད་ཡོདཔ།)
+Sora Nexus default: ballots lock `min_bond_amount` of `voting_asset_id` into the
+configured escrow account. Locks are created or extended when ballots land and
+released on expiry; bond lifecycle is emitted via `governance_bond_events_total`
+telemetry (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
 
-`parliament_committee_size` གིས་ ཚོགས་སྡེ་མེད་པའི་སྐབས་ ཕོལོ་བེག་འཐུས་མི་ཚུ་གི་གྱངས་ཁ་འདི་ ལོག་ཐོབ་ཡོདཔ་ད་ `parliament_term_blocks` གིས་ སོན་བཏོན་ནིའི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ epoch རིང་ཚད་འདི་ ངེས་ཚིག་བརྗོདཔ་ཨིན། `parliament_eligibility_asset_id` གིས་ འདེམས་ངོ་ཆ་ཚན་བཟོ་བའི་སྐབས་ རྒྱུ་དངོས་ལྷག་ལུས་ག་འདི་ པར་ལོག་བཏབ་ཡོདཔ་ཨིན་ན་ སེལ་འཐུ་འབདཝ་ཨིན།
+`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`), `parliament_min_stake` enforces the minimum stake (in smallest units) on the eligibility asset, and `parliament_eligibility_asset_id` selects which asset balance is scanned when building the candidate set.
 
-གཞུང་སྐྱོང་ཝི་ཀེ་ བདེན་དཔྱད་འབད་ནི་ལུ་ བཱའི་ཀ་མེདཔ་ཨིན། ཚོགས་རྒྱན་བདེན་དཔྱད་འབད་ནི་ལུ་ དུས་རྒྱུན་དུ་ ནང་ཐིག་བཱའིཊི་ཚུ་དང་གཅིག་ཁར་ `Active` བདེན་དཔྱད་ལྡེ་མིག་དགོཔ་ཨིནམ་དང་ མཐའ་འཁོར་ཚུ་ བདེན་དཔྱད་འབད་ནིའི་དོན་ལས་ བརྟག་དཔྱད་རྐྱངམ་ཅིག་ བརྟག་དཔྱད་འབད་ནི་ལུ་ བརྟེན་མི་དགོ།
+Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
 
-རྦ་སི།
-- ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་ཨོན་-རིམ་པ་ལུ་གནང་བ་དགོཔ།
-  - གྲོས་འཆར་: `CanProposeContractDeployment{ contract_id }`
-  - བརྡ་བྱང་: `CanSubmitGovernanceBallot{ referendum_id }`
-  - བརྙན་འཕྲིན།: `CanEnactGovernance`
-  - ཤུབས་བཤུད།/མཐོ་གཏུགས།: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
-  - ལས་ཚོགས་འཛིན་སྐྱོང་ (མ་འོངས་པ): `CanManageParliament`
-- བརྡབ་གསིག་/མཐོ་གཏུགས།
-  - གཉིས་ལྡབ་ཀྱི་ ཚོགས་རྒྱན་བཙུགས་མི་/འོས་འབབ་མེད་པའི་ཚོགས་རྒྱན་ཚུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ བུན་གཡར་གྱི་ བརྒྱ་ཆ་ཚུ་ ལག་ལེན་འཐབ་ཨིན།
-  - ལག་དེབ་ `SlashGovernanceLock`/`RestituteGovernanceLock` གིས་ བཀོལ་སྤྱོད་འབད་མི་གིས་ འདྲུད་བདའ་མི་ ཉེས་ཆད་དང་ མཐོ་གཏུགས་ཚུ་ ; བསྐྱིན་འགྲུལ་འདི་ ཐོ་བཀོད་འབད་དེ་ཡོད་མི་ བརྡལ་བཤིག་གཏང་མི་ཚུ་གིས་ བཀག་ཆ་འབད་དེ་ མ་དངུལ་ཚུ་ བུན་གཡར་གྱི་ བཀོལ་སྤྱོད་ལུ་ ལོག་སྤྲོད་དེ་ ལེཌ་ཇར་འདི་ དུས་མཐུན་བཟོ་སྟེ་ དུས་ཡུན་མ་རྫོགས་ཚུན་ཚོད་ ལྡེ་མིག་འདི་ ཤུགས་ལྡན་སྦེ་ བཞག་ཞིནམ་ལས་ `LockRestituted` འདི་ ཕྱིར་བཏོན་འབདཝ་ཨིན།ཉེན་སྐྱོབ་པའི་མིང་གི་ས་སྟོང་ཚུ།
-- སྲོལ་སྒྲིག་ཚད་གཞི་ `gov_protected_namespaces` གིས་ ཐོ་བཀོད་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ནང་ བཀྲམ་སྤེལ་འབད་ནིའི་དོན་ལུ་ འཛུལ་ཞུགས་སྒོ་སྒྲིག་ལྕོགས་ཅན་བཟོཝ་ཨིན།
-- ཉེན་སྐྱོབ་འབད་ཡོད་པའི་མིང་ས་སྟོང་ཚུ་དམིགས་གཏད་བསྐྱེད་མི་བཀྲམ་སྤེལ་གྱི་དོན་ལུ་ མཁོ་སྤྲོད་འབད་མི་ཚུ་གིས་ བརྗེ་སོར་མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ཚུ་གྲངས་སུ་བཙུགས་དགོ།
-  - `gov_namespace`: དམིགས་གཏད་མིང་གི་ས་སྟོང་ (དཔེར་ན་ `"apps"`)
-  - `gov_contract_id`: མིང་བར་སྟོང་པའི་ནང་འཁོད་ལུ་ གཏན་ཚིག་ཅན་གྱི་གན་ཡིག་ཨའི་ཌི།
-- `gov_manifest_approvers`: གདམ་བྱེད་ཀྱི་ཇེ་ཨེསི་ཨོ་ཨེ་རེ་ I105... རྩིས་ཐོ་ཨའི་ཌི་ཚུ། ལམ་ཕྱོགས་མངོན་གསལ་འབད་བའི་སྐབས་ གཅིག་ལས་ལྷག་པའི་ འདྲེན་བྱེད་ཅིག་ གསལ་བསྒྲགས་འབད་བའི་སྐབས་ འཛུལ་ཞུགས་ལུ་ གསལ་སྟོན་གྱི་ ཚད་གཞི་འདི་ བསྒྲུབ་ནིའི་དོན་ལུ་ ཐོ་བཀོད་འབད་ཡོད་པའི་རྩིས་ཁྲ་ཚུ་དང་ ཐོ་བཀོད་འབད་ཡོད་པའི་རྩིས་ཁྲ་ཚུ་དགོཔ་ཨིན།
-- ཊེ་ལི་མི་ཊི་རི་གིས་ `governance_manifest_admission_total{result}` བརྒྱུད་དེ་ ཆ་ཚང་འཛུལ་ཞུགས་ཀྱི་ གྱངས་ཁ་ཚུ་ གསལ་སྟོན་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ མཐར་འཁྱོལ་ཅན་གྱི་ བསླབ་བྱ་ཚུ་ `non_i105..._authority`, `quorum_rejected`, `quorum_rejected`, `protected_namespace_rejected`, དང་ `protected_namespace_rejected`, དང་ Sumeragi, དབྱེ་བ་ཕྱེ་ཚུགས། །།ལམ་དག་དང་།
-- ཊེ་ལི་མི་ཊི་རི་གིས་ `governance_manifest_quorum_total{outcome}` བརྒྱུད་དེ་ བསྟར་སྤྱོད་ལམ་ལུགས་ (གནས་གོང་ `satisfied` / `rejected`) དེ་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བརླག་སྟོར་ཤོར་བའི་གནང་བ་ཚུ་ རྩིས་སྟོན་འབད་ཚུགས།
-- ལེནསི་གིས་ ཁོང་རའི་མངོན་རྟགས་ཚུ་ནང་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ཐོ་ཡིག་མིང་གནས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན། `gov_namespace` གཞི་སྒྲིག་འབད་མི་ ཚོང་འབྲེལ་གང་རུང་ཅིག་གིས་ `gov_contract_id` བྱིན་དགོཔ་ཨིནམ་དང་ མིང་བར་སྟོང་འདི་ གསལ་སྟོན་གྱི་ `protected_namespaces` ཆ་ཚན་ནང་ལུ་འབྱུང་དགོ། `RegisterSmartContractCode` ཉེན་སྐྱོབ་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ མེ་ཊ་ཌེ་ཊ་འདི་མེད་པའི་ མེ་ཊ་ཌེ་ཊ་འདི་ ཆ་མེད་གཏངམ་ཨིན།
-- འཛུལ་ཞུགས་བཀག་དམ་འབད་ནི། ཊུཔ་ལི་ `(namespace, contract_id, code_hash, abi_hash)` གི་དོན་ལུ་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ གཞུང་སྐྱོང་གྲོས་འཆར་ཅིག་ གནས་ཏེ་ཡོདཔ་སྦེ་ཨིན། དེ་མེན་པ་ཅིན་ བདེན་དཔྱད་འབད་མ་བཏུབ་པའི་འཛོལ་བ་དང་གཅིག་ཁར་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
+RBAC
+- On-chain execution requires permissions:
+  - Proposals: `CanProposeContractDeployment{ contract_id }`
+  - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
+  - Enactment: `CanEnactGovernance`
+  - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
+  - Council management (future): `CanManageParliament`
+- Slashing/appeals:
+  - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
+  - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.
 
-རན་ཊའིམ་ ཡར་བསྐྱེད་ཧུཀ་ཚུ།
-- ལམ་ཐིག་གསལ་སྟོན་ཚུ་གིས་ `hooks.runtime_upgrade` གིས་ རཱན་ཊའིམ་ཡར་འཕར་བཀོད་རྒྱ་ཚུ་ (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`) ལུ་གསལ་བསྒྲགས་འབད་ཚུགས།
-- ཧུཀ་ས་ཞིང་ཚུ་:
-  - `allow` (bool, སྔོན་སྒྲིག་ `true`): `false` གི་ རན་དུས་ཚོད་ཡར་འཕེལ་གྱི་བཀོད་རྒྱ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ཡོདཔ་ཨིན།
-  - `require_metadata` (bool, སྔོན་སྒྲིག་ `false`): `metadata_key` གིས་གསལ་བཀོད་འབད་མི་ ཚོང་འབྲེལ་མེ་ཊ་ཌེ་ཊ་ ཐོ་བཀོད་དགོཔ་ཨིན།
-  - `metadata_key` (ཡིག་རྒྱུན་): མེ་ཊ་ཌེ་ཊ་མིང་འདི་ ཧུག་གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ། མེ་ཊ་ཌེ་ཊ་འདི་དགོཔ་ཨིན་ ཡང་ན་ གནང་བ་ཐོ་ཡིག་ཅིག་ཡོད་པའི་སྐབས་ `gov_upgrade_id` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
-  - `allowed_ids` (ཡིག་རྒྱུན་གྱི་ཨེ་རེ་): མེ་ཊ་ཌེ་ཊ་གནས་གོང་ཚུ་གི་གདམ་ཁ་ཅན་གྱི་ཐོ་ཡིག་ཐོ་ཡིག་ (གི་ཤུལ་ལས་ མགུ་ཐོམ་སི་སི་)། བྱིན་ཡོད་པའི་གནས་གོང་འདི་ཐོ་བཀོད་འབད་མེད་པའི་སྐབས་ལུ་ ངོས་ལེན་མ་འབད་བས།
-- ཧུཀ་འདི་ཡོད་པའི་སྐབས་ལུ་ ཀིའུ་ འཛུལ་ཞུགས་འདི་གིས་ བང་རིམ་ནང་མ་འཛུལ་བའི་ཧེ་མ་ མེ་ཊ་ཌེ་ཊ་སྲིད་བྱུས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན། མེ་ཊ་ཌེ་ཊ་དང་ གནས་གོང་སྟོངམ་ ཡང་ན་ གནས་གོང་ཚུ་ མེད་མི་འདི་གིས་ ཐོ་ཡིག་གི་ཕྱི་ཁར་ གནས་གོང་མེད་པའི་ `NotPermitted` འཛོལ་བ་ཅིག་ བཏོནམ་ཨིན།
-- ཊེ་ལི་མི་ཊི་ལམ་ཚུ་ `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` བརྒྱུད་དེ་ བཀག་ཆ་འབད་བའི་གྲུབ་འབྲས་ཚུ་ཨིན།
-- ཧུཀ་ལུ་ཡིད་ཚིམས་པའི་ ཚོང་འབྲེལ་ཚུ་ནང་ མེ་ཊ་ཌེ་ཊ་ `gov_upgrade_id=<value>` (ཡང་ན་ གསལ་སྟོན་གསལ་སྟོན་འབད་ཡོད་པའི་ལྡེ་མིག་) གཅིག་ i105 གང་རུང་དང་གཅིག་ཁར་ གསལ་སྟོན་གྱི་ ཚད་གཞི་གིས་ དགོས་མཁོ་བའི་ ཆ་འཇོག་ཚུ་ བཙུགས་དགོ།
+Protected Namespaces
+- Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
+- Clients must include transaction metadata keys for deploys targeting protected namespaces:
+  - `gov_namespace`: the target namespace (e.g., `"apps"`)
+  - `gov_contract_id`: the logical contract id within the namespace
+- `gov_manifest_approvers`: optional JSON array of i105... account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
+- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_i105..._authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
+- Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
+- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_namespace` must provide `gov_contract_id`, and the namespace must appear in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
+- Admission enforces that an Enacted governance proposal exists for the tuple `(namespace, contract_id, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
 
-སྟབས་བདེ་ མཐའ་འཁོར།
-- POST `/v1/gov/protected-namespaces` — མཐུད་མཚམས་གུ་ཐད་ཀར་དུ་ `gov_protected_namespaces` འཇུག་སྤྱོད་འབདཝ་ཨིན།
-  - ཞུ་བ་: { "མིང་གི་ས་སྟོང་": ["apps", "ལམ་ལུགས་"] } }.
-  - ལན་: { "ཨོག": དྲང་བ, "འཇུག་སྤྱོད་འབད་ཡོདཔ་": ༡ }
-  - དྲན་ཐོ། བདག་སྐྱོང་/བརྟག་དཔྱད་ཀྱི་དོན་ལུ་ དམིགས་ཡུལ་བསྐྱེད། རིམ་སྒྲིག་འབད་བ་ཅིན་ ཨེ་པི་ཨའི་ཊོ་ཀེན་དགོཔ་ཨིན། བཟོ་བསྐྲུན་གྱི་དོན་ལུ་ `SetParameter(Custom)` དང་གཅིག་ཁར་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ཚོང་འབྲེལ་ཅིག་ བཙུགས་ནི་ལུ་དགའ་དགོ།CLI ཉེན་སྐྱོབ་ཚུ།
+Runtime Upgrade Hooks
+- Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- Hook fields:
+  - `allow` (bool, default `true`): when `false`, all runtime-upgrade instructions are rejected.
+  - `require_metadata` (bool, default `false`): require the transaction metadata entry specified by `metadata_key`.
+  - `metadata_key` (string): metadata name enforced by the hook. Defaults to `gov_upgrade_id` when metadata is required or an allowlist is present.
+  - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
+- When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
+- Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
+- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any i105... approvals required by the manifest quorum.
+
+Convenience Endpoint
+- POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
+  - Request: { "namespaces": ["apps", "system"] }
+  - Response: { "ok": true, "applied": 1 }
+  - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
+
+CLI Helpers
 - `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
-  - མིང་ས་སྒོ་དང་ ཕར་ཚུར་ཞིབ་དཔྱད་འབད་ནིའི་དོན་ལུ་ གན་རྒྱ་གི་གནས་སྟངས་ཚུ་ འཐུདཔ་ཨིན།
-    - Prometheus གིས་ `code_hash` རེ་ལུ་ བཱའིཊི་ཀོཌི་དང་ དེ་གི་བེལེཀ་༢བི་-༣༢ འདི་ Sumeragi ལུ་མཐུན་སྒྲིག་འབདཝ་ཨིན།
-    - `/v1/contracts/code/{code_hash}` གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོད་པའི་ གསལ་སྟོན་འདི་གིས་ `code_hash` དང་ `abi_hash` གནས་གོང་ཚུ་ མཐུན་སྒྲིག་འབད་ཡོདཔ་ཨིན།
-    - བཅའ་ཁྲིམས་དང་འཁྲིལ་ གཞུང་སྐྱོང་གྲོས་འཆར་འདི་ `(namespace, contract_id, code_hash, abi_hash)` གི་དོན་ལུ་ཡོདཔ་ཨིན།
-  - གན་ཡིག་རེ་ལུ་ `results[]` དང་གཅིག་ཁར་ JSON སྙན་ཞུ་ཅིག་ (གནད་དོན་, གསལ་སྟོན་/ཨང་རྟགས་/གྲོས་འཆར་གྱི་བཅུད་བསྡུས་) དང་ གྲལ་ཐིག་གཅིག་གི་བཅུད་བསྡུས་འདི་ བཀག་ཆ་འབད་མ་ཚུགས་ཚུན་ཚོད་ ཐོན་འབྲས་འབདཝ་ཨིན། (`--no-summary`)
-  - ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ རྩིས་ཞིབ་འབད་ནི་ལུ་ ཕན་ཐོགས་ཅན་ ཡང་ན་ བདེན་དཔྱད་འབད་ཐོག་ལས་ གཞུང་སྐྱོང་ཚད་འཛིན་འབད་བའི་ བཀོལ་སྤྱོད་ལཱ་གི་རྒྱུན་རིམ་ཚུ་ཨིན།
+  - Fetches contract instances for the namespace and cross-checks that:
+    - Torii stores bytecode for each `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
+    - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
+    - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
+  - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
+  - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
 - `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
-  - གསལ་སྟོན་གསལ་སྟོན་གསལ་སྟོན་གྱི་ གསལ་སྟོན་གྱི་ ཀོ་རཱམ་ལམ་ལུགས་ཚུ་ བསྒྲུབ་ནིའི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ `gov_manifest_approvers` རྩིས་ཏེ་ བཀྲམ་སྤེལ་ཚུ་ ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་ས་སྒོ་ཚུ་ནང་ བཙུགས་པའི་སྐབས་ ལག་ལེན་འཐབ་མི་ JSON མེ་ཊ་ཌེ་ཊ་ རུས་སྒྲོམ་འདི་ བཏོནམ་ཨིན།
+  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
 - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - ཀེ་ནོ་ནིག་རྩིས་ཐོ་ ids གིས་ བདེན་དཔྱད་འབདཝ་ཨིན་ ༣༢-བཱའིཊི་ནལ་ལི་ཕིར་གྱི་བརྡ་སྟོན་ཚུ་ ཀེ་ནོ་ནིག་བཟོཝ་ཨིནམ་དང་ ཕན་བསླབ་ཚུ་ `public_inputs_json` ནང་ལུ་མཉམ་བསྡོམས་འབདཝ་ཨིན།
-  - ཀླད་ཀོར་འདི་ བདེན་ཁུངས་ཀྱི་ཁས་བླངས་ (མི་མང་ཨིན་པུཊ་) དང་ `domain_tag`, SORA, དང་ `election_id` ལས་འབྱུང་ཡོདཔ་ཨིན། `--nullifier` འདི་ བཀྲམ་སྤེལ་འབད་བའི་སྐབས་ བདེན་ཁུངས་ལུ་ བདེན་དཔྱད་འབདཝ་ཨིན།
-  - ད་ལྟོ་ གྱལ་རིམ་གཅིག་པའི་བཅུད་བསྡུས་འདི་གིས་ བརྡ་སྟོན་ཡོད་པའི་ `CastZkBallot` དང་ བརྡ་སྟོན་འབད་ཡོད་པའི་ བརྡ་སྟོན་ཚུ་ (`owner`, `amount`, `duration_blocks`, འདི་ཨིན། `direction` བྱིན་པའི་སྐབས་)།
-  - CLI ལན་འདེབས་ annotate `tx_instructions[]` `payload_fingerprint_hex` དང་ decoded ས་སྒོ་ཚུ་ དེ་ལས་ མར་ཕབ་ལག་ཆས་འདི་གིས་ Norito decoding མེད་པར་ skeleton བདེན་དཔྱད་འབད་ཚུགས།
-  - ལྡེ་མིག་གང་རུང་ཅིག་བྱིན་པའི་སྐབས་ ZK ཚོགས་རྒྱན་ཚུ་གིས་ `owner`, `amount`, དང་ `duration_blocks` བཀྲམ་སྤེལ་འབད་དགོ། ཆ་ཤས་ཅིག་བརྡ་སྟོན་ཚུ་ ངོས་ལེན་མ་འབད་བས། `min_bond_amount > 0` ལུ་ ལྡེ་མིག་བརྡ་སྟོན་ཚུ་དགོཔ་ཨིན། ལམ་སྟོན་འདི་གདམ་ཁ་ཅན་སྦེ་ལུས་ཡོདཔ་ལས་ བརྡ་སྟོན་རྐྱངམ་ཅིག་སྦེ་བརྩི་འཇོག་འབདཝ་ཨིན།
+  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
+  - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
+  - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
+  - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
 - `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` གིས་ ཀེ་ནོ་ནིག་ཨའི་ཨེཆ་༥༨ ལི་ཊར་ཚུ་ངོས་ལེན་འབདཝ་ཨིན། གདམ་ཁ་ཅན་ `@<domain>` རྗེས་འཇུག་ཚུ་ འགྲུལ་ལམ་བརྡ་སྟོན་རྐྱངམ་ཅིག་ཨིན།
-  - ཡིག་གཟུགས་ཆ་སྙོམས་ཀྱི་དོན་ལུ་ ZK དར་ཆ་མིང་ཚུ་ མཉམ་སྦྲགས་འབད་དགོ།
-  - བཅུད་བསྡུས་ཐོན་འབྲས་ `vote --mode zk` གིས་ བཀོད་རྒྱ་གི་མཛུབ་མོ་གི་པར་དང་ མི་གིས་ལྷག་ཚུགས་པའི་ ཚོགས་རྒྱན་ས་ཁོངས་ (`owner`, `duration_blocks`, `duration_blocks`, Norito) ཚུ་བཙུགས་ཏེ་ མཚན་རྟགས་བཀོད་པའི་ཧེ་མ་ མགྱོགས་དྲགས་སྦེ་ ངེས་གཏན་བཟོཝ་ཨིན།གནས་སྟངས།
-- GET `/v1/gov/instances/{ns}` — མིང་གནས་ཅིག་གི་དོན་ལུ་ ཤུགས་ལྡན་གན་རྒྱ་གི་གནས་སྟངས་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན།
-  - འདྲི་དཔྱད་པ་རིམ།
-    - `contains`: ཚགས་མ་ `contract_id` (case-sensitive)
-    - `hash_prefix`: `code_hash_hex` གི་ཧེགསི་སྔོན་སྒྲིག་གིས་ ཚགས་མ།
-    - `offset` (སྔོན་སྒྲིག་ ༠), `limit` (སྔོན་སྒྲིག་ ༡༠༠, མཐོ་ཤོས་ ༡༠_༠༠༠)
-    - `order`: `cid_asc` (སྔོན་སྒྲིག་), `cid_desc`, `hash_asc`, `hash_desc`,
-  - ལན་: { "མིང་གི་ས་སྟོང་": "ns", "གནས་སྟངས།": [ "ཁག་འབགཔ་_ཨའི་ཌི་": "...", "ཀོཌི་_ཧ་ཤི་_ཧེགས": ...": "བསྡོམས་": "ཨོཕ་སེཊི་": n, "ཚད་འཛིན": m }
-  - ཨེསི་ཌི་ཀེ་གྲོགས་རམ་པ་: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) ཡང་ན་ `ToriiClient.list_governance_instances_typed("apps", ...)` (པའི་ཐོན་)།
+  - `--owner` accepts canonical I105 literals; Pass domain context through the surrounding scoped interface when required.
+  - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
+  - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
-ཁ་ཕྱེ་མ་བཅུག (བཀོལ་སྤྱོད་པ/རྩིས་ཞིབ་)།
+Instances Listing
+- GET `/v1/gov/instances/{ns}` — lists active contract instances for a namespace.
+  - Query params:
+    - `contains`: filter by substring of `contract_id` (case-sensitive)
+    - `hash_prefix`: filter by hex prefix of `code_hash_hex` (lowercase)
+    - `offset` (default 0), `limit` (default 100, max 10_000)
+    - `order`: one of `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
+  - Response: { "namespace": "ns", "instances": [{ "contract_id": "…", "code_hash_hex": "…" }, …], "total": N, "offset": n, "limit": m }
+  - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) or `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
+
+Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
-  - ལན་: { "མཐོ་ཚད་_ད་ལྟོ": ཨེཆ་, "འགོརང_ལྡེ་མིག་_ནའོ་": n, "referenda_with_expirede”: m, "last_sweep_མཐོ་ཚད་): S }
-  - དྲན་འཛིན་: `last_sweep_height` གིས་ དུས་ཡུན་ཚང་བའི་ལྡེ་མིག་ཚུ་ ཕྱགས་བདའ་སྟེ་ གནས་ཏེ་ཡོད་པའི་ འཕྲལ་ཁམས་ཀྱི་ བཀག་ཆ་མཐོ་ཚད་འདི་ གསལ་སྟོན་འབདཝ་ཨིན། `expired_locks_now` འདི་ `expiry_height <= height_current` དང་གཅིག་ཁར་ པར་ལོག་བཀག་ཆའི་དྲན་ཐོ་ཚུ་གིས་ རྩིས་སྟོན་འབདཝ་ཨིན།
+  - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
+  - Notes: `last_sweep_height` reflects the most recent block height where expired locks were swept and persisted. `expired_locks_now` is computed by scanning lock records with `expiry_height <= height_current`.
 - POST `/v1/gov/ballots/zk-v1`
-  - ཞུ་བ་ (v1-style DTO):
+  - Request (v1-style DTO):
     {
-      "དབང་ཚད་": "i105...",,",,"
-      "རྒྱུན་རིམ་_id": "༠༠༠༠༠༠-༠༠༠-༠༠༠-༠༠༠-༠༠༠-༠༠༠-༠༠༠༠༠༠-༠༠༠༠༠༠༠༠༠༠༠༠","
-      "private_key": "...?"
-      "འདམ་ཁ་_ཨའི་ཌི་": "ref-1", ཚུན།,
-      "རྒྱབ་ལྗོངས་": "ཧ་ལོ་༢/ཨི་པ།", "རྒྱབ་ལྗོངས།", "ཧེ་ལོ་༢/ཨི་པ།"
-      "velope_b64": "AAECAwQ=", "།
-      "root_hint": "༠x...༦༤ཧེགསི་?"
-      "ཇོ་བདག་": "i105...", // ཀེནོ་ནིག་རྩིས་ཐོ་ཨའི་ཌི་ (canonical I105 literal; no @domain suffix)
-      "མཐོ་ཚད་": "༡༠༠?"
-      "duration_blocks": 6000?
-      "ངོས་ལམ།": "ཨའི|ངོམ།|ཕྱིར་འབུད་པ་?"
-      "nullifier": "བེལེཀ་༢བ༣༢:...༦༤ཧེགསི་?"
-    } # .
-  - ལན་: { "ཨོ་ཀ": དྲང་བདེན, "ངོས་ལེན་འབད་ཡོདཔ་": "tx_སྒྲིག་བཀོད་": [{...}] }- POST `/v1/gov/ballots/zk-v1/ballot-proof` (པར་རིས་: `zk-ballot`)
-  - `BallotProof` JSON ཅིག་ཐད་ཀར་དུ་ངོས་ལེན་འབད་དེ་ `CastZkBallot` ཀེང་རུས་ཅིག་སླར་ལོག་འབདཝ་ཨིན།
-  - ཞུ༌བ:
+      "authority": "i105...",
+      "chain_id": "00000000-0000-0000-0000-000000000000",
+      "private_key": "…?",
+      "election_id": "ref-1",
+      "backend": "halo2/ipa",
+      "envelope_b64": "AAECAwQ=",
+      "root_hint": "0x…64hex?",
+      "owner": "i105…",          // canonical AccountId (domainless encoded literal; no @domain suffix)
+      "amount": "100?",
+      "duration_blocks": 6000?,
+      "direction": "Aye|Nay|Abstain?",
+      "nullifier": "blake2b32:…64hex?"
+    }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+
+- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
+  - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
+  - Request:
     {
-      "དབང་ཚད་": "i105...",,",,"
-      "རྒྱུན་རིམ་_id": "༠༠༠༠༠༠-༠༠༠-༠༠༠-༠༠༠-༠༠༠-༠༠༠-༠༠༠༠༠༠-༠༠༠༠༠༠༠༠༠༠༠༠","
-      "private_key": "...?"
-      "འདམ་ཁ་_ཨའི་ཌི་": "ref-1", ཚུན།,
-      "བཱ་ཐོ།": {།
-        "རྒྱབ་ལྗོངས་": "ཧ་ལོ་༢/ཨི་པ།", "རྒྱབ་ལྗོངས།", "ཧེ་ལོ་༢/ཨི་པ།"
-        "velope_bytes": "AAECAwQ=", // ZK1 ཡང་ན་ H2* དོན།
-        "root_hint": ཀླད་ཀོར་ // གདམ་ཁའི་ ༣༢-བཱའིཊི་ཧེགསི་ཡིག་རྒྱུན་ (འོས་འབབ་རྩ་ཚད།)
-        "nown": null, // གདམ་ཁའི་ཀེ་ནོ་ནིག་རྩིས་ཐོ་ཨའི་ཌི་ (canonical I105 literal; no @domain suffix)
-        "nullifier": null, // གདམ་ཁའི་ 32-བཱའིཊི་ཧེགསི་ཡིག་རྒྱུན་ (བུད་མེད་བརྡ་སྟོན་)།
-        "100", // གདམ་ཁའི་ལོག་དངུལ་བརྡ་སྟོན་ (བཅུ་ཚག་ཡིག་རྒྱུན་)།
-        "duration_blocks": 6000, // གདམ་ཁའི་ལྡེ་མིག་ཡུན་རིང་གི་བརྡ་སྟོན།
-        "ཆུང": "Aye" // གདམ་ཁའི་ཁ་ཕྱོགས་ཀྱི་ཕན་སྟོབས།
-      } # .
-    } # .
-  - ལན་གསལ:
+      "authority": "i105...",
+      "chain_id": "00000000-0000-0000-0000-000000000000",
+      "private_key": "…?",
+      "election_id": "ref-1",
+      "ballot": {
+        "backend": "halo2/ipa",
+        "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
+        "owner": null,                    // optional canonical AccountId (domainless encoded literal; no @domain suffix)
+        "nullifier": null,                // optional 32-byte hex string (nullifier hint)
+        "amount": "100",                  // optional lock amount hint (decimal string)
+        "duration_blocks": 6000,          // optional lock duration hint
+        "direction": "Aye"                // optional direction hint
+      }
+    }
+  - Response:
     {
-      "འགྲིག": བདེན་པ།
-      "ངོས་ལེན་འབད་ཡོདཔ་": བདེན་པ།
-      "རྒྱུ་མཚན་": "ཚོང་འབྲེལ་གྱི་རུས་སྒྲོམ་བཟོ་ནི།"
-      "tx_Intions": [
-        { "wire_id": "ཀསིཊི་ཛེཀ་བཱ་ལོཊ།", "payload_hex": "..." }.
-      .
-    } # .
-  - དྲན་ཐོ།
-    - `private_key` བྱིན་པའི་སྐབས་ Torii གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ཚོང་འབྲེལ་འདི་ཕུལ་ཞིནམ་ལས་ `reason` གིས་ `submitted transaction` ལུ་གཞི་སྒྲིག་འབདཝ་ཨིན།
-    - སར་བར་གྱི་སབ་ཁྲ་ཚུ་ གདམ་ཁ་ཅན་ `root_hint`/`owner`/Norito/`duration_blocks`/`direction`/Sumeragi གི་དོན་ལུ་ Sumeragi གི་དོན་ལུ་ཨིན། `CastZkBallot`.
-    - ཡིག་ཤུབས་བཱའིཊི་ཚུ་ བཀོད་རྒྱ་སྤྲོད་ལེན་གྱི་དོན་ལུ་ base64 སྦེ་ ལོག་བཙུགས་ཡོདཔ་ཨིན།
-    - མཇུག་སྣོད་འདི་ `zk-ballot` ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་རྐྱངམ་ཅིག་འཐོབ་ཚུགས།
+      "ok": true,
+      "accepted": true,
+      "reason": "build transaction skeleton",
+      "tx_instructions": [
+        { "wire_id": "CastZkBallot", "payload_hex": "…" }
+      ]
+    }
+  - Notes:
+    - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
+    - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
+    - The envelope bytes are re-encoded as base64 for the instruction payload.
+    - This endpoint is only available when the `zk-ballot` feature is enabled.
 
-CastZkBallot བདེན་དཔྱད་འགྲུལ་ལམ།
-- `CastZkBallot` གིས་ བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ base64 བདེན་ཁུངས་འདི་ བརྡ་སྟོན་འབདཝ་ཨིནམ་དང་ སྟོངམ་ཡང་ན་ ནོར་འཁྲུལ་ཅན་གྱི་ པེ་ལོཌ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
-- `public_inputs_json` འདི་བཀྲམ་སྤེལ་འབད་བ་ཅིན་ དེ་ JSON དངོས་པོ་ཅིག་འོང་དགོ། དངོས་པོ་མེད་པའི་དངུལ་འབབ་ཚུ་ ངོས་ལེན་མ་འབད་བས།
-- ཧོསིཊི་གིས་ ཚོགས་རྒྱན་བདེན་དཔྱད་ཀྱི་ལྡེ་མིག་འདི་ སྤྱིར་བཏང་འོས་འདེམས་ (`vk_ballot`) ཡང་ན་ གཞུང་སྐྱོང་སྔོན་སྒྲིག་ལས་ བསལ་ཚུགསཔ་ཨིནམ་དང་ ཐོ་བཀོད་འདི་ གནས་ཏེ་ ཡོད་དགོཔ་དང་ `Active` དང་ ནང་ཐིག་བཱའིཊི་ཚུ་ འབག་དགོཔ་ཨིན།
-- གསོག་འཇོག་འབད་ཡོད་པའི་ལྡེ་མིག་བཱའིཊི་ཚུ་ `hash_vk` དང་གཅིག་ཁར་ ལོག་བཙུགས་ཡོདཔ་ཨིན། གང་ལྟར་ཡང་ ཁས་བླངས་མ་འབད་བའི་ ཐོ་བཀོད་ཀྱི་ཐོ་བཀོད་ཚུ་ བདེན་དཔྱད་མ་འབད་བའི་ཧེ་མ་ ལག་ལེན་འཐབ་མ་བཏུབ་པའི་ ཨར་རྐུན་འབད་མི་ཚུ་ཨིན།
-- བདེན་ཁུངས་ཅན་གྱི་བཱའིཊི་ཚུ་ ཐོ་བཀོད་འབད་ཡོད་པའི་རྒྱབ་གཞི་ལུ་ `zk::verify_backend` བརྒྱུད་དེ་ བཏང་ཡོདཔ་ཨིན། ནུས་མེད་ཡིག་གཟུགས་འདི་ `BallotRejected` དང་ `invalid proof` དང་ཅིག་ཁར་ ཕྱིར་ཐོན་འབདཝ་ཨིནམ་དང་ བཀོད་རྒྱ་འདི་ གཏན་འབེབས་བཟོ་མ་ཚུགསཔ་ཨིན།
-- བདེན་ཁུངས་འདི་གིས་ ཚོགས་རྒྱན་ཁས་བླངས་དང་ འོས་འབབ་ཀྱི་རྩ་བ་འདི་ མི་མང་གི་རྒྱབ་སྐྱོར་སྦེ་ གསལ་སྟོན་འབད་དགོ། རྩ་བ་འདི་ བཙག་འཐུའི་ `eligible_root` དང་མཐུན་དགོཔ་ཨིན།
-- མཐར་འཁྱོལ་ཅན་གྱི་བདེན་དཔང་ཚུ་ `BallotAccepted`; འདྲ་བཤུས་ཆ་མེད་བཟོ་མི་ཚུ་ འོས་འབབ་ཅན་གྱི་རྩ་བ་ ཡང་ན་ ལྡེ་མིག་རི་གེ་རེ་ཤཱན་གྱིས་ ཡིག་ཆ་འདི་ནང་ ཧེ་མ་ལས་ འགྲེལ་བཤད་རྐྱབ་ཡོད་པའི་ ད་ལྟོ་ཡོད་པའི་ ད་ལྟོ་ཡོད་པའི་ བཀག་ཆ་འབད་བའི་ རྒྱུ་མཚན་ཚུ་ འཕྲོ་མཐུད་དེ་རང་ བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+CastZkBallot Verification Path
+- `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
+- If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
+- The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
+- Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
+- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
+- Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
 
-## བདེན་དཔང་འབད་མི་དང་ མཉམ་རུབ་མོས་མཐུན།
+## Validator Misbehaviour & Joint Consensus
 
-### དབུགས་འགག་དང་བཙོན་ཁང་གི་ལས་རིམ།མོས་མཐུན་གྱིས་ `Evidence` གིས་ i105.. མཐུན་སྒྲིག་འདི་ལས་འགལ་བའི་སྐབས་ ཕྱིར་བཏོན་འབདཝ་ཨིན། དྲན་ཚད་ནང་ `EvidenceStore` ནང་ པེ་ལོཌ་གི་ས་ཆ་རེ་རེ་དང་ གལ་སྲིད་ མ་མཐོང་པ་ཅིན་ ཌབ་ལུ་ཨེསི་ཝི་-རྒྱབ་སྐྱོར་ཡོད་པའི་ `consensus_evidence` སབ་ཁྲ་ནང་ དངོས་གཞི་བཟོཝ་ཨིན། `sumeragi.npos.reconfig.evidence_horizon_blocks` ལས་རྙིངམ་ཐོ་བཀོད་ཚུ་ (སྔོན་སྒྲིག་ `7200` སྡེབ་ཚན་ཚུ་) ཆ་མེད་བཏང་ཡོདཔ་ལས་ གཏན་མཛོད་འདི་ མཚམས་འཇོག་འབད་དེ་ཡོད་རུང་ ངོས་ལེན་འདི་ བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན། གནམ་མཁའི་ནང་འཁོད་ལུ་ སྒྲུབ་བྱེད་ཚུ་གིས་ མཉམ་འབྲེལ་མཐུན་གྲོས་སྒྲིག་གཞི་ (`mode_activation_height requires next_mode to be set in the same block`) དང་ ཤུགས་ལྡན་བཟོ་ནི་གི་ཕྱིར་འགྱངས་ (`sumeragi.npos.reconfig.activation_lag_blocks`) དེ་ལས་ སྔོན་སྒྲིག་ `1`) དེ་ལས་ བརྡབ་འགྱོ་ནི་གི་ཕྱིར་འགྱངས་ (`sumeragi.npos.reconfig.slashing_delay_blocks`, སྔོན་སྒྲིག་ `259200`) འདི་གི་ཧེ་མ་ ཉེས་ཆད་བཀལ་ཚུགས། བཙུགས་ནི།
+### Slashing and Jailing Workflow
 
-ངོས་འཛིན་ཅན་གྱི་ཉེས་འཛུགས་ཚུ་གིས་ གཅིག་ལས་གཅིག་ལུ་ `EvidenceKind` ལུ་ སབ་ཁྲ་བཟོཝ་ཨིན། ཉེ་རིང་ཕྱེ་མི་ཚུ་ གནས་སྡུད་དཔེ་ཚད་ཀྱིས་ བརྟན་ཏོག་ཏོ་དང་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
+Consensus emits Norito-encoded `Evidence` whenever a i105... violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
+
+Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
 ```rust
 use iroha_data_model::block::consensus::EvidenceKind;
@@ -324,53 +346,55 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **གཉིས་ལྡན་Prepare/DoubleCommit** — i105... འདི་ `(phase,height,view,epoch)` tupl
-- **InvalidQc** — མཉམ་བསྡོམས་འབད་མི་ཅིག་གིས་ དབྱིབས་དབྱིབས་ཀྱི་ ཞིབ་དཔྱད་ཚུ་འཐུས་ཤོར་བྱུང་མི་ ཁས་བླངས་ ཀིའུ་སི་ལུ་ ཁ་བཟེད་ཡོདཔ་ཨིན།
-- **Invalid Proposal** — འགོ་ཁྲིདཔ་ཅིག་གིས་ བཟོ་བཀོད་བདེན་དཔྱད་འབད་མ་ཚུགས་པའི་ བཀག་ཆ་ཅིག་ གྲོས་འཆར་བཀོད་ཡོདཔ་ད་ (དཔེར་ན་ བསྡམ་བཞག་ཡོད་པའི་རྒྱུན་རིམ་གྱི་ལམ་ལུགས་འདི་ བརྡལ་བཤིག་གཏངམ་ཨིན།)
-- **Sensorship** — མཚན་རྟགས་བཀོད་མི་ ཞུ་ཡིག་ཐོབ་མི་ཚུ་གིས་ གྲོས་འཆར་མེད་པའི་ ཚོང་འབྲེལ་ཅིག་ སྟོནམ་ཨིན།
+- **DoublePrepare/DoubleCommit** — the i105... signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
+- **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
-ཝི་ཨར་ཨེཕ་ཉེས་ཆད་ཚུ་ `activation_lag_blocks` གི་ཤུལ་ལས་ རང་བཞིན་གྱིས་ བསྟར་སྤྱོད་འབདཝ་ཨིན། གཞུང་སྐྱོང་གིས་ ཉེས་ཆད་འདི་ ཆ་མེད་མ་བཏང་ཚུན་ཚོད་ མོས་མཐུན་གྱི་ བརྡབ་གསིག་འདི་ `slashing_delay_blocks` སྒོ་སྒྲིག་གི་ཤུལ་ལས་རྐྱངམ་ཅིག་ ལག་ལེན་འཐབ་ཨིན།
+VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
 
-བཀོལ་སྤྱོད་པ་དང་ ལག་ཆས་ཚུ་གིས་ བརྟག་ཞིབ་དང་ ལོག་སྟེ་ རྒྱང་བསྒྲགས་འབད་ཚུགས།
+Operators and tooling can inspect and re-broadcast payloads through:
 
-- Torii: `GET /v1/sumeragi/evidence` དང་ `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha ops sumeragi evidence list`, `… count`, དང་ `… submit --evidence-hex <payload>`.
+- Torii: `GET /v1/sumeragi/evidence` and `GET /v1/sumeragi/evidence/count`.
+- CLI: `iroha ops sumeragi evidence list`, `… count`, and `… submit --evidence-hex <payload>`.
 
-གཞུང་སྐྱོང་གིས་ སྒྲུབ་བྱེད་འདི་ ཁྲིམས་ལུགས་ཀྱི་བདེན་ཁུངས་ཅིག་སྦེ་ བརྩི་དགོཔ་ཨིན།
+Governance must treat the evidence bytes as canonical proof:
 
-༡ **ལོ་ན་མ་འགྱོ་བའི་ཧེ་མ་ འབབ་ཁུངས་** བསྡུ་ལེན་འབད། མཐོ་ཚད་/མཐོང་སྣང་མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ Norito བཱའིཊིསི་འདི་ དཔར་བསྐྲུན་འབད།
-2. **དགོས་ངེས་ཡོད་ན་** `CancelConsensusEvidencePenalty` འདི་ `slashing_delay_blocks` མ་འགྱོ་བའི་ཧེ་མ་ སྒྲུབ་བྱེད་ཀྱི་ འབབ་ཁུངས་ཚུ་དང་གཅིག་ཁར་ ཕུལ་དགོ། དྲན་ཐོ་འདི་ `penalty_cancelled` དང་ `penalty_cancelled_at_height` རྟགས་བཀོད་དེ་ཡོདཔ་ལས་ བརྡབ་འགྱོ་མི་ག་ཡང་འཇུག་སྤྱོད་འབདཝ་ཨིན།
-༣ **ཉེས་ཆད་འདི་ འོས་འདེམས་ཡང་ན་ སུ་ཌོ་བཀོད་རྒྱ་ནང་ བཙུགས་ཐོག་ལས་ ཉེས་ཆད་** གནས་དགོ། (དཔེར་ན་ `Unregister::peer`) ལག་ལེན་འཐབ་མི་འདི་གིས་ པེ་ལོཌ་འདི་ ལོག་བདེན་དཔྱད་འབདཝ་ཨིན། ནོར་འཁྲུལ་ཅན་གྱི་སྒྲུབ་བྱེད་དང་ སྒྲུབ་བྱེད་ཚུ་ ངོས་ལེན་མ་འབད་བར་ ངོས་ལེན་འབདཝ་ཨིན།
-4. **རྗེས་སུ་འཇུག་པའི་ཊོ་པོ་ལོ་ཇི་** དེ་འབདཝ་ལས་ ཉེས་ཅན་ i105... དེ་འཕྲལ་ལས་ ལོག་སྟེ་འཛུལ་མི་ཚུགས། སྤྱིར་བཏང་གི་ བཞུར་རྒྱུན་ གྱལ་རིམ་ `SetParameter(Sumeragi::NextMode)` དང་ `SetParameter(Sumeragi::ModeActivationHeight)` གིས་ དུས་མཐུན་བཟོ་ཡོད་པའི་ཐོ་ཡིག་དང་གཅིག་ཁར་ཨིན།
-༥. **རྩིས་ཞིབ་གྲུབ་འབྲས་** `/v1/sumeragi/evidence` དང་ `/v1/sumeragi/status` བརྒྱུད་དེ་ སྒྲུབ་བྱེད་ཀྱི་ མཐོ་རིམ་དང་ གཞུང་སྐྱོང་གིས་ བཏོན་གཏང་ནིའི་ འགན་ཁུར་འབག་དགོ།
+1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
+2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
+3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
+4. **Schedule the follow-up topology** so the offending i105... cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
-### མཉམ་རུབ་གྲོས་འཆར།
+### Joint-Consensus Sequencing
 
-མཉམ་འབྲེལ་མོས་མཐུན་འདི་གིས་ ཕྱིར་འཐོན་ i105... ཆ་ཚན་གསརཔ་འདི་ གྲོས་འཆར་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ མཐའ་མཚམས་སྡེབ་ཚན་འདི་ མཐའ་དཔྱད་འབད་དགོཔ་སྦེ་ གཞི་སྒྲིག་འབདཝ་ཨིན། རན་ཊའིམ་གྱིས་ ཆ་སྒྲིག་འབད་ཡོད་པའི་ཚད་བཟུང་ཚུ་བརྒྱུད་དེ་ ལམ་ལུགས་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།- `SumeragiParameter::NextMode` དང་ `SumeragiParameter::ModeActivationHeight` འདི་ **same block* ནང་ལུ་ ཁས་བླངས་འབད་དགོཔ་ཨིན། `mode_activation_height` འདི་ དུས་མཐུན་བཟོ་མི་ སྡེབ་ཚན་མཐོ་ཚད་ལས་ དམ་དམ་སྦེ་ མཐོ་དྲགས་དགོཔ་ཨིན་ དེ་གིས་ ཉུང་མཐའ་གཅིག་གི་ བཀག་ཆ་ལག་ལེན་བྱིནམ་ཨིན།
-- `sumeragi.npos.reconfig.activation_lag_blocks` (སྔོན་སྒྲིག་ `1`) འདི་ ཀླད་ཀོར་ལྷག་པའི་ལག་ཐོག་བཀག་བཞག་མི་ རིམ་སྒྲིག་སྲུང་སྐྱོབ་འདི་ཨིན།
-- `sumeragi.npos.reconfig.slashing_delay_blocks` (སྔོན་སྒྲིག་ `259200`) ཕྱིར་འགྱངས་ཀྱི་ཕྱིར་འགྱངས་འབདཝ་ལས་ གཞུང་སྐྱོང་གིས་ ཞུ་ཡིག་མ་བཙུགས་པའི་ཧེ་མ་ ཉེས་ཆད་ཚུ་ ཆ་མེད་བཏང་ཚུགས།
+Joint consensus guarantees that the outgoing i105... set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
+
+- `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
+- `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- རན་ཊའིམ་དང་ སི་ཨེལ་ཨའི་གིས་ `/v1/sumeragi/params` དང་ `wire_id` བརྒྱུད་དེ་ གནས་རིམ་གྱི་ཚད་གཞི་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཤུགས་ལྡན་གྱི་མཐོ་ཚད་དང་ I105... rosters ཚུ་ ངེས་གཏན་བཟོ་ཚུགས།
-- གཞུང་སྐྱོང་རང་བཞིན་གྱིས་ཨ་རྟག་རང་:
-  ༡ སྒྲུབ་བྱེད་རྒྱབ་སྐྱོར་ཐོག་ལས་ བཏོན་བཏང་ནི་ (ཡང་ན་ ལོག་བཙུགས་) གི་གྲོས་ཐག་འདི་ མཇུག་བསྡུ།
-  2. `mode_activation_height = h_current + activation_lag_blocks` དང་མཉམ་དུ་རྗེས་འཇུག་བསྐྱར་སྒྲིག་འབད་ནི།
-  3. རེ་བ་བསྐྱེད་པའི་མཐོ་ཚད་ལུ་ `effective_consensus_mode` ཚུན་ཚོད་ `/v1/sumeragi/status` ལྟ་རྟོག་འབད།
+- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and i105... rosters.
+- Governance automation should always:
+  1. Finalise the evidence-backed removal (or reinstatement) decision.
+  2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
+  3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
 
-i105...s བསྒྱིར་མི་ཡིག་ཚུགས་གང་རུང་ཡང་ན་ sland **དགོཔ་** ཀླད་ཀོར་གྱི་ལག་བསྟར་ཤུགས་ལྡན་བཟོ་ནིའི་དཔའ་བཅམ་མི་དང་ ཡང་ན་ ལགཔ་ལས་བཀག་བཞག་པའི་ཚད་བཟུང་ཚུ་བཏོན་གཏང་། དེ་བཟུམ་གྱི་ཚོང་འབྲེལ་ཚུ་ ངོས་ལེན་མ་འབད་བར་ ཧེ་མའི་ཐབས་ལམ་ནང་ ཡོངས་འབྲེལ་འདི་བཞག་དགོ།
+Any script that rotates i105...s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
 
-## བརྒྱུད་འཕྲིན་གྱི་ངོས་འཛིན།
+## Telemetry surfaces
 
-- Prometheus མེ་ཊིགསི་ཕྱིར་འདྲེན་གཞུང་སྐྱོང་ལས་སྣ།
-  - `governance_proposals_status{status}` (gauge) གིས་ གྲོས་འཆར་གྱངས་ཁ་ཚུ་ གནས་ཚད་དང་འཁྲིལ་ཏེ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
-  - མིང་གནས་ འཛུལ་ཞུགས་སྲུང་སྐྱོབ་འབད་བའི་སྐབས་ ཡར་སེང་ཚུ་གིས་ བཀྲམ་སྤེལ་ཅིག་ འབད་བཅུགཔ་ཨིན་ ཡང་ན་ ངོས་ལེན་འབདཝ་ཨིན།
-  - Prometheus (counter) དྲན་ཐོ་ཚུ་གིས་ བཙུགས་རྟགས་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
-- `/status` གིས་ གྲོས་འཆར་གྱངས་ཁ་ཚུ་ མེ་ལོང་ དང་ ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་ས་སྟོང་བསྡོམས་ དེ་ལས་ འཕྲལ་ཁམས་ཀྱི་ གསལ་སྟོན་ཚུ་ ཐོ་བཀོད་འབད་ནི་ (མིང་གནས་ས་དང་ གན་རྒྱ་ཨའི་ཌི་ གསང་གྲངས་/ཨེ་བི་ཨའི་ ཧེཤ་ བཀག་ཆ་ མཐོ་ཚད་ ཊི་སམཔ་) ཚུ་ཚུདཔ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ དུས་མཐུན་བཟོ་ཡོད་པའི་ མངོན་གསལ་འབད་ཡོད་པའི་ གསལ་སྟོན་ཚུ་ ངེས་དཔྱད་འབད་ནིའི་དོན་ལུ་ ས་སྒོ་འདི་ འོས་འདེམས་འཐབ་ཚུགས་ནི་ཨིནམ་དང་ ཉེན་སྲུང་འབད་ཡོད་པའི་ མིང་ས་སྒོའི་སྒོ་སྒྲིག་ཚུ་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ཨིནམ་ ངེས་པར་དུ ་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
-- A Grafana ཊེམ་པེལེཊི་ (`docs/source/grafana_governance_constraints.json`) དང་
-  `telemetry.md` ནང་ telemetry runbook
-  གྲོས་འཆར་ཚུ་ གསལ་སྟོན་གྱི་ ཤུགས་ལྡན་ཚུ་ ཡང་ན་ རེ་བ་མེད་པའི་སྲུང་སྐྱོབ་-མིང་ས་སྟོང་།
-  གཡོག་བཀོལ་བའི་དུས་ཚོད་ཚུ་ ཡར་བསྐྱེད་འབད་བའི་སྐབས་ ཆ་འཇོག་འབད་ནི།
+- Prometheus metrics export governance activity:
+  - `governance_proposals_status{status}` (gauge) tracks proposal counts by status.
+  - `governance_protected_namespace_total{outcome}` (counter) increments when protected namespace admission allows or rejects a deploy.
+  - `governance_manifest_activations_total{event}` (counter) records manifest insertions (`event="manifest_inserted"`) and namespace bindings (`event="instance_bound"`).
+- `/status` includes a `governance` object mirroring the proposal counts, reporting protected namespace totals, and listing recent manifest activations (namespace, contract id, code/ABI hash, block height, activation timestamp). Operators can poll this field to confirm that enactments updated manifests and that protected namespace gates are enforced.
+- A Grafana template (`docs/source/grafana_governance_constraints.json`) and the
+  telemetry runbook in `telemetry.md` show how to wire alarms for stuck
+  proposals, missing manifest activations, or unexpected protected-namespace
+  rejections during runtime upgrades.

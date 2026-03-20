@@ -881,8 +881,6 @@ final class TxBuilderTests: XCTestCase {
     }
 
     func testBuildClaimIdentifierProducesEnvelope() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
         let keypair = try makeFixtureKeypair()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let authority = AccountId.make(publicKey: keypair.publicKey)

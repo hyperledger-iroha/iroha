@@ -4,112 +4,67 @@
 lang: he
 direction: rtl
 source: docs/source/torii_contracts_api.md
-status: complete
+status: needs-update
 translator: manual
 ---
 
-<div dir="rtl">
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-# Torii Contracts API (מניפסטים ופריסה)
+# Torii Contracts API (Bytecode Deploy & Fetch)
 
-מסמך זה מתאר את נקודות הקצה HTTP שנועדו לפרסום ואחזור מניפסטים של חוזים חכמים. הן מעטפת דקה מעל טרנזקציות וקריאות קריאה-בלבד על השרשרת; הסמנטיקה הקונצנזואלית נשארת על השרשרת.
+This document describes the app-facing HTTP endpoints for deploying self-describing contract bytecode and fetching the stored manifest/bytecode. These endpoints are thin wrappers around on-chain transactions and read-only queries; consensus semantics remain on-chain.
 
-## נקודות קצה
+## Endpoints
 
-- **POST `/v1/contracts/code`** – עוטף `RegisterSmartContractCode` בטרנזקציה חתומה ושולח אותה.
-  - גוף: `RegisterContractCodeDto` (JSON או Norito JSON; ראו סכימה בהמשך).
-  - תשובה: `202 Accepted` עם קבלה; שגיאות קבלה אחרות בהתאם.
-  - הרשאה: נדרש `CanRegisterSmartContractCode`.
-  - טלמטריה: שגיאות מעבד מוסיפות ל-`torii_contract_errors_total{endpoint="code"}`, הפעלת ה-rate limiter מוסיפה ל-`torii_contract_throttled_total{endpoint="code"}`.
-  - תרחישים עיקריים:
+- GET `/v1/contracts/code/{code_hash}`
+  - Fetches the on-chain `ContractManifest` by its content-addressed `code_hash`.
+  - Path param: `code_hash` — 32‑byte hex string.
+  - Response body: `ContractCodeRecordDto` (JSON) with `manifest` populated.
 
-    | תרחיש | סטטוס | גוף | הערות |
-    | --- | --- | --- | --- |
-    | התקבל לתור | `202 Accepted` | גוף ריק | מזהה טרנזקציה מהחתימה; יש לנטר ב-pipeline. |
-    | חסר הרשאה | `202 Accepted` | ראה דוגמה | התור מקבל, מאוחר יותר נרשם `ValidationFail::NotPermitted`. |
-    | `manifest.code_hash`/`abi_hash` אינם hex חוקי | `400 Bad Request` | הודעת `invalid JSON body` | בדיקה בשכבת Norito JSON. |
-    | התור מלא | `429 Too Many Requests` | JSON מובנה (`code`, `message`, `queue`, `retry_after_seconds`) | כולל `Retry-After` והידוק עומס. |
+- POST `/v1/contracts/deploy`
+  - Accepts base64 `.to` bytecode with authority and private key; verifies the embedded `CNTR` contract interface, then computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy declared by the verified header.
+  - Request body: `DeployContractDto`; response body: `DeployContractResponseDto`.
+  - Submits two ISIs in a single transaction: `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (code storage).
+  - Body size is limited by the `max_contract_code_bytes` custom parameter (default 16 MiB); raise the cap before uploading larger programs.
+  - Telemetry: increments `torii_contract_errors_total{endpoint="deploy"}` on handler errors and `torii_contract_throttled_total{endpoint="deploy"}` when the limiter fires.
+- POST `/v1/contracts/instance`
+  - Accepts base64 `.to` bytecode and a target `(namespace, contract_id)` pair.
+  - Wraps `RegisterSmartContractCode`, `RegisterSmartContractBytes`, and `ActivateContractInstance` into a single transaction so deployment and activation happen atomically.
+  - Response body: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`.
+  - Telemetry: increments `torii_contract_errors_total{endpoint="instance"}` on handler errors and `torii_contract_throttled_total{endpoint="instance"}` when throttled.
 
-    דוגמה לסטטוס שנרשם ב-`/v1/pipeline/transactions/status` במקרה הרשאה חסרה:
+- GET `/v1/contracts/code-bytes/{code_hash}`
+  - Fetches stored code bytes for a given `code_hash`.
+  - Response body: `{ code_b64 }`.
 
-    ```json
-    {
-      "kind": "Transaction",
-      "content": {
-        "hash": "…",
-        "status": {
-          "kind": "Rejected",
-          "content": "<base64 TransactionRejectionReason>"
-        }
-      }
-    }
-    ```
+- POST `/v1/contracts/instance/activate`
+  - Submits `ActivateContractInstance` binding `(namespace, contract_id) -> code_hash`.
+  - Request body: `ActivateInstanceDto`; response body: `ActivateInstanceResponseDto`.
+  - Telemetry: increments `torii_contract_errors_total{endpoint="activate"}` on handler errors and `torii_contract_throttled_total{endpoint="activate"}` on throttle events.
 
-    דוגמת גוף שגיאת תור:
+- GET `/v1/contracts/instances/{ns}`
+  - Lists active contract instances for `ns`. Mirrors the governance listing endpoint.
+  - Query params: `contains`, `hash_prefix`, `offset`, `limit`, `order` (same semantics as governance endpoint).
+  - Response: `{ namespace, instances: [{ contract_id, code_hash_hex }], total, offset, limit }`.
 
-    ```json
-    {
-      "code": "queue_full",
-      "message": "transaction queue is at capacity",
-      "queue": {
-        "state": "saturated",
-        "queued": 65536,
-        "capacity": 65536,
-        "saturated": true
-      },
-      "retry_after_seconds": 1
-    }
-    ```
-
-- **GET `/v1/contracts/code/{code_hash}`** – מחזיר `ContractManifest` לפי `code_hash`.
-- **POST `/v1/contracts/deploy`** – מקבל bytecode Base64, מחשב `code_hash`/`abi_hash`, ושולח `RegisterSmartContractCode` + `RegisterSmartContractBytes` בטרנזקציה אחת.
-  - גוף: `DeployContractDto`; תשובה: `DeployContractResponseDto`.
-  - גודל הקוד מוכתב ע"י הפרמטר המותאם `max_contract_code_bytes` (ברירת מחדל 16 MiB). יש לעדכן את הערך לפני העלאת תוכניות גדולות יותר.
-  - טלמטריה: שגיאות → `torii_contract_errors_total{endpoint="deploy"}`; הפעלת limiter → `torii_contract_throttled_total{endpoint="deploy"}`.
-- **POST `/v1/contracts/instance`** – מקבל bytecode Base64 ויעד `(namespace, contract_id)`, ומבצע `RegisterSmartContractCode` + `RegisterSmartContractBytes` + `ActivateContractInstance` באותה טרנזקציה.
-  - תשובה: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`.
-  - טלמטריה: שגיאות → `torii_contract_errors_total{endpoint="instance"}`; הפעלת limiter → `torii_contract_throttled_total{endpoint="instance"}`.
-- **GET `/v1/contracts/code-bytes/{code_hash}`** – מחזיר `{ code_b64 }`.
-- **POST `/v1/contracts/instance/activate`** – שולח `ActivateContractInstance` עבור `(namespace, contract_id)`.
-  - גוף: `ActivateInstanceDto`; תשובה: `ActivateInstanceResponseDto`.
-  - טלמטריה: שגיאות → `torii_contract_errors_total{endpoint="activate"}`; הפעלת limiter → `torii_contract_throttled_total{endpoint="activate"}`.
-- **GET `/v1/contracts/instances/{ns}`** – מציג מופעי חוזים פעילים ב-`ns` עם פרמטרי סינון/מיון זהים לאנדפוינט הגוורננס.
-
-## סכימות
-
-### RegisterContractCodeDto
-
-```jsonc
-{
-  "authority": "i105...",
-  "private_key": "ed25519:...",
-  "manifest": {
-    "code_hash": "0123…cdef",
-    "abi_hash": "89ab…7654",
-    "compiler_fingerprint": "rustc-1.79 llvm-16",
-    "features_bitmap": 0
-  }
-}
-```
-
-- `manifest.code_hash` משמש כמפתח האחסון אם סופק.
-- `manifest.abi_hash` נבדק מול מדיניות ה-ABI של הנוד.
+## Schemas
 
 ### DeployContractDto
 
-בקשה להעלאת bytecode קומפילט ולקבלת מניפסט וחישובים מהנוד.
+Upload compiled bytecode and let Torii derive the manifest and hashes.
 
 ```jsonc
 {
-  "authority":   "i105...", // מזהה חשבון (מחרוזת)
-  "private_key": "ed25519:0123…",    // ExposedPrivateKey (hex רגיל או עם קידומת אלגוריתם)
+  "authority":   "i105...", // AccountId (string form)
+  "private_key": "ed25519:0123…",    // ExposedPrivateKey (bare or prefixed multihash hex)
   "code_b64":    "Base64Payload=="
 }
 ```
 
-- `code_b64` חייב להתפרש כ-header תקין של IVM עם `abi_version == 1`.
-- המניפסט נבנה בצד השרת; הלקוח אינו שולח אחד בבקשה זו.
-- פענוח ל-bytecode גדול מהערך `max_contract_code_bytes` יוביל ל-`InvariantViolation` עם ההודעה `code bytes exceed cap`.
+Notes:
+- `code_b64` must decode to a valid self-describing IVM `1.1` contract artifact with `abi_version == 1` and an embedded `CNTR` section.
+- The handler recomputes the manifest internally; callers do not provide one on this shortcut.
+- The decoded bytecode length must not exceed `max_contract_code_bytes`; exceeding the limit triggers an `InvariantViolation` (`code bytes exceed cap`) during transaction admission.
 
 ### DeployContractResponseDto
 
@@ -121,45 +76,45 @@ translator: manual
 }
 ```
 
-### קידודי JSON
+### Type encodings (JSON)
 
-- `Hash` → Hex באורך 64 תווים (32 בתים, אותיות קטנות).
-- `AccountId`: canonical I105 literal (no `@domain` suffix).
-- `ExposedPrivateKey` מקבל גם hex רגיל וגם גרסה עם קידומת אלגוריתם (למשל `ed25519:…`). תשובות חוזרות כ-hex רגיל.
+- `Hash` values (e.g., `code_hash`, `abi_hash`) are encoded as 64‑char lowercase hex strings (32 bytes).
+- `AccountId` strings use canonical I105 literals (domainless encoded literal).
+  Strict parser paths accept only canonical I105 literals (no `@<domain>` suffix).
+- `ExposedPrivateKey` accepts either a bare multihash hex string or its algorithm-prefixed variant (e.g., `ed25519:…`). Responses normalise to bare multihash hex. Multihash hex is canonical: varint bytes are lowercase, payload bytes are uppercase, and `0x` prefixes are rejected.
 
-### תשובת GET
+### GET response: ContractCodeRecordDto
 
 ```jsonc
 {
-  "manifest": { … }
+  "manifest": {
+    "code_hash": "0123…cdef",
+    "abi_hash":  "89ab…7654",
+    "compiler_fingerprint": "rustc-1.79 llvm-16",
+    "features_bitmap": 0
+  }
 }
 ```
 
 ### DeployAndActivateInstanceDto
 
+Represents a request to deploy bytecode and immediately bind `(namespace, contract_id)` to the resulting code hash.
+
 ```jsonc
 {
-  "authority": "i105...",
+  "authority":   "i105...",
   "private_key": "ed25519:…",
-  "namespace": "apps",
+  "namespace":   "apps",
   "contract_id": "calc.v1",
-  "code_b64": "…",
-  "manifest": {
-    "compiler_fingerprint": "rustc-1.79 llvm-16",
-    "features_bitmap": 0,
-    "access_set_hints": {
-      "read_keys": ["account:i105..."],
-      "write_keys": ["asset:usd#wonderland"]
-    }
-  }
+  "code_b64":    "…"
 }
 ```
 
-- אם `manifest.code_hash` נשלח, הוא חייב להתאים ל-hash שמחושב מה-bytecode (אחרת הבקשה תידחה).
-- ה-node מחשב מחדש `abi_hash` לפי ה-IVM header (נכון לעכשיו ABI v1) ומוודא שכל ערך שסופק תואם.
-- שדות נוספים (fingerprint/bitmap/access hints) נשמרים כפי שהם במניפסט.
+Notes:
+- The node verifies the embedded `CNTR` payload, derives the canonical manifest from the artifact itself, and computes the canonical `code_hash`/`abi_hash` pair before activation.
+- Callers do not provide a manifest override on this endpoint.
 
-### DeployAndActivateInstanceResponseDto
+### Response: DeployAndActivateInstanceResponseDto
 
 ```jsonc
 {
@@ -173,7 +128,7 @@ translator: manual
 
 ### ActivateInstanceDto
 
-בקשה לקשור `code_hash` קיים למזהה חוזה ב-namespace נתון.
+Bind an existing manifest/code hash to a namespace contract identifier.
 
 ```jsonc
 {
@@ -185,9 +140,10 @@ translator: manual
 }
 ```
 
-- `code_hash` חייב להיות Hex באורך 64 (32 בתים). קידומת `0x` תוסר אם קיימת.
-- המניפסט וה-bytecode עבור ה-`code_hash` חייבים להיות קיימים בשרשרת; אחרת הטרנזקציה תידחה.
-- namespaces מוגנים עדיין דורשים מטא-דאטה `gov_namespace`/`gov_contract_id` בהמשך הצינור.
+Notes:
+- `code_hash` must be exactly 32 bytes of lowercase hex. A leading `0x` is tolerated and stripped.
+- Manifests and code bytes for `code_hash` must already exist; otherwise the transaction will fail downstream.
+- Protected namespaces still enforce `gov_namespace`/`gov_contract_id` metadata checks; populate them via CLI helpers or custom transactions.
 
 ### ActivateInstanceResponseDto
 
@@ -197,32 +153,40 @@ translator: manual
 }
 ```
 
-### מטעני Norito
+### Norito payloads
 
-כל ה-DTO-ים לעיל מממשים גם `JsonSerialize` וגם `NoritoSerialize`. ניתן לשלוח JSON רגיל או Norito JSON. בעת יצירת מטען Norito בקוטודמה או בבדיקות, מומלץ להשתמש ב-`norito::json::json!` עם אותם שמות שדות וקידודים כדי ש-`NoritoJson<T>` יפענח באופן דטרמיניסטי.
+All DTOs derive both `JsonSerialize` and `NoritoSerialize`. Clients may submit either plain JSON or Norito-backed JSON. When emitting Norito via Kotodama tests or automation, use `norito::json::json!` with the same field names and encodings shown above so the `NoritoJson<T>` extractor can decode the payload deterministically.
 
-### ריסון קצב וטלמטריה
+### Rate limiting & telemetry
 
-- `torii.deploy_rate_per_origin_per_sec` ו-`torii.deploy_burst_per_origin` מגדירים את דלי-הטוקנים המשותף לנקודות הקצה `/v1/contracts/{code,deploy,instance,instance/activate}`. ברירת מחדל: 4 בקשות לשנייה עם burst של 8 לכל מקור (`X-API-Token`, כתובת IP, וזוג נקודת קצה).
-- בקשות שנחסמות על ידי ה-limiter מעלות את `torii_contract_throttled_total{endpoint}` כש־`endpoint` הוא `code` / `deploy` / `instance` / `activate`.
-- כל שגיאה במעבד (גוף לא תקין, חוסר הרשאה, כשל תור) מעלה את `torii_contract_errors_total{endpoint}`. מומלץ לנטר יחד עם מדדי התור.
+- `torii.deploy_rate_per_origin_per_sec` and `torii.deploy_burst_per_origin` configure the token bucket shared by `/v1/contracts/{deploy,instance,instance/activate}`. Defaults: 4 req/s with a burst of 8 per origin token (`X-API-Token`, remote IP, endpoint tuple).
+- Requests rejected by the limiter increment `torii_contract_throttled_total{endpoint}` where `endpoint` is `deploy`, `instance`, or `activate`.
+- Any handler error (invalid body, permission missing, queue failure) increments `torii_contract_errors_total{endpoint}`. Track alongside queue metrics for alerting.
 
-## דוגמאות
+## Examples
 
-פרסום מניפסט:
-
-```bash
-curl -s -X POST ... http://127.0.0.1:8080/v1/contracts/code
-```
-
-שליפת מניפסט או קוד בייטס:
+Fetch a manifest by hash:
 
 ```bash
-curl -s http://127.0.0.1:8080/v1/contracts/code/<hash>
-# …
+curl -s http://127.0.0.1:8080/v1/contracts/code/<32-byte-hex> | jq .
 ```
 
-פרסום והפעלת מופע בבקשה אחת:
+Deploy code and then fetch code bytes:
+
+```bash
+curl -s -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{
+        "authority": "i105...",
+        "private_key": "ed25519:…",
+        "code_b64": "…"
+      }' \
+  http://127.0.0.1:8080/v1/contracts/deploy | jq .
+
+curl -s http://127.0.0.1:8080/v1/contracts/code-bytes/<32-byte-hex> | jq .
+```
+
+Deploy and activate an instance atomically:
 
 ```bash
 curl -s -X POST \
@@ -237,7 +201,7 @@ curl -s -X POST \
   http://127.0.0.1:8080/v1/contracts/instance | jq .
 ```
 
-הפעלה של מופע קיים (לאחר שה-bytecode וה manifest כבר נשמרו):
+Activate an existing instance with previously uploaded artifacts:
 
 ```bash
 curl -s -X POST \
@@ -252,15 +216,17 @@ curl -s -X POST \
   http://127.0.0.1:8080/v1/contracts/instance/activate | jq .
 ```
 
-### חישוב `abi_hash`
+### Computing `abi_hash` for manifests
+
+Manifests may include an `abi_hash` that binds the program to the node’s IVM ABI policy. You can compute this hash locally using the CLI:
 
 ```bash
+# ABI v1
 iroha tools ivm abi-hash --policy v1 --uppercase
-```
 
-## אבטחה וממשל
+The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_hash`. Nodes verify that `abi_hash` equals their runtime policy hash and reject mismatches at admission.
 
-- רק בעלי `CanRegisterSmartContractCode` רשאים להגיש מניפסטים; הענקה נשלטת ע"י ממשל.
-- קריאות GET הן קריאה-בלבד לפי `code_hash`, אך הנוד רשאי לאכוף מדיניות גישה נוספת.
+## Security and governance
 
-</div>
+- Only accounts with `CanRegisterSmartContractCode` may submit manifests; by default, granting this permission is restricted to genesis. Networks may customize governance to expand who can grant it.
+- GET is read-only and content‑addressed by `code_hash`. Nodes may still apply access controls consistent with their governance policies.

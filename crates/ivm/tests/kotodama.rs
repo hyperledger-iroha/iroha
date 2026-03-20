@@ -705,7 +705,11 @@ fn compile_and_run_add() {
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode, 0);
-    assert_eq!(off, 17);
+    assert_eq!(meta.version_minor, 1);
+    assert!(
+        off > 17,
+        "self-describing artifacts must prefix code with CNTR"
+    );
 
     let mut vm = ivm::IVM::new(u64::MAX);
     // Decode trace left disabled by default; first-words dump is printed above.
@@ -1919,9 +1923,17 @@ fn manifest_includes_entrypoints_and_features() {
             }
         }
     "#;
-    let (_code, manifest) = Compiler::new()
+    let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile manifest with entrypoints");
+    let parsed = ProgramMetadata::parse(&code).expect("parse compiled artifact");
+    assert_eq!(parsed.metadata.version_minor, 1);
+    let contract_interface = parsed
+        .contract_interface
+        .expect("compiled contract must embed a CNTR section");
+    assert_eq!(contract_interface.entrypoints.len(), 2);
+    assert_eq!(contract_interface.entrypoints[0].name, "hajimari");
+    assert_eq!(contract_interface.entrypoints[1].name, "run");
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     assert_eq!(entrypoints.len(), 2);
     assert_eq!(entrypoints[0].name, "hajimari");

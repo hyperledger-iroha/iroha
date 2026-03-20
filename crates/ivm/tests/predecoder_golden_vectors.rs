@@ -64,7 +64,7 @@ fn decode_artifact_invariant_across_metadata_fields() {
     // Baseline header
     let base = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
@@ -104,23 +104,23 @@ fn decode_artifact_invariant_across_metadata_fields() {
 }
 
 #[test]
-fn decode_artifact_rejects_nonzero_minor_version() {
+fn decode_artifact_rejects_legacy_or_unknown_minor_version() {
     let code = build_wide_code();
     let base = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
         abi_version: 1,
     };
 
-    for vmin in [1u8, 7, 42] {
+    for vmin in [0u8, 2, 7, 42] {
         let mut m = base.clone();
         m.version_minor = vmin;
         let mut artifact = m.encode();
         artifact.extend_from_slice(&code);
-        let err = IvmCache::decode_artifact(&artifact).expect_err("non-zero minor should reject");
+        let err = IvmCache::decode_artifact(&artifact).expect_err("invalid minor should reject");
         assert_eq!(err, VMError::InvalidMetadata, "minor {vmin}");
     }
 }

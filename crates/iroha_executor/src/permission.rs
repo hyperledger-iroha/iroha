@@ -1433,7 +1433,9 @@ mod tests {
     use std::{num::NonZeroU64, vec::Vec};
 
     use iroha_crypto::PublicKey;
-    use iroha_executor_data_model::permission::{domain::CanRegisterDomain, peer::CanManagePeers};
+    use iroha_executor_data_model::permission::{
+        asset::CanMintAssetWithDefinition, domain::CanRegisterDomain, peer::CanManagePeers,
+    };
 
     use super::{OnlyGenesis, PassCondition, has_permission_in_roles, permission_owned_in_sources};
     use crate::{
@@ -1444,7 +1446,7 @@ mod tests {
             data_model::{
                 block::BlockHeader,
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, RoleId},
+                prelude::{AccountId, AssetDefinitionId, RoleId},
             },
         },
     };
@@ -1547,6 +1549,26 @@ mod tests {
             &role_permissions,
             &role_ids,
             &CanRegisterDomain,
+        ));
+    }
+
+    #[test]
+    fn permission_owned_matches_opaque_asset_definition_permission() {
+        let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
+            .parse()
+            .expect("opaque asset definition parses");
+        let token = CanMintAssetWithDefinition {
+            asset_definition: asset_definition.clone(),
+        };
+        let account_permissions = vec![PermissionObject::from(token.clone())];
+        let role_permissions: Vec<(RoleId, PermissionObject)> = Vec::new();
+        let role_ids: Vec<RoleId> = Vec::new();
+
+        assert!(permission_owned_in_sources(
+            &account_permissions,
+            &role_permissions,
+            &role_ids,
+            &token,
         ));
     }
 

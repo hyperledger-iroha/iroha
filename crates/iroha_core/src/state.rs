@@ -9806,6 +9806,27 @@ impl World {
         }
 
         self.account_subject_domains = subject_domains.into_iter().collect();
+        let updated_accounts = {
+            let accounts = self.accounts.view();
+            let domains = self.domains.view();
+            let subject_domains = self.account_subject_domains.view();
+            accounts
+                .iter()
+                .map(|(account_id, account_value)| {
+                    let mut details = account_value.as_ref().clone();
+                    let linked_domains = subject_domains
+                        .get(account_id)
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|domain| domains.get(domain).is_some())
+                        .collect();
+                    details.set_linked_domains(linked_domains);
+                    (account_id.clone(), AccountValue::new(details))
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        self.accounts = updated_accounts.into_iter().collect();
         self.rebuild_domain_account_subject_index();
     }
 
@@ -12966,6 +12987,20 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
+    fn sync_account_value_linked_domains(&mut self, subject: &AccountId) {
+        let linked_domains = self
+            .account_subject_domains
+            .get(subject)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|domain| self.domains.get(domain).is_some())
+            .collect();
+        if let Some(details) = self.accounts.get_mut(subject) {
+            details.set_linked_domains(linked_domains);
+        }
+    }
+
     /// Insert or replace an account and synchronize subject/domain membership indexes.
     pub fn insert_account_with_links(
         &mut self,
@@ -12990,6 +13025,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
         self.account_subject_domains
             .insert(subject.clone(), linked_domains.clone());
+        self.sync_account_value_linked_domains(&subject);
         self.rebuild_domain_account_subject_index();
 
         replaced
@@ -13014,7 +13050,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                     linked_domains.remove(domain);
                 }
             }
-            self.account_subject_domains.insert(subject, linked_domains);
+            self.account_subject_domains
+                .insert(subject.clone(), linked_domains);
+            self.sync_account_value_linked_domains(&subject);
             self.rebuild_domain_account_subject_index();
         }
         removed
@@ -13030,7 +13068,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .cloned()
             .unwrap_or_default();
         domains.insert(domain);
-        self.account_subject_domains.insert(subject, domains);
+        self.account_subject_domains
+            .insert(subject.clone(), domains);
+        self.sync_account_value_linked_domains(&subject);
         self.rebuild_domain_account_subject_index();
     }
 
@@ -13044,7 +13084,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .cloned()
             .unwrap_or_default();
         domains.remove(&domain);
-        self.account_subject_domains.insert(subject, domains);
+        self.account_subject_domains
+            .insert(subject.clone(), domains);
+        self.sync_account_value_linked_domains(&subject);
         self.rebuild_domain_account_subject_index();
     }
 
@@ -26338,6 +26380,51 @@ mod tests {
         assert_eq!(subjects_in_acme, vec![shared_subject]);
     }
 
+    #[test]
+    fn link_account_subject_domain_updates_stored_account_details() {
+        let keypair = KeyPair::random();
+        let wonderland: DomainId = "wonderland".parse().expect("domain id");
+        let acme: DomainId = "acme".parse().expect("domain id");
+
+        let wonderland_account = AccountId::new(keypair.public_key().clone());
+        let shared_subject = wonderland_account.subject_id();
+        let acme_account = shared_subject.to_account_id(acme.clone());
+
+        let world = World::with(
+            [
+                Domain::new(wonderland.clone()).build(&wonderland_account),
+                Domain::new(acme.clone()).build(acme_account.account()),
+            ],
+            [new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account)],
+            [],
+        );
+
+        let mut block = world.block();
+        #[cfg(feature = "telemetry")]
+        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
+        #[cfg(not(feature = "telemetry"))]
+        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
+        tx.link_account_subject_domain(&acme_account);
+
+        let stored = tx
+            .account(&shared_subject)
+            .expect("subject account should remain available after link");
+        assert_eq!(
+            stored.linked_domains(),
+            &BTreeSet::from([acme.clone(), wonderland.clone()])
+        );
+
+        tx.apply();
+        block.commit();
+
+        let world_view = world.view();
+        let stored = world_view
+            .account(&shared_subject)
+            .expect("linked subject should stay materialized after commit");
+        assert_eq!(stored.linked_domains(), &BTreeSet::from([acme, wonderland]));
+    }
+
+    #[test]
     fn unlink_last_domain_keeps_subject_record_materialized() {
         let keypair = KeyPair::random();
         let solo: DomainId = "solo".parse().expect("domain id");

@@ -32,6 +32,7 @@ pub mod axt;
 pub mod bn254_vec;
 mod branch_predictor;
 mod byte_merkle_tree;
+pub mod contract_artifact;
 mod core_host;
 mod cuda;
 mod decoder;
@@ -101,7 +102,14 @@ pub use crate::gpu_manager::GpuManager;
 // Re-export stable mode bits so tests/users can import `ivm::ivm_mode::*`.
 pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
-pub use crate::metadata::{MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX};
+pub use crate::contract_artifact::{
+    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+};
+pub use crate::metadata::{
+    CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
+    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, MAGIC as METADATA_MAGIC,
+    ProgramMetadata, VECTOR_LENGTH_MAX,
+};
 pub use crate::{
     aes::{
         aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,

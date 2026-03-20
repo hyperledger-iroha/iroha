@@ -966,6 +966,8 @@ pub struct IVM {
     use_cuda: bool,
     /// Flag indicating if zero-knowledge mode is active.
     pub zk_mode: bool,
+    /// Low-bit alignment shared by all valid instruction PCs in the loaded program.
+    pc_alignment: u64,
     /// Does the host CPU support hardware transactional memory?
     htm_supported: bool,
     /// Next free offset (relative to `Memory::INPUT_START`) used by the
@@ -1019,6 +1021,7 @@ impl Clone for IVM {
             use_metal: self.use_metal,
             use_cuda: self.use_cuda,
             zk_mode: self.zk_mode,
+            pc_alignment: self.pc_alignment,
             htm_supported: self.htm_supported,
             input_bump_next: self.input_bump_next,
             acceleration_policy: self.acceleration_policy,
@@ -1330,6 +1333,7 @@ impl IVM {
             use_metal: false,
             use_cuda: false,
             zk_mode: false,
+            pc_alignment: 0,
             htm_supported,
             input_bump_next: 0,
             acceleration_policy: AccelerationPolicy::deterministic(),
@@ -2017,6 +2021,7 @@ impl IVM {
         hasher.update(code_region);
         self.code_hash = hasher.finalize().into();
         self.pc = literal_prefix as u64;
+        self.pc_alignment = self.pc & 0b11;
         self.halted = false;
         self.constraint_failed = false;
         self.constraints = zk::ConstraintLog::default();
@@ -3812,7 +3817,9 @@ impl IVM {
                         return Err(VMError::PrivacyViolation);
                     }
                     let imm = i64::from(instruction::wide::imm8(instr));
-                    let target = ((self.registers.get(rs) as i64) + imm) as u64 & !3;
+                    let raw_target = ((self.registers.get(rs) as i64) + imm) as u64;
+                    let target =
+                        ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment;
                     let return_pc = self.pc.wrapping_add(length as u64);
                     self.registers.set(rd, return_pc);
                     if self.zk_mode {

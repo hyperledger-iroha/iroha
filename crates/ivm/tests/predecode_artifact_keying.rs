@@ -6,7 +6,7 @@ fn artifact_cache_key_ignores_non_version_header_fields() {
     let code = ivm::encoding::wide::encode_halt().to_le_bytes().to_vec();
     let mut a_base = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
@@ -16,7 +16,7 @@ fn artifact_cache_key_ignores_non_version_header_fields() {
     a_base.extend_from_slice(&code);
     let mut a_mode = ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: ivm::ivm_mode::VECTOR,
         vector_length: 8,
         max_cycles: 0,

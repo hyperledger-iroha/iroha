@@ -36,8 +36,8 @@ enum NoritoBridgeLoader {
     static let expectedVersion = "0.1.0"
     private static let expectedHashes: [String: String] = [
         "macos-arm64": "fcdcb9f488985556ae82f2d2ef48a92f5ebc9ae6739ff9e3cc3b47830c7d1f8f",
-        "ios-arm64": "3ca37e78caa09db893547238c25f1d33b2ef4d47f882c21727f58d78a8862991",
-        "ios-arm64_x86_64-simulator": "5f14995fc47746f93dcc7a3768791a74043ff946371fd8ff5a73567d6501e362"
+        "ios-arm64": "962ad99cb7ee30946771b302026feb4411ebcf500ff1bf960284e9e7118f8e91",
+        "ios-arm64_x86_64-simulator": "aedfbbf4e4ca3151e40d336a584c1162d1a2ad4b67ed20c21bf7c3c47bb1bb7f"
     ]
 
     private struct ArtifactManifest {
@@ -59,10 +59,21 @@ enum NoritoBridgeLoader {
                 let debugHandle = debugDylibURL.path.withCString { ptr in
                     dlopen(ptr, RTLD_NOW | RTLD_GLOBAL)
                 }
-                let hasSym = debugHandle.flatMap { dlsym($0, "connect_norito_free") } != nil
-                NSLog("[NoritoBridgeLoader] debug dylib handle=%@, hasSym=%d", debugHandle == nil ? "nil" : "ok", hasSym ? 1 : 0)
-                if let debugHandle, hasSym {
+                let hasFree = debugHandle.flatMap { dlsym($0, "connect_norito_free") } != nil
+                let hasTransfer = debugHandle.flatMap {
+                    dlsym($0, "connect_norito_encode_transfer_signed_transaction")
+                } != nil
+                NSLog(
+                    "[NoritoBridgeLoader] debug dylib handle=%@, hasFree=%d, hasTransfer=%d",
+                    debugHandle == nil ? "nil" : "ok",
+                    hasFree ? 1 : 0,
+                    hasTransfer ? 1 : 0
+                )
+                if let debugHandle, hasFree, hasTransfer {
                     return (debugHandle, .valid(path: "debug.dylib", identifier: currentIdentifier()))
+                }
+                if let debugHandle {
+                    dlclose(debugHandle)
                 }
             }
         } else {
@@ -3880,8 +3891,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) throws -> NativeSignedTransaction? {
         #if canImport(Darwin)
         guard let freeFn else { return nil }
-        let useAlg = algorithm != .ed25519 && encodeClaimIdentifierWithAlgFn != nil
-        guard useAlg || encodeClaimIdentifierFn != nil else { return nil }
+        let fallbackClaimIdentifierFn: EncodeClaimIdentifierFn? = nil
+        let fallbackClaimIdentifierWithAlgFn: EncodeClaimIdentifierWithAlgFn? = nil
+        let resolvedClaimIdentifierFn = encodeClaimIdentifierFn ?? fallbackClaimIdentifierFn
+        let resolvedClaimIdentifierWithAlgFn = encodeClaimIdentifierWithAlgFn ?? fallbackClaimIdentifierWithAlgFn
+        let useAlg = algorithm != .ed25519 && resolvedClaimIdentifierWithAlgFn != nil
+        guard useAlg || resolvedClaimIdentifierFn != nil else { return nil }
 
         var signedPtr: UnsafeMutablePointer<UInt8>? = nil
         var signedLen: UInt = 0
@@ -3908,8 +3923,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         return -1
                                     }
                                     return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
-                                        if useAlg, let encodeClaimIdentifierWithAlgFn {
-                                            return encodeClaimIdentifierWithAlgFn(
+                                        if useAlg, let resolvedClaimIdentifierWithAlgFn {
+                                            return resolvedClaimIdentifierWithAlgFn(
                                                 chainPtr, UInt(chainId.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,
@@ -3924,8 +3939,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                                 hashPtr,
                                                 hashLength
                                             )
-                                        } else if let encodeClaimIdentifierFn {
-                                            return encodeClaimIdentifierFn(
+                                        } else if let resolvedClaimIdentifierFn {
+                                            return resolvedClaimIdentifierFn(
                                                 chainPtr, UInt(chainId.utf8.count),
                                                 authorityPtr, UInt(authority.utf8.count),
                                                 creationTimeMs,

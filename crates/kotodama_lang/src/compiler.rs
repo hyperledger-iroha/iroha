@@ -30,7 +30,7 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox},
     role::RoleId,
     smart_contract::manifest::{
-        AccessSetHints, EntryPointKind, EntrypointDescriptor, TriggerCallback, TriggerDescriptor,
+        AccessSetHints, EntryPointKind, TriggerCallback, TriggerDescriptor,
     },
     trigger::{Trigger, TriggerId},
 };
@@ -49,7 +49,10 @@ use super::{
 };
 use crate::{
     encoding, instruction,
-    metadata::{self, LITERAL_SECTION_MAGIC, ProgramMetadata},
+    metadata::{
+        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
+        EmbeddedEntrypointDescriptor, LITERAL_SECTION_MAGIC, ProgramMetadata,
+    },
     pointer_abi::PointerType,
     syscalls,
 };
@@ -58,12 +61,11 @@ const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
 const POINTER_STUB_LEN: usize = 24;
 const LITERAL_SHIFT_REG: u8 = 26;
-const FEATURE_BIT_ZK: u64 = 1 << 0;
-const FEATURE_BIT_VECTOR: u64 = 1 << 1;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
 const TRIGGER_EVENT_PUBLIC_INPUT_KEY: &str = "trigger_event_json";
+const COMPILER_FINGERPRINT: &str = concat!("kotodama_lang/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone)]
 struct AccessSets {
@@ -97,10 +99,7 @@ impl StatePathHint {
 
 struct CompilationArtifacts {
     bytes: Vec<u8>,
-    entrypoints: Vec<EntrypointDescriptor>,
-    access_set_hints: Option<AccessSetHints>,
     access_hint_diagnostics: AccessHintDiagnostics,
-    kotoba_entries: Vec<iroha_data_model::smart_contract::manifest::KotobaTranslationEntry>,
 }
 
 /// Diagnostics emitted when access hints cannot be fully derived.
@@ -6098,7 +6097,7 @@ impl Compiler {
         // Construct header using contract meta (if present) with compiler options as fallback
         let meta = ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode,
             vector_length: meta_decl
                 .and_then(|m| m.vector_length)
@@ -6358,27 +6357,46 @@ impl Compiler {
             Ok(off)
         };
 
-        // Compute literal table and patch LOADs. Default layout places the
-        // literal table and its data payload BEFORE the code so literal
-        // pointers remain within a small 12-bit LOAD offset from x0. When
-        // there are no literals we omit the padding to keep the code start
-        // offset equal to the header size (17), which many tests/tools assume:
-        //   - No literals: [ header | code ]
-        //   - With literals: [ header | pad(align8) | literal table | data | code ]
+        let entrypoint_descriptors = build_entrypoint_descriptors(
+            &typed,
+            &access_sets,
+            &ir_prog.functions,
+            &hint_reports,
+            &func_start_offsets,
+        )?;
+        let access_set_hints = build_access_set_hints(&access_sets, include_hints);
+        let kotoba_entries = build_kotoba_entries(&typed.kotoba_entries);
+        let mut feature_bits = 0u64;
+        if meta.mode & metadata::mode::ZK != 0 {
+            feature_bits |= CONTRACT_FEATURE_BIT_ZK;
+        }
+        if meta.mode & metadata::mode::VECTOR != 0 {
+            feature_bits |= CONTRACT_FEATURE_BIT_VECTOR;
+        }
+        let contract_interface = EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: COMPILER_FINGERPRINT.to_owned(),
+            features_bitmap: feature_bits,
+            access_set_hints: access_set_hints.clone(),
+            kotoba: kotoba_entries.clone(),
+            entrypoints: entrypoint_descriptors.clone(),
+        };
+
+        // Compute literal table and patch LOADs. Contract artifacts are laid out as:
+        //   [ header | CNTR | LTLB? | code ]
         let meta_bytes = meta.encode();
+        let contract_section = contract_interface.encode_section();
         let header_len = meta_bytes.len() as u64;
         let need_literals = !key_order.is_empty();
-        // Literal table base when present (aligned to 8 bytes after header)
-        let lit_base = header_len;
+        // Literal table base when present, immediately after the required CNTR section.
+        let lit_base = header_len + contract_section.len() as u64;
         // Literal table length and offsets
         let lit_count = key_order.len() as u64;
         let lit_size = lit_count * 8;
         let lit_header_size: u64 = if need_literals { 16 } else { 0 };
         let lit_entries_base = lit_base + lit_header_size;
-        let pad_prefix = (lit_base - header_len) as usize;
         let lit_entries_base_rel = lit_entries_base
-            .checked_sub(header_len)
-            .expect("literal base beyond header");
+            .checked_sub(lit_base)
+            .expect("literal entries base beyond literal section start");
         let data_base_rel = lit_entries_base_rel + lit_size;
         let mut lit_bytes: Vec<u8> = Vec::with_capacity(lit_size as usize);
         for k in key_order.iter() {
@@ -6397,20 +6415,19 @@ impl Compiler {
 
         // Final layout assembly
         let mut out = meta_bytes;
+        out.extend_from_slice(&contract_section);
         let mut post_pad: usize = 0;
         if need_literals {
-            let total_prefix =
-                pad_prefix + lit_header_size as usize + lit_size as usize + data_bytes.len();
+            let total_prefix = contract_section.len()
+                + lit_header_size as usize
+                + lit_size as usize
+                + data_bytes.len();
             let rem = total_prefix % 4;
             if rem != 0 {
                 post_pad = 4 - rem;
             }
         }
         if need_literals {
-            let pad = (lit_base - header_len) as usize;
-            if pad > 0 {
-                out.resize(out.len() + pad, 0u8);
-            }
             let data_len = data_bytes.len() as u32;
             out.extend_from_slice(&LITERAL_SECTION_MAGIC);
             out.extend_from_slice(&(lit_count as u32).to_le_bytes());
@@ -6444,29 +6461,16 @@ impl Compiler {
                 let _ = write!(&mut hex, "{b:02x}");
             }
             let _ = write!(&mut hex, " | ");
-            // Code bytes (first 64) start right after header when no literals,
-            // or after header+pad+lit when literals are present.
-            let code_off = if need_literals {
-                (lit_entries_base as usize) + lit_bytes.len()
-            } else {
-                header_len as usize
-            };
-            for b in out.iter().skip(code_off).take(64) {
+            // Code bytes (first 64) start after the CNTR/literal prefix.
+            for b in out.iter().skip(code_start).take(64) {
                 let _ = write!(&mut hex, "{b:02x}");
             }
             eprintln!("[kotodama-compile] header+lit(first64) | code(first64): {hex}");
         }
-        let entrypoint_descriptors =
-            build_entrypoint_descriptors(&typed, &access_sets, &ir_prog.functions, &hint_reports);
-        let access_set_hints = build_access_set_hints(&access_sets, include_hints);
-        let kotoba_entries = build_kotoba_entries(&typed.kotoba_entries);
 
         Ok(CompilationArtifacts {
             bytes: out,
-            entrypoints: entrypoint_descriptors,
-            access_set_hints,
             access_hint_diagnostics: hint_diagnostics,
-            kotoba_entries,
         })
     }
 
@@ -6507,6 +6511,9 @@ impl Compiler {
         let bytes = artifacts.bytes.clone();
         let parsed = crate::metadata::ProgramMetadata::parse(&bytes)
             .map_err(|e| format!("manifest parse header: {e}"))?;
+        let contract_interface = parsed.contract_interface.ok_or_else(|| {
+            "manifest parse header: missing embedded contract interface".to_owned()
+        })?;
         let code_hash = iroha_crypto::Hash::new(&bytes[parsed.header_len..]);
         let meta = parsed.metadata;
         // First release: emit manifests only for ABI v1
@@ -6515,21 +6522,20 @@ impl Compiler {
             v => return Err(format!("unsupported abi_version {v}; expected 1")),
         };
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
-        let mut feature_bits = 0u64;
-        if meta.mode & metadata::mode::ZK != 0 {
-            feature_bits |= FEATURE_BIT_ZK;
-        }
-        if meta.mode & metadata::mode::VECTOR != 0 {
-            feature_bits |= FEATURE_BIT_VECTOR;
-        }
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             code_hash: Some(code_hash),
             abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash_bytes)),
-            compiler_fingerprint: None,
-            features_bitmap: (feature_bits != 0).then_some(feature_bits),
-            access_set_hints: artifacts.access_set_hints,
-            entrypoints: (!artifacts.entrypoints.is_empty()).then_some(artifacts.entrypoints),
-            kotoba: (!artifacts.kotoba_entries.is_empty()).then_some(artifacts.kotoba_entries),
+            compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
+            features_bitmap: Some(contract_interface.features_bitmap),
+            access_set_hints: contract_interface.access_set_hints,
+            entrypoints: Some(
+                contract_interface
+                    .entrypoints
+                    .into_iter()
+                    .map(|entrypoint| entrypoint.to_manifest_descriptor())
+                    .collect(),
+            ),
+            kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
         Ok((bytes, manifest, artifacts.access_hint_diagnostics))
@@ -7441,7 +7447,8 @@ fn build_entrypoint_descriptors(
     access_sets: &[AccessSets],
     ir_functions: &[ir::Function],
     hint_reports: &[HintReport],
-) -> Vec<EntrypointDescriptor> {
+    func_start_offsets: &HashMap<String, usize>,
+) -> Result<Vec<EmbeddedEntrypointDescriptor>, String> {
     let mut hints_by_name: HashMap<&str, (&IndexSet<String>, &IndexSet<String>)> = HashMap::new();
     let mut hintable_by_name: HashMap<&str, bool> = HashMap::new();
     let mut hint_report_by_name: HashMap<&str, &HintReport> = HashMap::new();
@@ -7476,7 +7483,7 @@ fn build_entrypoint_descriptors(
 
     let build_descriptor = |func: &semantic::TypedFunction,
                             kind: EntryPointKind|
-     -> EntrypointDescriptor {
+     -> Result<EmbeddedEntrypointDescriptor, String> {
         let include_hints = hintable_by_name
             .get(func.name.as_str())
             .copied()
@@ -7508,7 +7515,11 @@ fn build_entrypoint_descriptors(
             .cloned()
             .unwrap_or_default();
         let report = hint_report_by_name.get(func.name.as_str()).copied();
-        EntrypointDescriptor {
+        let entry_pc = func_start_offsets
+            .get(&func.name)
+            .copied()
+            .ok_or_else(|| format!("missing function offset for entrypoint `{}`", func.name))?;
+        Ok(EmbeddedEntrypointDescriptor {
             name: func.name.clone(),
             kind,
             permission: func.modifiers.permission.clone(),
@@ -7519,10 +7530,11 @@ fn build_entrypoint_descriptors(
                 .map(|r| r.skipped_reasons.clone())
                 .unwrap_or_default(),
             triggers,
-        }
+            entry_pc: entry_pc as u64,
+        })
     };
 
-    let mut entrypoints: Vec<EntrypointDescriptor> = typed
+    let mut entrypoints: Vec<EmbeddedEntrypointDescriptor> = typed
         .items
         .iter()
         .filter_map(|item| match item {
@@ -7531,7 +7543,7 @@ fn build_entrypoint_descriptors(
                 Some(build_descriptor(func, kind))
             }
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     if entrypoints.is_empty()
         && let Some(func) = typed.items.iter().find_map(|item| match item {
@@ -7543,10 +7555,10 @@ fn build_entrypoint_descriptors(
             _ => None,
         })
     {
-        entrypoints.push(build_descriptor(func, EntryPointKind::Public));
+        entrypoints.push(build_descriptor(func, EntryPointKind::Public)?);
     }
 
-    entrypoints
+    Ok(entrypoints)
 }
 
 fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<EntryPointKind> {

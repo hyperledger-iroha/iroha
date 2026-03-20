@@ -15,13 +15,22 @@ use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     queue::{Queue, TransactionGuard},
+    smartcontracts::Execute,
     state::{State, StateBlock, StateReadOnly},
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
-    ChainId, account::AccountId, block::SignedBlock, content::ContentAuthMode,
-    jurisdiction::JdgSignatureScheme, prelude::ExposedPrivateKey,
+    ChainId, Registrable,
+    account::AccountId,
+    block::{BlockHeader, SignedBlock},
+    content::ContentAuthMode,
+    jurisdiction::JdgSignatureScheme,
+    permission,
+    prelude::{Account, Domain, ExposedPrivateKey, Grant},
     sorafs::pricing::PricingScheduleRecord,
+};
+use iroha_executor_data_model::permission::{
+    governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
 };
 use nonzero_ext::nonzero;
 /// Parameters for invoking a contract within Torii integration tests.
@@ -128,28 +137,45 @@ pub fn finalize_committed_block(
     let _ = state.view().kura().store_block(Arc::new(signed_block));
 }
 
-/// Build a minimal IVM `.to` program containing a single HALT, with a V2 header.
+/// Build a minimal self-describing contract artifact containing a single HALT.
 pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-    let mut code = Vec::new();
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1_000,
         abi_version,
     };
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        compiler_fingerprint: "torii-test-utils".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
+    };
     let mut out = meta.encode();
-    out.extend_from_slice(&code);
+    out.extend_from_slice(&interface.encode_section());
+    out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     out
 }
 
 /// Compute the hex-encoded contract code hash for a `.to` program.
 ///
-/// This matches Torii's deployment hashing (header + body).
+/// This matches Torii's deployment hashing (artifact bytes after the fixed header).
 pub fn body_code_hash_hex(code_bytes: &[u8]) -> String {
-    let h = iroha_crypto::Hash::new(code_bytes);
+    let parsed = ivm::ProgramMetadata::parse(code_bytes).expect("parse contract artifact");
+    let h = iroha_crypto::Hash::new(&code_bytes[parsed.header_len..]);
     hex::encode(<[u8; 32]>::from(h))
 }
 
@@ -201,6 +227,46 @@ pub fn random_authority() -> AuthorityCreds {
         account,
         private_key,
     }
+}
+
+/// Build a minimal world that contains the given authority account in `wonderland`.
+pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
+    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
+    let domain = Domain::new(domain_id.clone()).build(authority);
+    let account = Account::new(authority.to_account_id(domain_id)).build(authority);
+    iroha_core::state::World::with([domain], [account], [])
+}
+
+/// Grant the permissions needed for contract deploy/activate flows in integration tests.
+pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &AccountId) {
+    let height_u64 = u64::try_from(state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(height_u64).expect("height > 0"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
+    Grant::account_permission(register_permission, authority.clone())
+        .execute(authority, &mut stx)
+        .expect("grant CanRegisterSmartContractCode");
+
+    let enact_permission: permission::Permission = CanEnactGovernance.into();
+    Grant::account_permission(enact_permission, authority.clone())
+        .execute(authority, &mut stx)
+        .expect("grant CanEnactGovernance");
+
+    stx.apply();
+    block
+        .commit()
+        .expect("commit contract operator permissions");
 }
 
 /// Build JSON string for deploy request body.
@@ -1345,9 +1411,12 @@ mod tests {
     use super::{apply_queued_in_one_block, body_code_hash_hex, minimal_ivm_program};
 
     #[test]
-    fn body_code_hash_hex_matches_full_bytes_hash() {
+    fn body_code_hash_hex_matches_post_header_hash() {
         let code = minimal_ivm_program(1);
-        let expected = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new(&code)));
+        let parsed = ivm::ProgramMetadata::parse(&code).expect("parse contract artifact");
+        let expected = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new(
+            &code[parsed.header_len..],
+        )));
         assert_eq!(body_code_hash_hex(&code), expected);
     }
 

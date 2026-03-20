@@ -2,6 +2,73 @@
 
 Last updated: 2026-03-20
 
+## 2026-03-20 Follow-up: self-describing contract artifacts are now mandatory, and Torii deploy/call no longer accept manifest fallbacks
+- Reworked the IVM contract artifact path around a required embedded `CNTR`
+  section in 1.1 `.to` artifacts:
+  - `crates/ivm_abi/src/metadata.rs` now decodes ordered prefix sections and
+    returns both the real code offset and the embedded contract-interface
+    payload,
+  - `crates/ivm/src/contract_artifact.rs` now verifies the embedded interface
+    against decoded bytecode and builds the canonical `ContractManifest`,
+    rejecting missing/malformed `CNTR`, duplicate entrypoints, invalid
+    `entry_pc` targets, invalid trigger callbacks, ABI mismatches, and other
+    structurally unsafe artifacts.
+- Updated the compiler/runtime side to treat self-description as the only
+  contract deploy format:
+  - `crates/kotodama_lang/src/compiler.rs` now always emits 1.1 artifacts with
+    embedded `EmbeddedContractInterfaceV1`,
+  - `crates/ivm/src/{core_host.rs,host.rs,ivm.rs}` now execute prefixed
+    `CNTR + LTLB + code` artifacts correctly by honoring the real code offset,
+    resolving literal pointers from prefixed bodies, and preserving correct
+    call/return alignment for prefixed programs.
+- Removed the public manifest sidecar/fallback path from Torii and CLI:
+  - `/v1/contracts/deploy` and `/v1/contracts/instance` now accept bytecode
+    only and derive/sign the on-chain manifest from verified artifact bytes,
+  - the legacy `POST /v1/contracts/code` manifest-only Torii endpoint and its
+    MCP exposure are removed, so contract publication no longer has a public
+    manifest-only bypass,
+  - `/v1/contracts/call` now requires the stored manifest to advertise the
+    requested entrypoint and no longer falls back to raw `Executable::Ivm`,
+  - the CLI manifest output path is inspection-only; it is no longer part of
+    deploy submission.
+- Tightened the generic artifact policy to match first-release IVM behavior:
+  - `crates/ivm_abi/src/metadata.rs` now accepts only IVM `1.1` headers,
+    while contract deploy verification still separately requires `CNTR`,
+  - remaining test fixtures/build helpers/predecoder exports were updated from
+    `version_minor = 0` to `1`, and the generated predecoder fixtures were
+    refreshed under `crates/ivm/tests/fixtures/predecoder/mixed/`.
+- Synced the contract/governance doc families to the shipped behavior:
+  - canonical English docs now describe bytecode-only deploy/instance flows,
+    derived manifests, mandatory `CNTR`, and the `1.1`-only artifact policy,
+  - translated/source and portal copies for the affected contract/governance
+    docs now mirror the corrected English text and are marked `needs-update`
+    until refreshed native-language translations are available.
+- Tightened the Torii contract-call transaction shape to match first-release
+  semantics:
+  - direct contract calls now register and execute an exactly-once trigger
+    without a redundant explicit unregister, avoiding post-execution repetition
+    failures once the trigger self-expires.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test metadata --test cli_smoke --test contract_artifact --test ivm_header_doc_sync -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama compile_and_run_add -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama call_function_with_tuple_return -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p ivm --test kotodama manifest_includes_entrypoints_and_features -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib contract_entrypoint_validation_tests -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib deploy_tests::deploy_endpoint_returns_hashes -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --lib multisig_contract_call_instruction_envelope_hashes_deterministically -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_contract_call_and_wait_surfaces_submit_error -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture` (pass)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_deploy_integration contracts_deploy_and_fetch_code_bytes -- --nocapture` (pass)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_activate_integration contracts_deploy_and_activate_via_single_endpoint -- --nocapture` (pass)
+  - `IROHA_RUN_IGNORED=1 CARGO_TARGET_DIR=/tmp/iroha-contract-artifact-target cargo test -p iroha_torii --test contracts_call_integration contracts_call_enqueues_transaction -- --nocapture` (pass)
+  - `bash /Users/takemiyamakoto/dev/pk-cbdc-core-api/scripts/build_kotodama_contracts.sh` (pass; downstream `.to` artifacts emitted with inspection-only manifest dumps)
+  - `CARGO_TARGET_DIR=/tmp/pk-cbdc-core-api-contract-artifact-target cargo test --test mint_flow mint_flow_contract_artifacts_exist -- --nocapture` in `../pk-cbdc-core-api` (pass)
+- Broader workspace execution coverage is still being exercised separately; the
+  targeted IVM, Torii, MCP, and downstream consumer slices that directly cover
+  the new `.to`-only deploy/call model are green.
+
 ## 2026-03-20 Follow-up: Torii multisig selector tests no longer reach into `World` private storage
 - Added a narrow smart-contract-state test/API scaffolding accessor in
   `crates/iroha_core/src/state.rs` so cross-crate callers can seed durable

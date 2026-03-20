@@ -3357,7 +3357,6 @@ mod run {
                     if self.plain_high_class.is_some_and(|c| c != class) {
                         self.flush_plain_high()?;
                     }
-                    self.plain_high_class = Some(class);
 
                     let cap = Self::MAX_PLAINTEXT_BYTES_HI.min(max_plaintext);
                     let would_exceed_bytes = !self.plain_high.is_empty()
@@ -3371,6 +3370,10 @@ mod run {
                     if self.plain_high.is_empty() && msg_len > cap {
                         self.enqueue_current_buffer(Priority::High, Some(class))?;
                         return Ok(());
+                    }
+
+                    if self.plain_high.is_empty() {
+                        self.plain_high_class = Some(class);
                     }
 
                     self.plain_high.extend_from_slice(&self.buffer);
@@ -4045,6 +4048,52 @@ mod run {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8]),
                 _ => panic!("expected low data frame"),
             }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_keeps_high_batch_class_after_cap_flush() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[12u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for _ in 0..=MessageSender::<ChaCha20Poly1305>::MAX_PLAINTEXT_MSGS_HI {
+                sender
+                    .prepare_message(&Message::Data(Dummy), Priority::High)
+                    .expect("prepare high message");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Dummy>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = 0usize;
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(Dummy) => {
+                        delivered = delivered.saturating_add(1);
+                    }
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                MessageSender::<ChaCha20Poly1305>::MAX_PLAINTEXT_MSGS_HI + 1
+            );
         }
 
         #[tokio::test(flavor = "current_thread")]

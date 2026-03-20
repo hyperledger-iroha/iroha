@@ -2850,17 +2850,6 @@ fn proof_paths() -> Map {
 fn contracts_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/contracts/code".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Register contract code.",
-            "Submit contract bytecode for registration.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/contracts/code/{code_hash}".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",

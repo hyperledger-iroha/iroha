@@ -7627,6 +7627,87 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    func testCallContractParsesResponse() {
+        let expectation = expectation(description: "call contract")
+        let codeHash = String(repeating: "d", count: 64)
+        let abiHash = String(repeating: "e", count: 64)
+        let txHash = String(repeating: "f", count: 64)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/contracts/call")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["authority"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["private_key"] as? String, "ed25519:secret")
+            XCTAssertEqual(json["namespace"] as? String, "apps")
+            XCTAssertEqual(json["contract_id"] as? String, "mint")
+            XCTAssertEqual(json["entrypoint"] as? String, "create")
+            XCTAssertEqual(json["gas_limit"] as? Int, 7)
+            XCTAssertEqual(json["gas_asset_id"] as? String, "norito:4e52543000000011")
+            XCTAssertEqual(json["fee_sponsor"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"ok":true,"submitted":true,"namespace":"apps","contract_id":"mint","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiContractCallRequest(
+            authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            privateKey: "ed25519:secret",
+            namespace: "apps",
+            contractId: "mint",
+            entrypoint: "create",
+            payload: .object(["amount": .string("10")]),
+            creationTimeMs: 321,
+            gasAssetId: "norito:4e52543000000011",
+            feeSponsor: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            gasLimit: 7
+        )
+        makeClient().callContract(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertTrue(response.ok)
+                XCTAssertTrue(response.submitted)
+                XCTAssertEqual(response.namespace, "apps")
+                XCTAssertEqual(response.contractId, "mint")
+                XCTAssertEqual(response.codeHashHex, codeHash)
+                XCTAssertEqual(response.abiHashHex, abiHash)
+                XCTAssertEqual(response.creationTimeMs, 321)
+                XCTAssertEqual(response.txHashHex, txHash)
+                XCTAssertEqual(response.signedTransactionB64, "AQ==")
+                XCTAssertEqual(response.signingMessageB64, "Ag==")
+                XCTAssertEqual(response.entrypoint, "create")
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testCallContractRejectsZeroGasLimit() {
+        let request = ToriiContractCallRequest(
+            authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            privateKey: "ed25519:secret",
+            namespace: "apps",
+            contractId: "mint",
+            gasLimit: 0
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
     func testProposeMultisigContractCallEncodesAliasSelector() {
         let expectation = expectation(description: "propose multisig contract call")
         let proposalId = String(repeating: "a", count: 64)

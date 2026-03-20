@@ -8,12 +8,7 @@ use std::sync::Arc;
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    queue::Queue,
-    state::{State, World},
-};
+use iroha_core::{kura::Kura, query::store::LiveQueryStore, queue::Queue, state::State};
 use iroha_crypto::Signature;
 use norito::json;
 use tower::ServiceExt as _;
@@ -27,9 +22,13 @@ async fn contracts_call_enqueues_transaction() {
         return;
     }
 
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let queue = Arc::new(Queue::from_config(queue_cfg, events));
@@ -107,8 +106,6 @@ async fn contracts_call_enqueues_transaction() {
     let program = iroha_torii::test_utils::minimal_ivm_program(1);
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let creds = iroha_torii::test_utils::random_authority();
-
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
     let deploy_req = http::Request::builder()

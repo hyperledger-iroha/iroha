@@ -9,6 +9,9 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 - Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
   `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
   directly.
+- Contract `.to` artifacts are self-describing: the required `CNTR` section
+  embeds the contract interface ahead of the executable stream, and Torii
+  derives the on-chain `ContractManifest` from that section after verification.
 - Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
   reject deterministically.
 - Stored artifacts live under the on-chain `contract_manifests` and
@@ -35,12 +38,14 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 
 ## Admission pipeline
 
-- The validator parses the IVM header, enforces `version_major == 1`, and checks
-  `abi_version == 1`. Unknown versions reject immediately; there is no runtime
-  toggle.
-- When a manifest is already present for `code_hash`, validation ensures the
-  stored `code_hash`/`abi_hash` equal the computed values from the submitted
-  program. A mismatch produces `Manifest{Code,Abi}HashMismatch` errors.
+- Contract deployment parses the artifact, requires IVM `1.1`, requires the
+  embedded `CNTR` section, and verifies the embedded interface against the
+  decoded executable stream before any manifest is stored.
+- Verification fails closed on malformed sections, duplicate/invalid
+  entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
+  / ABI mismatches, or unsupported metadata.
+- The canonical manifest is built from the verified `CNTR` payload, signed by
+  the submitting key, and then stored together with the uploaded bytecode.
 - Transactions targeting protected namespaces must include metadata keys
   `gov_namespace` and `gov_contract_id`. The admission path compares them
   against enacted `DeployContract` proposals; if no matching proposal exists the
@@ -50,19 +55,15 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 
 - `POST /v1/contracts/deploy`
   - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
-  - Torii decodes the base64 payload, computes both hashes, builds a manifest,
-    and submits `RegisterSmartContractCode` plus
+  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
+    derives the manifest from the artifact itself, and submits `RegisterSmartContractCode` plus
     `RegisterSmartContractBytes` in a signed transaction on behalf of the
     caller.
   - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - Errors: invalid base64, unsupported ABI version, missing permission
+  - Errors: invalid base64, invalid contract artifact, missing permission
     (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
-- `POST /v1/contracts/code`
-  - Accepts `RegisterContractCodeDto` (authority, private key, manifest) and submits only
-    `RegisterSmartContractCode`. Use when manifests are staged separately from
-    bytecode.
 - `POST /v1/contracts/instance`
-  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`, optional manifest overrides) and deploys + activates atomically.
+  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`) and deploys + activates atomically.
 - `POST /v1/contracts/instance/activate`
   - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
 - `GET /v1/contracts/code/{code_hash}`
@@ -78,7 +79,7 @@ All contract lifecycle endpoints share a dedicated deploy limiter configured via
 8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
 Set either field to `null` to disable the limiter for trusted operators. When the
 limiter fires, Torii increments the
-`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` telemetry counter and
+`torii_contract_throttled_total{endpoint="deploy|instance|activate"}` telemetry counter and
 returns HTTP 429; any handler error increments
 `torii_contract_errors_total{endpoint=…}` for alerting.
 
@@ -111,13 +112,15 @@ returns HTTP 429; any handler error increments
 - `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
   submits the Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  builds the manifest (signed with the supplied key), registers bytes + manifest,
-  and activates the `(namespace, contract_id)` binding in one transaction. Use
-  `--dry-run` to print the computed hashes and instruction count without
-  submitting, and `--manifest-out` to save the signed manifest JSON.
+  verifies the embedded `CNTR`, derives the canonical manifest, registers bytes
+  + manifest, and activates the `(namespace, contract_id)` binding in one
+  transaction. Use `--dry-run` to print the computed hashes and instruction
+  count without submitting, and `--manifest-out` to save the signed manifest
+  JSON for inspection.
 - `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
-  `code_hash`/`abi_hash` for compiled `.to` and optionally signs the manifest,
-  printing JSON or writing to `--out`.
+  `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
+  embedded `CNTR`, and optionally signs it for inspection, printing JSON or
+  writing to `--out`.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
   runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
   (counts and instruction ids) without touching the network. Attach

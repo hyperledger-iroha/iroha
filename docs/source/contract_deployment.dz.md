@@ -2,150 +2,161 @@
 lang: dz
 direction: ltr
 source: docs/source/contract_deployment.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 0f2b1d7d027d715eac5a3ca8be29dea8f0e76013e948947a4de66108ac561f34
-source_last_modified: "2026-01-22T14:58:53.689594+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 747a7ac905ca4b698ea6cc89d384a1ee11db13953440d3f35a1691ce78638e52
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 title: Contract Deployment (.to) — API & Workflow
 translator: machine-google-reviewed
 ---
 
-གནས་སྟངས་: Torii, CLI, དང་ ལྟེ་བ་འཛུལ་ཞུགས་བརྟག་དཔྱད་ (Nov 2025) གིས་ ལག་ལེན་འཐབ་ཡོདཔ་ཨིན།
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-## སྤྱི་མཐོང་།
+# Contract Deployment (.to) — API & Workflow
 
-- བཀྲམ་སྤེལ་འདི་ IVM བཱའིཊི་ཀོཌ་ (`.to`) བསྡུ་སྒྲིག་འབད་དེ་ Torii ལུ་བཙུགས་ ཡང་ན་ བཏོན་བཏང་ཐོག་ལས་
-  `RegisterSmartContractCode`/`RegisterSmartContractBytes` བསླབ་བྱ།
-  ཐད་ཀར་.
-- མཐུད་མཚམས་ཚུ་ `code_hash` དང་ ས་གནས་ནང་ ཀེ་ནོ་ནིག་ཨེ་བི་ཨའི་ ཧེཤ་ཚུ་ ལོག་རྩིས་སྟོན་འབདཝ་ཨིན། མ་སྒྲིག
-  གཏན་འབེབས་བཟོ་ཐོག་ལས་ ངོས་ལེན་འབད།
-- གསོག་འཇོག་འབད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ རིམ་སྒྲིག་ `contract_manifests` དང་ འོག་ལུ་ཡོདཔ་ཨིན།
-  `contract_code` ཐོ་བཀོད་ཚུ། མངོན་གསལ་པ་ཚུ་གིས་ ཧ་ཤེ་ཚུ་རྐྱངམ་ཅིག་ལུ་གཞི་བསྟུན་འབདཝ་ཨིནམ་དང་ ཆུང་ཀུ་སྦེ་ལུསཔ་ཨིན།
-  གསང་ཡིག་བཱའིཊི་ཚུ་ `code_hash` གིས་ ལྡེ་མིག་བརྐྱབ་སྟེ་ཡོདཔ་ཨིན།
-- ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ལུ་ བཅའ་ཁྲིམས་དང་འཁྲིལ་ གཞུང་སྐྱོང་གྲོས་འཆར་ཅིག་ ༡༠ གི་ཧེ་མ་དགོཔ་ཨིན།
-  བཀྲམ་སྤེལ་འདི་ ངོས་ལེན་འབད་ཡོདཔ་ཨིན། འཛུལ་ཞུགས་ལམ་འདི་གིས་ གྲོས་འཆར་གྱི་ འབབ་ཁུངས་འདི་ དང་།
-  `(namespace, contract_id, code_hash, abi_hash)` འདྲ་མཉམ་གྱི་ཚད་གཞི།
-  namespace འདི་ཉེན་སྐྱོབ་འབད་ཡོདཔ་ཨིན།
+Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
 
-## ཅ་རྙིང་དང་ བདག་གཉེར་འབད་ནི།
+## Overview
 
-- `RegisterSmartContractCode` བྱིན་ཡོད་པའི་དོན་ལུ་ གསལ་སྟོན་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
-  `code_hash`. དེ་བཟུམ་མའི་ཧེ་ཤི་འདི་ཧེ་མ་ལས་ཡོད་པའི་སྐབས་ལུ་ གསརཔ་གིས་ཚབ་བཙུགསཔ་ཨིན།
-  གསལ༌སྟོན༌འབད༌ནི།
-- `RegisterSmartContractBytes` གིས་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ལས་རིམ་འདི་ འོག་ལུ་གསོག་འཇོག་འབདཝ་ཨིན།
-  `contract_code[code_hash]`. ཧེཊི་གི་དོན་ལུ་ བཱའིཊི་ཚུ་ ཧེ་མ་ལས་རང་ གནས་ཏེ་ཡོད་པ་ཅིན་ དེ་ཚུ་མཐུན་དགོ།
-  ཀྲིག་ཀྲི་ར; བཱའིཊི་སོ་སོ་ཚུ་གིས་ འགྱུར་ལྡོག་མེད་པའི་ཁྲིམས་འགལ་ཡར་སེང་འབདཝ་ཨིན།
-- ཨང་རྟགས་ཚད་འདི་ སྲོལ་སྒྲིག་ཚད་གཞི་ `max_contract_code_bytes` གིས་ ཀེར་འབད་ཡོདཔ་ཨིན།
-  (སྔོན་སྒྲིག་ ༡༦ MiB). འདི་གི་ཧེ་མ་ `SetParameter(Custom)` ཚོང་འབྲེལ་དང་གཅིག་ཁར་ བཀག་འཛིན་འབད།
-  ཅ་རྙིང་སྦོམ་ཚུ་ཐོ་བཀོད་འབད་དོ།
-- བཀག་འཛིན་མེདཔ་: གསལ་སྟོན་ཚུ་དང་ གསང་ཡིག་ཚུ་ གསལ་སྟོན་མ་འབད་ཚུན་ཚོད་ འཐོབ་ཚུགསཔ་ཨིན།
-  མ་འོངས་པའི་གཞུང་སྐྱོང་ལཱ་གི་རྒྱུན་རིམ་ནང་ བཏོན་གཏང་ཡོདཔ། ཊི་ཊི་ཨེལ་ ཡང་ན་ རང་བཞིན་གྱིས་ ཇི་སི་ མེད།
+- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
+  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
+  directly.
+- Contract `.to` artifacts are self-describing: the required `CNTR` section
+  embeds the contract interface ahead of the executable stream, and Torii
+  derives the on-chain `ContractManifest` from that section after verification.
+- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
+  reject deterministically.
+- Stored artifacts live under the on-chain `contract_manifests` and
+  `contract_code` registries. Manifests reference hashes only and remain small;
+  code bytes are keyed by `code_hash`.
+- Protected namespaces can require an enacted governance proposal before a
+  deployment is admitted. The admission path looks up the proposal payload and
+  enforces `(namespace, contract_id, code_hash, abi_hash)` equality when the
+  namespace is protected.
 
-## འཛུལ་ཞུགས་མདོང་ལམ།
+## Stored Artifacts & Retention
 
-- བདེན་དཔྱད་འབད་མི་གིས་ IVM མགོ་ཡིག་འདི་དབྱེ་དཔྱད་འབདཝ་ཨིནམ་དང་ `version_major == 1` འདི་བསྟར་སྤྱོད་འབདཝ་ཨིན།
-  `abi_version == 1`. མ་ཤེས་པའི་ཐོན་རིམ་ཚུ་གིས་ དེ་འཕྲོ་ལས་ ངོས་ལེན་མི་འབད། གཡོག་བཀོལ་དུས་ཚོད་མེད།
-  བསྒྱུར་བཅོས།
-- `code_hash` གི་དོན་ལུ་ གསལ་སྟོན་ཅིག་ ཧེ་མ་ལས་རང་ ཡོད་པའི་སྐབས་ བདེན་དཔྱད་འདི་གིས་ ངེས་གཏན་བཟོཝ་ཨིན།
-  གསོག་འཇོག་འབད་ཡོད་མི་ `code_hash`/`abi_hash` བཙུགས་ཡོད་པའི་ལས་ རྩིས་སྟོན་འབད་ཡོད་པའི་གནས་གོང་ཚུ་དང་འདྲ་མཉམ་
-  ལས་རིམ། མ་མཐུན་མི་འདི་གིས་ `Manifest{Code,Abi}HashMismatch` འཛོལ་བ་ཚུ་བཏོནམ་ཨིན།
-- ཉེན་སྐྱོབ་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ལུ་དམིགས་གཏད་བསྐྱེད་མི་ ཚོང་འབྲེལ་ཚུ་ནང་ མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ཚུ་ གྲངས་སུ་བཙུགས་དགོ།
-  `gov_namespace` དང་ `gov_contract_id`. འཛུལ་ཞུགས་ལམ་ལུགས་ཀྱིས་ཁོང་ཚུ་གི་ག་བསྡུར་འབདཝ་ཨིན།
-  རྒྱབ་འགལ་ལུ་ `DeployContract` གྲོས་འཆར་ཚུ་; གལ་ཏེ་མཐུན་སྒྲིག་གྲོས་འཆར་མེད་པ་ཅིན་
-  ཚོང་འབྲེལ་འདི་ `NotPermitted` དང་ཅིག་ཁར་ ངོས་ལེན་འབདཝ་ཨིན།
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash`. When the same hash already exists, it is replaced with the new
+  manifest.
+- `RegisterSmartContractBytes` stores the compiled program under
+  `contract_code[code_hash]`. If bytes for a hash already exist they must match
+  exactly; differing bytes raise an invariant violation.
+- Code size is capped by the custom parameter `max_contract_code_bytes`
+  (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
+  registering larger artifacts.
+- Retention is unbounded: manifests and code remain available until explicitly
+  removed in a future governance workflow. There is no TTL or automatic GC.
 
-## Torii མཇུག་བསྡུ།- `POST /v1/contracts/deploy`
-  - ཞུ་བ་གཟུགས་: `DeployContractDto` (ས་ཁོངས་ཁ་གསལ་གྱི་དོན་ལུ་ `docs/source/torii_contracts_api.md` ལུ་བལྟ།)
-  - Torii གིས་ base64 པེ་ལོཌི་འདི་ བརྡ་སྟོན་འབདཝ་ཨིན། ཧེསི་གཉིས་ཆ་ར་རྩིས་སྟོན་འབདཝ་ཨིན། གསལ་སྟོན་ཅིག་བཟོཝ་ཨིན།
-    དང་ `RegisterSmartContractCode` དང་།
-    `RegisterSmartContractBytes` གི་ཁ་ཐུག་ལས་ མིང་རྟགས་བཀོད་པའི་ ཚོང་འབྲེལ།
-    ཁ་པར་བཏང་མི་།
-  - ལན་འདེབས་: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - འཛོལ་བ: ནུས་མེད་གཞི་༦༤, རྒྱབ་སྐྱོར་མ་འབད་བའི་ ABI ཐོན་རིམ་, གནང་བ་བརླག་སྟོན།
-    (`CanRegisterSmartContractCode`), ཚད་གཞི། གཞུང་སྐྱོང་སྒོ་སྒྲིག།
-- `POST /v1/contracts/code`
-  - `RegisterContractCodeDto` དང་ ཆ་འཇོག་འབད་ནི་ (དབང་ཚད་དང་ སྒེར་གྱི་ལྡེ་མིག་, གསལ་སྟོན་) དང་ རྐྱངམ་ཅིག་ བཙུགསཔ་ཨིན།
-    `RegisterSmartContractCode`. གསལ་སྟོན་ཚུ་ ལས་སོ་སོ་སྦེ་ གཞི་བསྟུན་འབད་བའི་སྐབས་ ལག་ལེན་འཐབ།
-    བཱའིཊི་ཀོཌ།
+## Admission pipeline
+
+- Contract deployment parses the artifact, requires IVM `1.1`, requires the
+  embedded `CNTR` section, and verifies the embedded interface against the
+  decoded executable stream before any manifest is stored.
+- Verification fails closed on malformed sections, duplicate/invalid
+  entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
+  / ABI mismatches, or unsupported metadata.
+- The canonical manifest is built from the verified `CNTR` payload, signed by
+  the submitting key, and then stored together with the uploaded bytecode.
+- Transactions targeting protected namespaces must include metadata keys
+  `gov_namespace` and `gov_contract_id`. The admission path compares them
+  against enacted `DeployContract` proposals; if no matching proposal exists the
+  transaction is rejected with `NotPermitted`.
+
+## Torii endpoints (feature `app_api`)
+
+- `POST /v1/contracts/deploy`
+  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
+  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
+    derives the manifest from the artifact itself, and submits `RegisterSmartContractCode` plus
+    `RegisterSmartContractBytes` in a signed transaction on behalf of the
+    caller.
+  - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
+  - Errors: invalid base64, invalid contract artifact, missing permission
+    (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
 - `POST /v1/contracts/instance`
-  - `DeployAndActivateInstanceDto` (དབང་ཚད་ཅན་ སྒེར་གྱི་ལྡེ་མིག་ མིང་གནས་/གན་ཡིག་_id, Torii, གདམ་ཁའི་གསལ་སྟོན་ཚུ་) དང་ བཀྲམ་སྤེལ་ + ཤུགས་ལྡན་བཟོཝ་ཨིན།
+  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`) and deploys + activates atomically.
 - `POST /v1/contracts/instance/activate`
-  - `ActivateInstanceDto` (དབང་ཚད་ སྒེར་གྱི་ལྡེ་མིག་ མིང་གནས་, གན་རྒྱ་_id, `code_hash`) དང་ ཤུགས་ལྡན་བཀོད་རྒྱ་རྐྱངམ་ཅིག་ ཕུལཝ་ཨིན།
+  - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
 - `GET /v1/contracts/code/{code_hash}`
-  - `{ manifest: { code_hash, abi_hash } }` སླར་ལོག་འབདཝ་ཨིན།
-    ཁ་སྐོང་གསལ་སྟོན་ས་སྒོ་ཚུ་ ནང་འཁོད་ལུ་ཉམས་སྲུང་འབད་ཡོདཔ་ཨིན་རུང་ ནཱ་ལུ་ ༡ གི་དོན་ལུ་ བཏོན་བཏང་ཡོདཔ་ཨིན།
-    བརྟན་ཏོག་ཏོ་ཡོད་པའི་ API.
-- Torii
-  - གསོག་འཇོག་འབད་ཡོད་པའི་ `.to` དང་གཅིག་ཁར་ `{ code_b64 }` འདི་ གཞི་རྟེན་༦༤ སྦེ་ ཨིན་ཀོཌི་འབད་ཡོད་པའི་ སླར་ལོག་འབདཝ་ཨིན།
+  - Returns `{ manifest: { code_hash, abi_hash } }`.
+    Additional manifest fields are preserved internally but omitted here for a
+    stable API.
+- `GET /v1/contracts/code-bytes/{code_hash}`
+  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-གན་ཡིག་གི་མི་ཚེ་འཁོར་ལོའི་མཐའ་མཚམས་ཚུ་ཆ་མཉམ་རང་ བརྩོན་ཤུགས་ཅན་གྱི་བཀྲམ་སྤེལ་ཚད་འཛིན་འབད་མི་འདི་ བརྒྱུད་དེ་ བརྗེ་སོར་འབདཝ་ཨིན།
-`torii.deploy_rate_per_origin_per_sec` (སྐར་ཆ་རེའི་ཊོ་ཀེན་) དང་།
-`torii.deploy_burst_per_origin` (burst ཊོ་ཀེན་)། སྔོན་སྒྲིག་ཚུ་ ༤ དང་ req/s གཉིས་ཨིན།
-8 གི་དོན་ལུ་ ཊོ་ཀེན་རེ་རེ་གི་དོན་ལུ་ `X-API-Token` དང་ ཐག་རིང་གི་ IP ཡང་ན་ མཐའ་མཚམས་བརྡ་སྟོན་ལས་ ཐོབ་མི་ ཊོ་ཀེན་རེ་རེ་གི་དོན་ལུ་ཨིན།
-བློ་གཏད་ཅན་གྱི་བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ ཚད་འཛིན་འདི་ལྕོགས་མིན་བཟོ་ནི་ལུ་ ས་སྒོ་གང་རུང་ཅིག་ `null` ལུ་གཞི་སྒྲིག་འབད། སྐབས།
-ཚད་བཟུང་མེ་, Torii ཡར་འཕར་བྱས་པ་དང་།
-`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` ཊེ་ལི་མི་ཊི་ གྱངས་ཁ་དང་།
-returns HTTP 429; གང་རུང་ ལེགས་སྐྱོང་ནོར་འཁྲུལ་ཡར་སེང་།
-ཉེན་བརྡ་འབད་ནིའི་དོན་ལུ་ `torii_contract_errors_total{endpoint=…}`.
+All contract lifecycle endpoints share a dedicated deploy limiter configured via
+`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
+`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
+8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
+Set either field to `null` to disable the limiter for trusted operators. When the
+limiter fires, Torii increments the
+`torii_contract_throttled_total{endpoint="deploy|instance|activate"}` telemetry counter and
+returns HTTP 429; any handler error increments
+`torii_contract_errors_total{endpoint=…}` for alerting.
 
-## གཞུང་སྐྱོང་མཉམ་བསྡོམ་དང་ ཉམས་སྲུང་འབད་ཡོད་པའི་མིང་ས་སྟོང་ཚུ།- སྲོལ་སྒྲིག་ཚད་བཟུང་ `gov_protected_namespaces` (མིང་ས་སྟོང་གི་ཇེ་ཨེསི་ཨོ་ཨེན་ཨེ་རེ་འདི་གཞི་སྒྲིག་འབད།
-  trys) འཛུལ་ཞུགས་སྒོ་སྒྲིག་ལྕོགས་ཅན་བཟོ་ནི་ལུ་ཨིན། Torii འོག་གི་རོགས་རམ་པ་ཚུ་ འོག་ལུ་སྟོནམ་ཨིན།
-  `/v1/gov/protected-namespaces` དང་ CLI གིས་ དེ་ཚུ་བརྒྱུད་དེ་ མེ་ལོང་བཟོཝ་ཨིན།
-  Torii / `iroha_cli app gov protected get`.
-- `ProposeDeployContract` དང་བཅས་གསར་བསྐྲུན་འབད་ཡོད་པའི་གྲོས་འཆར་ཚུ་ (ཡང་ན་ Torii
-  `/v1/gov/proposals/deploy-contract` མཐའ་མ) འཛིན་པ།
+## Governance integration & protected namespaces
+
+- Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
+  strings) to enable admission gating. Torii exposes helpers under
+  `/v1/gov/protected-namespaces` and the CLI mirrors them via
+  `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
+- Proposals created with `ProposeDeployContract` (or the Torii
+  `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
-- སྤྱིར་བཏང་འོས་འདེམས་འདི་ ཆ་འཇོག་འབད་ཚར་བའི་ཤུལ་ལས་ `EnactReferendum` གིས་ གྲོས་འཆར་འདི་ བཀོད་སྒྲིག་འབད་དེ་ དང་ རྟགས་བཀལ་ཡོདཔ་ཨིན།
-  འཛུལ་ཞུགས་འདི་གིས་ མེ་ཊ་ཌེ་ཊ་དང་ཨང་རྟགས་ཚུ་ འབག་མི་ བཀྲམ་སྤེལ་ཚུ་ ངོས་ལེན་འབད་འོང་།
-- ཚོང་འབྲེལ་ནང་ མེ་ཊ་ཌེ་ཊ་ ཆ་ `gov_namespace=a namespace` དང་།
-  `gov_contract_id=an identifier` (དང་ `contract_namespace` / གཞི་སྒྲིག་འབད་དགོ།
-  འབོད་བརྡ་དུས་ཚོད་བཱའིན་ཌིང་གི་དོན་ལུ་ `contract_id`)། CLI གྲོགས་རམ་པ་ཚུ་གིས་ འདི་འདི་ཚུ་འབདཝ་ཨིན།
-  རང་བཞིན་གྱིས་ `--namespace`/`--contract-id` བརྒྱུད་པའི་སྐབས་ རང་བཞིན་གྱིས་
-- ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ གྱལ་རིམ་འཛུལ་ཞུགས་བཀག་ཆ་འདི་གིས་ འབད་རྩོལ་ཚུ་འབད་རྩོལ་བསྐྱེདཔ་ཨིན།
-  ད་ལྟོ་ཡོད་པའི་ `contract_id` མིང་གནས་སོ་སོ་ཅིག་ལུ་ལོག་ལོག་འབད། བསྒྲུབ་པའི་ བསྒྲུབ་ཡོད་པའི་ལག་ལེན་འཐབ།
-  གྲོས་འཆར་ ཡང་ན་ ས་སྒོ་གཞན་ཁར་ བཀྲམ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ ཧེ་མའི་བཱའིན་ཌིང་འདི་ དགོངས་ཞུ་འབད་དགོ།
-- ལམ་གྱི་གསལ་སྟོན་གྱིས་ ཅིག་གི་ལྟག་ལུ་ བདེན་དཔྱད་འབད་མི་གཞི་བསྟུན་ཅིག་གཞི་སྒྲིག་འབད་བ་ཅིན་ ཚུདཔ་ཨིན།
-  `gov_manifest_approvers` (བདེན་དཔྱད་རྩིས་ཐོ་ཨའི་ཌི་ཚུའི་ཇེ་ཨེསི་ཨོ་ཨེན་) དེ་འབདཝ་ལས་ གྱལ་རིམ་འདི་གིས་ རྩིས་རྐྱབ་ཚུགས།
-  ཚོང་འབྲེལ་དབང་འཛིན་དང་གཅིག་ཁར་ ཁ་སྐོང་གནང་བ་ཚུ། ལེནསི་གིས་ཡང་ ངོས་ལེན་མ་འབད་བས།
-  གསལ་སྟོན་གྱི་ནང་ལུ་མིང་བར་སྟོང་ཚུ་གཞི་བསྟུན་འབད་མི་མེ་ཊ་ཌེ་ཊ་
-  `protected_namespaces` གཞི་སྒྲིག་།
+- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
+  admission will accept deployments that carry matching metadata and code.
+- Transactions must include the metadata pair `gov_namespace=a namespace` and
+  `gov_contract_id=an identifier` (and should set `contract_namespace` /
+  `contract_id` for call-time binding). CLI helpers populate these
+  automatically when you pass `--namespace`/`--contract-id`.
+- When protected namespaces are enabled, queue admission rejects attempts to
+  rebind an existing `contract_id` to a different namespace; use the enacted
+  proposal or retire the previous binding before deploying elsewhere.
+- If the lane manifest sets a validator quorum above one, include
+  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
+  the additional approvals alongside the transaction authority. Lanes also reject
+  metadata that references namespaces not present in the manifest's
+  `protected_namespaces` set.
 
-## CLI རོགས་རམ་པ།
+## CLI helpers
 
 - `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  Torii བཀྲམ་སྤེལ་འབད་བའི་ཞུ་བ་ (འཕུར་ལྡིང་ཐོག་ལུ་རྩིས་སྟོན་འབད་ནི།)
+  submits the Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  བཟོ་བསྐྲུན་འབདཝ་ཨིན་ གསལ་སྟོན་ (བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ལྡེ་མིག་དང་གཅིག་ཁར་) ཐོ་བཀོད་ཚུ་ ཐོ་བཀོད་བཱའིཊིསི་ + གསལ་སྟོན་,
-  དང་ ཚོང་འབྲེལ་གཅིག་ནང་ `(namespace, contract_id)` བཱའིན་ཌིང་འདི་ ཤུགས་ལྡན་བཟོཝ་ཨིན། ལག་ལེན་འཐབ་ནི
-  རྩིས་སྟོན་འབད་ཡོད་པའི་ རྩིས་འཕྲུལ་གྱི་ ཧ་ཤི་དང་ བཀོད་རྒྱ་གྱངས་ཁ་འདི་ མེད་པར་ དཔར་བསྐྲུན་འབད་ནི་ལུ་ `--dry-run`
-  ཕུལ་ནི་དང་ `--manifest-out` གིས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ JSON འདི་ གསོག་འཇོག་འབད་ནིའི་དོན་ལུ་ཨིན།
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` གློག་ཀླད།
-  `code_hash`/Torii གི་དོན་ལུ་ `.to` གི་དོན་ལུ་ བསྡུ་སྒྲིག་འབད་དེ་ གདམ་ཁ་ཅན་སྦེ་ གསལ་སྟོན་འདི་ མཚན་རྟགས་བཀོདཔ་ཨིན།
-  JSON ཡང་ན་ `--out` ལུ་འབྲི་ནི།
+  verifies the embedded `CNTR`, derives the canonical manifest, registers bytes
+  + manifest, and activates the `(namespace, contract_id)` binding in one
+  transaction. Use `--dry-run` to print the computed hashes and instruction
+  count without submitting, and `--manifest-out` to save the signed manifest
+  JSON for inspection.
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+  `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
+  embedded `CNTR`, and optionally signs it for inspection, printing JSON or
+  writing to `--out`.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
-  ཨོཕ་ལ་ཡིན་ཝི་ཨེམ་ ཆོག་ཡིག་གཡོག་བཀོལ་ཞིནམ་ལས་ ཨེ་བི་ཨའི་/ཧེ་ཤི་མེ་ཊ་ཌེ་ཊ་ དང་ ཀིའུ་ཌི་ཨའི་ཨེསི་ཨའི་ཨེསི་ཚུ་སྙན་ཞུ་འབདཝ་ཨིན།
-  (གྲངས་རྩིས་དང་བཀོད་རྒྱ་ ids) ཡོངས་འབྲེལ་ལུ་མ་རེག་པར་། སྦྱར༌ནི
-  `--namespace/--contract-id` མེ་ལོང་ འབོད་བརྡ་དུས་ཚོད་ མེ་ཊ་ཌེ་ཊ་ལུ་།
-- `iroha_cli app contracts manifest get --code-hash <hex>` Torii བརྒྱུད་དེ་ གསལ་སྟོན་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
-  དང་ གདམ་ཁ་ཅན་སྦེ་ ཌིཀསི་ལུ་བྲིས་དོ་ཡོདཔ་ཨིན།
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` ཕབ་ལེན།
-  གསོག་འཇོག་འབད་ཡོད་པའི་ `.to` གཟུགས་བརྙན།
-- `iroha_cli app contracts instances --namespace <ns> [--table]` ཐོ་ཡིག་ཚུ་ཤུགས་ལྡན་བཟོ་ཡོདཔ།
-  གན་རྒྱ་གནས་སྟངས་ཚུ་ (མནར་གཅོད་ + མེ་ཊ་ཌེ་ཊ་ འདྲེན་བཀོལ།)།
-- གཞུང་སྐྱོང་རོགས་སྐྱོར་ (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
-  Torii) གིས་ སྲུང་སྐྱོབ་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ལཱ་གི་རྒྱུན་རིམ་དང་ རིམ་སྒྲིག་འབདཝ་ཨིན།
-  རྩིས་ཞིབ་འབད་ནིའི་དོན་ལུ་ JSON ཅ་ཆས་ཚུ་ ཕྱིར་བཏོན་འབད།
+  runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
+  (counts and instruction ids) without touching the network. Attach
+  `--namespace/--contract-id` to mirror call-time metadata.
+- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+  and optionally writes it to disk.
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+  the stored `.to` image.
+- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
+  contract instances (manifest + metadata driven).
+- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
+  expose JSON artefacts for auditing.
 
-## བརྟག་དཔྱད་དང་ཁྱབ་ཁོངས།
+## Testing & coverage
 
-- `crates/iroha_core/tests/contract_code_bytes.rs` གསལ་སྡུད་ཨང་རྟགས་འོག་ལུ་ཡོད་པའི་ ཡུ་ནིཊི་བརྟག་དཔྱད།
-  གསོག་འཇོག་, བསམ་བརྙན་, དང་ ཚད་གཞི།
-- Torii བརྒྱུད་དེ་ གསལ་སྟོན་གསལ་སྟོན་འདི་བདེན་དཔྱད་འབདཝ་ཨིན།
-  ཁྲིམས་ལུགས་, དང་ `crates/iroha_core/tests/gov_protected_gate.rs` ལུས་སྦྱོང་།
-  སྲུང་སྐྱོབ་ཀྱི་མིང་ འཛུལ་ཞུགས་མཐའ་མ་ལས་མཇུག་བསྡུ།
-- Torii འགྲུལ་ལམ་ཚུ་ནང་ ཞུ་བ་/ལན་འདེབས་ཡུ་ནིཊི་བརྟག་དཔྱད་ཚུ་ཚུདཔ་ཨིནམ་དང་ སི་ཨེལ་ཨའི་བརྡ་བཀོད་ཚུ་ལུ་ཡོདཔ་ཨིན།
-  ཇེ་ཨེསི་ཨོ་ཨེན་ སྐོར་རིམ་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་བཞག་མི་ མཉམ་བསྡོམ་བརྟག་དཔྱད་ཚུ།
+- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
+  storage, idempotency, and the size cap.
+- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
+  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
+  protected-namespace admission end-to-end.
+- Torii routes include request/response unit tests, and the CLI commands have
+  integration tests ensuring JSON round-trips remain stable.
 
-ཁ་གསལ་གྱི་སྤྱི་ཁྱབ་འོས་འཚམ་གྱི་གླ་ཆ་ཚུ་གི་དོན་ལུ་ `docs/source/governance_api.md` ལུ་བལྟ།
-ཚོགས་རྒྱན་ལཱ་གི་རྒྱུན་རིམ་ཚུ།
+Refer to `docs/source/governance_api.md` for detailed referendum payloads and
+ballot workflows.
