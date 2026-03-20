@@ -106,6 +106,49 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         }
     }
 
+    // MARK: - assetDefinitionIdFromAlias
+
+    func testAssetDefinitionIdFromAliasProducesExpectedAid() throws {
+        guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
+            throw XCTSkip("NoritoBridge blake3 hashing unavailable")
+        }
+        let aid = try OfflineNorito.assetDefinitionIdFromAlias("usd#wonderland")
+        XCTAssertEqual(aid, "aid:bef53c1ccd1749e180dfbad6519bfd66")
+    }
+
+    func testAssetDefinitionIdFromAliasPublicAPI() throws {
+        guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
+            throw XCTSkip("NoritoBridge blake3 hashing unavailable")
+        }
+        let aid = try ToriiClient.assetDefinitionId(fromAlias: "usd#wonderland")
+        XCTAssertEqual(aid, "aid:bef53c1ccd1749e180dfbad6519bfd66")
+    }
+
+    func testAssetDefinitionIdFromAliasRejectsInvalidInput() throws {
+        guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
+            throw XCTSkip("NoritoBridge blake3 hashing unavailable")
+        }
+        XCTAssertThrowsError(try OfflineNorito.assetDefinitionIdFromAlias(""))
+        XCTAssertThrowsError(try OfflineNorito.assetDefinitionIdFromAlias("usd"))
+    }
+
+    func testAssetDefinitionIdFromAliasHasUuidV4Bits() throws {
+        guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
+            throw XCTSkip("NoritoBridge blake3 hashing unavailable")
+        }
+        let aid = try OfflineNorito.assetDefinitionIdFromAlias("usd#wonderland")
+        // aid:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX — strip prefix and parse hex
+        let hex = String(aid.dropFirst(4))
+        let bytes = stride(from: 0, to: hex.count, by: 2).map { i -> UInt8 in
+            let start = hex.index(hex.startIndex, offsetBy: i)
+            let end = hex.index(start, offsetBy: 2)
+            return UInt8(hex[start..<end], radix: 16) ?? 0
+        }
+        // UUIDv4: bytes[6] high nibble = 0x4, bytes[8] top 2 bits = 10
+        XCTAssertEqual(bytes[6] & 0xf0, 0x40, "Version nibble should be 4")
+        XCTAssertEqual(bytes[8] & 0xc0, 0x80, "Variant bits should be 10xx")
+    }
+
     private func assertInvalidAccountId(_ value: String, expected: String) {
         XCTAssertThrowsError(try OfflineNorito.encodeAccountId(value)) { error in
             guard case let OfflineNoritoError.invalidAccountId(actual) = error else {

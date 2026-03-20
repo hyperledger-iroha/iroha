@@ -20,6 +20,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
+        offline::{RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
     },
     metadata::Metadata,
@@ -639,6 +640,8 @@ pub(crate) enum ExplorerInstructionKind {
     SetParameter,
     Upgrade,
     Log,
+    RegisterOfflineAllowance,
+    SubmitOfflineToOnlineTransfer,
     Custom,
 }
 
@@ -658,6 +661,8 @@ impl ExplorerInstructionKind {
             Self::SetParameter => "SetParameter",
             Self::Upgrade => "Upgrade",
             Self::Log => "Log",
+            Self::RegisterOfflineAllowance => "RegisterOfflineAllowance",
+            Self::SubmitOfflineToOnlineTransfer => "SubmitOfflineToOnlineTransfer",
             Self::Custom => "Custom",
         }
     }
@@ -681,6 +686,12 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "setparameter" | "set_parameter" => Ok(Self::SetParameter),
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
+            "registerofflineallowance" | "register_offline_allowance" => {
+                Ok(Self::RegisterOfflineAllowance)
+            }
+            "submitofflinetoonlinetransfer" | "submit_offline_to_online_transfer" => {
+                Ok(Self::SubmitOfflineToOnlineTransfer)
+            }
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -787,6 +798,13 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {
                 ExplorerInstructionKind::Log
+            } else if any.downcast_ref::<RegisterOfflineAllowance>().is_some() {
+                ExplorerInstructionKind::RegisterOfflineAllowance
+            } else if any
+                .downcast_ref::<SubmitOfflineToOnlineTransfer>()
+                .is_some()
+            {
+                ExplorerInstructionKind::SubmitOfflineToOnlineTransfer
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -884,6 +902,12 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::SetParameter => set_parameter_payload(instruction),
         ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
         ExplorerInstructionKind::Log => log_payload(instruction),
+        ExplorerInstructionKind::RegisterOfflineAllowance => {
+            register_offline_allowance_payload(instruction)
+        }
+        ExplorerInstructionKind::SubmitOfflineToOnlineTransfer => {
+            submit_offline_to_online_transfer_payload(instruction)
+        }
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1061,6 +1085,81 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     let log = instruction.as_any().downcast_ref::<Log>()?;
     let value = json::to_value(log).ok()?;
     Some(instruction_variant_value("Log", value))
+}
+
+fn register_offline_allowance_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction
+        .as_any()
+        .downcast_ref::<RegisterOfflineAllowance>()?;
+    let cert = &isi.certificate;
+    let allowance = &cert.allowance;
+    let mut value = Map::new();
+    value.insert(
+        "controller".to_string(),
+        Value::String(cert.controller.to_string()),
+    );
+    value.insert(
+        "operator".to_string(),
+        Value::String(cert.operator.to_string()),
+    );
+    value.insert(
+        "asset".to_string(),
+        json::to_value(&allowance.asset).unwrap_or(Value::Null),
+    );
+    value.insert(
+        "amount".to_string(),
+        Value::String(allowance.amount.to_string()),
+    );
+    value.insert(
+        "issued_at_ms".to_string(),
+        Value::Number(cert.issued_at_ms.into()),
+    );
+    value.insert(
+        "expires_at_ms".to_string(),
+        Value::Number(cert.expires_at_ms.into()),
+    );
+    Some(instruction_variant_value(
+        "RegisterOfflineAllowance",
+        Value::Object(value),
+    ))
+}
+
+fn submit_offline_to_online_transfer_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction
+        .as_any()
+        .downcast_ref::<SubmitOfflineToOnlineTransfer>()?;
+    let transfer = &isi.transfer;
+    let proof = &transfer.balance_proof;
+    let allowance = &proof.initial_commitment;
+    let mut value = Map::new();
+    value.insert(
+        "receiver".to_string(),
+        Value::String(transfer.receiver.to_string()),
+    );
+    value.insert(
+        "deposit_account".to_string(),
+        Value::String(transfer.deposit_account.to_string()),
+    );
+    value.insert(
+        "asset".to_string(),
+        json::to_value(&allowance.asset).unwrap_or(Value::Null),
+    );
+    value.insert(
+        "claimed_delta".to_string(),
+        Value::String(proof.claimed_delta.to_string()),
+    );
+    value.insert(
+        "receipt_count".to_string(),
+        Value::Number((transfer.receipts.len() as u64).into()),
+    );
+    value.insert(
+        "bundle_id".to_string(),
+        Value::String(transfer.bundle_id.to_string()),
+    );
+    Some(instruction_variant_value(
+        "SubmitOfflineToOnlineTransfer",
+        Value::Object(value),
+    ))
 }
 
 fn custom_payload(instruction: &InstructionBox) -> Option<Value> {
