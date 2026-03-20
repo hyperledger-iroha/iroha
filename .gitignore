@@ -105,9 +105,9 @@ docs/source/da/_generated/threat_model_report.json
 .pytest_cache/
 .swift-module-cache/
 .gradle/
-.kotlin/*
 .gradle-local/
 local.properties
+.kotlin/*
 **/local.properties
 gradle-app.setting
 java/iroha_android/.gradle-home/

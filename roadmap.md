@@ -34,6 +34,18 @@ Open work for this slice now remains:
   multi-hour budget to confirm the retained-summary fix removes the remaining
   topology-specific failures as well.
 
+Latest sync (2026-03-19 merge-conflict resolution + workspace compile gate):
+the branch no longer has unresolved merge entries, and the merged workspace now
+passes the compile gate again after reconciling the remaining conflicts in
+`.gitignore`, `Cargo.toml`, `Dockerfile.cross`, and
+`crates/iroha_torii/src/routing.rs`.
+
+Open work after this sync:
+- run the broader targeted/runtime test coverage, then the multi-hour
+  `cargo test --workspace` sweep when the validation budget is available,
+- review the large staged SDK/docs/generated artifact set if the next step is a
+  narrower release cut instead of carrying the full merged feature surface.
+
 Latest sync (2026-03-19 generic hidden-program RAM-LFE program-policy foundation):
 `crates/iroha_crypto/src/ram_lfe.rs`,
 `crates/iroha_data_model/src/{ram_lfe.rs,identifier.rs,isi/ram_lfe.rs}`,

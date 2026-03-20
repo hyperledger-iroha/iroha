@@ -2570,7 +2570,7 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_NORITO),
+                .header("Accept", APPLICATION_JSON),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -2585,9 +2585,16 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         if content_type.starts_with(APPLICATION_NORITO) {
-            let wire = decode_from_bytes::<SumeragiStatusWire>(resp.body())
-                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?;
-            return Ok(sumeragi_status_json_payload(&wire));
+            match decode_from_bytes::<SumeragiStatusWire>(resp.body()) {
+                Ok(wire) => return Ok(sumeragi_status_json_payload(&wire)),
+                Err(norito_err) => {
+                    return norito::json::from_slice(resp.body()).map_err(|json_err| {
+                        eyre!(
+                            "Failed to decode sumeragi status Norito payload: {norito_err}; JSON fallback also failed: {json_err}"
+                        )
+                    });
+                }
+            }
         }
         Ok(norito::json::from_slice(resp.body())?)
     }
@@ -8807,7 +8814,7 @@ impl Client {
     }
 
     /// GET `/v1/node/capabilities`
-    /// Returns `{ abi_version: 1, data_model_version: n, crypto: { ... } }`.
+    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
@@ -8846,7 +8853,7 @@ impl Client {
     }
 
     /// GET `/v1/node/capabilities`
-    /// Returns `{ abi_version: 1, data_model_version: n, crypto: { ... } }`.
+    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
@@ -8863,7 +8870,7 @@ impl Client {
     }
 
     /// GET `/v1/runtime/metrics`
-    /// Returns a JSON summary of runtime metrics (ABI version and upgrade events counters).
+    /// Returns a JSON summary of runtime metrics (ABI count and upgrade events counters).
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_runtime_metrics_json(&self) -> Result<norito::json::Value> {
@@ -11825,6 +11832,9 @@ mod tests {
             worker_loop: iroha_data_model::block::consensus::SumeragiWorkerLoopStatus::default(),
             commit_inflight:
                 iroha_data_model::block::consensus::SumeragiCommitInflightStatus::default(),
+            commit_pipeline:
+                iroha_data_model::block::consensus::SumeragiCommitPipelineStatus::default(),
+            round_gap: iroha_data_model::block::consensus::SumeragiRoundGapStatus::default(),
         };
         (status, relay_envelope)
     }
@@ -14411,6 +14421,9 @@ mod tests {
             worker_loop: iroha_data_model::block::consensus::SumeragiWorkerLoopStatus::default(),
             commit_inflight:
                 iroha_data_model::block::consensus::SumeragiCommitInflightStatus::default(),
+            commit_pipeline:
+                iroha_data_model::block::consensus::SumeragiCommitPipelineStatus::default(),
+            round_gap: iroha_data_model::block::consensus::SumeragiRoundGapStatus::default(),
         }
     }
 
@@ -14490,6 +14503,72 @@ mod tests {
         })
         .expect("json call succeeds");
         assert_eq!(decoded_json, status);
+    }
+
+    #[test]
+    fn get_sumeragi_status_json_requests_json_and_falls_back_to_norito() {
+        let status = sample_sumeragi_status();
+        let expected_json = sumeragi_status_json_payload(&status);
+
+        let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let json_body = norito::json::to_vec(&expected_json)
+            .expect("serialize sumeragi status endpoint JSON payload");
+        let json_response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(json_body)
+            .unwrap();
+        let decoded_json = with_mock_http(respond_with(&json_snapshots, json_response), || {
+            client_with_base_url(base_url()).get_sumeragi_status_json()
+        })
+        .expect("json call succeeds");
+        assert_eq!(decoded_json, expected_json);
+        let json_snapshot = json_snapshots
+            .lock()
+            .expect("lock snapshots")
+            .first()
+            .cloned()
+            .expect("snapshot captured");
+        let json_accept_header: HashMap<_, _> = json_snapshot
+            .headers
+            .iter()
+            .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+            .collect();
+        assert_eq!(
+            json_accept_header.get("accept"),
+            Some(&APPLICATION_JSON.to_owned()),
+            "json helper should request JSON payloads for sumeragi status"
+        );
+
+        let norito_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let norito_body = norito::to_bytes(&status).expect("serialize status");
+        let norito_response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito_body)
+            .unwrap();
+        let decoded_norito =
+            with_mock_http(respond_with(&norito_snapshots, norito_response), || {
+                client_with_base_url(base_url()).get_sumeragi_status_json()
+            })
+            .expect("norito fallback succeeds");
+        assert_eq!(decoded_norito, expected_json);
+
+        let mislabeled_json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let mislabeled_json_response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(
+                norito::json::to_vec(&expected_json)
+                    .expect("serialize status endpoint JSON payload"),
+            )
+            .unwrap();
+        let decoded_mislabeled_json = with_mock_http(
+            respond_with(&mislabeled_json_snapshots, mislabeled_json_response),
+            || client_with_base_url(base_url()).get_sumeragi_status_json(),
+        )
+        .expect("json fallback succeeds for mislabeled status payload");
+        assert_eq!(decoded_mislabeled_json, expected_json);
     }
 
     #[test]
@@ -14737,6 +14816,9 @@ mod tests {
             worker_loop: iroha_data_model::block::consensus::SumeragiWorkerLoopStatus::default(),
             commit_inflight:
                 iroha_data_model::block::consensus::SumeragiCommitInflightStatus::default(),
+            commit_pipeline:
+                iroha_data_model::block::consensus::SumeragiCommitPipelineStatus::default(),
+            round_gap: iroha_data_model::block::consensus::SumeragiRoundGapStatus::default(),
         };
 
         let json = sumeragi_status_json_payload(&status);

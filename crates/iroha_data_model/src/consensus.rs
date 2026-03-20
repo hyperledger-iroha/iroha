@@ -10,13 +10,13 @@ use norito::codec::{Decode, Encode};
 
 pub use crate::block::consensus::{
     CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
-    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-    SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
-    SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-    SumeragiQcStatus, SumeragiStatusWire, SumeragiViewChangeCauseStatus,
-    SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
-    SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
-    SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
+    SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
+    SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+    SumeragiMembershipMismatchStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
+    SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRoundGapStatus,
+    SumeragiStatusWire, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+    SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
+    SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
 };
 use crate::prelude::*;
 
@@ -137,7 +137,7 @@ pub struct PreviousRosterEvidence {
     pub block_hash: HashOf<crate::block::BlockHeader>,
     /// Signed validator checkpoint for the referenced block.
     pub validator_checkpoint: ValidatorSetCheckpoint,
-    /// Optional `NPoS` stake snapshot aligned to the validator set.
+    /// Optional NPoS stake snapshot aligned to the validator set.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub stake_snapshot: Option<CommitStakeSnapshot>,
