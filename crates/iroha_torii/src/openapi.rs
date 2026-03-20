@@ -203,6 +203,24 @@ fn tags_section() -> Value {
         Value::String("Account listing and account-scoped query helpers.".to_owned()),
     );
 
+    let mut ram_lfe = Map::new();
+    ram_lfe.insert("name".into(), Value::String("RamLfe".to_owned()));
+    ram_lfe.insert(
+        "description".into(),
+        Value::String(
+            "Generic RAM-LFE program-policy, execute, and receipt-verification helpers.".to_owned(),
+        ),
+    );
+
+    let mut identifiers = Map::new();
+    identifiers.insert("name".into(), Value::String("Identifiers".to_owned()));
+    identifiers.insert(
+        "description".into(),
+        Value::String(
+            "Identifier-policy listing, resolution, and claim-receipt helpers.".to_owned(),
+        ),
+    );
+
     let mut domains = Map::new();
     domains.insert("name".into(), Value::String("Domains".to_owned()));
     domains.insert(
@@ -345,6 +363,8 @@ fn tags_section() -> Value {
         Value::Object(runtime),
         Value::Object(settlement),
         Value::Object(accounts),
+        Value::Object(ram_lfe),
+        Value::Object(identifiers),
         Value::Object(domains),
         Value::Object(assets),
         Value::Object(nfts),
@@ -3793,6 +3813,49 @@ fn identifier_paths() -> Map {
     paths
 }
 
+fn ram_lfe_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/ram-lfe/program-policies".to_owned(),
+        Value::Object(json_get_operation(
+            "RamLfe",
+            "List RAM-LFE program policies.",
+            "List globally registered RAM-LFE program policies and their public execution metadata.",
+            "#/components/schemas/RamLfeProgramPolicyListResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/ram-lfe/programs/{program_id}/execute".to_owned(),
+        Value::Object({
+            let params = vec![string_path_param(
+                "program_id",
+                "RAM-LFE program identifier.",
+            )];
+            json_post_operation(
+                "RamLfe",
+                "Execute a RAM-LFE program.",
+                "Execute a RAM-LFE program from plaintext or BFV-encrypted input and return the stateless execution receipt.",
+                "#/components/schemas/RamLfeExecuteRequest",
+                "#/components/schemas/RamLfeExecuteResponse",
+                params,
+            )
+        }),
+    );
+    paths.insert(
+        "/v1/ram-lfe/receipts/verify".to_owned(),
+        Value::Object(json_post_operation(
+            "RamLfe",
+            "Verify a RAM-LFE receipt.",
+            "Validate a stateless RAM-LFE execution receipt against the published on-chain program policy and optionally compare a caller-supplied output blob to the receipt output hash.",
+            "#/components/schemas/RamLfeReceiptVerifyRequest",
+            "#/components/schemas/RamLfeReceiptVerifyResponse",
+            Vec::new(),
+        )),
+    );
+    paths
+}
+
 fn domain_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -6681,6 +6744,7 @@ fn paths_section() -> Map {
     paths.extend(governance_paths());
     paths.extend(runtime_paths());
     paths.extend(account_paths());
+    paths.extend(ram_lfe_paths());
     paths.extend(identifier_paths());
     paths.extend(domain_paths());
     paths.extend(asset_paths());
@@ -8070,6 +8134,307 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64",
                     "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecutionReceiptPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id",
+                "program_digest",
+                "backend",
+                "verification_mode",
+                "output_hash",
+                "associated_data_hash",
+                "executed_at_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier."
+                },
+                "program_digest": {
+                    "type": "string",
+                    "description": "Published digest of the hidden compiled program."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend that produced the receipt."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "output_hash": {
+                    "type": "string",
+                    "description": "Hash of the plaintext output bytes."
+                },
+                "associated_data_hash": {
+                    "type": "string",
+                    "description": "Hash of the associated-data blob bound into execution."
+                },
+                "executed_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Execution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecutionReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["payload"],
+            "additionalProperties": false,
+            "properties": {
+                "payload": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
+                },
+                "signature": {
+                    "$ref": "#/components/schemas/JsonValue"
+                },
+                "proof": {
+                    "$ref": "#/components/schemas/JsonValue"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeProgramPolicySummary".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id",
+                "owner",
+                "active",
+                "resolver_public_key",
+                "backend",
+                "verification_mode"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier."
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "Canonical account identifier that owns the program policy."
+                },
+                "active": {
+                    "type": "boolean",
+                    "description": "Whether the program policy is active for new executions."
+                },
+                "resolver_public_key": {
+                    "type": "string",
+                    "description": "Public key used to verify RAM-LFE execution receipts."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend advertised by the program policy."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "input_encryption": {
+                    "type": "string",
+                    "description": "Optional encrypted-input scheme published for this program."
+                },
+                "input_encryption_public_parameters": {
+                    "type": "string",
+                    "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters."
+                },
+                "input_encryption_public_parameters_decoded": {
+                    "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
+                },
+                "ram_fhe_profile": {
+                    "$ref": "#/components/schemas/BfvRamProgramProfile"
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional human-readable note attached to the program policy."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeProgramPolicyListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["total", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "total": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Number of program policies returned."
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/RamLfeProgramPolicySummary"
+                    },
+                    "description": "Registered RAM-LFE program policies."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecuteRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "input_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded plaintext input bytes. Supply exactly one of `input_hex` or `encrypted_input`."
+                },
+                "encrypted_input": {
+                    "type": "string",
+                    "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input_hex` or `encrypted_input`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecuteResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id",
+                "opaque_hash",
+                "receipt_hash",
+                "output_hex",
+                "output_hash",
+                "associated_data_hash",
+                "executed_at_ms",
+                "backend",
+                "verification_mode",
+                "receipt"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier."
+                },
+                "opaque_hash": {
+                    "type": "string",
+                    "description": "Opaque evaluator hash returned by the RAM-LFE backend."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic receipt hash returned by the RAM-LFE backend."
+                },
+                "output_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded plaintext output bytes."
+                },
+                "output_hash": {
+                    "type": "string",
+                    "description": "Hash of the plaintext output bytes."
+                },
+                "associated_data_hash": {
+                    "type": "string",
+                    "description": "Hash of the associated-data blob bound into execution."
+                },
+                "executed_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Execution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend that produced the receipt."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "receipt": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceipt"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeReceiptVerifyRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["receipt"],
+            "additionalProperties": false,
+            "properties": {
+                "receipt": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceipt"
+                },
+                "output_hex": {
+                    "type": "string",
+                    "description": "Optional hex-encoded plaintext output bytes to compare against `receipt.payload.output_hash`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeReceiptVerifyResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "valid",
+                "program_id",
+                "backend",
+                "verification_mode",
+                "output_hash",
+                "associated_data_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "valid": {
+                    "type": "boolean",
+                    "description": "Whether the receipt validated against the published program policy."
+                },
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier from the receipt."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend advertised by the receipt."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "output_hash": {
+                    "type": "string",
+                    "description": "Receipt payload output hash."
+                },
+                "associated_data_hash": {
+                    "type": "string",
+                    "description": "Receipt payload associated-data hash."
+                },
+                "output_hash_matches": {
+                    "type": "boolean",
+                    "description": "Whether the supplied `output_hex` matched `output_hash`, when provided."
+                },
+                "error": {
+                    "type": "string",
+                    "description": "Validation failure reason when `valid == false`."
                 }
             }
         }),
@@ -11195,6 +11560,9 @@ mod tests {
         assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
+        assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
+        assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
+        assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
         assert!(paths.contains_key("/v1/assets/definitions"));
         assert!(paths.contains_key("/v1/explorer/accounts"));
         assert!(paths.contains_key("/v1/sorafs/providers"));
@@ -11251,6 +11619,34 @@ mod tests {
                 .any(|value| value.as_str() == Some("encrypted_input_mode"))
         );
         assert!(schemas.contains_key("BfvRamEncryptedInputMode"));
+    }
+
+    #[test]
+    fn ram_lfe_execute_schema_references_receipt_payload() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        let execute = schemas
+            .get("RamLfeExecuteResponse")
+            .and_then(Value::as_object)
+            .expect("RamLfeExecuteResponse schema");
+        let properties = execute
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("RamLfeExecuteResponse properties");
+        assert_eq!(
+            properties
+                .get("receipt")
+                .and_then(Value::as_object)
+                .and_then(|field| field.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/RamLfeExecutionReceipt")
+        );
+        assert!(schemas.contains_key("RamLfeExecutionReceiptPayload"));
     }
 
     #[test]

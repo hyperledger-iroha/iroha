@@ -2,6 +2,50 @@
 
 Last updated: 2026-03-20
 
+Latest sync (2026-03-20 generic Torii RAM-LFE routes + `torii.ram_lfe` config):
+`crates/iroha_config/src/parameters/{actual.rs,user.rs,defaults.rs}`,
+`crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,routing.rs,openapi.rs,test_utils.rs}`,
+`crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs`,
+`crates/iroha_torii/tests/connect_gating.rs`,
+and
+`docs/source/universal_accounts_guide.md`
+now close the Torii runtime/config/API half of the generic RAM-LFE follow-up:
+
+- the in-process app runtime is now configured under `torii.ram_lfe`, with
+  `programs[*]` keyed by `program_id` instead of identifier policy id,
+- Torii now exposes:
+  - `GET /v1/ram-lfe/program-policies`,
+  - `POST /v1/ram-lfe/programs/{program_id}/execute`, and
+  - `POST /v1/ram-lfe/receipts/verify`,
+- program-policy list responses publish decoded BFV input-encryption metadata
+  and the programmed `ram_fhe_profile`,
+- generic execute responses now return stateless `RamLfeExecutionReceipt`
+  payloads plus `{ output_hex, output_hash, receipt_hash, opaque_hash }`,
+- receipt verification is now a shared stateless helper wired through
+  `iroha_core::smartcontracts::isi::ram_lfe::validate_execution_receipt(...)`,
+  so Torii reuses the same attestation checks as core admission,
+- identifier routes still work, but they now reuse the shared RAM-LFE runtime
+  keyed by `program_id` rather than the removed `torii.identifier_resolver`
+  config surface, and
+- proof-mode receipt issuance is now rejected explicitly until a prover runtime
+  is wired, rather than emitting invalid signed receipts for proof-mode
+  policies.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_config torii_ram_lfe_parses -- --nocapture`
+- `cargo test -p iroha_torii --lib ram_lfe -- --nocapture`
+- `cargo test -p iroha_torii --lib identifier_ -- --nocapture`
+
+Open work for this slice now remains:
+- add explicit Torii prover runtime/config support for
+  `verification_mode = proof` RAM-LFE policies so execute/claim-receipt flows
+  can issue proof-carrying receipts instead of rejecting them,
+- extend the JS/Swift/Android SDKs to the generic RAM-LFE program-policy,
+  execute, and receipt-verify schema and helper flows,
+- run the broader workspace validation sweep once the multi-hour budget is
+  available.
+
 Latest sync (2026-03-20 manifest-declared structured data triggers):
 `crates/iroha_data_model/src/events/data/filters.rs`,
 `crates/kotodama_lang/src/{ast.rs,parser.rs,semantic.rs,compiler.rs}`,

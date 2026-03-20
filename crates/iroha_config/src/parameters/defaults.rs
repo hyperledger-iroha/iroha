@@ -1348,9 +1348,9 @@ pub mod torii {
             Vec::new()
         }
     }
-    /// Identifier resolver defaults (disabled unless explicitly configured).
-    pub mod identifier_resolver {
-        /// Master enable switch for identifier-resolution runtime wiring.
+    /// RAM-LFE runtime defaults (disabled unless explicitly configured).
+    pub mod ram_lfe {
+        /// Master enable switch for in-process RAM-LFE runtime wiring.
         pub const ENABLED: bool = false;
     }
     /// Operator request-signature defaults for Torii operator endpoints.

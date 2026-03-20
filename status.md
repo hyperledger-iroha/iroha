@@ -2,6 +2,46 @@
 
 Last updated: 2026-03-20
 
+## 2026-03-20 Follow-up: Torii now exposes generic RAM-LFE program-policy, execute, and receipt-verify APIs, and the runtime config is keyed by `program_id`
+- Replaced the app-runtime config surface from `torii.identifier_resolver` to
+  `torii.ram_lfe` across `crates/iroha_config` and Torii test fixtures:
+  - runtime entries are now configured under `torii.ram_lfe.programs[*]`,
+    keyed by `program_id`,
+  - Torii now builds its in-process RAM-LFE runtime from those program entries,
+    and the identifier routes reuse that same runtime instead of a separate
+    identifier-policy keyed config surface.
+- Extended Torii's app API and OpenAPI description across
+  `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}` with the generic
+  RAM-LFE surface:
+  - `GET /v1/ram-lfe/program-policies`,
+  - `POST /v1/ram-lfe/programs/{program_id}/execute`, and
+  - `POST /v1/ram-lfe/receipts/verify`.
+- Added generic RAM-LFE route DTOs and handler coverage so Torii now:
+  - lists program policies with decoded BFV input-encryption metadata and
+    programmed `ram_fhe_profile`,
+  - executes programmed BFV RAM-LFE policies from either `input_hex` or
+    `encrypted_input`,
+  - returns stateless `RamLfeExecutionReceipt` payloads plus `{ output_hex,
+    output_hash, receipt_hash, opaque_hash }`, and
+  - verifies RAM-LFE receipts statelessly against on-chain program policy
+    metadata while optionally checking a caller-supplied `output_hex`.
+- Added a shared stateless receipt validator in
+  `crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs` so Torii's verify
+  endpoint uses the same signature/proof policy checks as core admission logic.
+- Tightened Torii's receipt issuance semantics:
+  - the in-process RAM-LFE runtime now keys secrets/signers by `program_id`,
+  - both generic RAM-LFE execution and identifier claim-receipt flows reject
+    proof-mode receipt issuance until explicit prover runtime support exists,
+    instead of silently emitting signed receipts for proof-mode policies.
+- Synced the UAID guide in `docs/source/universal_accounts_guide.md` to
+  document the new generic RAM-LFE routes and the `torii.ram_lfe` config
+  surface.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config torii_ram_lfe_parses -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib ram_lfe -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib identifier_ -- --nocapture` (pass)
+
 ## 2026-03-20 Follow-up: manifest-declared data triggers now cover structured core-ledger filters
 - Extended manifest-declared trigger support across `crates/iroha_data_model`,
   `crates/kotodama_lang`, `crates/iroha_core/tests`, and

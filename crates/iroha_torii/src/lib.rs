@@ -4430,6 +4430,63 @@ fn parse_encrypted_identifier_ciphertext(
 }
 
 #[cfg(feature = "app_api")]
+fn parse_hex_bytes(raw: &str, field_name: &str) -> Result<Vec<u8>, Error> {
+    let literal = raw.trim();
+    if literal.is_empty() {
+        return Err(identifier_conversion_error(format!(
+            "{field_name} must not be empty"
+        )));
+    }
+    hex::decode(literal.trim_start_matches("0x"))
+        .map_err(|err| identifier_conversion_error(format!("{field_name} is not valid hex: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_verification_mode_label(mode: iroha_crypto::RamLfeVerificationMode) -> &'static str {
+    match mode {
+        iroha_crypto::RamLfeVerificationMode::Signed => "signed",
+        iroha_crypto::RamLfeVerificationMode::Proof => "proof",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn derive_ram_lfe_request_draft(
+    resolver: &identifier_resolution::IdentifierResolutionService,
+    program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
+    request: &routing::RamLfeExecuteRequestDto,
+) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
+    match (
+        request.input_hex.as_deref(),
+        request.encrypted_input.as_deref(),
+    ) {
+        (Some(input_hex), None) => {
+            let input = parse_hex_bytes(input_hex, "input_hex")?;
+            resolver
+                .execute(program_policy, &input)
+                .map_err(|err| identifier_internal_error(err.to_string()))
+        }
+        (None, Some(ciphertext_hex)) => {
+            let ciphertext = parse_encrypted_identifier_ciphertext(ciphertext_hex)?;
+            resolver
+                .execute_encrypted(program_policy, &ciphertext)
+                .map_err(|err| match err {
+                    identifier_resolution::IdentifierResolutionError::Fhe(_)
+                    | identifier_resolution::IdentifierResolutionError::InvalidUtf8 => {
+                        identifier_conversion_error(err.to_string())
+                    }
+                    _ => identifier_internal_error(err.to_string()),
+                })
+        }
+        (Some(_), Some(_)) => Err(identifier_conversion_error(
+            "supply exactly one of `input_hex` or `encrypted_input`",
+        )),
+        (None, None) => Err(identifier_conversion_error(
+            "one of `input_hex` or `encrypted_input` is required",
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn derive_identifier_request_draft(
     resolver: &identifier_resolution::IdentifierResolutionService,
     policy: &iroha_data_model::identifier::IdentifierPolicy,
@@ -4477,6 +4534,34 @@ fn derive_identifier_request_draft(
 }
 
 #[cfg(feature = "app_api")]
+fn ram_lfe_program_policy_summary_dto(
+    program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
+) -> routing::RamLfeProgramPolicySummaryDto {
+    let public_parameters =
+        identifier_resolution::decode_bfv_public_parameters(program_policy).ok();
+    let ram_fhe_profile = identifier_resolution::decode_ram_fhe_profile(program_policy)
+        .ok()
+        .flatten();
+    routing::RamLfeProgramPolicySummaryDto {
+        program_id: program_policy.program_id.to_string(),
+        owner: program_policy.owner.to_string(),
+        active: program_policy.active,
+        resolver_public_key: program_policy.resolver_public_key.to_string(),
+        backend: program_policy.commitment.backend.as_str().to_owned(),
+        verification_mode: ram_lfe_verification_mode_label(program_policy.verification_mode)
+            .to_owned(),
+        input_encryption: public_parameters.as_ref().map(|_| "bfv-v1".to_owned()),
+        input_encryption_public_parameters: public_parameters
+            .as_ref()
+            .and_then(|value| norito::to_bytes(value).ok())
+            .map(hex::encode_upper),
+        input_encryption_public_parameters_decoded: public_parameters,
+        ram_fhe_profile,
+        note: program_policy.note.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn identifier_policy_summary_dto(
     policy: &iroha_data_model::identifier::IdentifierPolicy,
     program_policy: Option<&iroha_data_model::ram_lfe::RamLfeProgramPolicy>,
@@ -4505,6 +4590,45 @@ fn identifier_policy_summary_dto(
         input_encryption_public_parameters_decoded: public_parameters,
         ram_fhe_profile,
         note: policy.note.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_execute_response(
+    receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+    draft: &identifier_resolution::RamLfeExecutionDraft,
+) -> routing::RamLfeExecuteResponseDto {
+    routing::RamLfeExecuteResponseDto {
+        program_id: receipt.payload.program_id.to_string(),
+        opaque_hash: draft.opaque_hash.to_string(),
+        receipt_hash: draft.receipt_hash.to_string(),
+        output_hex: hex::encode_upper(&draft.output),
+        output_hash: draft.output_hash.to_string(),
+        associated_data_hash: draft.associated_data_hash.to_string(),
+        executed_at_ms: draft.executed_at_ms,
+        expires_at_ms: draft.expires_at_ms,
+        backend: draft.backend.as_str().to_owned(),
+        verification_mode: ram_lfe_verification_mode_label(draft.verification_mode).to_owned(),
+        receipt: receipt.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_receipt_verify_response(
+    receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+    output_hash_matches: Option<bool>,
+    error: Option<String>,
+) -> routing::RamLfeReceiptVerifyResponseDto {
+    routing::RamLfeReceiptVerifyResponseDto {
+        valid: error.is_none(),
+        program_id: receipt.payload.program_id.to_string(),
+        backend: receipt.payload.backend.as_str().to_owned(),
+        verification_mode: ram_lfe_verification_mode_label(receipt.payload.verification_mode)
+            .to_owned(),
+        output_hash: receipt.payload.output_hash.to_string(),
+        associated_data_hash: receipt.payload.associated_data_hash.to_string(),
+        output_hash_matches,
+        error,
     }
 }
 
@@ -13607,6 +13731,117 @@ async fn handler_asset_alias_resolve(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_ram_lfe_program_policies(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, None, "v1/ram-lfe/program-policies").await?;
+    let world = app.state.world_view();
+    let items = world
+        .ram_lfe_program_policies_iter()
+        .map(ram_lfe_program_policy_summary_dto)
+        .collect::<Vec<_>>();
+    json_ok(routing::RamLfeProgramPolicyListDto {
+        total: u64::try_from(items.len()).unwrap_or(u64::MAX),
+        items,
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_ram_lfe_execute(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(program_id_literal): AxPath<String>,
+    NoritoJson(request): NoritoJson<routing::RamLfeExecuteRequestDto>,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        None,
+        "v1/ram-lfe/programs/{program_id}/execute",
+    )
+    .await?;
+    let program_id = iroha_data_model::ram_lfe::RamLfeProgramId::from_str(
+        program_id_literal.trim(),
+    )
+    .map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+    let world = app.state.world_view();
+    let Some(program_policy) = world.ram_lfe_program_policies().get(&program_id).cloned() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if !program_policy.active {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
+    let Some(resolver) = app.identifier_resolver.as_ref() else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
+    let draft = derive_ram_lfe_request_draft(resolver, &program_policy, &request)?;
+    let receipt = resolver
+        .issue_execution_receipt(&program_policy, &draft)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
+    json_ok(ram_lfe_execute_response(&receipt, &draft))
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_ram_lfe_receipt_verify(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(request): NoritoJson<routing::RamLfeReceiptVerifyRequestDto>,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, None, "v1/ram-lfe/receipts/verify").await?;
+    let output_hash_matches = match request.output_hex.as_deref() {
+        Some(output_hex) => match parse_hex_bytes(output_hex, "output_hex") {
+            Ok(output) => Some(
+                iroha_crypto::ram_lfe_output_hash(&output) == request.receipt.payload.output_hash,
+            ),
+            Err(err) => {
+                return json_ok(ram_lfe_receipt_verify_response(
+                    &request.receipt,
+                    None,
+                    Some(err.to_string()),
+                ));
+            }
+        },
+        None => None,
+    };
+    let world = app.state.world_view();
+    let Some(program_policy) = world
+        .ram_lfe_program_policies()
+        .get(&request.receipt.payload.program_id)
+        .cloned()
+    else {
+        return json_ok(ram_lfe_receipt_verify_response(
+            &request.receipt,
+            output_hash_matches,
+            Some(format!(
+                "RAM-LFE program policy {} is not registered",
+                request.receipt.payload.program_id
+            )),
+        ));
+    };
+    let validation = iroha_core::smartcontracts::isi::ram_lfe::validate_execution_receipt(
+        &request.receipt,
+        &program_policy,
+    )
+    .err();
+    let validation = match (validation, output_hash_matches) {
+        (None, Some(false)) => {
+            Some("provided output_hex does not match receipt output_hash".to_owned())
+        }
+        (result, _) => result,
+    };
+    json_ok(ram_lfe_receipt_verify_response(
+        &request.receipt,
+        output_hash_matches,
+        validation,
+    ))
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_identifier_policies(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -15423,6 +15658,18 @@ impl Torii {
                     "/v1/space-directory/manifests/revoke",
                     post(handler_space_directory_manifest_revoke),
                 )
+                .route(
+                    "/v1/ram-lfe/program-policies",
+                    get(handler_ram_lfe_program_policies),
+                )
+                .route(
+                    "/v1/ram-lfe/programs/{program_id}/execute",
+                    post(handler_ram_lfe_execute),
+                )
+                .route(
+                    "/v1/ram-lfe/receipts/verify",
+                    post(handler_ram_lfe_receipt_verify),
+                )
                 .route("/v1/identifier-policies", get(handler_identifier_policies))
                 .route(
                     "/v1/accounts/{account_id}/identifiers/claim-receipt",
@@ -16648,29 +16895,24 @@ impl Torii {
             }
         });
         #[cfg(feature = "app_api")]
-        let identifier_resolver = config.identifier_resolver.as_ref().and_then(|cfg| {
-            if cfg.policies.is_empty() {
-                iroha_logger::warn!(
-                    "torii.identifier_resolver is enabled but no policies are configured"
-                );
+        let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
+            if cfg.programs.is_empty() {
+                iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
                 return None;
             }
             let service = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-            for (index, policy_cfg) in cfg.policies.iter().enumerate() {
-                let signer =
-                    KeyPair::from_private_key(policy_cfg.signer_private_key.0.clone())
-                        .unwrap_or_else(|err| {
-                            panic!(
-                                "invalid torii.identifier_resolver.policies[{index}].signer_private_key: {err}"
-                            )
-                        });
-                service.register_policy_runtime(
-                    policy_cfg.policy_id.clone(),
-                    policy_cfg.secret.clone(),
+            for (index, program_cfg) in cfg.programs.iter().enumerate() {
+                let signer = KeyPair::from_private_key(program_cfg.signer_private_key.0.clone())
+                    .unwrap_or_else(|err| {
+                        panic!("invalid torii.ram_lfe.programs[{index}].signer_private_key: {err}")
+                    });
+                service.register_program_runtime(
+                    program_cfg.program_id.clone(),
+                    program_cfg.secret.clone(),
                     signer,
-                    policy_cfg.receipt_ttl.and_then(|ttl| {
-                        u64::try_from(ttl.as_millis()).ok()
-                    }),
+                    program_cfg
+                        .receipt_ttl
+                        .and_then(|ttl| u64::try_from(ttl.as_millis()).ok()),
                 );
             }
             Some(service)
@@ -19261,22 +19503,17 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn torii_identifier_resolver_uses_config_runtime() {
+    async fn torii_ram_lfe_uses_config_runtime() {
         let mut cfg = crate::test_utils::mk_minimal_root_cfg();
         let signer = KeyPair::random();
-        cfg.torii.identifier_resolver =
-            Some(iroha_config::parameters::actual::ToriiIdentifierResolver {
-                policies: vec![
-                    iroha_config::parameters::actual::ToriiIdentifierResolverPolicy {
-                        policy_id: "phone#retail".parse().expect("policy id"),
-                        secret: vec![0x01, 0x02, 0x03, 0x04],
-                        signer_private_key: iroha_crypto::ExposedPrivateKey(
-                            signer.private_key().clone(),
-                        ),
-                        receipt_ttl: Some(Duration::from_secs(30)),
-                    },
-                ],
-            });
+        cfg.torii.ram_lfe = Some(iroha_config::parameters::actual::ToriiRamLfe {
+            programs: vec![iroha_config::parameters::actual::ToriiRamLfeProgram {
+                program_id: "phone_retail".parse().expect("program id"),
+                secret: vec![0x01, 0x02, 0x03, 0x04],
+                signer_private_key: iroha_crypto::ExposedPrivateKey(signer.private_key().clone()),
+                receipt_ttl: Some(Duration::from_secs(30)),
+            }],
+        });
 
         let (kiso, _child) = KisoHandle::start(cfg.clone());
         let kura = Kura::blank_kura_for_testing();
@@ -22405,6 +22642,23 @@ mod tests {
         .expect("activate policy");
     }
 
+    fn register_and_activate_program_policy(
+        authority: &AccountId,
+        tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+        program_policy: &RamLfeProgramPolicy,
+    ) {
+        RegisterRamLfeProgramPolicy {
+            policy: program_policy.clone(),
+        }
+        .execute(authority, tx)
+        .expect("register program policy");
+        ActivateRamLfeProgramPolicy {
+            program_id: program_policy.program_id.clone(),
+        }
+        .execute(authority, tx)
+        .expect("activate program policy");
+    }
+
     fn seed_proof_record_at_height(
         app: &SharedAppState,
         backend: &str,
@@ -22839,6 +23093,182 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn ram_lfe_program_policies_list_registered_program() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (_policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let mut app = mk_app_state_for_tests();
+
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&authority, &mut tx, &program_policy);
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_ram_lfe_program_policies(State(app), HeaderMap::new())
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::RamLfeProgramPolicyListDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items.len(), 1);
+        assert_eq!(
+            dto.items[0].program_id,
+            program_policy.program_id.to_string()
+        );
+        assert_eq!(dto.items[0].backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.items[0].verification_mode, "signed");
+        assert!(dto.items[0].active);
+        assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
+        assert!(dto.items[0].ram_fhe_profile.is_some());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn ram_lfe_execute_returns_receipt() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (_policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let mut app = mk_app_state_for_tests();
+
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&authority, &mut tx, &program_policy);
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_ram_lfe_execute(
+            State(app),
+            HeaderMap::new(),
+            AxPath(program_policy.program_id.to_string()),
+            NoritoJson(routing::RamLfeExecuteRequestDto {
+                input_hex: Some(hex::encode("identifier-input")),
+                encrypted_input: None,
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::RamLfeExecuteResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.program_id, program_policy.program_id.to_string());
+        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.verification_mode, "signed");
+        assert!(!dto.output_hex.is_empty());
+        assert_eq!(dto.receipt.payload.program_id.to_string(), dto.program_id);
+        assert_eq!(dto.receipt.payload.output_hash.to_string(), dto.output_hash);
+        assert_eq!(
+            dto.receipt.payload.associated_data_hash.to_string(),
+            dto.associated_data_hash
+        );
+        assert!(dto.receipt.signature.is_some());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (_policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let mut app = mk_app_state_for_tests();
+
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&authority, &mut tx, &program_policy);
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let draft = resolver
+            .execute(&program_policy, b"receipt-verify-input")
+            .expect("execute program");
+        let receipt = resolver
+            .issue_execution_receipt(&program_policy, &draft)
+            .expect("issue RAM-LFE receipt");
+
+        let response = handler_ram_lfe_receipt_verify(
+            State(app),
+            HeaderMap::new(),
+            NoritoJson(routing::RamLfeReceiptVerifyRequestDto {
+                receipt,
+                output_hex: Some(hex::encode(&draft.output)),
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::RamLfeReceiptVerifyResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert!(dto.valid);
+        assert_eq!(dto.program_id, program_policy.program_id.to_string());
+        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.verification_mode, "signed");
+        assert_eq!(dto.output_hash_matches, Some(true));
+        assert!(dto.error.is_none());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn identifier_policies_lists_registered_policy() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "directory".parse().expect("domain id");
@@ -22855,8 +23285,8 @@ mod tests {
         let signer = KeyPair::random();
         let (policy, program_policy) = sample_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -22924,8 +23354,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23019,8 +23449,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23124,8 +23554,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23218,8 +23648,8 @@ mod tests {
             &public_parameters,
         );
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23350,8 +23780,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23421,8 +23851,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
