@@ -77,11 +77,8 @@ use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, c_ulonglong, free, malloc};
-use norito::{
-    codec::DecodeAll,
-    core::DecodeFromSlice,
-};
 use norito::json::{Map as JsonMap, Value as JsonValue};
+use norito::{codec::DecodeAll, core::DecodeFromSlice};
 use norito::{decode_from_bytes, to_bytes};
 use rand::{RngCore, rng};
 use sha2::{Digest, Sha256, Sha512};
@@ -1378,10 +1375,15 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
 
     let signature = parse_identifier_receipt_signature(object.get("signature"))?;
 
-    if let Some(payload_hex) = object.get("signature_payload_hex").and_then(JsonValue::as_str) {
+    if let Some(payload_hex) = object
+        .get("signature_payload_hex")
+        .and_then(JsonValue::as_str)
+    {
         let payload_bytes = decode_identifier_receipt_hex(payload_hex)?;
-        let decoded_payload = decode_from_bytes::<IdentifierResolutionReceiptPayload>(&payload_bytes)
-            .or_else(|_| IdentifierResolutionReceiptPayload::decode_all(&mut payload_bytes.as_slice()));
+        let decoded_payload =
+            decode_from_bytes::<IdentifierResolutionReceiptPayload>(&payload_bytes).or_else(|_| {
+                IdentifierResolutionReceiptPayload::decode_all(&mut payload_bytes.as_slice())
+            });
         if let Ok(payload) = decoded_payload {
             return Ok(IdentifierResolutionReceipt {
                 payload,
@@ -1396,9 +1398,9 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
         .cloned()
         .or_else(|| object.get("payload").cloned())
     {
-        if let Ok(payload) = norito::json::from_value::<IdentifierResolutionReceiptPayload>(
-            payload_value,
-        ) {
+        if let Ok(payload) =
+            norito::json::from_value::<IdentifierResolutionReceiptPayload>(payload_value)
+        {
             return Ok(IdentifierResolutionReceipt {
                 payload,
                 signature: Some(signature),
@@ -12048,8 +12050,7 @@ mod tests {
         "ab".repeat(64)
     }
 
-    const LIVE_EMAIL_CLAIM_SIGNATURE_HEX: &str =
-        "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900";
+    const LIVE_EMAIL_CLAIM_SIGNATURE_HEX: &str = "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900";
 
     const LIVE_EMAIL_CLAIM_PAYLOAD_HEX: &str = "2B000000000000000D000000000000000500000000000000656D61696C0E00000000000000060000000000000072657461696CDD000000000000001C0000000000000014000000000000000C00000000000000656D61696C5F72657461696C200000000000000075522459A6B0039705A18CE5D21050F39454F440203D6041C454658735DA1D070400000000000000020000000400000000000000000000002000000000000000E12E5429C9C8B146C4EC6DB972DCDEBD6BC84257A4503C0A152E052D345B303D2000000000000000444180A5ECCBC236041F1DC4D5E3BD220B0656261EB55B9D9AE32AA729B5437F0800000000000000987ABF0A9D0100001100000000000000010800000000000000780EC40A9D01000028000000000000002000000000000000D82F9EAB952F7A5241BB2339C0095EBC61958428164AB820FAD85952F35745852000000000000000032DF7E7370E04DDBABF0CD40932935A1D2C77A9B8D723BBB9F1472F2791CC7128000000000000002000000000000000C60973F731CCB57008687F9BC38CC712E3BE7AB46D99A1BEFFD1C9FD61E60A875A00000000000000000000004E00000000000000460000000000000065643031323035363334453930373145383636323937344132324631333739373236363343343634344443333534364131393338453143414335384445344342413844393635";
 
@@ -12058,7 +12059,10 @@ mod tests {
         let payload = sample_identifier_receipt_payload();
         let payload_hex = hex::encode(to_bytes(&payload).expect("encode payload"));
         let receipt = parse_identifier_receipt_value(json_object([
-            ("signature", JsonValue::from(sample_identifier_signature_hex())),
+            (
+                "signature",
+                JsonValue::from(sample_identifier_signature_hex()),
+            ),
             ("signature_payload_hex", JsonValue::from(payload_hex)),
         ]))
         .expect("parse torii payload hex receipt");
@@ -12075,7 +12079,10 @@ mod tests {
         let payload = sample_identifier_receipt_payload();
         let payload_value = norito::json::to_value(&payload).expect("payload json");
         let receipt = parse_identifier_receipt_value(json_object([
-            ("signature", JsonValue::from(sample_identifier_signature_hex())),
+            (
+                "signature",
+                JsonValue::from(sample_identifier_signature_hex()),
+            ),
             ("signature_payload_hex", JsonValue::from("01020304a0")),
             ("signature_payload", payload_value),
         ]))
@@ -12093,7 +12100,10 @@ mod tests {
         let payload = sample_identifier_receipt_payload();
         let payload_value = norito::json::to_value(&payload).expect("payload json");
         let receipt = parse_identifier_receipt_value(json_object([
-            ("signature", JsonValue::from(sample_identifier_signature_hex())),
+            (
+                "signature",
+                JsonValue::from(sample_identifier_signature_hex()),
+            ),
             ("payload", payload_value),
         ]))
         .expect("parse payload envelope receipt");
@@ -12137,15 +12147,22 @@ mod tests {
 
     #[test]
     fn parse_identifier_receipt_accepts_swift_normalized_payload_fallback() {
-        let payload_bytes = hex::decode(LIVE_EMAIL_CLAIM_PAYLOAD_HEX).expect("hex decode live payload");
+        let payload_bytes =
+            hex::decode(LIVE_EMAIL_CLAIM_PAYLOAD_HEX).expect("hex decode live payload");
         let payload = IdentifierResolutionReceiptPayload::decode_all(&mut payload_bytes.as_slice())
             .expect("decode live payload bytes");
         let payload_value = json_object([
             ("policy_id", JsonValue::from(payload.policy_id.to_string())),
             ("opaque_id", JsonValue::from(payload.opaque_id.to_string())),
-            ("receipt_hash", JsonValue::from(payload.receipt_hash.to_string())),
+            (
+                "receipt_hash",
+                JsonValue::from(payload.receipt_hash.to_string()),
+            ),
             ("uaid", JsonValue::from(payload.uaid.to_string())),
-            ("account_id", JsonValue::from(payload.account_id.to_string())),
+            (
+                "account_id",
+                JsonValue::from(payload.account_id.to_string()),
+            ),
             (
                 "execution",
                 json_object([
@@ -12157,14 +12174,8 @@ mod tests {
                         "program_digest",
                         JsonValue::from(payload.execution.program_digest.to_string()),
                     ),
-                    (
-                        "backend",
-                        JsonValue::from("bfv-programmed-sha3-256-v1"),
-                    ),
-                    (
-                        "verification_mode",
-                        JsonValue::from("signed"),
-                    ),
+                    ("backend", JsonValue::from("bfv-programmed-sha3-256-v1")),
+                    ("verification_mode", JsonValue::from("signed")),
                     (
                         "output_hash",
                         JsonValue::from(payload.execution.output_hash.to_string()),

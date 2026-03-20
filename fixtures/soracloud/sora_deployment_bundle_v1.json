@@ -109,6 +109,103 @@
         "max_item_bytes": 16384,
         "max_total_bytes": 16777216
       }
+    ],
+    "handlers": [
+      {
+        "handler_name": "assets",
+        "class": {
+          "class": "Asset",
+          "value": null
+        },
+        "entrypoint": "serve_assets",
+        "route_path": "/assets",
+        "certified_response": {
+          "certified_response": "StateCommitment",
+          "value": null
+        },
+        "mailbox": null
+      },
+      {
+        "handler_name": "query",
+        "class": {
+          "class": "Query",
+          "value": null
+        },
+        "entrypoint": "serve_query",
+        "route_path": "/query",
+        "certified_response": {
+          "certified_response": "AuditReceipt",
+          "value": null
+        },
+        "mailbox": null
+      },
+      {
+        "handler_name": "update",
+        "class": {
+          "class": "Update",
+          "value": null
+        },
+        "entrypoint": "apply_update",
+        "route_path": "/update",
+        "certified_response": {
+          "certified_response": "None",
+          "value": null
+        },
+        "mailbox": {
+          "queue_name": "updates",
+          "max_pending_messages": 1024,
+          "max_message_bytes": 65536,
+          "retention_blocks": 1440
+        }
+      },
+      {
+        "handler_name": "private_update",
+        "class": {
+          "class": "PrivateUpdate",
+          "value": null
+        },
+        "entrypoint": "apply_private_update",
+        "route_path": "/private/update",
+        "certified_response": {
+          "certified_response": "None",
+          "value": null
+        },
+        "mailbox": {
+          "queue_name": "private_updates",
+          "max_pending_messages": 256,
+          "max_message_bytes": 131072,
+          "retention_blocks": 2880
+        }
+      }
+    ],
+    "artifacts": [
+      {
+        "kind": {
+          "artifact_kind": "StaticAsset",
+          "value": null
+        },
+        "artifact_hash": "hash:1112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F31#011A",
+        "artifact_path": "/public/index.html",
+        "handler_name": "assets"
+      },
+      {
+        "kind": {
+          "artifact_kind": "Journal",
+          "value": null
+        },
+        "artifact_hash": "hash:1112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F31#011A",
+        "artifact_path": "/journals/portal.journal",
+        "handler_name": "update"
+      },
+      {
+        "kind": {
+          "artifact_kind": "Checkpoint",
+          "value": null
+        },
+        "artifact_hash": "hash:1112131415161718191A1B1C1D1E1F202122232425262728292A2B2C2D2E2F31#011A",
+        "artifact_path": "/checkpoints/portal.chk",
+        "handler_name": "private_update"
+      }
     ]
   }
 }

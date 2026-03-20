@@ -10,22 +10,27 @@
 use std::{
     collections::BTreeMap,
     fs,
-    num::{NonZeroU16, NonZeroU64},
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
+    account::AccountId,
     Encode,
     name::Name,
+    prelude::ExposedPrivateKey,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, AgentUpgradePolicyV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-        SORA_STATE_BINDING_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraNetworkPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateScopeV1, SoraTlsModeV1, encode_agent_artifact_allow_provenance_payload,
+        SORA_STATE_BINDING_VERSION_V1, SoraArtifactKindV1, SoraArtifactRefV1,
+        SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+        SoraDeploymentBundleV1, SoraMailboxContractV1, SoraNetworkPolicyV1, SoraRouteTargetV1,
+        SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+        SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -129,93 +134,101 @@ impl Run for Command {
         match self {
             Command::Init(args) => context.print_data(&args.run()?),
             Command::Deploy(args) => {
-                let output = args.run(MutationMode::Deploy, &context.config().key_pair)?;
+                let output = args.run(
+                    MutationMode::Deploy,
+                    &context.config().account,
+                    &context.config().key_pair,
+                )?;
                 context.print_data(&output)
             }
             Command::Status(args) => context.print_data(&args.run()?),
             Command::Upgrade(args) => {
-                let output = args.run(MutationMode::Upgrade, &context.config().key_pair)?;
+                let output = args.run(
+                    MutationMode::Upgrade,
+                    &context.config().account,
+                    &context.config().key_pair,
+                )?;
                 context.print_data(&output)
             }
             Command::Rollback(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::Rollout(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentDeploy(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentLeaseRenew(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentRestart(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentStatus(args) => context.print_data(&args.run()?),
             Command::AgentWalletSpend(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentWalletApprove(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentPolicyRevoke(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentMessageSend(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentMessageAck(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentMailboxStatus(args) => context.print_data(&args.run()?),
             Command::AgentArtifactAllow(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentAutonomyRun(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::AgentAutonomyStatus(args) => context.print_data(&args.run()?),
             Command::TrainingJobStart(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::TrainingJobCheckpoint(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::TrainingJobRetry(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::TrainingJobStatus(args) => context.print_data(&args.run()?),
             Command::ModelArtifactRegister(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::ModelArtifactStatus(args) => context.print_data(&args.run()?),
             Command::ModelWeightRegister(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::ModelWeightPromote(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::ModelWeightRollback(args) => {
-                let output = args.run(&context.config().key_pair)?;
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
             Command::ModelWeightStatus(args) => context.print_data(&args.run()?),
@@ -357,7 +370,12 @@ pub struct DeployArgs {
 }
 
 impl DeployArgs {
-    fn run(self, mode: MutationMode, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(
+        self,
+        mode: MutationMode,
+        authority: &AccountId,
+        key_pair: &KeyPair,
+    ) -> Result<norito::json::Value> {
         let container: SoraContainerManifestV1 = load_json(&self.container)?;
         let service: SoraServiceManifestV1 = load_json(&self.service)?;
         let bundle = SoraDeploymentBundleV1 {
@@ -372,7 +390,7 @@ impl DeployArgs {
                 MutationMode::Deploy => "v1/soracloud/deploy",
                 MutationMode::Upgrade => "v1/soracloud/upgrade",
             };
-            let request = signed_bundle_request(bundle, key_pair)?;
+            let request = signed_bundle_request(bundle, Some(authority), key_pair)?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
                 endpoint_path,
@@ -414,7 +432,12 @@ pub struct UpgradeArgs {
 }
 
 impl UpgradeArgs {
-    fn run(self, mode: MutationMode, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(
+        self,
+        mode: MutationMode,
+        authority: &AccountId,
+        key_pair: &KeyPair,
+    ) -> Result<norito::json::Value> {
         let container: SoraContainerManifestV1 = load_json(&self.container)?;
         let service: SoraServiceManifestV1 = load_json(&self.service)?;
         let bundle = SoraDeploymentBundleV1 {
@@ -429,7 +452,7 @@ impl UpgradeArgs {
                 MutationMode::Deploy => "v1/soracloud/deploy",
                 MutationMode::Upgrade => "v1/soracloud/upgrade",
             };
-            let request = signed_bundle_request(bundle, key_pair)?;
+            let request = signed_bundle_request(bundle, Some(authority), key_pair)?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
                 endpoint_path,
@@ -457,7 +480,7 @@ pub struct StatusArgs {
     #[arg(long, value_name = "NAME")]
     service_name: Option<String>,
     /// Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query
-    /// `/v1/soracloud/status` from a live control plane.
+    /// `/v1/soracloud/registry` from a live control plane.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
     /// Optional API token sent as `x-api-token` when querying Torii.
@@ -525,11 +548,12 @@ pub struct RollbackArgs {
 }
 
 impl RollbackArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
             let request = signed_rollback_request(
                 &self.service_name,
                 self.target_version.as_deref(),
+                Some(authority),
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -586,7 +610,7 @@ pub struct RolloutArgs {
 }
 
 impl RolloutArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
             let request = signed_rollout_request(
                 &self.service_name,
@@ -594,6 +618,7 @@ impl RolloutArgs {
                 self.health.is_healthy(),
                 self.promote_to_percent,
                 self.governance_tx_hash,
+                Some(authority),
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -647,7 +672,7 @@ pub struct AgentDeployArgs {
 }
 
 impl AgentDeployArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_ticks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
@@ -662,6 +687,7 @@ impl AgentDeployArgs {
                 manifest,
                 self.lease_ticks,
                 self.autonomy_budget_units,
+                authority,
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -710,14 +736,18 @@ pub struct AgentLeaseRenewArgs {
 }
 
 impl AgentLeaseRenewArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.lease_ticks == 0 {
             return Err(eyre!("--lease-ticks must be greater than zero"));
         }
 
         if let Some(torii_url) = self.torii_url.as_deref() {
-            let request =
-                signed_agent_lease_renew_request(&self.apartment_name, self.lease_ticks, key_pair)?;
+            let request = signed_agent_lease_renew_request(
+                &self.apartment_name,
+                self.lease_ticks,
+                authority,
+                key_pair,
+            )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
                 "v1/soracloud/agent/lease/renew",
@@ -760,10 +790,14 @@ pub struct AgentRestartArgs {
 }
 
 impl AgentRestartArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
-            let request =
-                signed_agent_restart_request(&self.apartment_name, &self.reason, key_pair)?;
+            let request = signed_agent_restart_request(
+                &self.apartment_name,
+                &self.reason,
+                authority,
+                key_pair,
+            )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
                 "v1/soracloud/agent/restart",
@@ -866,7 +900,7 @@ pub struct AgentWalletSpendArgs {
 }
 
 impl AgentWalletSpendArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.amount_nanos == 0 {
             return Err(eyre!("--amount-nanos must be greater than zero"));
         }
@@ -876,6 +910,7 @@ impl AgentWalletSpendArgs {
                 &self.apartment_name,
                 &self.asset_definition,
                 self.amount_nanos,
+                authority,
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -924,11 +959,12 @@ pub struct AgentWalletApproveArgs {
 }
 
 impl AgentWalletApproveArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
             let request = signed_agent_wallet_approve_request(
                 &self.apartment_name,
                 &self.request_id,
+                authority,
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -976,12 +1012,13 @@ pub struct AgentPolicyRevokeArgs {
 }
 
 impl AgentPolicyRevokeArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
             let request = signed_agent_policy_revoke_request(
                 &self.apartment_name,
                 &self.capability,
                 self.reason.as_deref(),
+                authority,
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -1036,13 +1073,14 @@ pub struct AgentMessageSendArgs {
 }
 
 impl AgentMessageSendArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
             let request = signed_agent_message_send_request(
                 &self.from_apartment,
                 &self.to_apartment,
                 &self.channel,
                 &self.payload,
+                authority,
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -1092,10 +1130,14 @@ pub struct AgentMessageAckArgs {
 }
 
 impl AgentMessageAckArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
-            let request =
-                signed_agent_message_ack_request(&self.apartment_name, &self.message_id, key_pair)?;
+            let request = signed_agent_message_ack_request(
+                &self.apartment_name,
+                &self.message_id,
+                authority,
+                key_pair,
+            )?;
             let (_, payload) = post_torii_soracloud_mutation(
                 torii_url,
                 "v1/soracloud/agent/message/ack",
@@ -1199,12 +1241,13 @@ pub struct AgentArtifactAllowArgs {
 }
 
 impl AgentArtifactAllowArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if let Some(torii_url) = self.torii_url.as_deref() {
             let request = signed_agent_artifact_allow_request(
                 &self.apartment_name,
                 &self.artifact_hash,
                 self.provenance_hash.as_deref(),
+                authority,
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -1262,7 +1305,7 @@ pub struct AgentAutonomyRunArgs {
 }
 
 impl AgentAutonomyRunArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.budget_units == 0 {
             return Err(eyre!("--budget-units must be greater than zero"));
         }
@@ -1274,6 +1317,7 @@ impl AgentAutonomyRunArgs {
                 self.provenance_hash.as_deref(),
                 self.budget_units,
                 &self.run_label,
+                authority,
                 key_pair,
             )?;
             let (_, payload) = post_torii_soracloud_mutation(
@@ -1414,7 +1458,7 @@ pub struct TrainingJobStartArgs {
 }
 
 impl TrainingJobStartArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.worker_group_size == 0 {
             return Err(eyre!("--worker-group-size must be greater than zero"));
         }
@@ -1447,6 +1491,7 @@ impl TrainingJobStartArgs {
             self.step_compute_units,
             self.compute_budget_units,
             self.storage_budget_bytes,
+            Some(authority),
             key_pair,
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -1490,7 +1535,7 @@ pub struct TrainingJobCheckpointArgs {
 }
 
 impl TrainingJobCheckpointArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         if self.completed_step == 0 {
             return Err(eyre!("--completed-step must be greater than zero"));
         }
@@ -1504,6 +1549,7 @@ impl TrainingJobCheckpointArgs {
             self.completed_step,
             self.checkpoint_size_bytes,
             self.metrics_hash,
+            Some(authority),
             key_pair,
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -1541,12 +1587,13 @@ pub struct TrainingJobRetryArgs {
 }
 
 impl TrainingJobRetryArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_training_job_retry_request(
             &self.service_name,
             &self.job_id,
             &self.reason,
+            Some(authority),
             key_pair,
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -1633,7 +1680,7 @@ pub struct ModelArtifactRegisterArgs {
 }
 
 impl ModelArtifactRegisterArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_model_artifact_register_request(
             &self.service_name,
@@ -1644,6 +1691,7 @@ impl ModelArtifactRegisterArgs {
             self.training_config_hash,
             self.reproducibility_hash,
             self.provenance_attestation_hash,
+            Some(authority),
             key_pair,
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -1736,7 +1784,7 @@ pub struct ModelWeightRegisterArgs {
 }
 
 impl ModelWeightRegisterArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_model_weight_register_request(
             &self.service_name,
@@ -1749,6 +1797,7 @@ impl ModelWeightRegisterArgs {
             self.training_config_hash,
             self.reproducibility_hash,
             self.provenance_attestation_hash,
+            Some(authority),
             key_pair,
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -1792,7 +1841,7 @@ pub struct ModelWeightPromoteArgs {
 }
 
 impl ModelWeightPromoteArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_model_weight_promote_request(
             &self.service_name,
@@ -1800,6 +1849,7 @@ impl ModelWeightPromoteArgs {
             &self.weight_version,
             self.gate_approved,
             self.gate_report_hash,
+            Some(authority),
             key_pair,
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -1840,13 +1890,14 @@ pub struct ModelWeightRollbackArgs {
 }
 
 impl ModelWeightRollbackArgs {
-    fn run(self, key_pair: &KeyPair) -> Result<norito::json::Value> {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_model_weight_rollback_request(
             &self.service_name,
             &self.model_name,
             &self.target_version,
             &self.reason,
+            Some(authority),
             key_pair,
         )?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -2568,6 +2619,10 @@ impl StatusOutput {
 struct SignedBundleRequest {
     bundle: SoraDeploymentBundleV1,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2588,6 +2643,10 @@ struct RollbackPayload {
 struct SignedRollbackRequest {
     payload: RollbackPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2611,6 +2670,10 @@ struct RolloutAdvancePayload {
 struct SignedRolloutAdvanceRequest {
     payload: RolloutAdvancePayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2632,6 +2695,10 @@ struct AgentDeployPayload {
 struct SignedAgentDeployRequest {
     payload: AgentDeployPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2651,6 +2718,10 @@ struct AgentLeaseRenewPayload {
 struct SignedAgentLeaseRenewRequest {
     payload: AgentLeaseRenewPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2670,6 +2741,10 @@ struct AgentRestartPayload {
 struct SignedAgentRestartRequest {
     payload: AgentRestartPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2692,6 +2767,10 @@ struct AgentPolicyRevokePayload {
 struct SignedAgentPolicyRevokeRequest {
     payload: AgentPolicyRevokePayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2712,6 +2791,10 @@ struct AgentWalletSpendPayload {
 struct SignedAgentWalletSpendRequest {
     payload: AgentWalletSpendPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2731,6 +2814,10 @@ struct AgentWalletApprovePayload {
 struct SignedAgentWalletApproveRequest {
     payload: AgentWalletApprovePayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2752,6 +2839,10 @@ struct AgentMessageSendPayload {
 struct SignedAgentMessageSendRequest {
     payload: AgentMessageSendPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2771,6 +2862,10 @@ struct AgentMessageAckPayload {
 struct SignedAgentMessageAckRequest {
     payload: AgentMessageAckPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2793,6 +2888,10 @@ struct AgentArtifactAllowPayload {
 struct SignedAgentArtifactAllowRequest {
     payload: AgentArtifactAllowPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2817,6 +2916,10 @@ struct AgentAutonomyRunPayload {
 struct SignedAgentAutonomyRunRequest {
     payload: AgentAutonomyRunPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2844,6 +2947,10 @@ struct TrainingJobStartPayload {
 struct SignedTrainingJobStartRequest {
     payload: TrainingJobStartPayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2866,6 +2973,10 @@ struct TrainingJobCheckpointPayload {
 struct SignedTrainingJobCheckpointRequest {
     payload: TrainingJobCheckpointPayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2886,6 +2997,10 @@ struct TrainingJobRetryPayload {
 struct SignedTrainingJobRetryRequest {
     payload: TrainingJobRetryPayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2911,6 +3026,10 @@ struct ModelArtifactRegisterPayload {
 struct SignedModelArtifactRegisterRequest {
     payload: ModelArtifactRegisterPayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2940,6 +3059,10 @@ struct ModelWeightRegisterPayload {
 struct SignedModelWeightRegisterRequest {
     payload: ModelWeightRegisterPayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2962,6 +3085,10 @@ struct ModelWeightPromotePayload {
 struct SignedModelWeightPromoteRequest {
     payload: ModelWeightPromotePayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -2983,6 +3110,10 @@ struct ModelWeightRollbackPayload {
 struct SignedModelWeightRollbackRequest {
     payload: ModelWeightRollbackPayload,
     provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
 }
 
 fn apply_mutation(
@@ -4666,6 +4797,7 @@ fn rollout_handle(service_name: &str, sequence: u64) -> String {
 
 fn signed_bundle_request(
     bundle: SoraDeploymentBundleV1,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedBundleRequest> {
     let payload = encode_bundle_provenance_payload(&bundle)
@@ -4677,12 +4809,15 @@ fn signed_bundle_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
 fn signed_rollback_request(
     service_name: &str,
     target_version: Option<&str>,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedRollbackRequest> {
     if service_name.trim().is_empty() {
@@ -4701,6 +4836,8 @@ fn signed_rollback_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -4718,6 +4855,7 @@ fn signed_rollout_request(
     healthy: bool,
     promote_to_percent: Option<u8>,
     governance_tx_hash: Hash,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedRolloutAdvanceRequest> {
     if service_name.trim().is_empty() {
@@ -4745,6 +4883,8 @@ fn signed_rollout_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -4752,6 +4892,7 @@ fn signed_agent_deploy_request(
     manifest: AgentApartmentManifestV1,
     lease_ticks: u64,
     autonomy_budget_units: u64,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentDeployRequest> {
     let payload = AgentDeployPayload {
@@ -4768,12 +4909,15 @@ fn signed_agent_deploy_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
 fn signed_agent_lease_renew_request(
     apartment_name: &str,
     lease_ticks: u64,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentLeaseRenewRequest> {
     if apartment_name.trim().is_empty() {
@@ -4795,12 +4939,15 @@ fn signed_agent_lease_renew_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
 fn signed_agent_restart_request(
     apartment_name: &str,
     reason: &str,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentRestartRequest> {
     if apartment_name.trim().is_empty() {
@@ -4822,6 +4969,8 @@ fn signed_agent_restart_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -4829,6 +4978,7 @@ fn signed_agent_policy_revoke_request(
     apartment_name: &str,
     capability: &str,
     reason: Option<&str>,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentPolicyRevokeRequest> {
     if apartment_name.trim().is_empty() {
@@ -4851,6 +5001,8 @@ fn signed_agent_policy_revoke_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -4858,6 +5010,7 @@ fn signed_agent_wallet_spend_request(
     apartment_name: &str,
     asset_definition: &str,
     amount_nanos: u64,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentWalletSpendRequest> {
     if apartment_name.trim().is_empty() {
@@ -4883,12 +5036,15 @@ fn signed_agent_wallet_spend_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
 fn signed_agent_wallet_approve_request(
     apartment_name: &str,
     request_id: &str,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentWalletApproveRequest> {
     if apartment_name.trim().is_empty() {
@@ -4910,6 +5066,8 @@ fn signed_agent_wallet_approve_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -4918,6 +5076,7 @@ fn signed_agent_message_send_request(
     to_apartment: &str,
     channel: &str,
     payload: &str,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentMessageSendRequest> {
     if from_apartment.trim().is_empty() {
@@ -4947,12 +5106,15 @@ fn signed_agent_message_send_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
 fn signed_agent_message_ack_request(
     apartment_name: &str,
     message_id: &str,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentMessageAckRequest> {
     if apartment_name.trim().is_empty() {
@@ -4974,6 +5136,8 @@ fn signed_agent_message_ack_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -4981,6 +5145,7 @@ fn signed_agent_artifact_allow_request(
     apartment_name: &str,
     artifact_hash: &str,
     provenance_hash: Option<&str>,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentArtifactAllowRequest> {
     if apartment_name.trim().is_empty() {
@@ -5004,6 +5169,8 @@ fn signed_agent_artifact_allow_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5013,6 +5180,7 @@ fn signed_agent_autonomy_run_request(
     provenance_hash: Option<&str>,
     budget_units: u64,
     run_label: &str,
+    authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentAutonomyRunRequest> {
     if apartment_name.trim().is_empty() {
@@ -5045,6 +5213,8 @@ fn signed_agent_autonomy_run_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5060,6 +5230,7 @@ fn signed_training_job_start_request(
     step_compute_units: u64,
     compute_budget_units: u64,
     storage_budget_bytes: u64,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobStartRequest> {
     if service_name.trim().is_empty() {
@@ -5112,6 +5283,8 @@ fn signed_training_job_start_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5121,6 +5294,7 @@ fn signed_training_job_checkpoint_request(
     completed_step: u32,
     checkpoint_size_bytes: u64,
     metrics_hash: Hash,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobCheckpointRequest> {
     if service_name.trim().is_empty() {
@@ -5151,6 +5325,8 @@ fn signed_training_job_checkpoint_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5158,6 +5334,7 @@ fn signed_training_job_retry_request(
     service_name: &str,
     job_id: &str,
     reason: &str,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobRetryRequest> {
     if service_name.trim().is_empty() {
@@ -5183,6 +5360,8 @@ fn signed_training_job_retry_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5196,6 +5375,7 @@ fn signed_model_artifact_register_request(
     training_config_hash: Hash,
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelArtifactRegisterRequest> {
     if service_name.trim().is_empty() {
@@ -5229,6 +5409,8 @@ fn signed_model_artifact_register_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5244,6 +5426,7 @@ fn signed_model_weight_register_request(
     training_config_hash: Hash,
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightRegisterRequest> {
     if service_name.trim().is_empty() {
@@ -5285,6 +5468,8 @@ fn signed_model_weight_register_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5294,6 +5479,7 @@ fn signed_model_weight_promote_request(
     weight_version: &str,
     gate_approved: bool,
     gate_report_hash: Hash,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightPromoteRequest> {
     if service_name.trim().is_empty() {
@@ -5321,6 +5507,8 @@ fn signed_model_weight_promote_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5329,6 +5517,7 @@ fn signed_model_weight_rollback_request(
     model_name: &str,
     target_version: &str,
     reason: &str,
+    authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightRollbackRequest> {
     if service_name.trim().is_empty() {
@@ -5358,6 +5547,8 @@ fn signed_model_weight_rollback_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
+        authority: authority.cloned(),
+        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
     })
 }
 
@@ -5637,8 +5828,8 @@ fn fetch_torii_soracloud_status(
 ) -> Result<(String, norito::json::Value)> {
     let mut endpoint = reqwest::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
-        .join("v1/soracloud/status")
-        .wrap_err("failed to derive /v1/soracloud/status URL from --torii-url")?;
+        .join("v1/soracloud/registry")
+        .wrap_err("failed to derive /v1/soracloud/registry URL from --torii-url")?;
 
     if let Some(service_name) = service_name
         && !service_name.is_empty()
@@ -5670,7 +5861,7 @@ fn fetch_torii_soracloud_status(
     if !status.is_success() {
         let body_text = String::from_utf8_lossy(&body);
         return Err(eyre!(
-            "Torii /v1/soracloud/status returned {}: {}",
+            "Torii /v1/soracloud/registry returned {}: {}",
             status,
             body_text
         ));
@@ -6058,6 +6249,49 @@ fn workspace_fixture(path: &str) -> PathBuf {
         .join(path)
 }
 
+fn service_handler(
+    handler_name: &str,
+    class: SoraServiceHandlerClassV1,
+    entrypoint: &str,
+    route_path: Option<&str>,
+    certified_response: SoraCertifiedResponsePolicyV1,
+    mailbox: Option<(&str, u32, u64, u32)>,
+) -> SoraServiceHandlerV1 {
+    SoraServiceHandlerV1 {
+        handler_name: handler_name.parse().expect("literal handler name is valid"),
+        class,
+        entrypoint: entrypoint.to_owned(),
+        route_path: route_path.map(ToOwned::to_owned),
+        certified_response,
+        mailbox: mailbox.map(
+            |(queue_name, max_pending_messages, max_message_bytes, retention_blocks)| {
+                SoraMailboxContractV1 {
+                    queue_name: queue_name.parse().expect("literal queue name is valid"),
+                    max_pending_messages: NonZeroU32::new(max_pending_messages)
+                        .expect("nonzero literal"),
+                    max_message_bytes: NonZeroU64::new(max_message_bytes)
+                        .expect("nonzero literal"),
+                    retention_blocks: NonZeroU32::new(retention_blocks)
+                        .expect("nonzero literal"),
+                }
+            },
+        ),
+    }
+}
+
+fn service_artifact(
+    kind: SoraArtifactKindV1,
+    artifact_path: &str,
+    handler_name: Option<&str>,
+) -> SoraArtifactRefV1 {
+    SoraArtifactRefV1 {
+        kind,
+        artifact_hash: Hash::new(artifact_path.as_bytes()),
+        artifact_path: artifact_path.to_owned(),
+        handler_name: handler_name.map(|name| name.parse().expect("literal handler name is valid")),
+    }
+}
+
 fn apply_init_template_defaults(
     template: InitTemplate,
     service_name: &Name,
@@ -6092,6 +6326,19 @@ fn apply_init_template_defaults(
             });
             service.replicas = NonZeroU16::new(2).expect("nonzero literal");
             service.state_bindings.clear();
+            service.handlers = vec![service_handler(
+                "assets",
+                SoraServiceHandlerClassV1::Asset,
+                "serve_assets",
+                Some("/"),
+                SoraCertifiedResponsePolicyV1::StateCommitment,
+                None,
+            )];
+            service.artifacts = vec![service_artifact(
+                SoraArtifactKindV1::StaticAsset,
+                "/app/dist/index.html",
+                Some("assets"),
+            )];
             Ok(())
         }
         InitTemplate::Webapp => {
@@ -6159,6 +6406,29 @@ fn apply_init_template_defaults(
                     max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
                 },
             ];
+            service.handlers = vec![
+                service_handler(
+                    "query",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_query",
+                    Some("/query"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "update",
+                    SoraServiceHandlerClassV1::Update,
+                    "apply_update",
+                    Some("/update"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("updates", 1024, 65_536, 1_440)),
+                ),
+            ];
+            service.artifacts = vec![service_artifact(
+                SoraArtifactKindV1::Journal,
+                "/journals/webapp.journal",
+                Some("update"),
+            )];
             Ok(())
         }
         InitTemplate::PiiApp => {
@@ -6267,6 +6537,44 @@ fn apply_init_template_defaults(
                     max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
                     max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
                 },
+            ];
+            service.handlers = vec![
+                service_handler(
+                    "query",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_query",
+                    Some("/query"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "update",
+                    SoraServiceHandlerClassV1::Update,
+                    "apply_update",
+                    Some("/update"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("updates", 512, 65_536, 1_440)),
+                ),
+                service_handler(
+                    "private_update",
+                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    "apply_private_update",
+                    Some("/private/update"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("private_updates", 256, 131_072, 2_880)),
+                ),
+            ];
+            service.artifacts = vec![
+                service_artifact(
+                    SoraArtifactKindV1::Journal,
+                    "/journals/pii.journal",
+                    Some("update"),
+                ),
+                service_artifact(
+                    SoraArtifactKindV1::Checkpoint,
+                    "/checkpoints/pii.chk",
+                    Some("private_update"),
+                ),
             ];
             Ok(())
         }
@@ -8668,7 +8976,7 @@ mod tests {
             }
         });
         let output = StatusOutput::from_network(
-            "http://127.0.0.1:8080/v1/soracloud/status".to_owned(),
+            "http://127.0.0.1:8080/v1/soracloud/registry".to_owned(),
             payload.clone(),
         );
         assert_eq!(output.source, "torii_control_plane");
@@ -8755,19 +9063,24 @@ mod tests {
             service,
         };
         let key_pair = KeyPair::random();
-        let request = signed_bundle_request(bundle, &key_pair).expect("signed request");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_bundle_request(bundle, Some(&authority), &key_pair)
+            .expect("signed request");
         let payload = encode_bundle_provenance_payload(&request.bundle).expect("encode payload");
         request
             .provenance
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_rollback_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let request = signed_rollback_request("web_portal", None, &key_pair)
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_rollback_request("web_portal", None, Some(&authority), &key_pair)
             .expect("signed rollback request");
         let payload = encode_rollback_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8775,17 +9088,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_rollout_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_rollout_request(
             "web_portal",
             "web_portal:rollout:2",
             true,
             Some(100),
             Hash::new(b"governance"),
+            Some(&authority),
             &key_pair,
         )
         .expect("signed rollout request");
@@ -8795,13 +9112,17 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_deploy_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let request = signed_agent_deploy_request(fixture_agent_apartment(), 120, 500, &key_pair)
-            .expect("signed agent deploy request");
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let request =
+            signed_agent_deploy_request(fixture_agent_apartment(), 120, 500, &authority, &key_pair)
+                .expect("signed agent deploy request");
         let payload =
             encode_agent_deploy_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8809,13 +9130,17 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_lease_renew_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let request = signed_agent_lease_renew_request("ops_agent", 120, &key_pair)
-            .expect("signed agent lease renew request");
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let request =
+            signed_agent_lease_renew_request("ops_agent", 120, &authority, &key_pair)
+                .expect("signed agent lease renew request");
         let payload =
             encode_agent_lease_renew_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8823,13 +9148,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_restart_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let request = signed_agent_restart_request("ops_agent", "manual-restart", &key_pair)
-            .expect("signed agent restart request");
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let request = signed_agent_restart_request(
+            "ops_agent",
+            "manual-restart",
+            &authority,
+            &key_pair,
+        )
+        .expect("signed agent restart request");
         let payload =
             encode_agent_restart_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8837,15 +9170,19 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_policy_revoke_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
         let request = signed_agent_policy_revoke_request(
             "ops_agent",
             "agent.autonomy.run",
             Some("manual-review"),
+            &authority,
             &key_pair,
         )
         .expect("signed agent policy revoke request");
@@ -8856,14 +9193,22 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let request =
-            signed_agent_wallet_spend_request("ops_agent", "xor#sora", 1_000_000, &key_pair)
-                .expect("signed agent wallet spend request");
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let request = signed_agent_wallet_spend_request(
+            "ops_agent",
+            "xor#sora",
+            1_000_000,
+            &authority,
+            &key_pair,
+        )
+        .expect("signed agent wallet spend request");
         let payload =
             encode_agent_wallet_spend_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8871,14 +9216,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_wallet_approve_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let request =
-            signed_agent_wallet_approve_request("ops_agent", "ops_agent:wallet:7", &key_pair)
-                .expect("signed agent wallet approve request");
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let request = signed_agent_wallet_approve_request(
+            "ops_agent",
+            "ops_agent:wallet:7",
+            &authority,
+            &key_pair,
+        )
+        .expect("signed agent wallet approve request");
         let payload = encode_agent_wallet_approve_signature_payload(&request.payload)
             .expect("encode payload");
         request
@@ -8886,16 +9238,20 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_message_send_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
         let request = signed_agent_message_send_request(
             "ops_agent",
             "worker_agent",
             "ops.sync",
             "rotate-key-42",
+            &authority,
             &key_pair,
         )
         .expect("signed agent message send request");
@@ -8906,14 +9262,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_message_ack_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let request =
-            signed_agent_message_ack_request("worker_agent", "worker_agent:mail:3", &key_pair)
-                .expect("signed agent message ack request");
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let request = signed_agent_message_ack_request(
+            "worker_agent",
+            "worker_agent:mail:3",
+            &authority,
+            &key_pair,
+        )
+        .expect("signed agent message ack request");
         let payload =
             encode_agent_message_ack_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8921,15 +9284,19 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_artifact_allow_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
         let request = signed_agent_artifact_allow_request(
             "ops_agent",
             "hash:ABCD0123#01",
             Some("hash:PROV0001#01"),
+            &authority,
             &key_pair,
         )
         .expect("signed agent artifact allow request");
@@ -8940,17 +9307,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
     fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
         let request = signed_agent_autonomy_run_request(
             "ops_agent",
             "hash:ABCD0123#01",
             Some("hash:PROV0001#01"),
             120,
             "nightly-train-step-1",
+            &authority,
             &key_pair,
         )
         .expect("signed agent autonomy run request");
@@ -8961,6 +9332,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
     }
 
     #[test]
@@ -8977,6 +9350,7 @@ mod tests {
             500,
             50_000,
             4_000,
+            None,
             &key_pair,
         )
         .expect("signed training start request");
@@ -8998,6 +9372,7 @@ mod tests {
             20,
             1_024,
             Hash::new(b"metrics"),
+            None,
             &key_pair,
         )
         .expect("signed training checkpoint request");
@@ -9017,6 +9392,7 @@ mod tests {
             "web_portal",
             "job-1",
             "worker unavailable",
+            None,
             &key_pair,
         )
         .expect("signed training retry request");
@@ -9041,6 +9417,7 @@ mod tests {
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
+            None,
             &key_pair,
         )
         .expect("signed model artifact request");
@@ -9067,6 +9444,7 @@ mod tests {
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
+            None,
             &key_pair,
         )
         .expect("signed model weight register request");
@@ -9088,6 +9466,7 @@ mod tests {
             "1.0.0",
             true,
             Hash::new(b"gate-report"),
+            None,
             &key_pair,
         )
         .expect("signed model weight promote request");
@@ -9108,6 +9487,7 @@ mod tests {
             "model-1",
             "0.9.0",
             "gate regression",
+            None,
             &key_pair,
         )
         .expect("signed model weight rollback request");
@@ -9565,6 +9945,21 @@ mod tests {
                 .map(|route| route.path_prefix.as_str()),
             Some("/")
         );
+        assert_eq!(service.handlers.len(), 1);
+        assert_eq!(service.handlers[0].handler_name.as_ref(), "assets");
+        assert_eq!(service.handlers[0].class, SoraServiceHandlerClassV1::Asset);
+        assert_eq!(service.artifacts.len(), 1);
+        assert_eq!(
+            service.artifacts[0].kind,
+            SoraArtifactKindV1::StaticAsset
+        );
+        assert_eq!(
+            service.artifacts[0]
+                .handler_name
+                .as_ref()
+                .map(Name::as_ref),
+            Some("assets")
+        );
     }
 
     #[test]
@@ -9627,6 +10022,25 @@ mod tests {
                 .state_bindings
                 .iter()
                 .any(|binding| binding.key_prefix == "/state/auth/sessions")
+        );
+        assert_eq!(service.handlers.len(), 2);
+        assert_eq!(service.handlers[0].class, SoraServiceHandlerClassV1::Query);
+        assert_eq!(service.handlers[1].class, SoraServiceHandlerClassV1::Update);
+        assert_eq!(
+            service.handlers[1]
+                .mailbox
+                .as_ref()
+                .map(|mailbox| mailbox.queue_name.as_ref()),
+            Some("updates")
+        );
+        assert_eq!(service.artifacts.len(), 1);
+        assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
+        assert_eq!(
+            service.artifacts[0]
+                .handler_name
+                .as_ref()
+                .map(Name::as_ref),
+            Some("update")
         );
     }
 
@@ -9722,6 +10136,30 @@ mod tests {
                 .any(|binding| binding.key_prefix == "/state/auth/sessions"),
             "auth session shared binding missing from pii-app template"
         );
+        assert_eq!(service.handlers.len(), 3);
+        assert_eq!(service.handlers[0].class, SoraServiceHandlerClassV1::Query);
+        assert_eq!(service.handlers[1].class, SoraServiceHandlerClassV1::Update);
+        assert_eq!(
+            service.handlers[1]
+                .mailbox
+                .as_ref()
+                .map(|mailbox| mailbox.queue_name.as_ref()),
+            Some("updates")
+        );
+        assert_eq!(
+            service.handlers[2].class,
+            SoraServiceHandlerClassV1::PrivateUpdate
+        );
+        assert_eq!(
+            service.handlers[2]
+                .mailbox
+                .as_ref()
+                .map(|mailbox| mailbox.queue_name.as_ref()),
+            Some("private_updates")
+        );
+        assert_eq!(service.artifacts.len(), 2);
+        assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
+        assert_eq!(service.artifacts[1].kind, SoraArtifactKindV1::Checkpoint);
     }
 
     #[test]

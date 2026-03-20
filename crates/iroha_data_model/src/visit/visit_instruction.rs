@@ -8,6 +8,19 @@ use crate::{
         ActivateIdentifierPolicy, ClaimIdentifier, Instruction, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
         nexus::SetLaneRelayEmergencyValidators,
+        soracloud::{
+            AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout,
+            AllowSoracloudAgentAutonomyArtifact, ApproveSoracloudAgentWalletSpend,
+            CheckpointSoracloudTrainingJob, DeploySoracloudAgentApartment, DeploySoracloudService,
+            EnqueueSoracloudAgentMessage, MutateSoracloudState, PromoteSoracloudModelWeight,
+            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
+            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
+            RegisterSoracloudModelWeight, RenewSoracloudAgentLease,
+            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
+            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
+            RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
+            SetSoracloudRuntimeState, StartSoracloudTrainingJob, UpgradeSoracloudService,
+        },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
         },
@@ -78,6 +91,84 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         visitor.visit_claim_identifier(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RevokeIdentifier>() {
         visitor.visit_revoke_identifier(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudService>() {
+        visitor.visit_deploy_soracloud_service(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<UpgradeSoracloudService>() {
+        visitor.visit_upgrade_soracloud_service(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RollbackSoracloudService>() {
+        visitor.visit_rollback_soracloud_service(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<MutateSoracloudState>() {
+        visitor.visit_mutate_soracloud_state(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudFheJob>() {
+        visitor.visit_run_soracloud_fhe_job(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RecordSoracloudDecryptionRequest>()
+    {
+        visitor.visit_record_soracloud_decryption_request(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudAgentApartment>() {
+        visitor.visit_deploy_soracloud_agent_apartment(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RenewSoracloudAgentLease>() {
+        visitor.visit_renew_soracloud_agent_lease(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RestartSoracloudAgentApartment>()
+    {
+        visitor.visit_restart_soracloud_agent_apartment(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RevokeSoracloudAgentPolicy>() {
+        visitor.visit_revoke_soracloud_agent_policy(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RequestSoracloudAgentWalletSpend>()
+    {
+        visitor.visit_request_soracloud_agent_wallet_spend(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ApproveSoracloudAgentWalletSpend>()
+    {
+        visitor.visit_approve_soracloud_agent_wallet_spend(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<EnqueueSoracloudAgentMessage>() {
+        visitor.visit_enqueue_soracloud_agent_message(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<AcknowledgeSoracloudAgentMessage>()
+    {
+        visitor.visit_acknowledge_soracloud_agent_message(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<AllowSoracloudAgentAutonomyArtifact>()
+    {
+        visitor.visit_allow_soracloud_agent_autonomy_artifact(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudAgentAutonomy>() {
+        visitor.visit_run_soracloud_agent_autonomy(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<StartSoracloudTrainingJob>() {
+        visitor.visit_start_soracloud_training_job(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<CheckpointSoracloudTrainingJob>()
+    {
+        visitor.visit_checkpoint_soracloud_training_job(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RetrySoracloudTrainingJob>() {
+        visitor.visit_retry_soracloud_training_job(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RegisterSoracloudModelArtifact>()
+    {
+        visitor.visit_register_soracloud_model_artifact(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterSoracloudModelWeight>() {
+        visitor.visit_register_soracloud_model_weight(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<PromoteSoracloudModelWeight>() {
+        visitor.visit_promote_soracloud_model_weight(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RollbackSoracloudModelWeight>() {
+        visitor.visit_rollback_soracloud_model_weight(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<AdvanceSoracloudRollout>() {
+        visitor.visit_advance_soracloud_rollout(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudRuntimeState>() {
+        visitor.visit_set_soracloud_runtime_state(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudMailboxMessage>() {
+        visitor.visit_record_soracloud_mailbox_message(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudRuntimeReceipt>() {
+        visitor.visit_record_soracloud_runtime_receipt(v);
     } else {
         unreachable!("Unknown instruction type");
     }
@@ -240,6 +331,33 @@ macro_rules! instruction_visitors {
             visit_activate_identifier_policy(&ActivateIdentifierPolicy),
             visit_claim_identifier(&ClaimIdentifier),
             visit_revoke_identifier(&RevokeIdentifier),
+            visit_deploy_soracloud_service(&DeploySoracloudService),
+            visit_upgrade_soracloud_service(&UpgradeSoracloudService),
+            visit_rollback_soracloud_service(&RollbackSoracloudService),
+            visit_mutate_soracloud_state(&MutateSoracloudState),
+            visit_run_soracloud_fhe_job(&RunSoracloudFheJob),
+            visit_record_soracloud_decryption_request(&RecordSoracloudDecryptionRequest),
+            visit_deploy_soracloud_agent_apartment(&DeploySoracloudAgentApartment),
+            visit_renew_soracloud_agent_lease(&RenewSoracloudAgentLease),
+            visit_restart_soracloud_agent_apartment(&RestartSoracloudAgentApartment),
+            visit_revoke_soracloud_agent_policy(&RevokeSoracloudAgentPolicy),
+            visit_request_soracloud_agent_wallet_spend(&RequestSoracloudAgentWalletSpend),
+            visit_approve_soracloud_agent_wallet_spend(&ApproveSoracloudAgentWalletSpend),
+            visit_enqueue_soracloud_agent_message(&EnqueueSoracloudAgentMessage),
+            visit_acknowledge_soracloud_agent_message(&AcknowledgeSoracloudAgentMessage),
+            visit_allow_soracloud_agent_autonomy_artifact(&AllowSoracloudAgentAutonomyArtifact),
+            visit_run_soracloud_agent_autonomy(&RunSoracloudAgentAutonomy),
+            visit_start_soracloud_training_job(&StartSoracloudTrainingJob),
+            visit_checkpoint_soracloud_training_job(&CheckpointSoracloudTrainingJob),
+            visit_retry_soracloud_training_job(&RetrySoracloudTrainingJob),
+            visit_register_soracloud_model_artifact(&RegisterSoracloudModelArtifact),
+            visit_register_soracloud_model_weight(&RegisterSoracloudModelWeight),
+            visit_promote_soracloud_model_weight(&PromoteSoracloudModelWeight),
+            visit_rollback_soracloud_model_weight(&RollbackSoracloudModelWeight),
+            visit_advance_soracloud_rollout(&AdvanceSoracloudRollout),
+            visit_set_soracloud_runtime_state(&SetSoracloudRuntimeState),
+            visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
+            visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
         }
     };
 }

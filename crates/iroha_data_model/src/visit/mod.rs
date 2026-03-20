@@ -6,6 +6,19 @@ use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
+        soracloud::{
+            AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout,
+            AllowSoracloudAgentAutonomyArtifact, ApproveSoracloudAgentWalletSpend,
+            CheckpointSoracloudTrainingJob, DeploySoracloudAgentApartment, DeploySoracloudService,
+            EnqueueSoracloudAgentMessage, MutateSoracloudState, PromoteSoracloudModelWeight,
+            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
+            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
+            RegisterSoracloudModelWeight, RenewSoracloudAgentLease,
+            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
+            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
+            RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
+            SetSoracloudRuntimeState, StartSoracloudTrainingJob, UpgradeSoracloudService,
+        },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
         },

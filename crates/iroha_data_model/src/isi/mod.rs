@@ -230,6 +230,168 @@ impl From<crate::isi::identifier::RevokeIdentifier> for InstructionBox {
     }
 }
 
+impl From<crate::isi::soracloud::DeploySoracloudService> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeploySoracloudService) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::UpgradeSoracloudService> for InstructionBox {
+    fn from(i: crate::isi::soracloud::UpgradeSoracloudService) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RollbackSoracloudService> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RollbackSoracloudService) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::MutateSoracloudState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::MutateSoracloudState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RunSoracloudFheJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RunSoracloudFheJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudDecryptionRequest> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudDecryptionRequest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::DeploySoracloudAgentApartment> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeploySoracloudAgentApartment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RenewSoracloudAgentLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RenewSoracloudAgentLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RestartSoracloudAgentApartment> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RestartSoracloudAgentApartment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RevokeSoracloudAgentPolicy> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RevokeSoracloudAgentPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RequestSoracloudAgentWalletSpend> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RequestSoracloudAgentWalletSpend) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ApproveSoracloudAgentWalletSpend> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ApproveSoracloudAgentWalletSpend) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::EnqueueSoracloudAgentMessage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::EnqueueSoracloudAgentMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AcknowledgeSoracloudAgentMessage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AcknowledgeSoracloudAgentMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RunSoracloudAgentAutonomy> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RunSoracloudAgentAutonomy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::StartSoracloudTrainingJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::StartSoracloudTrainingJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::CheckpointSoracloudTrainingJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::CheckpointSoracloudTrainingJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RetrySoracloudTrainingJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RetrySoracloudTrainingJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RegisterSoracloudModelArtifact> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RegisterSoracloudModelArtifact) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RegisterSoracloudModelWeight> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RegisterSoracloudModelWeight) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::PromoteSoracloudModelWeight> for InstructionBox {
+    fn from(i: crate::isi::soracloud::PromoteSoracloudModelWeight) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RollbackSoracloudModelWeight> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RollbackSoracloudModelWeight) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AdvanceSoracloudRollout> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdvanceSoracloudRollout) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudMailboxMessage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudMailboxMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudRuntimeReceipt> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudRuntimeReceipt) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of runtime upgrade instructions
 impl From<crate::isi::runtime_upgrade::ProposeRuntimeUpgrade> for InstructionBox {
     fn from(i: crate::isi::runtime_upgrade::ProposeRuntimeUpgrade) -> Self {
@@ -1387,6 +1549,8 @@ pub mod settlement;
 pub mod smart_contract_code;
 /// Viral incentive and social reward instructions.
 pub mod social;
+/// Soracloud lifecycle and runtime-state instructions.
+pub mod soracloud;
 /// `SoraDNS` attestation and directory instructions.
 pub mod soradns;
 /// `SoraFS` pin registry instructions.
@@ -2204,6 +2368,12 @@ pub mod prelude {
             SettlementPlan, SettlementSuccessRecord,
         },
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
+        soracloud::{
+            AdvanceSoracloudRollout, DeploySoracloudService, MutateSoracloudState,
+            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
+            RecordSoracloudRuntimeReceipt, RollbackSoracloudService, RunSoracloudFheJob,
+            SetSoracloudRuntimeState, UpgradeSoracloudService,
+        },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,
             SetDirectoryRotationPolicy, SubmitDirectoryDraft, UnrevokeResolver,

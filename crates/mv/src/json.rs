@@ -141,6 +141,32 @@ impl JsonKeyCodec for (String, String) {
     }
 }
 
+impl JsonKeyCodec for (String, String, String) {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut buf = String::with_capacity(self.0.len() + self.1.len() + self.2.len() + 2);
+        buf.push_str(&self.0);
+        buf.push(TUPLE_KEY_SEPARATOR);
+        buf.push_str(&self.1);
+        buf.push(TUPLE_KEY_SEPARATOR);
+        buf.push_str(&self.2);
+        json::write_json_string(&buf, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parts = encoded.splitn(3, TUPLE_KEY_SEPARATOR);
+        let first = parts.next().ok_or_else(|| {
+            json::Error::Message("expected triple tuple key to contain unit separator".into())
+        })?;
+        let second = parts.next().ok_or_else(|| {
+            json::Error::Message("expected triple tuple key to contain unit separator".into())
+        })?;
+        let third = parts.next().ok_or_else(|| {
+            json::Error::Message("expected triple tuple key to contain unit separator".into())
+        })?;
+        Ok((first.to_owned(), second.to_owned(), third.to_owned()))
+    }
+}
+
 impl JsonKeyCodec for (String, u32) {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::with_capacity(self.0.len() + 11 + 1);

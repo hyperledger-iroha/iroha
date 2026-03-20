@@ -523,13 +523,15 @@ impl Default for CompilerOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, HashSet};
+
     use super::{
         Compiler, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY,
         STATE_WILDCARD_KEY, WIDE_IMM_MAX, emit_addi, emit_load64, emit_store64,
         patch_pointer_literal_stub, pointer_type_for_kind, reserve_pointer_literal_stub,
         stack_slot_offset_bytes,
     };
-    use crate::ast::ContractMeta;
+    use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
     use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
 
     #[test]
@@ -1355,6 +1357,346 @@ seiyaku Test {
     }
 
     #[test]
+    fn trigger_callback_entrypoint_is_compiled_first_even_with_private_helpers() {
+        let src = r#"
+seiyaku Test {
+  fn update_record(request_id: Name) {
+    state_set(name("LastRequestId"), pointer_to_norito(request_id));
+  }
+
+  kotoage fn run() {
+    update_record(name("request-1"));
+  }
+
+  register_trigger wake {
+    call run;
+    on time pre_commit;
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let run = entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("run entrypoint");
+        let parsed = ivm_abi::metadata::ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let embedded = parsed
+            .contract_interface
+            .expect("embedded contract interface");
+        let run_embedded = embedded
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == "run")
+            .expect("embedded run entrypoint");
+        assert_eq!(
+            run_embedded.entry_pc, 0,
+            "trigger callback entrypoint must be laid out first so VM startup enters `run`"
+        );
+        assert_eq!(run.name, "run");
+    }
+
+    #[test]
+    fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation() {
+        let src = r#"
+seiyaku StagedMintRequest {
+  state int MintRequestNextSequence;
+  state MintRequestSequenceById: Map<Name, int>;
+  state MintRequestSequences: Map<int, int>;
+  state MintRequestRequestIds: Map<int, Name>;
+  state MintRequestFiIds: Map<int, Name>;
+  state MintRequestFiAuthorities: Map<int, AccountId>;
+  state MintRequestToAccounts: Map<int, AccountId>;
+  state MintRequestAmounts: Map<int, int>;
+  state MintRequestRequestedBy: Map<int, Json>;
+  state MintRequestStates: Map<int, int>;
+  state MintRequestCreatedAt: Map<int, int>;
+  state MintRequestExpiresAt: Map<int, int>;
+  state MintRequestFinalizedAt: Map<int, int>;
+  state MintRequestCanceledAt: Map<int, int>;
+
+  fn update_record(sequence: int,
+                   request_id: Name,
+                   fi_id: Name,
+                   fi_multisig_account_id: AccountId,
+                   to_account_id: AccountId,
+                   amount_i64: int,
+                   requested_by_actor_id: Json,
+                   state_code: int,
+                   created_at_ms: int,
+                   expires_at_ms: int,
+                   finalized_at_ms: int,
+                   canceled_at_ms: int) {
+    MintRequestSequences[sequence] = sequence;
+    MintRequestRequestIds[sequence] = request_id;
+    MintRequestFiIds[sequence] = fi_id;
+    MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
+    MintRequestToAccounts[sequence] = to_account_id;
+    MintRequestAmounts[sequence] = amount_i64;
+    MintRequestRequestedBy[sequence] = requested_by_actor_id;
+    MintRequestStates[sequence] = state_code;
+    MintRequestCreatedAt[sequence] = created_at_ms;
+    MintRequestExpiresAt[sequence] = expires_at_ms;
+    MintRequestFinalizedAt[sequence] = finalized_at_ms;
+    MintRequestCanceledAt[sequence] = canceled_at_ms;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn run() {
+    let ev = trigger_event();
+    let action_key = name("action");
+    let request_id_key = name("request_id");
+    let fi_id_key = name("fi_id");
+    let to_account_id_key = name("to_account_id");
+    let amount_i64_key = name("amount_i64");
+    let requested_by_actor_id_key = name("requested_by_actor_id");
+    let created_at_ms_key = name("created_at_ms");
+    let expires_at_ms_key = name("expires_at_ms");
+
+    let action = json_get_name(ev, action_key);
+    if (action == name("create")) {
+      let request_id = json_get_name(ev, request_id_key);
+      let sequence = MintRequestNextSequence + 1;
+      let fi_id = json_get_name(ev, fi_id_key);
+      let to_account_id = json_get_account_id(ev, to_account_id_key);
+      let amount_i64 = json_get_int(ev, amount_i64_key);
+      let requested_by_actor_id = json_get_json(ev, requested_by_actor_id_key);
+      let created_at_ms = json_get_int(ev, created_at_ms_key);
+      let expires_at_ms = json_get_int(ev, expires_at_ms_key);
+      update_record(sequence,
+                    request_id,
+                    fi_id,
+                    to_account_id,
+                    to_account_id,
+                    amount_i64,
+                    requested_by_actor_id,
+                    0,
+                    created_at_ms,
+                    expires_at_ms,
+                    0,
+                    0);
+    }
+  }
+}
+"#;
+
+        let program = parse(src).expect("parse");
+        let typed = analyze(&program).expect("analyze");
+        let ir_prog =
+            ir::lower_with_cap(&typed, CompilerOptions::default().dynamic_iter_cap as usize)
+                .expect("lower");
+        let typed_functions: Vec<_> = typed
+            .items
+            .iter()
+            .map(|item| match item {
+                crate::semantic::TypedItem::Function(func) => func,
+            })
+            .collect();
+
+        let mut string_map: HashMap<(usize, ir::Temp), String> = HashMap::new();
+        let mut string_literal_temps: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
+        let mut int_const_map: HashMap<(usize, ir::Temp), i64> = HashMap::new();
+        let mut param_temp_map: HashMap<(usize, usize), ir::Temp> = HashMap::new();
+
+        use crate::ast::UnaryOp;
+        use crate::ir::DataRefKind as DRK;
+        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
+                    if let ir::Instr::Binary { dest, .. } = instr {
+                        int_const_map.remove(&(func_idx, *dest));
+                    }
+                    if let ir::Instr::Copy { dest, src } = instr {
+                        if dest != src {
+                            let dest_key = (func_idx, *dest);
+                            string_map.remove(&dest_key);
+                            dataref_kind_map.remove(&dest_key);
+                            int_const_map.remove(&dest_key);
+                            string_literal_temps.remove(&dest_key);
+                            if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
+                                string_map.insert(dest_key, val);
+                            }
+                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied() {
+                                dataref_kind_map.insert(dest_key, kind);
+                            }
+                            if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
+                                int_const_map.insert(dest_key, val);
+                            }
+                            if string_literal_temps.contains(&(func_idx, *src)) {
+                                string_literal_temps.insert(dest_key);
+                            }
+                        }
+                        continue;
+                    }
+                    if let ir::Instr::StringConst { dest, value } = instr {
+                        string_map.insert((func_idx, *dest), value.clone());
+                        string_literal_temps.insert((func_idx, *dest));
+                        dataref_kind_map.insert((func_idx, *dest), DRK::Blob);
+                    }
+                    if let ir::Instr::PointerFromString { dest, kind, src } = instr
+                        && let Some(s) = string_map.get(&(func_idx, *src)).cloned()
+                    {
+                        string_map.insert((func_idx, *dest), s);
+                        dataref_kind_map.insert((func_idx, *dest), *kind);
+                    }
+                    if let ir::Instr::Const { dest, value } = instr {
+                        int_const_map.insert((func_idx, *dest), *value);
+                    }
+                    if let ir::Instr::Unary {
+                        dest,
+                        op: UnaryOp::Neg,
+                        operand,
+                    } = instr
+                        && let Some(value) = int_const_map.get(&(func_idx, *operand)).copied()
+                        && let Some(neg) = value.checked_neg()
+                    {
+                        int_const_map.insert((func_idx, *dest), neg);
+                    }
+                    if let ir::Instr::DataRef { dest, kind, value } = instr {
+                        string_map.insert((func_idx, *dest), value.clone());
+                        dataref_kind_map.insert((func_idx, *dest), *kind);
+                    }
+                    if let ir::Instr::PointerFromNorito { dest, kind, .. } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), *kind);
+                    }
+                    if let ir::Instr::PointerToNorito { dest, value } = instr {
+                        dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);
+                        let literal_kind = dataref_kind_map.get(&(func_idx, *value)).copied();
+                        let literal_raw = string_map.get(&(func_idx, *value)).cloned();
+                        if let (Some(kind), Some(raw)) = (literal_kind, literal_raw)
+                            && let Some(tlv_bytes) = super::encode_pointer_tlv_bytes(kind, &raw)
+                        {
+                            let hex = hex::encode(tlv_bytes);
+                            string_map.insert((func_idx, *dest), format!("0x{hex}"));
+                        }
+                    }
+                    if let ir::Instr::LoadVar { dest, name } = instr
+                        && let Some(param_idx) = func.params.iter().position(|p| p == name)
+                    {
+                        param_temp_map.entry((func_idx, param_idx)).or_insert(*dest);
+                    }
+                }
+            }
+        }
+
+        let fn_index_by_name: HashMap<String, usize> = typed_functions
+            .iter()
+            .enumerate()
+            .map(|(idx, func)| (func.name.clone(), idx))
+            .collect();
+        let mut literal_param_conflicts: HashSet<(usize, ir::Temp)> = HashSet::new();
+        for (caller_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
+                    if let Some((name, args)) = match instr {
+                        ir::Instr::Call { callee, args, .. }
+                        | ir::Instr::CallMulti { callee, args, .. } => {
+                            Some((callee.as_str(), args.as_slice()))
+                        }
+                        _ => None,
+                    } && let Some(&callee_idx) = fn_index_by_name.get(name)
+                    {
+                        let callee = &ir_prog.functions[callee_idx];
+                        let count = usize::min(args.len(), callee.params.len());
+                        for (i, &arg_temp) in args.iter().take(count).enumerate() {
+                            let Some(&param_temp) = param_temp_map.get(&(callee_idx, i)) else {
+                                continue;
+                            };
+                            let param_key = (callee_idx, param_temp);
+                            if literal_param_conflicts.contains(&param_key) {
+                                continue;
+                            }
+                            let arg_has_literal = string_literal_temps
+                                .contains(&(caller_idx, arg_temp))
+                                || dataref_kind_map.contains_key(&(caller_idx, arg_temp));
+                            let Some(value) = string_map.get(&(caller_idx, arg_temp)).cloned()
+                            else {
+                                if string_map.contains_key(&param_key) {
+                                    string_map.remove(&param_key);
+                                    string_literal_temps.remove(&param_key);
+                                    dataref_kind_map.remove(&param_key);
+                                    literal_param_conflicts.insert(param_key);
+                                }
+                                continue;
+                            };
+                            if !arg_has_literal {
+                                if string_map.contains_key(&param_key) {
+                                    string_map.remove(&param_key);
+                                    string_literal_temps.remove(&param_key);
+                                    dataref_kind_map.remove(&param_key);
+                                    literal_param_conflicts.insert(param_key);
+                                }
+                                continue;
+                            }
+                            if let Some(existing) = string_map.get(&param_key) {
+                                if existing != &value {
+                                    string_map.remove(&param_key);
+                                    string_literal_temps.remove(&param_key);
+                                    dataref_kind_map.remove(&param_key);
+                                    literal_param_conflicts.insert(param_key);
+                                    continue;
+                                }
+                            } else {
+                                string_map.insert(param_key, value);
+                            }
+                            if string_literal_temps.contains(&(caller_idx, arg_temp)) {
+                                string_literal_temps.insert(param_key);
+                            }
+                            if let Some(kind) =
+                                dataref_kind_map.get(&(caller_idx, arg_temp)).copied()
+                            {
+                                dataref_kind_map.insert(param_key, kind);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let update_record_idx = ir_prog
+            .functions
+            .iter()
+            .position(|func| func.name == "update_record")
+            .expect("update_record index");
+        let update_record = &ir_prog.functions[update_record_idx];
+        let mut bases = Vec::new();
+        for bb in &update_record.blocks {
+            for instr in &bb.instrs {
+                if let ir::Instr::PathMapKey { base, .. } = instr {
+                    bases.push(
+                        string_map
+                            .get(&(update_record_idx, *base))
+                            .cloned()
+                            .expect("PathMapKey base should be a literal name"),
+                    );
+                }
+            }
+        }
+
+        assert_eq!(
+            bases,
+            vec![
+                "MintRequestSequences",
+                "MintRequestRequestIds",
+                "MintRequestFiIds",
+                "MintRequestFiAuthorities",
+                "MintRequestToAccounts",
+                "MintRequestAmounts",
+                "MintRequestRequestedBy",
+                "MintRequestStates",
+                "MintRequestCreatedAt",
+                "MintRequestExpiresAt",
+                "MintRequestFinalizedAt",
+                "MintRequestCanceledAt",
+            ]
+        );
+    }
+
+    #[test]
     fn manifest_trigger_decl_lowers_structured_data_filter() {
         use iroha_data_model::events::{
             EventFilterBox,
@@ -2124,14 +2466,45 @@ impl Compiler {
         }
         let ir_prog = ir::lower_with_cap(&typed, self.opts.dynamic_iter_cap as usize)?;
         let durable_enabled = abi_version >= 1;
-        // Choose entrypoint: prefer `main`, then `hajimari`, else first.
+        // Choose the default entrypoint used when the VM starts execution at offset 0.
+        // Trigger contracts must boot into their callback entrypoint, not a preceding private helper.
+        let typed_functions: Vec<&semantic::TypedFunction> = typed
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                semantic::TypedItem::Function(func) => Some(func),
+            })
+            .collect();
+        let preferred_entry = typed
+            .triggers
+            .first()
+            .map(|trigger| trigger.call.entrypoint.as_str())
+            .or_else(|| {
+                typed_functions
+                    .iter()
+                    .find(|func| func.name == "main")
+                    .map(|func| func.name.as_str())
+            })
+            .or_else(|| {
+                typed_functions
+                    .iter()
+                    .find(|func| func.modifiers.kind == FunctionKind::Hajimari)
+                    .map(|func| func.name.as_str())
+            })
+            .or_else(|| {
+                typed_functions
+                    .iter()
+                    .find(|func| entrypoint_kind_from_modifiers(&func.modifiers).is_some())
+                    .map(|func| func.name.as_str())
+            })
+            .or_else(|| typed_functions.first().map(|func| func.name.as_str()))
+            .ok_or_else(|| i18n::translate(self.lang, Message::NoFunctions))?;
         let entry_name = ir_prog
             .functions
             .iter()
-            .find(|f| f.name == "main")
-            .or_else(|| ir_prog.functions.iter().find(|f| f.name == "hajimari"))
+            .find(|func| func.name == preferred_entry)
             .or_else(|| ir_prog.functions.first())
-            .map(|f| f.name.clone())
+            .map(|func| func.name.clone())
             .ok_or_else(|| i18n::translate(self.lang, Message::NoFunctions))?;
 
         // Stage 1 pointer‑ABI: collect string constants and integer constants used by ops.
@@ -2478,7 +2851,7 @@ impl Compiler {
         let mut code: Vec<u8> = Vec::new();
         let mut uses_zk_global = false;
         let mut uses_vector_global = false;
-        let mut call_fixups: Vec<(usize, String)> = Vec::new();
+        let mut call_fixups: Vec<(usize, String, String)> = Vec::new();
         let mut func_start_offsets: HashMap<String, usize> = HashMap::new();
         struct JumpFixup {
             at: usize,
@@ -4314,7 +4687,7 @@ impl Compiler {
                             let at = code.len();
                             let jal = encode_jal(1, 0)?;
                             push_word(&mut code, jal);
-                            call_fixups.push((at, callee.clone()));
+                            call_fixups.push((at, callee.clone(), func.name.clone()));
                             // Move return value if needed
                             if let Some(d) = dest {
                                 let (rd, spilled, imm) = dst_reg(d);
@@ -4356,7 +4729,7 @@ impl Compiler {
                             let at = code.len();
                             let jal = encode_jal(1, 0)?;
                             push_word(&mut code, jal);
-                            call_fixups.push((at, callee.clone()));
+                            call_fixups.push((at, callee.clone(), func.name.clone()));
                             // Move return values r10.. into dest regs
                             for (i, d) in dests.iter().enumerate() {
                                 let (rd, spilled, imm) = dst_reg(d);
@@ -6391,7 +6764,7 @@ impl Compiler {
         }
 
         // Patch call sites now that function offsets are known.
-        for (at, callee) in &call_fixups {
+        for (at, callee, _caller) in &call_fixups {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
                 i18n::translate(self.lang, Message::SemanticError("unknown callee"))
             })? as i64;
@@ -6735,11 +7108,12 @@ impl Compiler {
             lit_bytes.extend_from_slice(&ptr.to_le_bytes());
         }
         // Patch literal pointer stubs with absolute data addresses
+        let literal_start = contract_section.len() as u64;
         for (at, rd, key) in &fixups {
             let data_off = *data_offsets
                 .get(key)
                 .expect("literal data offset present for pointer stub");
-            let ptr = data_base_rel + data_off;
+            let ptr = literal_start + data_base_rel + data_off;
             patch_pointer_literal_stub(&mut code, *at, *rd, ptr)?;
         }
 

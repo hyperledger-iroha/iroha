@@ -1736,11 +1736,15 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_POINTER_TO_NORITO => {
-                let ptr = vm.register(10);
-                if ptr == 0 {
+                let original = vm.register(10);
+                if original == 0 {
                     return Err(VMError::NoritoInvalid);
                 }
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let ptr = Self::resolve_code_tlv_addr(vm, original);
+                let tlv = match vm.memory.validate_tlv(ptr) {
+                    Ok(tlv) => tlv,
+                    Err(err) => return Err(err),
+                };
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {
@@ -2017,9 +2021,6 @@ impl IVMHost for CoreHost {
                 // Mirror TLV into INPUT (no-op if already INPUT); validate envelope/policy.
                 let original = vm.register(10);
                 if original == 0 {
-                    if crate::dev_env::decode_trace_enabled() {
-                        eprintln!("[CoreHost] INPUT_PUBLISH_TLV src=0 (noop)");
-                    }
                     vm.set_register(10, 0);
                     return Ok(0);
                 }
@@ -2036,26 +2037,13 @@ impl IVMHost for CoreHost {
                             type_id: tlv.type_id as u16,
                         });
                     }
-                    if crate::dev_env::decode_trace_enabled() {
-                        eprintln!("[CoreHost] INPUT_PUBLISH_TLV passthrough src=0x{src:08x}");
-                        eprintln!(
-                            "[CoreHost] INPUT_PUBLISH_TLV cache {:?} @0x{src:08x}",
-                            tlv.type_id
-                        );
-                    }
                     return Ok(0);
                 }
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!("[CoreHost] INPUT_PUBLISH_TLV src=0x{src:08x}");
+                if let Some(resolved) = Self::resolve_literal_pointer(vm, src as usize) {
+                    src = resolved as u64;
                 }
                 let mut header = [0u8; 7];
-                let mut read_ok = vm.memory.load_bytes(src, &mut header).is_ok();
-                if (!read_ok || header[2] != 1)
-                    && let Some(resolved) = Self::resolve_literal_pointer(vm, src as usize)
-                {
-                    src = resolved as u64;
-                    read_ok = vm.memory.load_bytes(src, &mut header).is_ok();
-                }
+                let read_ok = vm.memory.load_bytes(src, &mut header).is_ok();
                 if !read_ok || header[2] != 1 {
                     return Err(VMError::NoritoInvalid);
                 }
@@ -2078,18 +2066,7 @@ impl IVMHost for CoreHost {
                     });
                 }
                 let dst = vm.alloc_input_tlv(&bytes_vec)?;
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!(
-                        "[CoreHost] INPUT_PUBLISH_TLV cache {:?} -> 0x{dst:08x}",
-                        tlv.type_id
-                    );
-                }
                 vm.set_register(10, dst);
-                if crate::dev_env::decode_trace_enabled() {
-                    eprintln!(
-                        "[CoreHost] INPUT_PUBLISH_TLV r10: src=0x{original:08x}/0x{src:08x} -> dst=0x{dst:08x}"
-                    );
-                }
                 Ok(0)
             }
             syscalls::SYSCALL_GET_AUTHORITY => {

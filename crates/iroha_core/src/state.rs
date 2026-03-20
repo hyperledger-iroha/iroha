@@ -96,6 +96,14 @@ use iroha_data_model::{
     repo::{RepoAgreement, RepoAgreementId},
     role::RoleId,
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
+    soracloud::{
+        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
+        SoraDeploymentBundleV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
+        SoraModelRegistryV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
+        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+    },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
         ResolverId, ResolverRevocationRecordV1,
@@ -397,6 +405,33 @@ macro_rules! build_world_block {
             contract_code: $state.contract_code.$method(),
             contract_instances: $state.contract_instances.$method(),
             smart_contract_state: $state.smart_contract_state.$method(),
+            soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
+            soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
+            soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
+            soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
+            soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
+            soracloud_decryption_request_records: $state
+                .soracloud_decryption_request_records
+                .$method(),
+            soracloud_agent_apartments: $state.soracloud_agent_apartments.$method(),
+            soracloud_agent_apartment_audit_events: $state
+                .soracloud_agent_apartment_audit_events
+                .$method(),
+            soracloud_training_jobs: $state.soracloud_training_jobs.$method(),
+            soracloud_training_job_audit_events: $state
+                .soracloud_training_job_audit_events
+                .$method(),
+            soracloud_model_registries: $state.soracloud_model_registries.$method(),
+            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.$method(),
+            soracloud_model_weight_audit_events: $state
+                .soracloud_model_weight_audit_events
+                .$method(),
+            soracloud_model_artifacts: $state.soracloud_model_artifacts.$method(),
+            soracloud_model_artifact_audit_events: $state
+                .soracloud_model_artifact_audit_events
+                .$method(),
+            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
+            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
             capacity_declarations: $state.capacity_declarations.$method(),
             capacity_fee_ledger: $state.capacity_fee_ledger.$method(),
             capacity_disputes: $state.capacity_disputes.$method(),
@@ -528,6 +563,33 @@ macro_rules! build_world_transaction {
             contract_code: $state.contract_code.transaction(),
             contract_instances: $state.contract_instances.transaction(),
             smart_contract_state: $state.smart_contract_state.transaction(),
+            soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
+            soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
+            soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
+            soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
+            soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
+            soracloud_decryption_request_records: $state
+                .soracloud_decryption_request_records
+                .transaction(),
+            soracloud_agent_apartments: $state.soracloud_agent_apartments.transaction(),
+            soracloud_agent_apartment_audit_events: $state
+                .soracloud_agent_apartment_audit_events
+                .transaction(),
+            soracloud_training_jobs: $state.soracloud_training_jobs.transaction(),
+            soracloud_training_job_audit_events: $state
+                .soracloud_training_job_audit_events
+                .transaction(),
+            soracloud_model_registries: $state.soracloud_model_registries.transaction(),
+            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.transaction(),
+            soracloud_model_weight_audit_events: $state
+                .soracloud_model_weight_audit_events
+                .transaction(),
+            soracloud_model_artifacts: $state.soracloud_model_artifacts.transaction(),
+            soracloud_model_artifact_audit_events: $state
+                .soracloud_model_artifact_audit_events
+                .transaction(),
+            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
+            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
             capacity_declarations: $state.capacity_declarations.transaction(),
             capacity_fee_ledger: $state.capacity_fee_ledger.transaction(),
             capacity_disputes: $state.capacity_disputes.transaction(),
@@ -1443,6 +1505,43 @@ pub struct World {
     pub(crate) contract_instances: Storage<(String, String), iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: Storage<Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_service_revisions: Storage<(String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments: Storage<Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime: Storage<Name, SoraServiceRuntimeStateV1>,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events: Storage<u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        Storage<(String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        Storage<(String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments: Storage<String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events: Storage<u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs: Storage<(String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events: Storage<u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries: Storage<(String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions:
+        Storage<(String, String, String), SoraModelWeightVersionRecordV1>,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events: Storage<u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts: Storage<(String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events: Storage<u64, SoraModelArtifactAuditEventV1>,
+    /// Ordered Soracloud mailbox messages keyed by deterministic message id.
+    pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by deterministic receipt id.
+    pub(crate) soracloud_runtime_receipts: Storage<Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     #[norito(skip)]
     pub(crate) capacity_declarations: Storage<ProviderId, CapacityDeclarationRecord>,
@@ -1767,6 +1866,52 @@ pub struct WorldBlock<'world> {
     pub(crate) contract_instances: StorageBlock<'world, (String, String), iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageBlock<'world, Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions.
+    pub(crate) soracloud_service_revisions:
+        StorageBlock<'world, (String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments:
+        StorageBlock<'world, Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime: StorageBlock<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events: StorageBlock<'world, u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        StorageBlock<'world, (String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        StorageBlock<'world, (String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments: StorageBlock<'world, String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events:
+        StorageBlock<'world, u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs:
+        StorageBlock<'world, (String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events:
+        StorageBlock<'world, u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries:
+        StorageBlock<'world, (String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions:
+        StorageBlock<'world, (String, String, String), SoraModelWeightVersionRecordV1>,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events:
+        StorageBlock<'world, u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts:
+        StorageBlock<'world, (String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events:
+        StorageBlock<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Ordered Soracloud mailbox messages keyed by message id.
+    pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by receipt id.
+    pub(crate) soracloud_runtime_receipts: StorageBlock<'world, Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -2242,6 +2387,61 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, (String, String), iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageTransaction<'block, 'world, Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions.
+    pub(crate) soracloud_service_revisions:
+        StorageTransaction<'block, 'world, (String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments:
+        StorageTransaction<'block, 'world, Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime:
+        StorageTransaction<'block, 'world, Name, SoraServiceRuntimeStateV1>,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        StorageTransaction<'block, 'world, (String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        StorageTransaction<'block, 'world, (String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments:
+        StorageTransaction<'block, 'world, String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs:
+        StorageTransaction<'block, 'world, (String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries:
+        StorageTransaction<'block, 'world, (String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions: StorageTransaction<
+        'block,
+        'world,
+        (String, String, String),
+        SoraModelWeightVersionRecordV1,
+    >,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts:
+        StorageTransaction<'block, 'world, (String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Ordered Soracloud mailbox messages keyed by message id.
+    pub(crate) soracloud_mailbox_messages:
+        StorageTransaction<'block, 'world, Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by receipt id.
+    pub(crate) soracloud_runtime_receipts:
+        StorageTransaction<'block, 'world, Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations:
         StorageTransaction<'block, 'world, ProviderId, CapacityDeclarationRecord>,
@@ -2783,6 +2983,52 @@ pub struct WorldView<'world> {
     pub(crate) contract_instances: StorageView<'world, (String, String), iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageView<'world, Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions.
+    pub(crate) soracloud_service_revisions:
+        StorageView<'world, (String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments:
+        StorageView<'world, Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime: StorageView<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events: StorageView<'world, u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        StorageView<'world, (String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        StorageView<'world, (String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments: StorageView<'world, String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events:
+        StorageView<'world, u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs:
+        StorageView<'world, (String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events:
+        StorageView<'world, u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries:
+        StorageView<'world, (String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions:
+        StorageView<'world, (String, String, String), SoraModelWeightVersionRecordV1>,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events:
+        StorageView<'world, u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts:
+        StorageView<'world, (String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events:
+        StorageView<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Ordered Soracloud mailbox messages keyed by message id.
+    pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by receipt id.
+    pub(crate) soracloud_runtime_receipts: StorageView<'world, Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageView<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -9592,6 +9838,125 @@ impl World {
         &mut self.smart_contract_state
     }
 
+    /// Provides mutable access to Soracloud service revisions for tests and API scaffolding.
+    pub fn soracloud_service_revisions_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraDeploymentBundleV1> {
+        &mut self.soracloud_service_revisions
+    }
+
+    /// Provides mutable access to Soracloud deployment state for tests and API scaffolding.
+    pub fn soracloud_service_deployments_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Name, SoraServiceDeploymentStateV1> {
+        &mut self.soracloud_service_deployments
+    }
+
+    /// Provides mutable access to Soracloud runtime state for tests and API scaffolding.
+    pub fn soracloud_service_runtime_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Name, SoraServiceRuntimeStateV1> {
+        &mut self.soracloud_service_runtime
+    }
+
+    /// Provides mutable access to Soracloud audit events for tests and API scaffolding.
+    pub fn soracloud_service_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraServiceAuditEventV1> {
+        &mut self.soracloud_service_audit_events
+    }
+
+    /// Provides mutable access to authoritative Soracloud ciphertext state for tests and API scaffolding.
+    pub fn soracloud_service_state_entries_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraServiceStateEntryV1> {
+        &mut self.soracloud_service_state_entries
+    }
+
+    /// Provides mutable access to Soracloud decryption request records for tests and API scaffolding.
+    pub fn soracloud_decryption_request_records_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraDecryptionRequestRecordV1> {
+        &mut self.soracloud_decryption_request_records
+    }
+
+    /// Provides mutable access to Soracloud agent apartments for tests and API scaffolding.
+    pub fn soracloud_agent_apartments_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<String, SoraAgentApartmentRecordV1> {
+        &mut self.soracloud_agent_apartments
+    }
+
+    /// Provides mutable access to Soracloud agent-apartment audit events for tests and API scaffolding.
+    pub fn soracloud_agent_apartment_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraAgentApartmentAuditEventV1> {
+        &mut self.soracloud_agent_apartment_audit_events
+    }
+
+    /// Provides mutable access to Soracloud training jobs for tests and API scaffolding.
+    pub fn soracloud_training_jobs_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraTrainingJobRecordV1> {
+        &mut self.soracloud_training_jobs
+    }
+
+    /// Provides mutable access to Soracloud training-job audit events for tests and API scaffolding.
+    pub fn soracloud_training_job_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraTrainingJobAuditEventV1> {
+        &mut self.soracloud_training_job_audit_events
+    }
+
+    /// Provides mutable access to Soracloud model registries for tests and API scaffolding.
+    pub fn soracloud_model_registries_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraModelRegistryV1> {
+        &mut self.soracloud_model_registries
+    }
+
+    /// Provides mutable access to Soracloud model-weight versions for tests and API scaffolding.
+    pub fn soracloud_model_weight_versions_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraModelWeightVersionRecordV1> {
+        &mut self.soracloud_model_weight_versions
+    }
+
+    /// Provides mutable access to Soracloud model-weight audit events for tests and API scaffolding.
+    pub fn soracloud_model_weight_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraModelWeightAuditEventV1> {
+        &mut self.soracloud_model_weight_audit_events
+    }
+
+    /// Provides mutable access to Soracloud model artifacts for tests and API scaffolding.
+    pub fn soracloud_model_artifacts_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraModelArtifactRecordV1> {
+        &mut self.soracloud_model_artifacts
+    }
+
+    /// Provides mutable access to Soracloud model-artifact audit events for tests and API scaffolding.
+    pub fn soracloud_model_artifact_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraModelArtifactAuditEventV1> {
+        &mut self.soracloud_model_artifact_audit_events
+    }
+
+    /// Provides mutable access to Soracloud mailbox messages for tests and API scaffolding.
+    pub fn soracloud_mailbox_messages_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraServiceMailboxMessageV1> {
+        &mut self.soracloud_mailbox_messages
+    }
+
+    /// Provides mutable access to Soracloud runtime receipts for tests and API scaffolding.
+    pub fn soracloud_runtime_receipts_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraRuntimeReceiptV1> {
+        &mut self.soracloud_runtime_receipts
+    }
+
     /// Creates a [`World`] with these [`Domain`]s and [`Peer`]s.
     pub fn with<D, A, Ad>(domains: D, accounts: A, asset_definitions: Ad) -> Self
     where
@@ -10281,6 +10646,27 @@ impl World {
             contract_code: self.contract_code.view(),
             contract_instances: self.contract_instances.view(),
             smart_contract_state: self.smart_contract_state.view(),
+            soracloud_service_revisions: self.soracloud_service_revisions.view(),
+            soracloud_service_deployments: self.soracloud_service_deployments.view(),
+            soracloud_service_runtime: self.soracloud_service_runtime.view(),
+            soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
+            soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
+            soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
+            soracloud_agent_apartments: self.soracloud_agent_apartments.view(),
+            soracloud_agent_apartment_audit_events: self
+                .soracloud_agent_apartment_audit_events
+                .view(),
+            soracloud_training_jobs: self.soracloud_training_jobs.view(),
+            soracloud_training_job_audit_events: self.soracloud_training_job_audit_events.view(),
+            soracloud_model_registries: self.soracloud_model_registries.view(),
+            soracloud_model_weight_versions: self.soracloud_model_weight_versions.view(),
+            soracloud_model_weight_audit_events: self.soracloud_model_weight_audit_events.view(),
+            soracloud_model_artifacts: self.soracloud_model_artifacts.view(),
+            soracloud_model_artifact_audit_events: self
+                .soracloud_model_artifact_audit_events
+                .view(),
+            soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
+            soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
             capacity_declarations: self.capacity_declarations.view(),
             capacity_fee_ledger: self.capacity_fee_ledger.view(),
             capacity_disputes: self.capacity_disputes.view(),
@@ -10600,6 +10986,69 @@ pub trait WorldReadOnly {
     fn contract_instances(&self) -> &impl StorageReadOnly<(String, String), iroha_crypto::Hash>;
     /// Durable smart-contract state keyed by logical path (read-only).
     fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>>;
+    /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
+    fn soracloud_service_revisions(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1>;
+    /// Current Soracloud deployment state keyed by service name (read-only).
+    fn soracloud_service_deployments(
+        &self,
+    ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1>;
+    /// Active Soracloud runtime state keyed by service name (read-only).
+    fn soracloud_service_runtime(&self) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1>;
+    /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
+    fn soracloud_service_audit_events(&self)
+    -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1>;
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)` (read-only).
+    fn soracloud_service_state_entries(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraServiceStateEntryV1>;
+    /// Recorded decryption requests keyed by `(service_name, request_id)` (read-only).
+    fn soracloud_decryption_request_records(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraDecryptionRequestRecordV1>;
+    /// Authoritative agent apartments keyed by apartment name (read-only).
+    fn soracloud_agent_apartments(
+        &self,
+    ) -> &impl StorageReadOnly<String, SoraAgentApartmentRecordV1>;
+    /// Agent-apartment audit events keyed by deterministic sequence (read-only).
+    fn soracloud_agent_apartment_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraAgentApartmentAuditEventV1>;
+    /// Authoritative training jobs keyed by `(service_name, job_id)` (read-only).
+    fn soracloud_training_jobs(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraTrainingJobRecordV1>;
+    /// Training-job audit events keyed by deterministic sequence (read-only).
+    fn soracloud_training_job_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraTrainingJobAuditEventV1>;
+    /// Model registries keyed by `(service_name, model_name)` (read-only).
+    fn soracloud_model_registries(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraModelRegistryV1>;
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)` (read-only).
+    fn soracloud_model_weight_versions(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraModelWeightVersionRecordV1>;
+    /// Model-weight audit events keyed by deterministic sequence (read-only).
+    fn soracloud_model_weight_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraModelWeightAuditEventV1>;
+    /// Model artifacts keyed by `(service_name, training_job_id)` (read-only).
+    fn soracloud_model_artifacts(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraModelArtifactRecordV1>;
+    /// Model-artifact audit events keyed by deterministic sequence (read-only).
+    fn soracloud_model_artifact_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1>;
+    /// Ordered Soracloud mailbox messages keyed by message id (read-only).
+    fn soracloud_mailbox_messages(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1>;
+    /// Soracloud runtime receipts keyed by receipt id (read-only).
+    fn soracloud_runtime_receipts(&self) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1>;
     /// Repo agreement registry (read-only).
     fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement>;
     /// Settlement audit trails (read-only).
@@ -11403,6 +11852,92 @@ macro_rules! impl_world_ro {
             fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>> {
                 &self.smart_contract_state
             }
+            fn soracloud_service_revisions(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1> {
+                &self.soracloud_service_revisions
+            }
+            fn soracloud_service_deployments(
+                &self,
+            ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1> {
+                &self.soracloud_service_deployments
+            }
+            fn soracloud_service_runtime(
+                &self,
+            ) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1> {
+                &self.soracloud_service_runtime
+            }
+            fn soracloud_service_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1> {
+                &self.soracloud_service_audit_events
+            }
+            fn soracloud_service_state_entries(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraServiceStateEntryV1> {
+                &self.soracloud_service_state_entries
+            }
+            fn soracloud_decryption_request_records(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraDecryptionRequestRecordV1> {
+                &self.soracloud_decryption_request_records
+            }
+            fn soracloud_agent_apartments(
+                &self,
+            ) -> &impl StorageReadOnly<String, SoraAgentApartmentRecordV1> {
+                &self.soracloud_agent_apartments
+            }
+            fn soracloud_agent_apartment_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraAgentApartmentAuditEventV1> {
+                &self.soracloud_agent_apartment_audit_events
+            }
+            fn soracloud_training_jobs(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraTrainingJobRecordV1> {
+                &self.soracloud_training_jobs
+            }
+            fn soracloud_training_job_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraTrainingJobAuditEventV1> {
+                &self.soracloud_training_job_audit_events
+            }
+            fn soracloud_model_registries(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraModelRegistryV1> {
+                &self.soracloud_model_registries
+            }
+            fn soracloud_model_weight_versions(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraModelWeightVersionRecordV1>
+            {
+                &self.soracloud_model_weight_versions
+            }
+            fn soracloud_model_weight_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraModelWeightAuditEventV1> {
+                &self.soracloud_model_weight_audit_events
+            }
+            fn soracloud_model_artifacts(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraModelArtifactRecordV1> {
+                &self.soracloud_model_artifacts
+            }
+            fn soracloud_model_artifact_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1> {
+                &self.soracloud_model_artifact_audit_events
+            }
+            fn soracloud_mailbox_messages(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1> {
+                &self.soracloud_mailbox_messages
+            }
+            fn soracloud_runtime_receipts(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1> {
+                &self.soracloud_runtime_receipts
+            }
             fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement> {
                 &self.repo_agreements
             }
@@ -11790,6 +12325,23 @@ impl<'world> WorldBlock<'world> {
             contract_code,
             contract_instances,
             smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_service_runtime,
+            soracloud_service_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -11867,6 +12419,23 @@ impl<'world> WorldBlock<'world> {
         contract_code.commit();
         contract_instances.commit();
         smart_contract_state.commit();
+        soracloud_service_revisions.commit();
+        soracloud_service_deployments.commit();
+        soracloud_service_runtime.commit();
+        soracloud_service_audit_events.commit();
+        soracloud_service_state_entries.commit();
+        soracloud_decryption_request_records.commit();
+        soracloud_agent_apartments.commit();
+        soracloud_agent_apartment_audit_events.commit();
+        soracloud_training_jobs.commit();
+        soracloud_training_job_audit_events.commit();
+        soracloud_model_registries.commit();
+        soracloud_model_weight_versions.commit();
+        soracloud_model_weight_audit_events.commit();
+        soracloud_model_artifacts.commit();
+        soracloud_model_artifact_audit_events.commit();
+        soracloud_mailbox_messages.commit();
+        soracloud_runtime_receipts.commit();
         capacity_disputes.commit();
         capacity_fee_ledger.commit();
         capacity_declarations.commit();
@@ -12779,6 +13348,23 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             contract_code,
             contract_instances,
             smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_service_runtime,
+            soracloud_service_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -12842,6 +13428,23 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         contract_code.apply();
         contract_instances.apply();
         smart_contract_state.apply();
+        soracloud_service_revisions.apply();
+        soracloud_service_deployments.apply();
+        soracloud_service_runtime.apply();
+        soracloud_service_audit_events.apply();
+        soracloud_service_state_entries.apply();
+        soracloud_decryption_request_records.apply();
+        soracloud_agent_apartments.apply();
+        soracloud_agent_apartment_audit_events.apply();
+        soracloud_training_jobs.apply();
+        soracloud_training_job_audit_events.apply();
+        soracloud_model_registries.apply();
+        soracloud_model_weight_versions.apply();
+        soracloud_model_weight_audit_events.apply();
+        soracloud_model_artifacts.apply();
+        soracloud_model_artifact_audit_events.apply();
+        soracloud_mailbox_messages.apply();
+        soracloud_runtime_receipts.apply();
         capacity_disputes.apply();
         capacity_fee_ledger.apply();
         capacity_declarations.apply();
@@ -24996,6 +25599,39 @@ pub(crate) mod deserialize {
         let contract_code = take_optional_default(&mut map, "contract_code")?;
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
+        let soracloud_service_revisions =
+            take_optional_default(&mut map, "soracloud_service_revisions")?;
+        let soracloud_service_deployments =
+            take_optional_default(&mut map, "soracloud_service_deployments")?;
+        let soracloud_service_runtime =
+            take_optional_default(&mut map, "soracloud_service_runtime")?;
+        let soracloud_service_audit_events =
+            take_optional_default(&mut map, "soracloud_service_audit_events")?;
+        let soracloud_service_state_entries =
+            take_optional_default(&mut map, "soracloud_service_state_entries")?;
+        let soracloud_decryption_request_records =
+            take_optional_default(&mut map, "soracloud_decryption_request_records")?;
+        let soracloud_agent_apartments =
+            take_optional_default(&mut map, "soracloud_agent_apartments")?;
+        let soracloud_agent_apartment_audit_events =
+            take_optional_default(&mut map, "soracloud_agent_apartment_audit_events")?;
+        let soracloud_training_jobs = take_optional_default(&mut map, "soracloud_training_jobs")?;
+        let soracloud_training_job_audit_events =
+            take_optional_default(&mut map, "soracloud_training_job_audit_events")?;
+        let soracloud_model_registries =
+            take_optional_default(&mut map, "soracloud_model_registries")?;
+        let soracloud_model_weight_versions =
+            take_optional_default(&mut map, "soracloud_model_weight_versions")?;
+        let soracloud_model_weight_audit_events =
+            take_optional_default(&mut map, "soracloud_model_weight_audit_events")?;
+        let soracloud_model_artifacts =
+            take_optional_default(&mut map, "soracloud_model_artifacts")?;
+        let soracloud_model_artifact_audit_events =
+            take_optional_default(&mut map, "soracloud_model_artifact_audit_events")?;
+        let soracloud_mailbox_messages =
+            take_optional_default(&mut map, "soracloud_mailbox_messages")?;
+        let soracloud_runtime_receipts =
+            take_optional_default(&mut map, "soracloud_runtime_receipts")?;
         let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
@@ -25096,6 +25732,23 @@ pub(crate) mod deserialize {
             contract_code,
             contract_instances,
             smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_service_runtime,
+            soracloud_service_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
             capacity_declarations: Storage::default(),
             capacity_fee_ledger: Storage::default(),
             capacity_disputes: Storage::default(),
@@ -36715,6 +37368,179 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
+        use iroha_data_model::{
+            account::rekey::AccountLabel,
+            events::data::prelude as data_pre,
+            permission::Permission,
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use iroha_primitives::json::Json;
+        use iroha_primitives::numeric::Numeric;
+        use ivm::KotodamaCompiler;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            domain_id.clone(),
+            "rose".parse().unwrap(),
+        );
+        let gold_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            domain_id.clone(),
+            "gold".parse().unwrap(),
+        );
+        let gold_source = AssetId::new(gold_def_id.clone(), ALICE_ID.clone());
+        let gold_target = AssetId::new(gold_def_id.clone(), BOB_ID.clone());
+        let rose_source = AssetId::new(rose_def_id.clone(), ALICE_ID.clone());
+        let rose_target = AssetId::new(rose_def_id.clone(), BOB_ID.clone());
+        let trigger_id: TriggerId = "alias_json_transfer".parse().unwrap();
+        let banking_label =
+            AccountLabel::new(domain_id.clone(), "banking".parse().expect("banking label"));
+
+        let src = r#"
+            seiyaku AliasTransfer {
+              #[access(read="*", write="*")]
+              kotoage fn run() permission(alias_transfer_run) {
+                let ev = trigger_event();
+                if (json_get_name(ev, name("kind")) != name("asset_change")) {
+                  return;
+                }
+                if (json_get_name(ev, name("op")) != name("added")) {
+                  return;
+                }
+                let dst_domain = json_get_name(ev, name("account_domain"));
+                let dst = json_get_account_id(ev, name("account_id"));
+                let amount = json_get_int(ev, name("amount_i64"));
+                if (amount <= 0) {
+                  return;
+                }
+                let src = resolve_account_alias(name("banking"), domain("wonderland"));
+                let payout = amount * 76;
+                if (dst_domain != name("wonderland")) {
+                  return;
+                }
+                transfer_asset(dst, src, asset_definition("__ROSE_ASSET_DEFINITION_ID__"), amount);
+                transfer_asset(src, dst, asset_definition("__GOLD_ASSET_DEFINITION_ID__"), payout);
+              }
+            }
+        "#
+        .replace("__ROSE_ASSET_DEFINITION_ID__", &rose_def_id.to_string())
+        .replace("__GOLD_ASSET_DEFINITION_ID__", &gold_def_id.to_string());
+        let program = KotodamaCompiler::new()
+            .compile_source(&src)
+            .expect("compile alias transfer contract");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 1;
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&ALICE_ID).with_label(Some(banking_label)))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&BOB_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::asset_definition({
+                let __asset_definition_id = rose_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::asset_definition({
+                let __asset_definition_id = gold_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Mint::asset_numeric(1_000_u32, gold_source.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Grant::account_permission(
+                Permission::new("alias_transfer_run".into(), Json::new(())),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(bytecode),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    data_pre::DataEventFilter::Asset(
+                        data_pre::AssetEventFilter::new()
+                            .for_events(data_pre::AssetEventSet::Added)
+                            .for_asset(rose_target.clone()),
+                    ),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let mut state_block = state.block(block2.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Mint::asset_numeric(5_u32, rose_target.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let steps = stx
+                .execute_data_triggers_dfs(&ALICE_ID)
+                .expect("data trigger should execute transfer path");
+            assert_eq!(steps.len(), 1, "expected one data trigger execution");
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let view = state.view();
+        let bob_gold = view
+            .world
+            .asset(&gold_target)
+            .expect("trigger should credit gold to bob");
+        assert_eq!(&**bob_gold.value(), &Numeric::from(380_u32));
+        let alice_gold = view
+            .world
+            .asset(&gold_source)
+            .expect("trigger should debit gold from the reserve");
+        assert_eq!(&**alice_gold.value(), &Numeric::from(620_u32));
+        let alice_rose = view
+            .world
+            .asset(&rose_source)
+            .expect("trigger should collect rose into the reserve");
+        assert_eq!(&**alice_rose.value(), &Numeric::from(5_u32));
+    }
+
     #[test]
     fn detached_execute_called_trigger_failure_rolls_back_state() {
         let kura = Kura::blank_kura_for_testing();
@@ -40123,6 +40949,467 @@ mod tests {
 
         let view = state.view();
         assert!(view.world.elections().get(&election_id).is_some());
+    }
+
+    #[test]
+    fn soracloud_runtime_records_are_visible_through_world_view() {
+        let mut world = World::new();
+        let service_name: Name = "portal".parse().expect("valid name");
+        let service_version = "2026.1".to_string();
+        let revision = SoraDeploymentBundleV1 {
+            schema_version: iroha_data_model::soracloud::SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container: iroha_data_model::soracloud::SoraContainerManifestV1 {
+                schema_version: iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+                runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
+                bundle_hash: Hash::new(b"bundle"),
+                bundle_path: "/bundle/service.ivm".to_string(),
+                entrypoint: "main".to_string(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
+                    network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
+                    allow_wallet_signing: false,
+                    allow_state_writes: false,
+                    allow_model_training: false,
+                },
+                resources: iroha_data_model::soracloud::SoraResourceLimitsV1 {
+                    cpu_millis: std::num::NonZeroU32::new(500).expect("nonzero"),
+                    memory_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024).expect("nonzero"),
+                    ephemeral_storage_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024)
+                        .expect("nonzero"),
+                    max_open_files: std::num::NonZeroU32::new(256).expect("nonzero"),
+                    max_tasks: std::num::NonZeroU16::new(16).expect("nonzero"),
+                },
+                lifecycle: iroha_data_model::soracloud::SoraLifecycleHooksV1 {
+                    start_grace_secs: std::num::NonZeroU32::new(10).expect("nonzero"),
+                    stop_grace_secs: std::num::NonZeroU32::new(10).expect("nonzero"),
+                    healthcheck_path: Some("/health".to_string()),
+                },
+            },
+            service: iroha_data_model::soracloud::SoraServiceManifestV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                container: iroha_data_model::soracloud::SoraContainerManifestRefV1 {
+                    manifest_hash: Hash::new(b"container"),
+                    expected_schema_version:
+                        iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+                },
+                replicas: std::num::NonZeroU16::new(1).expect("nonzero"),
+                route: None,
+                rollout: iroha_data_model::soracloud::SoraRolloutPolicyV1 {
+                    canary_percent: 0,
+                    max_unavailable_replicas: 0,
+                    health_window_secs: std::num::NonZeroU32::new(30).expect("nonzero"),
+                    automatic_rollback_failures: std::num::NonZeroU32::new(1).expect("nonzero"),
+                },
+                state_bindings: Vec::new(),
+                handlers: vec![iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                    handler_name: "query".parse().expect("valid name"),
+                    class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+                    entrypoint: "serve_query".to_string(),
+                    route_path: Some("/query".to_string()),
+                    certified_response:
+                        iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    mailbox: None,
+                }],
+                artifacts: vec![iroha_data_model::soracloud::SoraArtifactRefV1 {
+                    kind: iroha_data_model::soracloud::SoraArtifactKindV1::StaticAsset,
+                    artifact_hash: Hash::new(b"asset"),
+                    artifact_path: "/public/index.html".to_string(),
+                    handler_name: Some("query".parse().expect("valid name")),
+                }],
+            },
+        };
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), service_version.clone()),
+            revision,
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: service_name.clone(),
+                    current_service_version: service_version.clone(),
+                    current_service_manifest_hash: Hash::new(b"service-manifest"),
+                    current_container_manifest_hash: Hash::new(b"container-manifest"),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 4,
+                    active_rollout: None,
+                    last_rollout: None,
+                },
+            );
+        world.soracloud_service_runtime_mut_for_testing().insert(
+            service_name.clone(),
+            SoraServiceRuntimeStateV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+                service_name: service_name.clone(),
+                active_service_version: service_version.clone(),
+                health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+                load_factor_bps: 250,
+                materialized_bundle_hash: Hash::new(b"bundle"),
+                rollout_handle: Some("rollout-1".to_string()),
+                pending_mailbox_message_count: 1,
+                last_receipt_id: Some(Hash::new(b"receipt")),
+            },
+        );
+        world
+            .soracloud_service_audit_events_mut_for_testing()
+            .insert(
+                4,
+                iroha_data_model::soracloud::SoraServiceAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+                    sequence: 4,
+                    action: iroha_data_model::soracloud::SoraServiceLifecycleActionV1::Deploy,
+                    service_name: service_name.clone(),
+                    from_version: None,
+                    to_version: service_version.clone(),
+                    service_manifest_hash: Hash::new(b"service-manifest"),
+                    container_manifest_hash: Hash::new(b"container-manifest"),
+                    governance_tx_hash: None,
+                    binding_name: None,
+                    state_key: None,
+                    rollout_handle: None,
+                    policy_name: None,
+                    policy_snapshot_hash: None,
+                    jurisdiction_tag: None,
+                    consent_evidence_hash: None,
+                    break_glass: None,
+                    break_glass_reason: None,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world
+            .soracloud_service_state_entries_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    "vault".to_string(),
+                    "/state/private/patient-1".to_string(),
+                ),
+                iroha_data_model::soracloud::SoraServiceStateEntryV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    binding_name: "vault".parse().expect("valid name"),
+                    state_key: "/state/private/patient-1".to_string(),
+                    encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::FheCiphertext,
+                    payload_bytes: std::num::NonZeroU64::new(128).expect("nonzero"),
+                    payload_commitment: Hash::new(b"ciphertext"),
+                    last_update_sequence: 4,
+                    governance_tx_hash: Hash::new(b"gov"),
+                    source_action:
+                        iroha_data_model::soracloud::SoraServiceLifecycleActionV1::StateMutation,
+                },
+            );
+        world
+            .soracloud_decryption_request_records_mut_for_testing()
+            .insert(
+                (service_name.as_ref().to_owned(), "decrypt-1".to_string()),
+                iroha_data_model::soracloud::SoraDecryptionRequestRecordV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    policy: iroha_data_model::soracloud::DecryptionAuthorityPolicyV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+                        policy_name: "phi_policy".parse().expect("valid name"),
+                        mode:
+                            iroha_data_model::soracloud::DecryptionAuthorityModeV1::ThresholdService,
+                        approver_quorum: std::num::NonZeroU16::new(1).expect("nonzero"),
+                        approver_ids: vec!["approver".parse().expect("valid name")],
+                        allow_break_glass: true,
+                        jurisdiction_tag: "us_hipaa".to_string(),
+                        require_consent_evidence: false,
+                        max_ttl_blocks: std::num::NonZeroU32::new(64).expect("nonzero"),
+                        audit_tag: "phi.access".to_string(),
+                    },
+                    request: iroha_data_model::soracloud::DecryptionRequestV1 {
+                        schema_version: iroha_data_model::soracloud::DECRYPTION_REQUEST_VERSION_V1,
+                        request_id: "decrypt-1".to_string(),
+                        policy_name: "phi_policy".parse().expect("valid name"),
+                        binding_name: "vault".parse().expect("valid name"),
+                        state_key: "/state/private/patient-1".to_string(),
+                        ciphertext_commitment: Hash::new(b"ciphertext"),
+                        justification: "care review".to_string(),
+                        jurisdiction_tag: "us_hipaa".to_string(),
+                        consent_evidence_hash: None,
+                        requested_ttl_blocks: std::num::NonZeroU32::new(32).expect("nonzero"),
+                        break_glass: false,
+                        break_glass_reason: None,
+                        governance_tx_hash: Hash::new(b"gov"),
+                    },
+                    sequence: 5,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_training_jobs_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), "job-1".to_string()),
+            iroha_data_model::soracloud::SoraTrainingJobRecordV1 {
+                schema_version: iroha_data_model::soracloud::SORA_TRAINING_JOB_RECORD_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                model_name: "vision_model".to_string(),
+                job_id: "job-1".to_string(),
+                status: iroha_data_model::soracloud::SoraTrainingJobStatusV1::Completed,
+                worker_group_size: 4,
+                target_steps: 100,
+                completed_steps: 100,
+                checkpoint_interval_steps: 20,
+                last_checkpoint_step: Some(100),
+                checkpoint_count: 5,
+                retry_count: 1,
+                max_retries: 3,
+                step_compute_units: 50,
+                compute_budget_units: 40_000,
+                compute_consumed_units: 20_000,
+                storage_budget_bytes: 8_192,
+                storage_consumed_bytes: 4_096,
+                latest_metrics_hash: Some(Hash::new(b"metrics")),
+                last_failure_reason: None,
+                created_sequence: 6,
+                updated_sequence: 8,
+            },
+        );
+        world
+            .soracloud_training_job_audit_events_mut_for_testing()
+            .insert(
+                8,
+                iroha_data_model::soracloud::SoraTrainingJobAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
+                    sequence: 8,
+                    action: iroha_data_model::soracloud::SoraTrainingJobActionV1::Checkpoint,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    job_id: "job-1".to_string(),
+                    status: iroha_data_model::soracloud::SoraTrainingJobStatusV1::Completed,
+                    completed_steps: 100,
+                    checkpoint_count: 5,
+                    retry_count: 1,
+                    compute_consumed_units: 20_000,
+                    storage_consumed_bytes: 4_096,
+                    last_checkpoint_step: Some(100),
+                    latest_metrics_hash: Some(Hash::new(b"metrics")),
+                    last_failure_reason: None,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_model_registries_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), "vision_model".to_string()),
+            iroha_data_model::soracloud::SoraModelRegistryV1 {
+                schema_version: iroha_data_model::soracloud::SORA_MODEL_REGISTRY_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                model_name: "vision_model".to_string(),
+                current_version: Some("v2".to_string()),
+                updated_sequence: 10,
+            },
+        );
+        world
+            .soracloud_model_weight_versions_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    "vision_model".to_string(),
+                    "v2".to_string(),
+                ),
+                iroha_data_model::soracloud::SoraModelWeightVersionRecordV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    weight_version: "v2".to_string(),
+                    parent_version: Some("v1".to_string()),
+                    training_job_id: "job-1".to_string(),
+                    weight_artifact_hash: Hash::new(b"weights"),
+                    dataset_ref: "dataset://train".to_string(),
+                    training_config_hash: Hash::new(b"train-config"),
+                    reproducibility_hash: Hash::new(b"repro"),
+                    provenance_attestation_hash: Hash::new(b"prov"),
+                    registered_sequence: 9,
+                    promoted_sequence: Some(10),
+                    gate_report_hash: Some(Hash::new(b"gate")),
+                    promoted_by: Some(iroha_crypto::KeyPair::random().public_key().clone()),
+                },
+            );
+        world
+            .soracloud_model_weight_audit_events_mut_for_testing()
+            .insert(
+                10,
+                iroha_data_model::soracloud::SoraModelWeightAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
+                    sequence: 10,
+                    action: iroha_data_model::soracloud::SoraModelWeightActionV1::Promote,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    target_version: "v2".to_string(),
+                    current_version: Some("v2".to_string()),
+                    parent_version: Some("v1".to_string()),
+                    gate_approved: Some(true),
+                    rollback_reason: None,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_model_artifacts_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), "job-1".to_string()),
+            iroha_data_model::soracloud::SoraModelArtifactRecordV1 {
+                schema_version: iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                model_name: "vision_model".to_string(),
+                training_job_id: "job-1".to_string(),
+                weight_artifact_hash: Hash::new(b"weights"),
+                dataset_ref: "dataset://train".to_string(),
+                training_config_hash: Hash::new(b"train-config"),
+                reproducibility_hash: Hash::new(b"repro"),
+                provenance_attestation_hash: Hash::new(b"prov"),
+                registered_sequence: 9,
+                consumed_by_version: Some("v2".to_string()),
+            },
+        );
+        world
+            .soracloud_model_artifact_audit_events_mut_for_testing()
+            .insert(
+                9,
+                iroha_data_model::soracloud::SoraModelArtifactAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
+                    sequence: 9,
+                    action: iroha_data_model::soracloud::SoraModelArtifactActionV1::Register,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    training_job_id: "job-1".to_string(),
+                    consumed_by_version: Some("v2".to_string()),
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_mailbox_messages_mut_for_testing().insert(
+            Hash::new(b"message"),
+            SoraServiceMailboxMessageV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+                message_id: Hash::new(b"message"),
+                from_service: service_name.clone(),
+                from_handler: "query".parse().expect("valid name"),
+                to_service: service_name.clone(),
+                to_handler: "query".parse().expect("valid name"),
+                payload_commitment: Hash::new(b"payload"),
+                enqueue_sequence: 4,
+                available_after_sequence: 4,
+                expires_at_sequence: Some(8),
+            },
+        );
+        world.soracloud_runtime_receipts_mut_for_testing().insert(
+            Hash::new(b"receipt"),
+            SoraRuntimeReceiptV1 {
+                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                receipt_id: Hash::new(b"receipt"),
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                handler_name: "query".parse().expect("valid name"),
+                handler_class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+                request_commitment: Hash::new(b"request"),
+                result_commitment: Hash::new(b"result"),
+                certified_by:
+                    iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+                emitted_sequence: 5,
+                mailbox_message_id: None,
+                journal_artifact_hash: None,
+                checkpoint_artifact_hash: None,
+            },
+        );
+
+        let view = world.view();
+        assert!(
+            view.soracloud_service_revisions()
+                .get(&(service_name.as_ref().to_owned(), service_version.clone()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_service_deployments()
+                .get(&service_name)
+                .is_some()
+        );
+        assert_eq!(
+            view.soracloud_service_runtime()
+                .get(&service_name)
+                .expect("runtime state")
+                .pending_mailbox_message_count,
+            1
+        );
+        assert!(view.soracloud_service_audit_events().get(&4).is_some());
+        assert!(
+            view.soracloud_service_state_entries()
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    "vault".to_string(),
+                    "/state/private/patient-1".to_string(),
+                ))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_decryption_request_records()
+                .get(&(service_name.as_ref().to_owned(), "decrypt-1".to_string()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_training_jobs()
+                .get(&(service_name.as_ref().to_owned(), "job-1".to_string()))
+                .is_some()
+        );
+        assert!(view.soracloud_training_job_audit_events().get(&8).is_some());
+        assert!(
+            view.soracloud_model_registries()
+                .get(&(service_name.as_ref().to_owned(), "vision_model".to_string()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_weight_versions()
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    "vision_model".to_string(),
+                    "v2".to_string(),
+                ))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_weight_audit_events()
+                .get(&10)
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_artifacts()
+                .get(&(service_name.as_ref().to_owned(), "job-1".to_string()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_artifact_audit_events()
+                .get(&9)
+                .is_some()
+        );
+        assert!(
+            view.soracloud_mailbox_messages()
+                .get(&Hash::new(b"message"))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_runtime_receipts()
+                .get(&Hash::new(b"receipt"))
+                .is_some()
+        );
     }
 
     #[tokio::test]

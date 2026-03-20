@@ -13751,6 +13751,8 @@ pub struct Torii {
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional hidden-identifier resolver configuration for app API endpoints.
     pub identifier_resolver: Option<ToriiIdentifierResolver>,
+    /// Optional transaction-history visibility/auth configuration for direct wallet reads.
+    pub tx_history: Option<ToriiTxHistory>,
 }
 
 /// Geo lookup configuration for peer telemetry.
@@ -14200,6 +14202,7 @@ impl Torii {
             identifier_resolver: self
                 .identifier_resolver
                 .and_then(ToriiIdentifierResolver::parse),
+            tx_history: self.tx_history.and_then(ToriiTxHistory::parse),
             app_api: actual::AppApi {
                 default_list_limit,
                 max_list_limit,
@@ -14228,6 +14231,90 @@ impl Torii {
                 .rate_per_minute
                 .or(super::defaults::torii::RBC_SAMPLING_RATE_PER_MIN)
                 .and_then(std::num::NonZeroU32::new),
+        }
+    }
+}
+
+/// Transaction-history visibility/auth configuration for Torii app API endpoints.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiTxHistory {
+    /// Optional dataspace-keyed mandatory-alias policy file.
+    pub mandatory_aliases_path: Option<PathBuf>,
+    /// Optional asset-definition restriction applied to visible-history endpoints.
+    pub allowed_asset_definition_id: Option<String>,
+    /// Optional JWT bearer verification configuration.
+    pub jwt: Option<ToriiTxHistoryJwt>,
+}
+
+impl ToriiTxHistory {
+    fn parse(self) -> Option<actual::ToriiTxHistory> {
+        let allowed_asset_definition_id = self.allowed_asset_definition_id.map(|value| {
+            value.parse::<AssetDefinitionId>().unwrap_or_else(|err| {
+                panic!("invalid torii.tx_history.allowed_asset_definition_id `{value}`: {err}")
+            })
+        });
+        Some(actual::ToriiTxHistory {
+            mandatory_aliases_path: self.mandatory_aliases_path,
+            allowed_asset_definition_id,
+            jwt: self.jwt.and_then(ToriiTxHistoryJwt::parse),
+        })
+    }
+}
+
+/// JWT bearer verification inputs for transaction-history endpoints.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiTxHistoryJwt {
+    /// Expected JWT algorithm label (for example `RS256` or `HS256`).
+    pub algorithm: String,
+    /// Shared-secret material used for HMAC JWT algorithms.
+    pub secret: Option<String>,
+    /// PEM-encoded public key used for asymmetric JWT algorithms.
+    pub public_key_pem: Option<String>,
+    /// Optional issuer constraint.
+    pub issuer: Option<String>,
+    /// Optional audience constraint.
+    pub audience: Option<String>,
+}
+
+impl ToriiTxHistoryJwt {
+    fn parse(self) -> Option<actual::ToriiTxHistoryJwt> {
+        let algorithm = self.algorithm.trim().to_ascii_uppercase();
+        if algorithm.is_empty() {
+            panic!("torii.tx_history.jwt.algorithm must not be empty");
+        }
+        match algorithm.as_str() {
+            "HS256" | "HS384" | "HS512" => {
+                let secret = self.secret.filter(|value| !value.trim().is_empty());
+                if secret.is_none() {
+                    panic!("torii.tx_history.jwt.secret must be set for HMAC JWT algorithms");
+                }
+                Some(actual::ToriiTxHistoryJwt {
+                    algorithm,
+                    secret,
+                    public_key_pem: None,
+                    issuer: self.issuer.filter(|value| !value.trim().is_empty()),
+                    audience: self.audience.filter(|value| !value.trim().is_empty()),
+                })
+            }
+            "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" | "ES256" | "ES384"
+            | "EDDSA" => {
+                let public_key_pem = self.public_key_pem.filter(|value| !value.trim().is_empty());
+                if public_key_pem.is_none() {
+                    panic!(
+                        "torii.tx_history.jwt.public_key_pem must be set for asymmetric JWT algorithms"
+                    );
+                }
+                Some(actual::ToriiTxHistoryJwt {
+                    algorithm,
+                    secret: None,
+                    public_key_pem,
+                    issuer: self.issuer.filter(|value| !value.trim().is_empty()),
+                    audience: self.audience.filter(|value| !value.trim().is_empty()),
+                })
+            }
+            other => panic!(
+                "invalid torii.tx_history.jwt.algorithm `{other}`; expected HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA"
+            ),
         }
     }
 }

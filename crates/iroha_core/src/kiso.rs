@@ -792,6 +792,7 @@ mod tests {
                 api_high_load_tx_threshold: None,
                 api_high_load_stream_threshold: None,
                 api_high_load_subscription_threshold: None,
+                tx_history: None,
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
