@@ -903,6 +903,202 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testListRamLfeProgramPoliciesAsync() async throws {
+        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/ram-lfe/program-policies")
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "total": 1,
+              "items": [{
+                "program_id":"identifier_lookup_retail",
+                "owner":"\(owner)",
+                "active":true,
+                "resolver_public_key":"ed25519:resolver-key",
+                "backend":"bfv-programmed-sha3-256-v1",
+                "verification_mode":"signed",
+                "input_encryption":"bfv-v1",
+                "input_encryption_public_parameters":"ABCD",
+                "input_encryption_public_parameters_decoded":{
+                  "parameters":{
+                    "polynomial_degree":64,
+                    "plaintext_modulus":257,
+                    "ciphertext_modulus":1099511627776,
+                    "decomposition_base_log":12
+                  },
+                  "public_key":{
+                    "b":[1,2,3],
+                    "a":[4,5,6]
+                  },
+                  "max_input_bytes":32
+                },
+                "ram_fhe_profile":{
+                  "profile_version":1,
+                  "register_count":4,
+                  "memory_lane_count":32,
+                  "ciphertext_mul_per_step":1,
+                  "encrypted_input_mode":"resolver_canonicalized_envelope_v1",
+                  "min_ciphertext_modulus":1099511627776
+                },
+                "note":"retail programmed policy"
+              }]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let response = try await makeClient().listRamLfeProgramPolicies()
+        XCTAssertEqual(response.total, 1)
+        XCTAssertEqual(response.items.count, 1)
+        XCTAssertEqual(response.items.first?.programId, "identifier_lookup_retail")
+        XCTAssertEqual(response.items.first?.owner, owner)
+        XCTAssertEqual(response.items.first?.verificationMode, "signed")
+        XCTAssertEqual(response.items.first?.inputEncryption, "bfv-v1")
+        XCTAssertEqual(
+            response.items.first?.inputEncryptionPublicParametersDecoded?.parameters.polynomialDegree,
+            64
+        )
+        XCTAssertEqual(response.items.first?.ramFheProfile?.profileVersion, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testExecuteRamLfeProgramAsync() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/ram-lfe/programs/identifier_lookup_retail/execute")
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["input_hex"] as? String, "abcd")
+            XCTAssertNil(payload["encrypted_input"])
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "program_id":"identifier_lookup_retail",
+              "opaque_hash":"opaque-hash-literal",
+              "receipt_hash":"receipt-hash-literal",
+              "output_hex":"c0ffee",
+              "output_hash":"output-hash-literal",
+              "associated_data_hash":"associated-data-hash-literal",
+              "executed_at_ms":42,
+              "expires_at_ms":142,
+              "backend":"bfv-programmed-sha3-256-v1",
+              "verification_mode":"signed",
+              "receipt":{
+                "payload":{
+                  "program_id":{"name":"identifier_lookup_retail"},
+                  "program_digest":"hash:\(String(repeating: "11", count: 32).uppercased())#ABCD",
+                  "backend":"bfv-programmed-sha3-256-v1",
+                  "verification_mode":{"mode":"Signed","value":null},
+                  "output_hash":"hash:\(String(repeating: "22", count: 32).uppercased())#BCDE",
+                  "associated_data_hash":"hash:\(String(repeating: "33", count: 32).uppercased())#CDEF",
+                  "executed_at_ms":42,
+                  "expires_at_ms":142
+                },
+                "signature":"\(String(repeating: "aa", count: 64))"
+              }
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let response = try await makeClient().executeRamLfeProgram(
+            programId: "identifier_lookup_retail",
+            inputHex: "0xABCD"
+        )
+        XCTAssertEqual(response?.programId, "identifier_lookup_retail")
+        XCTAssertEqual(response?.outputHex, "c0ffee")
+        XCTAssertEqual(response?.verificationMode, "signed")
+        if case let .object(receipt)? = response?.receipt["payload"] {
+            XCTAssertNotNil(receipt["program_id"])
+        } else {
+            XCTFail("missing raw receipt payload")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testExecuteRamLfeProgramReturnsNilOnNotFound() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/ram-lfe/programs/identifier_lookup_retail/execute")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 404,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data())
+        }
+
+        let response = try await makeClient().executeRamLfeProgram(
+            programId: "identifier_lookup_retail",
+            encryptedInputHex: "ABCD"
+        )
+        XCTAssertNil(response)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testVerifyRamLfeReceiptAsync() async throws {
+        let receipt: ToriiRamLfeExecutionReceipt = [
+            "payload": .object([
+                "program_id": .object(["name": .string("identifier_lookup_retail")]),
+                "program_digest": .string("hash:\(String(repeating: "11", count: 32).uppercased())#ABCD"),
+                "backend": .string("bfv-programmed-sha3-256-v1"),
+                "verification_mode": .object([
+                    "mode": .string("Signed"),
+                    "value": .null
+                ]),
+                "output_hash": .string("hash:\(String(repeating: "22", count: 32).uppercased())#BCDE"),
+                "associated_data_hash": .string("hash:\(String(repeating: "33", count: 32).uppercased())#CDEF"),
+                "executed_at_ms": .number(42),
+                "expires_at_ms": .number(142)
+            ]),
+            "signature": .string(String(repeating: "aa", count: 64))
+        ]
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/ram-lfe/receipts/verify")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["output_hex"] as? String, "c0ffee")
+            let receiptObject = payload["receipt"] as? [String: Any]
+            let payloadObject = receiptObject?["payload"] as? [String: Any]
+            XCTAssertNotNil(payloadObject?["program_id"])
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "valid":true,
+              "program_id":"identifier_lookup_retail",
+              "backend":"bfv-programmed-sha3-256-v1",
+              "verification_mode":"signed",
+              "output_hash":"output-hash-literal",
+              "associated_data_hash":"associated-data-hash-literal",
+              "output_hash_matches":true
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let response = try await makeClient().verifyRamLfeReceipt(
+            receipt: receipt,
+            outputHex: "C0FFEE"
+        )
+        XCTAssertTrue(response.valid)
+        XCTAssertEqual(response.programId, "identifier_lookup_retail")
+        XCTAssertEqual(response.outputHashMatches, true)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testResolveIdentifierAsync() async throws {
         let accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let opaqueId = "opaque:\(String(repeating: "11", count: 32))"

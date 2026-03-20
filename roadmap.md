@@ -2,6 +2,39 @@
 
 Last updated: 2026-03-20
 
+Latest sync (2026-03-20 JS/Swift/Android RAM-LFE client surface):
+`javascript/iroha_js/{src/toriiClient.js,test/toriiClient.ramLfe.test.js,index.d.ts}`,
+`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
+`IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`,
+and
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/{HttpClientTransport.java,RamLfeJsonParser.java,RamLfeProgramPolicySummary.java,RamLfeProgramPolicyListResponse.java,RamLfeExecuteRequest.java,RamLfeExecuteResponse.java,RamLfeReceiptVerifyRequest.java,RamLfeReceiptVerifyResponse.java}`
+plus
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+now close the SDK API-shape half of the generic RAM-LFE follow-up:
+
+- the JS SDK now exposes `listRamLfeProgramPolicies(...)`,
+  `executeRamLfeProgram(...)`, and `verifyRamLfeReceipt(...)`,
+- the Swift SDK now exposes matching async and completion-based RAM-LFE policy,
+  execute, and verify methods plus typed request/response models,
+- the Android SDK now exposes matching `HttpClientTransport` RAM-LFE helpers
+  and DTO/parser coverage, and
+- Swift and Android SDKs both preserve nested execution receipts as raw JSON
+  maps so execute-response receipts can be posted back to
+  `/v1/ram-lfe/receipts/verify` without guessing the data-model JSON wire form
+  for nested `program_id`, enum-tagged `verification_mode`, or nullable
+  `signature` / `proof` members.
+
+Targeted validation passed:
+- `swift test --filter ToriiClientTests/testListRamLfeProgramPoliciesAsync`
+- `swift test --filter ToriiClientTests/testExecuteRamLfeProgramAsync`
+- `swift test --filter ToriiClientTests/testExecuteRamLfeProgramReturnsNilOnNotFound`
+- `swift test --filter ToriiClientTests/testVerifyRamLfeReceiptAsync`
+- `git diff --check`
+
+Validation still blocked in this environment:
+- JS tests are pending local execution because `node` / `npm` are unavailable.
+- Android tests are pending local execution because no Java runtime is installed.
+
 Latest sync (2026-03-20 generic Torii RAM-LFE routes + `torii.ram_lfe` config):
 `crates/iroha_config/src/parameters/{actual.rs,user.rs,defaults.rs}`,
 `crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,routing.rs,openapi.rs,test_utils.rs}`,
@@ -41,8 +74,9 @@ Open work for this slice now remains:
 - add explicit Torii prover runtime/config support for
   `verification_mode = proof` RAM-LFE policies so execute/claim-receipt flows
   can issue proof-carrying receipts instead of rejecting them,
-- extend the JS/Swift/Android SDKs to the generic RAM-LFE program-policy,
-  execute, and receipt-verify schema and helper flows,
+- execute the new JS and Android RAM-LFE client suites once local `node` and
+  Java toolchains are available, then fold those commands into the validation
+  checklist for this slice,
 - run the broader workspace validation sweep once the multi-hour budget is
   available.
 

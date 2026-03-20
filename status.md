@@ -2,6 +2,42 @@
 
 Last updated: 2026-03-20
 
+## 2026-03-20 Follow-up: JS, Swift, and Android Torii clients now expose the generic RAM-LFE policy, execute, and verify routes
+- Extended the three client SDKs to the generic Torii RAM-LFE surface so they
+  now mirror:
+  - `GET /v1/ram-lfe/program-policies`,
+  - `POST /v1/ram-lfe/programs/{program_id}/execute`, and
+  - `POST /v1/ram-lfe/receipts/verify`.
+- `javascript/iroha_js/src/toriiClient.js` now adds:
+  - `listRamLfeProgramPolicies(...)`,
+  - `executeRamLfeProgram(programId, { inputHex | encryptedInput })`, and
+  - `verifyRamLfeReceipt({ receipt, outputHex? })`,
+  alongside focused node tests in
+  `javascript/iroha_js/test/toriiClient.ramLfe.test.js` and matching
+  TypeScript declarations in `javascript/iroha_js/index.d.ts`.
+- `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift` now adds RAM-LFE policy,
+  execute, and verify request/response models plus async and completion-based
+  client methods. The Swift client intentionally keeps the nested
+  `receipt` payload as raw `ToriiJSONValue` maps so the execute-to-verify
+  round-trip preserves the exact data-model JSON wire shape for program IDs,
+  enum tags, and nullable receipt fields.
+- `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/`
+  now includes RAM-LFE DTOs, a dedicated `RamLfeJsonParser`, and matching
+  `HttpClientTransport` helpers that likewise preserve nested receipts as raw
+  JSON maps for lossless verify requests.
+- Added focused SDK regression coverage in:
+  - `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`
+  - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+- Validation:
+  - `swift test --filter ToriiClientTests/testListRamLfeProgramPoliciesAsync` (pass)
+  - `swift test --filter ToriiClientTests/testExecuteRamLfeProgramAsync` (pass)
+  - `swift test --filter ToriiClientTests/testExecuteRamLfeProgramReturnsNilOnNotFound` (pass)
+  - `swift test --filter ToriiClientTests/testVerifyRamLfeReceiptAsync` (pass)
+  - `git diff --check` (pass)
+- Validation blocked in this environment:
+  - JS tests could not be executed because `node`/`npm` are unavailable.
+  - Android tests could not be executed because no local Java runtime is installed.
+
 ## 2026-03-20 Follow-up: Torii now exposes generic RAM-LFE program-policy, execute, and receipt-verify APIs, and the runtime config is keyed by `program_id`
 - Replaced the app-runtime config surface from `torii.identifier_resolver` to
   `torii.ram_lfe` across `crates/iroha_config` and Torii test fixtures:

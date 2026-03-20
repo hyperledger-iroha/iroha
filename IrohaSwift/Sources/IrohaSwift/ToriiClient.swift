@@ -273,6 +273,39 @@ public struct ToriiIdentifierPolicyListResponse: Decodable, Sendable {
     public let items: [ToriiIdentifierPolicySummary]
 }
 
+public struct ToriiRamLfeProgramPolicySummary: Decodable, Sendable {
+    public let programId: String
+    public let owner: String
+    public let active: Bool
+    public let resolverPublicKey: String
+    public let backend: String
+    public let verificationMode: String
+    public let inputEncryption: String?
+    public let inputEncryptionPublicParameters: String?
+    public let inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters?
+    public let ramFheProfile: ToriiIdentifierRamFheProfile?
+    public let note: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case owner
+        case active
+        case resolverPublicKey = "resolver_public_key"
+        case backend
+        case verificationMode = "verification_mode"
+        case inputEncryption = "input_encryption"
+        case inputEncryptionPublicParameters = "input_encryption_public_parameters"
+        case inputEncryptionPublicParametersDecoded = "input_encryption_public_parameters_decoded"
+        case ramFheProfile = "ram_fhe_profile"
+        case note
+    }
+}
+
+public struct ToriiRamLfeProgramPolicyListResponse: Decodable, Sendable {
+    public let total: UInt64
+    public let items: [ToriiRamLfeProgramPolicySummary]
+}
+
 public struct ToriiIdentifierBfvParameters: Decodable, Sendable {
     public let polynomialDegree: UInt32
     public let plaintextModulus: UInt64
@@ -769,6 +802,105 @@ public struct ToriiIdentifierLookupRequest: Encodable, Sendable {
             seedHex: seedHex
         )
         return try encrypted(policyId: policy.policyId, encryptedInputHex: encryptedInputHex)
+    }
+}
+
+public typealias ToriiRamLfeExecutionReceipt = [String: ToriiJSONValue]
+
+public struct ToriiRamLfeExecuteRequest: Encodable, Sendable {
+    public let inputHex: String?
+    public let encryptedInputHex: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case encryptedInputHex = "encrypted_input"
+    }
+
+    public static func plaintext(inputHex: String) throws -> ToriiRamLfeExecuteRequest {
+        let normalizedInputHex = try ToriiRequestValidation.normalizedEvenLengthHex(
+            inputHex,
+            field: "inputHex"
+        )
+        return ToriiRamLfeExecuteRequest(
+            inputHex: normalizedInputHex,
+            encryptedInputHex: nil
+        )
+    }
+
+    public static func encrypted(encryptedInputHex: String) throws -> ToriiRamLfeExecuteRequest {
+        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
+            encryptedInputHex,
+            field: "encryptedInputHex"
+        )
+        return ToriiRamLfeExecuteRequest(
+            inputHex: nil,
+            encryptedInputHex: normalizedEncryptedInput
+        )
+    }
+}
+
+public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
+    public let programId: String
+    public let opaqueHash: String
+    public let receiptHash: String
+    public let outputHex: String
+    public let outputHash: String
+    public let associatedDataHash: String
+    public let executedAtMs: UInt64
+    public let expiresAtMs: UInt64?
+    public let backend: String
+    public let verificationMode: String
+    public let receipt: ToriiRamLfeExecutionReceipt
+
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case opaqueHash = "opaque_hash"
+        case receiptHash = "receipt_hash"
+        case outputHex = "output_hex"
+        case outputHash = "output_hash"
+        case associatedDataHash = "associated_data_hash"
+        case executedAtMs = "executed_at_ms"
+        case expiresAtMs = "expires_at_ms"
+        case backend
+        case verificationMode = "verification_mode"
+        case receipt
+    }
+}
+
+public struct ToriiRamLfeReceiptVerifyRequest: Encodable, Sendable {
+    public let receipt: ToriiRamLfeExecutionReceipt
+    public let outputHex: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case receipt
+        case outputHex = "output_hex"
+    }
+
+    public init(receipt: ToriiRamLfeExecutionReceipt, outputHex: String? = nil) {
+        self.receipt = receipt
+        self.outputHex = outputHex
+    }
+}
+
+public struct ToriiRamLfeReceiptVerifyResponse: Decodable, Sendable {
+    public let valid: Bool
+    public let programId: String
+    public let backend: String
+    public let verificationMode: String
+    public let outputHash: String
+    public let associatedDataHash: String
+    public let outputHashMatches: Bool?
+    public let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case valid
+        case programId = "program_id"
+        case backend
+        case verificationMode = "verification_mode"
+        case outputHash = "output_hash"
+        case associatedDataHash = "associated_data_hash"
+        case outputHashMatches = "output_hash_matches"
+        case error
     }
 }
 
@@ -10330,6 +10462,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func listRamLfeProgramPolicies(completion: @escaping (Result<ToriiRamLfeProgramPolicyListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listRamLfeProgramPolicies() }
+    }
+
+    @discardableResult
     public func resolveIdentifier(_ requestBody: ToriiIdentifierLookupRequest,
                                   completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.resolveIdentifier(requestBody) }
@@ -10375,6 +10512,42 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 input: input,
                 encryptedInputHex: encryptedInputHex
             )
+        }
+    }
+
+    @discardableResult
+    public func executeRamLfeProgram(programId: String,
+                                     requestBody: ToriiRamLfeExecuteRequest,
+                                     completion: @escaping (Result<ToriiRamLfeExecuteResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.executeRamLfeProgram(programId: programId, requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func executeRamLfeProgram(programId: String,
+                                     inputHex: String? = nil,
+                                     encryptedInputHex: String? = nil,
+                                     completion: @escaping (Result<ToriiRamLfeExecuteResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.executeRamLfeProgram(
+                programId: programId,
+                inputHex: inputHex,
+                encryptedInputHex: encryptedInputHex
+            )
+        }
+    }
+
+    @discardableResult
+    public func verifyRamLfeReceipt(_ requestBody: ToriiRamLfeReceiptVerifyRequest,
+                                    completion: @escaping (Result<ToriiRamLfeReceiptVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.verifyRamLfeReceipt(requestBody) }
+    }
+
+    @discardableResult
+    public func verifyRamLfeReceipt(receipt: ToriiRamLfeExecutionReceipt,
+                                    outputHex: String? = nil,
+                                    completion: @escaping (Result<ToriiRamLfeReceiptVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.verifyRamLfeReceipt(receipt: receipt, outputHex: outputHex)
         }
     }
 
@@ -11434,6 +11607,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiIdentifierPolicyListResponse.self, from: data)
     }
 
+    public func listRamLfeProgramPolicies() async throws -> ToriiRamLfeProgramPolicyListResponse {
+        let request = try makeRequest(
+            path: "/v1/ram-lfe/program-policies",
+            headers: ["Accept": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiRamLfeProgramPolicyListResponse.self, from: data)
+    }
+
     public func resolveIdentifier(_ requestBody: ToriiIdentifierLookupRequest) async throws -> ToriiIdentifierResolutionReceipt? {
         let body = try JSONEncoder().encode(requestBody)
         let request = try makeRequest(
@@ -11528,6 +11710,68 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 policyId: policyId,
                 input: input,
                 encryptedInputHex: encryptedInputHex
+            )
+        )
+    }
+
+    public func executeRamLfeProgram(programId: String,
+                                     requestBody: ToriiRamLfeExecuteRequest) async throws -> ToriiRamLfeExecuteResponse? {
+        let normalizedProgramId = try ToriiRequestValidation.normalizedNonEmpty(programId, field: "programId")
+        let encodedProgramId = encodePathComponent(normalizedProgramId)
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/ram-lfe/programs/\(encodedProgramId)/execute",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        return try decodeJSON(ToriiRamLfeExecuteResponse.self, from: data)
+    }
+
+    public func executeRamLfeProgram(programId: String,
+                                     inputHex: String? = nil,
+                                     encryptedInputHex: String? = nil) async throws -> ToriiRamLfeExecuteResponse? {
+        try await executeRamLfeProgram(
+            programId: programId,
+            requestBody: buildRamLfeExecuteRequest(
+                inputHex: inputHex,
+                encryptedInputHex: encryptedInputHex
+            )
+        )
+    }
+
+    public func verifyRamLfeReceipt(_ requestBody: ToriiRamLfeReceiptVerifyRequest) async throws -> ToriiRamLfeReceiptVerifyResponse {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/ram-lfe/receipts/verify",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiRamLfeReceiptVerifyResponse.self, from: data)
+    }
+
+    public func verifyRamLfeReceipt(receipt: ToriiRamLfeExecutionReceipt,
+                                    outputHex: String? = nil) async throws -> ToriiRamLfeReceiptVerifyResponse {
+        let normalizedOutputHex = try outputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "outputHex")
+        }
+        return try await verifyRamLfeReceipt(
+            ToriiRamLfeReceiptVerifyRequest(
+                receipt: receipt,
+                outputHex: normalizedOutputHex
             )
         )
     }
@@ -14341,6 +14585,23 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return ToriiIdentifierLookupRequest(
             policyId: normalizedPolicyId,
             input: normalizedInput,
+            encryptedInputHex: normalizedEncryptedInput
+        )
+    }
+
+    private func buildRamLfeExecuteRequest(inputHex: String?,
+                                           encryptedInputHex: String?) throws -> ToriiRamLfeExecuteRequest {
+        let normalizedInputHex = try inputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "inputHex")
+        }
+        let normalizedEncryptedInput = try encryptedInputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "encryptedInputHex")
+        }
+        guard (normalizedInputHex == nil) != (normalizedEncryptedInput == nil) else {
+            throw ToriiClientError.invalidPayload("Exactly one of inputHex or encryptedInputHex must be provided.")
+        }
+        return ToriiRamLfeExecuteRequest(
+            inputHex: normalizedInputHex,
             encryptedInputHex: normalizedEncryptedInput
         )
     }
