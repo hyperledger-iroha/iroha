@@ -309,7 +309,8 @@ impl std::fmt::Display for BuildLineArg {
     }
 }
 
-const CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
+const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
+const LOCALNET_CHAIN_ID_ENV: &str = "IROHA_LOCALNET_CHAIN_ID";
 const GENESIS_SEED: &[u8; 7] = b"genesis";
 /// Localnet uses larger channel caps to keep DA/RBC traffic from dropping at 1s block times.
 const LOCALNET_MSG_CHANNEL_CAP_VOTES: usize = 8_192;
@@ -777,6 +778,7 @@ fn generate_localnet_with_line<T: Write>(
     })?;
 
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
+    let chain_id = configured_chain_id();
     let peers = build_peers(
         opts.peers.get(),
         seed_bytes,
@@ -834,6 +836,7 @@ fn generate_localnet_with_line<T: Write>(
         opts.consensus_mode,
         opts.next_consensus_mode,
         opts.mode_activation_height,
+        &chain_id,
         build_line,
     )?;
     if opts.extra_accounts > 0 || !opts.assets.is_empty() {
@@ -919,6 +922,7 @@ fn generate_localnet_with_line<T: Write>(
             &kura_dir,
             &tiered_state_dir,
             &da_store_dir,
+            &chain_id,
             (&hosts.bind, &hosts.public),
             opts.consensus_mode,
             nexus_enabled,
@@ -947,7 +951,7 @@ fn generate_localnet_with_line<T: Write>(
     copy_rans_tables(&out_dir)?;
 
     tui::status("Writing client config");
-    write_client_config(&out_dir, opts.base_api_port, &hosts.public)?;
+    write_client_config(&out_dir, opts.base_api_port, &hosts.public, &chain_id)?;
     tui::success("Localnet ready");
 
     writeln!(
@@ -1107,6 +1111,14 @@ fn localnet_dataspace_catalog(fault_tolerance: u32) -> Vec<toml::Value> {
     catalog
 }
 
+fn configured_chain_id() -> String {
+    std::env::var(LOCALNET_CHAIN_ID_ENV)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_CHAIN_ID.to_owned())
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_peer_config(
     peer: &Peer,
@@ -1118,6 +1130,7 @@ fn render_peer_config(
     kura_store_dir: &Path,
     tiered_state_root: &Path,
     da_store_root: &Path,
+    chain_id: &str,
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
     nexus_enabled: bool,
@@ -1157,7 +1170,7 @@ fn render_peer_config(
         .collect::<Vec<_>>();
 
     let mut root = Table::new();
-    root.insert("chain".into(), Value::String(CHAIN_ID.to_owned()));
+    root.insert("chain".into(), Value::String(chain_id.to_owned()));
     root.insert(
         "private_key".into(),
         Value::String(peer.private_key.to_string()),
@@ -1624,9 +1637,13 @@ fn generate_raw_genesis(
     consensus_mode: SumeragiConsensusMode,
     next_consensus_mode: Option<SumeragiConsensusMode>,
     mode_activation_height: Option<u64>,
+    chain_id: &str,
     build_line: BuildLine,
 ) -> Result<RawGenesisTransaction> {
-    let builder = GenesisBuilder::new_without_executor(ChainId::from(CHAIN_ID), PathBuf::from("."));
+    let builder = GenesisBuilder::new_without_executor(
+        ChainId::from(chain_id.to_owned()),
+        PathBuf::from("."),
+    );
     generate_default(
         builder,
         genesis_public_key,
@@ -2177,6 +2194,7 @@ fn write_client_config(
     out_dir: &Path,
     base_api_port: u16,
     torii_host: &CanonicalHost,
+    chain_id: &str,
 ) -> Result<()> {
     let path = out_dir.join("client.toml");
     // Render explicitly to avoid pretty-printer wrapping the long keys.
@@ -2200,7 +2218,7 @@ fn write_client_config(
             "password  = \"ilovetea\"\n",
             "web_login = \"mad_hatter\"\n",
         ),
-        chain = CHAIN_ID,
+        chain = chain_id,
         torii_port = base_api_port,
         torii_host = torii_host,
         ttl_ms = LOCALNET_CLIENT_TTL_MS,
@@ -2284,6 +2302,7 @@ mod tests {
             opts.consensus_mode,
             opts.next_consensus_mode,
             opts.mode_activation_height,
+            DEFAULT_CHAIN_ID,
             opts.build_line,
         )
         .expect("generate raw genesis");
@@ -3760,7 +3779,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
-        write_client_config(tmp.path(), 8080, &host).expect("write client config");
+        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID)
+            .expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("private_key = \"802620"));
@@ -3821,7 +3841,8 @@ mod tests {
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
-        write_client_config(tmp.path(), 8080, &host).expect("write client config");
+        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID)
+            .expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
