@@ -258,6 +258,23 @@ Last updated: 2026-03-20
   - `cargo check -p iroha_crypto -p iroha_torii` (pass)
   - `cargo clippy -p iroha_crypto -p iroha_torii --all-targets -- -D warnings` (pass)
 
+## 2026-03-18 Follow-up: offline allowance list/query payloads now expose asset-definition metadata across Torii and SDKs
+- Updated `crates/iroha_torii/src/routing.rs` so offline allowance projection resolves the referenced asset definition once per record, injects `asset_definition_id`, `asset_definition_name`, and nullable `asset_definition_alias` into list/query JSON, and fails with an internal error when an allowance references a missing asset definition.
+- Updated `crates/iroha_torii/src/openapi.rs` plus the checked-in Torii OpenAPI JSON snapshots so `OfflineAllowanceItem` documents the concrete `asset_id` separately from the human-facing asset-definition metadata.
+- Updated Android offline allowance parsing/model types in `java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/` and adjusted affected tests/call sites to require the new constructor/parser fields.
+- Updated JavaScript offline allowance normalization/types in `javascript/iroha_js/src/toriiClient.js`, `javascript/iroha_js/index.d.ts`, regenerated `javascript/iroha_js/dist/`, and extended allowance normalization assertions in `javascript/iroha_js/test/toriiClient.test.js`.
+- Updated Python offline allowance parsing in `python/iroha_torii_client/client.py` and the corresponding payload test in `python/iroha_torii_client/tests/test_client.py`.
+- Updated Android offline allowance docs in `java/iroha_android/README.md` and `docs/source/sdk/android/offline_signing.md` to use `assetDefinitionName()` and describe the `asset_id` vs `asset_definition_id` split.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii offline_allowance_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test offline_app_api -- --nocapture` (pass)
+  - `/bin/zsh -lc 'JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :jvm:test --console=plain'` from `java/iroha_android` (pass)
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "OfflineAllowances|OfflineAllowance" test/toriiClient.test.js` from `javascript/iroha_js` (pass)
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js` from `javascript/iroha_js` (fails in 4 pre-existing non-offline tests: three governance owner-validation assertions and one `extractToriiFeatureConfig` validation case)
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k offline_allowances` could not run because `pytest` is not installed in this environment
+  - `PYTHONPATH=python python3 -c '...'` offline allowance smoke-check could not run because the environment is also missing `requests`
+
 ## 2026-03-18 Follow-up: deterministic BFV acceleration landed, and the workspace lint/compile gates are green
 - Replaced the old scalar-only BFV multiplication baseline in
   `crates/iroha_crypto/src/fhe_bfv.rs` with a deterministic CRT-NTT backend

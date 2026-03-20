@@ -3269,6 +3269,9 @@ export interface ToriiOfflineAllowanceItem {
   controller_id: string;
   controller_display: string;
   asset_id: string;
+  asset_definition_id: string;
+  asset_definition_name: string;
+  asset_definition_alias: string | null;
   registered_at_ms: number;
   expires_at_ms: number;
   policy_expires_at_ms: number;

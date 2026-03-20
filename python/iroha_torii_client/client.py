@@ -1528,6 +1528,9 @@ class OfflineAllowanceListItem:
     controller_id: str
     controller_display: str
     asset_id: str
+    asset_definition_id: str
+    asset_definition_name: str
+    asset_definition_alias: Optional[str]
     registered_at_ms: int
     expires_at_ms: int
     policy_expires_at_ms: int
@@ -1556,6 +1559,11 @@ class OfflineAllowanceListItem:
             if not isinstance(value, str) or not value:
                 raise RuntimeError(f"offline allowance `{key}` must be a non-empty string")
             return value
+
+        def required_optional_str(key: str) -> Optional[str]:
+            if key not in payload:
+                raise RuntimeError(f"offline allowance entry missing `{key}`")
+            return optional_str(key)
 
         def require_int(key: str) -> int:
             value = payload.get(key)
@@ -1593,6 +1601,9 @@ class OfflineAllowanceListItem:
             controller_id=require_str("controller_id"),
             controller_display=require_str("controller_display"),
             asset_id=require_str("asset_id"),
+            asset_definition_id=require_str("asset_definition_id"),
+            asset_definition_name=require_str("asset_definition_name"),
+            asset_definition_alias=required_optional_str("asset_definition_alias"),
             registered_at_ms=require_int("registered_at_ms"),
             expires_at_ms=require_int("expires_at_ms"),
             policy_expires_at_ms=require_int("policy_expires_at_ms"),

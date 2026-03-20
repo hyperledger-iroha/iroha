@@ -398,6 +398,9 @@ function createOfflineAllowanceItem(overrides = {}) {
     controller_id: SAMPLE_ACCOUNT_ID,
     controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
     asset_id: "usd#wonderland",
+    asset_definition_id: "usd#wonderland",
+    asset_definition_name: "USD",
+    asset_definition_alias: null,
     registered_at_ms: 1,
     expires_at_ms: 2,
     policy_expires_at_ms: 3,
@@ -15660,6 +15663,9 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
         controller_id: FIXTURE_ALICE_ID,
         controller_display: "soraqqqqqqqq",
         asset_id: "usd#wonderland",
+        asset_definition_id: "usd#wonderland",
+        asset_definition_name: "USD",
+        asset_definition_alias: "usd#main",
             registered_at_ms: "1234",
             expires_at_ms: "9999",
             policy_expires_at_ms: "10001",
@@ -15678,6 +15684,9 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
             controller_id: FIXTURE_BOB_ID,
             controller_display: "soraqqqqqqqr",
             asset_id: "usd#wonderland",
+            asset_definition_id: "usd#wonderland",
+            asset_definition_name: "USD",
+            asset_definition_alias: null,
             registered_at_ms: 2000,
             expires_at_ms: 3000,
             policy_expires_at_ms: 4000,
@@ -15712,6 +15721,9 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   assert.equal(item.controller_id, FIXTURE_ALICE_ID);
   assert.equal(item.controller_display, "soraqqqqqqqq");
   assert.equal(item.asset_id, "usd#wonderland");
+  assert.equal(item.asset_definition_id, "usd#wonderland");
+  assert.equal(item.asset_definition_name, "USD");
+  assert.equal(item.asset_definition_alias, "usd#main");
   assert.equal(item.registered_at_ms, 1234);
   assert.equal(item.expires_at_ms, 9999);
   assert.equal(item.policy_expires_at_ms, 10001);
@@ -15745,6 +15757,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   assert.equal(fallback.deadline_ms, null);
   assert.equal(fallback.deadline_ms_remaining, null);
   assert.equal(fallback.remaining_amount, "125");
+  assert.equal(fallback.asset_definition_alias, null);
   assert.equal(fallback.integrity_metadata, null);
 });
 
@@ -15776,6 +15789,9 @@ test("listOfflineAllowances captures play integrity metadata", async () => {
             controller_id: FIXTURE_ALICE_ID,
             controller_display: "soraqqqqqqqq",
             asset_id: "usd#wonderland",
+            asset_definition_id: "usd#wonderland",
+            asset_definition_name: "USD",
+            asset_definition_alias: null,
             registered_at_ms: "1234",
             expires_at_ms: "9999",
             policy_expires_at_ms: "10001",
@@ -15832,6 +15848,9 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
             controller_id: FIXTURE_BOB_ID,
             controller_display: "soraqqqqqqqq",
             asset_id: "usd#wonderland",
+            asset_definition_id: "usd#wonderland",
+            asset_definition_name: "USD",
+            asset_definition_alias: null,
             registered_at_ms: "1234",
             expires_at_ms: "9999",
             policy_expires_at_ms: "10001",
