@@ -1,6 +1,33 @@
 # Status
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
+
+## 2026-03-20 Follow-up: retained RBC session summaries now survive commit cleanup, and multilane Kura again provisions per-lane merge logs
+- Restored per-lane merge-ledger file naming in
+  `crates/iroha_config/src/parameters/actual.rs` so multilane Kura layouts now
+  provision `merge_ledger/lane_*_merge.log` again instead of collapsing every
+  lane onto a shared `universal.log`.
+- Fixed the DA/RBC observability regression in
+  `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,tests.rs}` and
+  `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - commit cleanup still drains the runtime RBC session state, but it now keeps
+    the retained status summary written during cleanup instead of immediately
+    deleting that summary when clearing auxiliary caches such as rebroadcast
+    cooldowns, persisted-session markers, and seed-worker state,
+  - this restores the evidence expected by the cross-peer consistency and
+    restart-recovery tests, which read `/v1/sumeragi/rbc/sessions` and the
+    persisted `rbc_sessions/sessions.norito` snapshot after commit/restart.
+- Added focused regression coverage for both fixes:
+  - config assertions now lock the canonical per-lane merge-log paths,
+  - Sumeragi unit tests now verify that `clean_rbc_sessions_for_block(...)`
+    clears stale runtime-only RBC state without erasing the retained summary.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config lane_config_from_catalog_preserves_alias_metadata -- --nocapture` (pass)
+  - `cargo test -p iroha_core clean_rbc_sessions_for_block_ -- --nocapture` (pass)
+  - `cargo test -p integration_tests multilane_kura_layout::kura_prepares_multilane_storage_layout -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod extra_functional::seven_peer_consistency::seven_peer_cross_peer_consistency_basic -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture` (pass)
 
 ## 2026-03-19 Follow-up: generic hidden-program RAM-LFE program-policy foundations now exist in `iroha_crypto`, `iroha_data_model`, `iroha_core`, and the identifier Torii path
 - Extended `crates/iroha_crypto/src/ram_lfe.rs` from an identifier-only
