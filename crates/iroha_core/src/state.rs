@@ -9587,6 +9587,11 @@ impl World {
         &mut self.space_directory_manifests
     }
 
+    /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
+    pub fn smart_contract_state_mut_for_testing(&mut self) -> &mut Storage<Name, Vec<u8>> {
+        &mut self.smart_contract_state
+    }
+
     /// Creates a [`World`] with these [`Domain`]s and [`Peer`]s.
     pub fn with<D, A, Ad>(domains: D, accounts: A, asset_definitions: Ad) -> Self
     where

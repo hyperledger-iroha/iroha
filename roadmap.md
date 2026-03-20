@@ -2,6 +2,26 @@
 
 Last updated: 2026-03-20
 
+Latest sync (2026-03-20 Torii multisig selector private-field compile fix):
+`crates/iroha_core/src/state.rs` and `crates/iroha_torii/src/routing.rs`
+now close the immediate `E0616` regression from the recent `World` visibility
+tightening:
+
+- `iroha_core::state::World` now exposes a narrow
+  `smart_contract_state_mut_for_testing()` helper for test/API scaffolding,
+- the Torii multisig selector regression test now seeds fallback contract state
+  through that helper instead of reaching into a private field directly.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii --lib --no-run`
+- `cargo test -p iroha_torii multisig_spec_falls_back_to_contract_state_when_metadata_is_missing -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the broader workspace validation sweep, especially if more cross-crate
+  tests still seed `World` internals directly after the recent privacy
+  tightening.
+
 Latest sync (2026-03-20 RBC observability retention + multilane Kura merge-log regression):
 `crates/iroha_config/src/parameters/actual.rs`,
 `crates/iroha_core/src/sumeragi/main_loop.rs`,

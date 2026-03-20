@@ -2,6 +2,19 @@
 
 Last updated: 2026-03-20
 
+## 2026-03-20 Follow-up: Torii multisig selector tests no longer reach into `World` private storage
+- Added a narrow smart-contract-state test/API scaffolding accessor in
+  `crates/iroha_core/src/state.rs` so cross-crate callers can seed durable
+  contract state without reopening the `World` field visibility.
+- Updated the multisig selector regression coverage in
+  `crates/iroha_torii/src/routing.rs` to use that accessor when seeding the
+  fallback `MultisigAccountState`, fixing the `E0616` build break after
+  `World.smart_contract_state` became private.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib --no-run` (pass)
+  - `cargo test -p iroha_torii multisig_spec_falls_back_to_contract_state_when_metadata_is_missing -- --nocapture` (pass)
+
 ## 2026-03-20 Follow-up: retained RBC session summaries now survive commit cleanup, and multilane Kura again provisions per-lane merge logs
 - Restored per-lane merge-ledger file naming in
   `crates/iroha_config/src/parameters/actual.rs` so multilane Kura layouts now
