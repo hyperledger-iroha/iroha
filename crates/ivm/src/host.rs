@@ -1790,7 +1790,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_INPUT_PUBLISH_TLV => {
                 // Mirror a TLV into INPUT (no-op if already INPUT); validate envelope/policy.
-                let src = vm.register(10);
+                let mut src = vm.register(10);
                 if src == 0 {
                     vm.set_register(10, 0);
                     return Ok(0);
@@ -1808,6 +1808,9 @@ impl IVMHost for DefaultHost {
                         });
                     }
                     return Ok(0);
+                }
+                if let Some(resolved) = Self::resolve_literal_pointer(vm, src as usize) {
+                    src = resolved as u64;
                 }
                 // Read header to determine total length
                 let hdr = vm

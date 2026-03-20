@@ -2,7 +2,7 @@
   "schema_version": 1,
   "param_set": "fhe_bfv_med",
   "version": 2,
-  "backend": "fhe/bfv-rns/v1",
+  "backend": "fhe/bfv-rns/v2",
   "scheme": {
     "scheme": "Bfv",
     "value": null

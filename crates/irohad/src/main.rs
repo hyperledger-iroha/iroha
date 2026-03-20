@@ -13,6 +13,8 @@
 mod genesis_bootstrap;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
+/// Embedded Soracloud runtime-manager reconciliation.
+mod soracloud_runtime;
 
 use std::{
     borrow::Cow,
@@ -31,6 +33,7 @@ use std::{
 };
 
 use crate::genesis_bootstrap::GenesisBootstrapper;
+use crate::soracloud_runtime::{SoracloudRuntimeManager, SoracloudRuntimeManagerHandle};
 use clap::Parser;
 use error_stack::{Report, ResultExt};
 use eyre::Result as EyreResult;
@@ -592,6 +595,8 @@ pub struct Iroha {
     kura: Arc<Kura>,
     /// State of blockchain
     state: Arc<State>,
+    /// Embedded Soracloud runtime-manager handle.
+    soracloud_runtime: SoracloudRuntimeManagerHandle,
     /// Streaming session manager
     streaming: iroha_core::streaming::StreamingHandle,
     /// P2P network handle used for outbound control frames (e.g., streaming manifests).
@@ -4577,6 +4582,14 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
+        let (soracloud_runtime, child) = SoracloudRuntimeManager::new(
+            soracloud_runtime::SoracloudRuntimeManagerConfig::from_node_config(&config),
+            Arc::clone(&state),
+        )
+        .start(supervisor.shutdown_signal());
+        state.set_soracloud_runtime(Some(Arc::new(soracloud_runtime.clone())));
+        supervisor.monitor(child);
+
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
@@ -4601,7 +4614,8 @@ impl Iroha {
             receipt_signer,
             iroha_torii::OnlinePeersProvider::new(network.online_peers_receiver()),
             Some(sumeragi.clone()),
-            torii_telemetry,
+            iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
+                .with_soracloud_runtime(Arc::new(soracloud_runtime.clone())),
         );
         let torii = torii.with_rbc_store_dir(rbc_store_dir.clone());
         let torii = torii.with_p2p(network.clone());
@@ -4688,6 +4702,7 @@ impl Iroha {
             Self {
                 kura,
                 state,
+                soracloud_runtime,
                 streaming: streaming.clone(),
                 network: network.clone(),
             },
@@ -4707,6 +4722,11 @@ impl Iroha {
     /// Access to the block storage handle.
     pub fn kura(&self) -> &Arc<Kura> {
         &self.kura
+    }
+
+    /// Access the embedded Soracloud runtime-manager handle.
+    pub fn soracloud_runtime(&self) -> &SoracloudRuntimeManagerHandle {
+        &self.soracloud_runtime
     }
 
     /// Streaming handle used for Torii and telemetry ingress.

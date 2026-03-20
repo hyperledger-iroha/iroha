@@ -8735,6 +8735,9 @@ fn openapi_schemas() -> Map {
                 "controller_id",
                 "controller_display",
                 "asset_id",
+                "asset_definition_id",
+                "asset_definition_name",
+                "asset_definition_alias",
                 "registered_at_ms",
                 "expires_at_ms",
                 "policy_expires_at_ms",
@@ -8756,7 +8759,20 @@ fn openapi_schemas() -> Map {
                 },
                 "asset_id": {
                     "type": "string",
-                    "description": "Asset id bound to the allowance."
+                    "description": "Concrete asset id bound to the allowance."
+                },
+                "asset_definition_id": {
+                    "type": "string",
+                    "description": "Canonical asset-definition id referenced by the allowance."
+                },
+                "asset_definition_name": {
+                    "type": "string",
+                    "description": "Human-facing asset-definition name resolved from the ledger."
+                },
+                "asset_definition_alias": {
+                    "type": "string",
+                    "description": "Human-facing asset-definition alias resolved from the ledger, when configured.",
+                    "nullable": true
                 },
                 "registered_at_ms": {
                     "type": "integer",

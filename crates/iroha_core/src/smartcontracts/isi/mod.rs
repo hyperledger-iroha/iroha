@@ -22,6 +22,8 @@ pub mod repo;
 pub mod settlement;
 /// Viral social incentive instruction handlers.
 pub mod social;
+/// Soracloud lifecycle and runtime-state instruction handlers.
+pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
@@ -136,6 +138,33 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudService>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudService>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::MutateSoracloudState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudFheJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudDecryptionRequest>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudAgentLease>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RevokeSoracloudAgentPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RequestSoracloudAgentWalletSpend>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ApproveSoracloudAgentWalletSpend>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::EnqueueSoracloudAgentMessage>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AcknowledgeSoracloudAgentMessage>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AllowSoracloudAgentAutonomyArtifact>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudAgentAutonomy>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::StartSoracloudTrainingJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::CheckpointSoracloudTrainingJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RetrySoracloudTrainingJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelArtifact>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelWeight>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::PromoteSoracloudModelWeight>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudModelWeight>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvanceSoracloudRollout>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::oracle::SubmitOracleObservation>,
     dispatch_instruction::<iroha_data_model::isi::oracle::AggregateOracleFeed>,

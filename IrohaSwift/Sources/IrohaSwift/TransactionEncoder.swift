@@ -206,6 +206,16 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
     }
 }
 
+private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
+    let signature: String
+    let signaturePayloadHex: String
+
+    private enum CodingKeys: String, CodingKey {
+        case signature
+        case signaturePayloadHex = "signature_payload_hex"
+    }
+}
+
 private enum ClaimIdentifierSwiftNoritoEncoder {
     private static let instructionWireName = "identity::ClaimIdentifier"
     private static let instructionTypeName = "iroha_data_model::isi::identifier::ClaimIdentifier"
@@ -709,7 +719,12 @@ struct SwiftTransactionEncoder {
 
         if NoritoNativeBridge.shared.isAvailable {
             let privateKey = try privateKeyBytes(from: signingKey)
-            let receiptJSON = try JSONEncoder().encode(request.receipt)
+            let receiptJSON = try JSONEncoder().encode(
+                NativeClaimIdentifierReceiptEnvelope(
+                    signature: request.receipt.signature,
+                    signaturePayloadHex: request.receipt.signaturePayloadHex
+                )
+            )
             do {
                 if let native = try NoritoNativeBridge.shared.encodeClaimIdentifier(
                     chainId: ids.chainId,

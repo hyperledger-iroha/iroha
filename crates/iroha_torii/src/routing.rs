@@ -15211,6 +15211,19 @@ fn instruction_matches_account_id(
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
         return rewards.reward_asset().account() == expected;
     }
+    // Offline instructions: match by participant account.
+    {
+        use iroha_data_model::isi::offline::{
+            RegisterOfflineAllowance, SubmitOfflineToOnlineTransfer,
+        };
+        if let Some(reg) = any.downcast_ref::<RegisterOfflineAllowance>() {
+            return reg.certificate.controller == *expected;
+        }
+        if let Some(submit) = any.downcast_ref::<SubmitOfflineToOnlineTransfer>() {
+            return submit.transfer.receiver == *expected
+                || submit.transfer.deposit_account == *expected;
+        }
+    }
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
         if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
             return match multisig {
@@ -15228,6 +15241,200 @@ fn instruction_matches_account_id(
         return false;
     }
     false
+}
+
+#[cfg(feature = "app_api")]
+fn instruction_matches_domain_id(
+    instr: &iroha_data_model::isi::InstructionBox,
+    expected: &DomainId,
+) -> bool {
+    use iroha_data_model::isi::{
+        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
+        TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
+    };
+    use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+
+    let any = instr.as_any();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        return match transfer {
+            TransferBox::Domain(inner) => inner.object() == expected,
+            TransferBox::AssetDefinition(inner) => inner.object().domain() == expected,
+            TransferBox::Asset(inner) => inner.source().definition().domain() == expected,
+            TransferBox::Nft(inner) => inner.object().domain() == expected,
+        };
+    }
+    if let Some(batch) = any.downcast_ref::<TransferAssetBatch>() {
+        return batch
+            .entries()
+            .iter()
+            .any(|entry| entry.asset_definition().domain() == expected);
+    }
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        if let MintBox::Asset(asset_mint) = mint {
+            return asset_mint.destination().definition().domain() == expected;
+        }
+        return false;
+    }
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        if let BurnBox::Asset(asset_burn) = burn {
+            return asset_burn.destination().definition().domain() == expected;
+        }
+        return false;
+    }
+    if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
+        return set.asset().definition().domain() == expected;
+    }
+    if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
+        return remove.asset().definition().domain() == expected;
+    }
+    if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
+        return rewards.reward_asset().definition().domain() == expected;
+    }
+    if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
+        if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
+            return match multisig {
+                MultisigInstructionBox::Register(register) => &register.home_domain == expected,
+                MultisigInstructionBox::Approve(_approve) => false,
+                MultisigInstructionBox::Propose(propose) => propose
+                    .instructions
+                    .iter()
+                    .any(|nested| instruction_matches_domain_id(nested, expected)),
+            };
+        }
+        return false;
+    }
+    false
+}
+
+#[cfg(feature = "app_api")]
+fn executable_contains_account_id(
+    executable: &iroha_data_model::transaction::Executable,
+    expected: &AccountId,
+) -> bool {
+    use iroha_data_model::transaction::Executable;
+    match executable {
+        Executable::Instructions(instructions) => instructions
+            .iter()
+            .any(|instruction| instruction_matches_account_id(instruction, expected)),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn executable_contains_domain_id(
+    executable: &iroha_data_model::transaction::Executable,
+    expected: &DomainId,
+) -> bool {
+    use iroha_data_model::transaction::Executable;
+    match executable {
+        Executable::Instructions(instructions) => instructions
+            .iter()
+            .any(|instruction| instruction_matches_domain_id(instruction, expected)),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_references_account_id(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    expected: &AccountId,
+) -> bool {
+    match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => {
+            executable_contains_account_id(signed.instructions(), expected)
+        }
+        TransactionEntrypoint::Time(entry) => entry
+            .instructions
+            .iter()
+            .any(|instruction| instruction_matches_account_id(instruction, expected)),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_references_domain_id(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    expected: &DomainId,
+) -> bool {
+    match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => {
+            executable_contains_domain_id(signed.instructions(), expected)
+        }
+        TransactionEntrypoint::Time(entry) => entry
+            .instructions
+            .iter()
+            .any(|instruction| instruction_matches_domain_id(instruction, expected)),
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+pub(crate) enum TxHistoryAssetSelector {
+    AssetId(iroha_data_model::asset::AssetId),
+    DefinitionId(iroha_data_model::asset::id::AssetDefinitionId),
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+pub(crate) struct TxHistoryVisibilityScope {
+    pub viewer_account_ids: Vec<AccountId>,
+    pub viewer_dataspace_id: String,
+    pub allow_dataspace_wide: bool,
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAssetSelector> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(conversion_error("asset_id must not be empty".to_string()));
+    }
+    if let Ok(asset_id) = iroha_data_model::asset::AssetId::parse_encoded(trimmed) {
+        return Ok(TxHistoryAssetSelector::AssetId(asset_id));
+    }
+    trimmed
+        .parse::<iroha_data_model::asset::id::AssetDefinitionId>()
+        .map(TxHistoryAssetSelector::DefinitionId)
+        .map_err(|_| {
+            conversion_error("asset_id must be a valid asset id or asset definition id".to_string())
+        })
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn resolve_tx_history_asset_selector(
+    raw: Option<&str>,
+    allowed_definition: Option<&iroha_data_model::asset::id::AssetDefinitionId>,
+) -> Result<Option<TxHistoryAssetSelector>> {
+    let requested = raw.map(parse_tx_history_asset_selector).transpose()?;
+    if let Some(allowed_definition) = allowed_definition {
+        let requested_definition = requested.as_ref().map(|selector| match selector {
+            TxHistoryAssetSelector::AssetId(asset_id) => asset_id.definition(),
+            TxHistoryAssetSelector::DefinitionId(definition_id) => definition_id,
+        });
+        if requested_definition.is_some_and(|definition_id| definition_id != allowed_definition) {
+            return Err(conversion_error(
+                "asset_id is outside the allowed transaction history asset definition".to_string(),
+            ));
+        }
+        return Ok(Some(requested.unwrap_or_else(|| {
+            TxHistoryAssetSelector::DefinitionId(allowed_definition.clone())
+        })));
+    }
+    Ok(requested)
+}
+
+#[cfg(feature = "app_api")]
+fn tx_matches_asset_selector(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    selector: &TxHistoryAssetSelector,
+) -> bool {
+    let assets = tx_collect_asset_ids(tx);
+    match selector {
+        TxHistoryAssetSelector::AssetId(asset_id) => {
+            assets.iter().any(|candidate| candidate == asset_id)
+        }
+        TxHistoryAssetSelector::DefinitionId(definition_id) => assets
+            .iter()
+            .any(|candidate| candidate.definition() == definition_id),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -15350,7 +15557,7 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                     let s = v
                         .as_str()
                         .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))?;
-                    s.parse::<iroha_data_model::asset::AssetId>()
+                    parse_tx_history_asset_selector(s)
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
@@ -15833,16 +16040,11 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
 }
 
 #[cfg(feature = "app_api")]
-fn tx_authority_matches_subject(
+fn tx_matches_account_history_subject(
     tx: &iroha_data_model::query::CommittedTransaction,
     account_id: &iroha_data_model::account::AccountId,
 ) -> bool {
-    match tx.entrypoint() {
-        iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
-            signed.authority() == account_id
-        }
-        _ => false,
-    }
+    tx_references_account_id(tx, account_id)
 }
 
 #[cfg(feature = "app_api")]
@@ -17084,6 +17286,7 @@ pub async fn handle_v1_account_transactions(
         axum::extract::Path(account_id),
         NoritoJson(envelope),
         telemetry,
+        None,
     )
     .await
 }
@@ -17096,6 +17299,7 @@ pub async fn handle_v1_account_transactions_with_policy(
     axum::extract::Path(account_id): axum::extract::Path<String>,
     NoritoJson(envelope): NoritoJson<QueryEnvelope>,
     telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
@@ -17131,6 +17335,9 @@ pub async fn handle_v1_account_transactions_with_policy(
     let limits = app_query_limits();
     let cap = app_query_page_cap(&state);
     let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let allowed_asset_selector = allowed_asset_definition_id
+        .clone()
+        .map(TxHistoryAssetSelector::DefinitionId);
 
     let (items, total) = {
         // Validate JSON filter (structural + endpoint-specific) and execute typed predicate (PASS for now)
@@ -17183,8 +17390,13 @@ pub async fn handle_v1_account_transactions_with_policy(
                 if !predicate.applies(tx) {
                     return None;
                 }
-                if !tx_authority_matches_subject(tx, &account_id) {
+                if !tx_matches_account_history_subject(tx, &account_id) {
                     return None;
+                }
+                if let Some(expected) = allowed_asset_selector.as_ref() {
+                    if !tx_matches_asset_selector(tx, expected) {
+                        return None;
+                    }
                 }
                 let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
                 if include {
@@ -17213,8 +17425,13 @@ pub async fn handle_v1_account_transactions_with_policy(
                 if !predicate.applies(tx) {
                     continue;
                 }
-                if !tx_authority_matches_subject(tx, &account_id) {
+                if !tx_matches_account_history_subject(tx, &account_id) {
                     continue;
+                }
+                if let Some(expected) = allowed_asset_selector.as_ref() {
+                    if !tx_matches_asset_selector(tx, expected) {
+                        continue;
+                    }
                 }
                 let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
                 if debug_filter {
@@ -17410,6 +17627,7 @@ pub async fn handle_v1_account_transactions_get(
         axum::extract::Path(account_id),
         crate::NoritoQuery(params),
         telemetry,
+        None,
     )
     .await
 }
@@ -17422,11 +17640,10 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     axum::extract::Path(account_id): axum::extract::Path<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
     telemetry: MaybeTelemetry,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
 ) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
-
-    use iroha_data_model::asset::AssetId;
 
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
@@ -17437,14 +17654,10 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let asset_filter = params
-        .asset_id
-        .as_deref()
-        .map(|raw| {
-            AssetId::parse_encoded(raw)
-                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
-        })
-        .transpose()?;
+    let asset_filter = resolve_tx_history_asset_selector(
+        params.asset_id.as_deref(),
+        allowed_asset_definition_id.as_ref(),
+    )?;
     let cap = app_query_page_cap(&state);
     let limits = app_query_limits();
     let committed_txs = committed_transactions_snapshot(state.as_ref());
@@ -17464,12 +17677,11 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             let query_subject = query_subject.clone();
             let asset_filter = asset_filter.clone();
             move |tx| {
-                if !tx_authority_matches_subject(tx, &query_subject) {
+                if !tx_matches_account_history_subject(tx, &query_subject) {
                     return None;
                 }
                 if let Some(expected) = asset_filter.as_ref() {
-                    let assets = tx_collect_asset_ids(tx);
-                    if !assets.iter().any(|candidate| candidate == expected) {
+                    if !tx_matches_asset_selector(tx, expected) {
                         return None;
                     }
                 }
@@ -17507,6 +17719,110 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             .observe(items.len() as f64);
     }
     // Norito JSON response
+    let items_json = tx_projections_to_json(&items);
+    let mut top = norito::json::Map::new();
+    top.insert("items".into(), norito::json::Value::Array(items_json));
+    top.insert("total".into(), norito::json::Value::from(total as u64));
+    let body = norito::json::to_json_pretty(&top).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// GET `/v1/transactions/history` — visible history feed for the authenticated viewer.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_transactions_history_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<AccountTransactionsGetParams>,
+    telemetry: MaybeTelemetry,
+    visibility: TxHistoryVisibilityScope,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+) -> Result<impl IntoResponse> {
+    #[cfg(feature = "telemetry")]
+    use std::time::Instant;
+
+    #[cfg(feature = "telemetry")]
+    let start = Instant::now();
+    let cap = app_query_page_cap(&state);
+    let limits = app_query_limits();
+    let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let asset_filter = resolve_tx_history_asset_selector(
+        params.asset_id.as_deref(),
+        allowed_asset_definition_id.as_ref(),
+    )?;
+    let dataspace_domain = visibility
+        .allow_dataspace_wide
+        .then(|| visibility.viewer_dataspace_id.parse::<DomainId>().ok())
+        .flatten();
+
+    let (items, total) = {
+        let pagination =
+            enforce_app_pagination(params.limit, params.offset, cap, "/v1/transactions/history")?;
+        let fetch_cap = limits
+            .clamp_fetch_size(None)?
+            .map(|v| v.min(pagination.cap));
+        let filtered = committed_txs.iter().filter_map({
+            let viewer_account_ids = visibility.viewer_account_ids.clone();
+            let asset_filter = asset_filter.clone();
+            let dataspace_domain = dataspace_domain.clone();
+            move |tx| {
+                if let Some(expected) = asset_filter.as_ref() {
+                    if !tx_matches_asset_selector(tx, expected) {
+                        return None;
+                    }
+                }
+                let visible = if let Some(domain_id) = dataspace_domain.as_ref() {
+                    tx_references_domain_id(tx, domain_id)
+                } else {
+                    viewer_account_ids
+                        .iter()
+                        .any(|account_id| tx_references_account_id(tx, account_id))
+                };
+                if !visible {
+                    return None;
+                }
+                Some(project_tx(tx, &None))
+            }
+        });
+        collect_page_streaming(
+            filtered.map(|proj| ((), proj)),
+            pagination.offset,
+            pagination.limit,
+            fetch_cap,
+        )
+    };
+
+    #[cfg(feature = "telemetry")]
+    if telemetry.is_enabled() {
+        let metrics = telemetry.metrics().await;
+        let endpoint = "/v1/transactions/history";
+        metrics
+            .torii_filter_depth
+            .with_label_values(&[endpoint])
+            .observe(0.0);
+        metrics
+            .torii_filter_match_count
+            .with_label_values(&[endpoint])
+            .observe(total as f64);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        metrics
+            .torii_scan_ms
+            .with_label_values(&[endpoint])
+            .observe(elapsed_ms);
+        metrics
+            .torii_stream_rows
+            .with_label_values(&[endpoint])
+            .observe(items.len() as f64);
+    }
+
     let items_json = tx_projections_to_json(&items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
@@ -18540,6 +18856,18 @@ mod tx_query_filter_tests {
     }
 
     #[test]
+    fn tx_filter_adapter_accepts_asset_definition_id_eq() {
+        let telemetry = MaybeTelemetry::disabled();
+        let asset_def: dm::AssetDefinitionId =
+            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+        let expr = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("asset_id".into()),
+            norito::json::Value::from(asset_def.to_string()),
+        );
+        assert!(validate_tx_filter_adapter(&expr, &telemetry).is_ok());
+    }
+
+    #[test]
     fn filter_timestamp_range_matches() {
         let (a, kp) = account_with_key();
         let tx = make_external_tx(&a, &kp, 1_710_000_000_000, None, true);
@@ -19455,9 +19783,14 @@ mod tx_query_integration_smoke {
             offset: 0,
             asset_id: Some(asset_id.to_string()),
         };
+        let actor_literal = actor_id
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("actor i105 literal");
         let resp = handle_v1_account_transactions_get(
             state,
-            axum::extract::Path(actor_id.to_string()),
+            axum::extract::Path(actor_literal),
             crate::NoritoQuery(params),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -19474,6 +19807,129 @@ mod tx_query_integration_smoke {
         assert_eq!(
             items[0]["entrypoint_hash"].as_str(),
             Some(entry_hash_asset.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn account_transactions_get_includes_counterparty_transfer_for_recipient_account() {
+        use iroha_crypto::Algorithm;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader0.private_key())
+            .unpack(|_| {});
+        let mut st_block0 = state.block(unverified0.header());
+        let mut stx0 = st_block0.transaction();
+
+        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let alice_id = dm::ScopedAccountId::new(domain_id.clone(), kp_alice.public_key().clone());
+        let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
+        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(exec_id.account(), &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(exec_id.account(), &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(alice_id.clone()))
+            .execute(exec_id.account(), &mut stx0)
+            .ok();
+        dm::Register::account(dm::Account::new(bob_id.clone()))
+            .execute(exec_id.account(), &mut stx0)
+            .ok();
+        dm::Register::asset_definition({
+            let __asset_definition_id = def_id.clone();
+            dm::AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Mint::asset_numeric(
+            100_u32,
+            dm::AssetId::new(def_id.clone(), alice_id.account().clone()),
+        )
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+
+        stx0.apply();
+        let valid0 = unverified0
+            .clone()
+            .validate_and_record_transactions(&mut st_block0)
+            .unpack(|_| {});
+        let committed0 = valid0.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+
+        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let transfer_asset_id = dm::AssetId::new(def_id.clone(), alice_id.account().clone());
+        let mut tx_builder = dm::TransactionBuilder::new(chain_id, alice_id.account().clone());
+        tx_builder.set_creation_time(core::time::Duration::from_millis(1_000));
+        let signed_transfer = tx_builder
+            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
+                transfer_asset_id,
+                7_u32,
+                bob_id.account().clone(),
+            )
+            .into()])
+            .sign(kp_alice.private_key());
+        let entry_hash = format!("{}", signed_transfer.hash_as_entrypoint());
+        let transfer_tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed_transfer));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![transfer_tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let valid: ValidBlock = unverified
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let bob_literal = bob_id
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("recipient i105 literal");
+        let resp = handle_v1_account_transactions_get(
+            state,
+            axum::extract::Path(bob_literal),
+            crate::NoritoQuery(AccountTransactionsGetParams {
+                limit: Some(10),
+                offset: 0,
+                asset_id: Some(def_id.to_string()),
+            }),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(parsed["total"].as_u64(), Some(1));
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["entrypoint_hash"].as_str(),
+            Some(entry_hash.as_str())
         );
     }
 
@@ -39540,6 +39996,9 @@ struct OfflineAllowanceListItem {
     certificate_id_hex: String,
     controller: AccountId,
     asset_id: String,
+    asset_definition_id: String,
+    asset_definition_name: String,
+    asset_definition_alias: Option<String>,
     registered_at_ms: u64,
     expires_at_ms: u64,
     policy_expires_at_ms: u64,
@@ -39796,32 +40255,46 @@ impl From<OfflineCounterSummary> for OfflineCounterSummaryListItem {
 }
 
 #[cfg(feature = "app_api")]
-impl From<OfflineAllowanceRecord> for OfflineAllowanceListItem {
-    fn from(record: OfflineAllowanceRecord) -> Self {
-        let certificate_id_hex = hex::encode(record.certificate_id().as_ref());
-        let controller = record.certificate.controller.clone();
-        let asset_id = record.certificate.allowance.asset.to_string();
-        let registered_at_ms = record.registered_at_ms;
-        let expires_at_ms = record.certificate.expires_at_ms;
-        let policy_expires_at_ms = record.certificate.policy.expires_at_ms;
-        let refresh_at_ms = allowance_refresh_at_ms(&record);
-        let verdict_id_hex = allowance_verdict_hex(&record);
-        let attestation_nonce_hex = allowance_attestation_nonce_hex(&record);
-        let remaining_amount = record.remaining_amount.clone();
-        Self {
-            certificate_id_hex,
-            controller,
-            asset_id,
-            registered_at_ms,
-            expires_at_ms,
-            policy_expires_at_ms,
-            refresh_at_ms,
-            verdict_id_hex,
-            attestation_nonce_hex,
-            remaining_amount,
-            record,
-        }
-    }
+fn project_offline_allowance_item(
+    record: OfflineAllowanceRecord,
+    world: &impl WorldReadOnly,
+) -> Result<OfflineAllowanceListItem> {
+    let certificate_id_hex = hex::encode(record.certificate_id().as_ref());
+    let controller = record.certificate.controller.clone();
+    let asset_id = record.certificate.allowance.asset.to_string();
+    let definition_id = record.certificate.allowance.asset.definition().clone();
+    let asset_definition_id = definition_id.to_string();
+    let definition = world.asset_definition(&definition_id).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+            "offline allowance `{certificate_id_hex}` references missing asset definition `{asset_definition_id}`",
+        )))
+    })?;
+    let registered_at_ms = record.registered_at_ms;
+    let expires_at_ms = record.certificate.expires_at_ms;
+    let policy_expires_at_ms = record.certificate.policy.expires_at_ms;
+    let refresh_at_ms = allowance_refresh_at_ms(&record);
+    let verdict_id_hex = allowance_verdict_hex(&record);
+    let attestation_nonce_hex = allowance_attestation_nonce_hex(&record);
+    let remaining_amount = record.remaining_amount.clone();
+    Ok(OfflineAllowanceListItem {
+        certificate_id_hex,
+        controller,
+        asset_id,
+        asset_definition_id,
+        asset_definition_name: definition.name().clone(),
+        asset_definition_alias: definition
+            .alias()
+            .as_ref()
+            .map(|alias| alias.as_ref().to_owned()),
+        registered_at_ms,
+        expires_at_ms,
+        policy_expires_at_ms,
+        refresh_at_ms,
+        verdict_id_hex,
+        attestation_nonce_hex,
+        remaining_amount,
+        record,
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -40261,6 +40734,20 @@ fn offline_allowance_item_to_json(item: &OfflineAllowanceListItem, now_ms: u64) 
     );
     map.insert("asset_id".into(), Value::from(item.asset_id.clone()));
     map.insert(
+        "asset_definition_id".into(),
+        Value::from(item.asset_definition_id.clone()),
+    );
+    map.insert(
+        "asset_definition_name".into(),
+        Value::from(item.asset_definition_name.clone()),
+    );
+    map.insert(
+        "asset_definition_alias".into(),
+        item.asset_definition_alias
+            .clone()
+            .map_or(Value::Null, Value::from),
+    );
+    map.insert(
         "registered_at_ms".into(),
         Value::from(item.registered_at_ms),
     );
@@ -40631,30 +41118,31 @@ pub async fn handle_v1_offline_allowances(
 
     let filter_ref = filter_expr.as_ref();
     let projection_ref = filter_expr.as_ref();
-    let mapped_iter = records.into_iter().filter_map({
-        let selectors = selectors;
-        let extra_filters = extra_filters;
-        move |record| {
-            if let Some(expr) = filter_ref {
-                if !offline_allowance_filter_object(expr, &record) {
-                    return None;
-                }
-            }
-            if !extra_filters.matches(&record) {
-                return None;
-            }
-            let item = OfflineAllowanceListItem::from(record);
-            if let Some(expr) = projection_ref {
-                if !offline_allowance_filter_projection(expr, &item) {
-                    return None;
-                }
-            }
-            let key = offline_allowance_sort_key(&item.record, &selectors);
-            Some((key, item))
+    let mut projected = Vec::new();
+    for record in records {
+        if let Some(expr) = filter_ref
+            && !offline_allowance_filter_object(expr, &record)
+        {
+            continue;
         }
-    });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+        if !extra_filters.matches(&record) {
+            continue;
+        }
+        let item = project_offline_allowance_item(record, &world)?;
+        if let Some(expr) = projection_ref
+            && !offline_allowance_filter_projection(expr, &item)
+        {
+            continue;
+        }
+        let key = offline_allowance_sort_key(&item.record, &selectors);
+        projected.push((key, item));
+    }
+    let (items, total) = collect_page_streaming(
+        projected.into_iter(),
+        pagination.offset,
+        pagination.limit,
+        None,
+    );
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -40813,26 +41301,28 @@ pub async fn handle_v1_offline_allowances_query(
 
     let filter_ref = envelope.filter.as_ref();
     let projection_ref = envelope.filter.as_ref();
-    let mapped_iter = records.into_iter().filter_map({
-        let selectors = selectors;
-        move |record| {
-            if let Some(expr) = filter_ref {
-                if !offline_allowance_filter_object(expr, &record) {
-                    return None;
-                }
-            }
-            let item = OfflineAllowanceListItem::from(record);
-            if let Some(expr) = projection_ref {
-                if !offline_allowance_filter_projection(expr, &item) {
-                    return None;
-                }
-            }
-            let key = offline_allowance_sort_key(&item.record, &selectors);
-            Some((key, item))
+    let mut projected = Vec::new();
+    for record in records {
+        if let Some(expr) = filter_ref
+            && !offline_allowance_filter_object(expr, &record)
+        {
+            continue;
         }
-    });
-    let (items, total) =
-        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+        let item = project_offline_allowance_item(record, &world)?;
+        if let Some(expr) = projection_ref
+            && !offline_allowance_filter_projection(expr, &item)
+        {
+            continue;
+        }
+        let key = offline_allowance_sort_key(&item.record, &selectors);
+        projected.push((key, item));
+    }
+    let (items, total) = collect_page_streaming(
+        projected.into_iter(),
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+    );
 
     let mut arr = Vec::with_capacity(items.len());
     for item in &items {
@@ -47071,6 +47561,8 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     use crate::filter::FieldPath;
     use crate::{json_array, json_object, json_value};
+    #[cfg(feature = "app_api")]
+    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
 
     fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
         json_object(pairs)
@@ -47274,7 +47766,7 @@ mod adapter_filter_tests {
 
     #[cfg(all(test, feature = "app_api"))]
     fn sample_allowance_record() -> OfflineAllowanceRecord {
-        use iroha_crypto::{PublicKey, Signature};
+        use iroha_crypto::Signature;
         use iroha_test_samples::ALICE_ID;
 
         let controller = ALICE_ID.clone();
@@ -47290,10 +47782,10 @@ mod adapter_filter_tests {
                     amount: Numeric::new(1_000, 0),
                     commitment: vec![0xAA; 32],
                 },
-                spend_public_key: PublicKey::from_str(
-                    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-                )
-                .expect("public key"),
+                spend_public_key: controller
+                    .try_signatory()
+                    .expect("single-signature controller")
+                    .clone(),
                 attestation_report: Vec::new(),
                 issued_at_ms: 1_700_000_000_000,
                 expires_at_ms: 1_900_000_000_000,
@@ -47318,6 +47810,47 @@ mod adapter_filter_tests {
         }
     }
 
+    #[cfg(all(test, feature = "app_api"))]
+    fn sample_allowance_world(record: &OfflineAllowanceRecord) -> World {
+        let domain_id = record
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone();
+        let controller = record.certificate.controller.clone();
+        let domain = Domain {
+            id: domain_id.clone(),
+            logo: None,
+            metadata: Metadata::default(),
+            owned_by: controller.clone(),
+        };
+        let account = Account {
+            id: controller.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::from([domain_id]),
+        };
+        let asset_definition = AssetDefinition {
+            id: record.certificate.allowance.asset.definition().clone(),
+            name: "Allowance Points".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Default::default(),
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: Default::default(),
+            owned_by: controller,
+            total_quantity: Numeric::zero(),
+            confidential_policy: Default::default(),
+        };
+        World::with([domain], [account], [asset_definition])
+    }
+
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_allowance_filter_validator_accepts_verdict_hex() {
@@ -47332,6 +47865,12 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_filters_match_new_metadata_fields() {
         let record = sample_allowance_record();
+        let state = CoreState::new_for_testing(
+            sample_allowance_world(&record),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
         let verdict_hex = allowance_verdict_hex(&record).expect("verdict id");
         let refresh_at = allowance_refresh_at_ms(&record).expect("refresh timestamp");
 
@@ -47340,7 +47879,7 @@ mod adapter_filter_tests {
             Value::from(verdict_hex.clone()),
         );
         assert!(offline_allowance_filter_object(&verdict_expr, &record));
-        let item = OfflineAllowanceListItem::from(record.clone());
+        let item = project_offline_allowance_item(record.clone(), &world).expect("projection");
         assert!(offline_allowance_filter_projection(&verdict_expr, &item));
 
         let refresh_expr = FilterExpr::Lt(
@@ -47348,7 +47887,7 @@ mod adapter_filter_tests {
             Value::from(refresh_at + 1),
         );
         assert!(offline_allowance_filter_object(&refresh_expr, &record));
-        let item = OfflineAllowanceListItem::from(record.clone());
+        let item = project_offline_allowance_item(record.clone(), &world).expect("projection");
         assert!(offline_allowance_filter_projection(&refresh_expr, &item));
     }
 
@@ -47356,13 +47895,48 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_item_json_includes_verdict_metadata() {
         let record = sample_allowance_record();
+        let state = CoreState::new_for_testing(
+            sample_allowance_world(&record),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
         let verdict_hex = allowance_verdict_hex(&record).expect("verdict id");
         let nonce_hex = allowance_attestation_nonce_hex(&record).expect("nonce");
         let refresh_at = allowance_refresh_at_ms(&record).expect("refresh timestamp");
-        let item = OfflineAllowanceListItem::from(record);
+        let expected_asset_id = record.certificate.allowance.asset.to_string();
+        let expected_definition_id = record.certificate.allowance.asset.definition().to_string();
+        let item = project_offline_allowance_item(record, &world).expect("projection");
         let now_ms = refresh_at.saturating_sub(500);
         let value = offline_allowance_item_to_json(&item, now_ms).expect("json");
         let object = value.as_object().expect("json object");
+        assert_eq!(
+            object
+                .get("asset_id")
+                .and_then(Value::as_str)
+                .expect("asset id"),
+            expected_asset_id
+        );
+        assert_eq!(
+            object
+                .get("asset_definition_id")
+                .and_then(Value::as_str)
+                .expect("asset definition id"),
+            expected_definition_id
+        );
+        assert_eq!(
+            object
+                .get("asset_definition_name")
+                .and_then(Value::as_str)
+                .expect("asset definition name"),
+            "Allowance Points"
+        );
+        assert!(
+            object
+                .get("asset_definition_alias")
+                .is_some_and(Value::is_null),
+            "asset_definition_alias should be present and null"
+        );
         assert_eq!(
             object
                 .get("verdict_id_hex")
@@ -47419,6 +47993,53 @@ mod adapter_filter_tests {
                 .expect("deadline remaining"),
             500
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn offline_allowance_projection_missing_asset_definition_returns_internal_error() {
+        let record = sample_allowance_record();
+        let domain_id = record
+            .certificate
+            .allowance
+            .asset
+            .definition()
+            .domain()
+            .clone();
+        let controller = record.certificate.controller.clone();
+        let world = World::with(
+            [Domain {
+                id: domain_id.clone(),
+                logo: None,
+                metadata: Metadata::default(),
+                owned_by: controller.clone(),
+            }],
+            [Account {
+                id: controller,
+                metadata: Metadata::default(),
+                label: None,
+                uaid: None,
+                opaque_ids: Vec::new(),
+                linked_domains: BTreeSet::from([domain_id]),
+            }],
+            Vec::<AssetDefinition>::new(),
+        );
+
+        let state = CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let world = state.world_view();
+        let err = match project_offline_allowance_item(record.clone(), &world) {
+            Ok(_) => panic!("projection must fail"),
+            Err(err) => err,
+        };
+        let expected_definition_id = record.certificate.allowance.asset.definition().to_string();
+        let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = err else {
+            panic!("expected internal error");
+        };
+        assert!(message.contains(expected_definition_id.as_str()));
     }
 
     #[cfg(feature = "app_api")]
@@ -49641,7 +50262,10 @@ mod tests {
 
     use http::StatusCode;
     use http_body_util::BodyExt;
-    use iroha_core::{sumeragi::status, telemetry::StateTelemetry};
+    use iroha_core::{
+        kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::status,
+        telemetry::StateTelemetry,
+    };
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         block::BlockHeader,

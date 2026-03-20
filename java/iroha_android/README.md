@@ -1018,7 +1018,7 @@ OfflineListParams params = OfflineListParams.builder()
 transport.offlineToriiClient().listAllowances(params)
     .thenAccept(list -> {
         for (OfflineAllowanceList.OfflineAllowanceItem item : list.items()) {
-            System.out.println(item.certificateIdHex());
+            System.out.println(item.assetDefinitionName());
         }
     });
 
@@ -1031,6 +1031,9 @@ transport.offlineToriiClient().queryTransfers(query)
     .thenAccept(list -> System.out.println("Fetched " + list.total() + " transfers"));
 ```
 
+For offline allowance responses, `item.assetId()` remains the concrete `AssetId`, while
+`item.assetDefinitionId()`, `item.assetDefinitionName()`, and `item.assetDefinitionAlias()`
+describe the referenced asset definition for display.
 Register signed certificates on-ledger by posting them to the offline allowances endpoint:
 
 ```java

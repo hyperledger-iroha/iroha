@@ -4796,6 +4796,10 @@ pub struct Torii {
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
+    /// Optional hidden-identifier resolver runtime configuration.
+    pub identifier_resolver: Option<ToriiIdentifierResolver>,
+    /// Optional transaction-history visibility/auth configuration.
+    pub tx_history: Option<ToriiTxHistory>,
     /// App-facing query/backpressure limits.
     pub app_api: AppApi,
     /// Webhook delivery/backpressure configuration.
@@ -4804,6 +4808,32 @@ pub struct Torii {
     pub webhook_security: WebhookSecurity,
     /// Push notification delivery configuration.
     pub push: Push,
+}
+
+/// Transaction-history visibility/auth configuration for Torii app API.
+#[derive(Debug, Clone)]
+pub struct ToriiTxHistory {
+    /// Optional dataspace-keyed mandatory-alias policy file.
+    pub mandatory_aliases_path: Option<PathBuf>,
+    /// Optional asset-definition restriction applied to visible-history endpoints.
+    pub allowed_asset_definition_id: Option<AssetDefinitionId>,
+    /// Optional JWT bearer verification configuration for wallet history reads.
+    pub jwt: Option<ToriiTxHistoryJwt>,
+}
+
+/// JWT bearer verification inputs for transaction-history endpoints.
+#[derive(Debug, Clone)]
+pub struct ToriiTxHistoryJwt {
+    /// Expected JWT algorithm label (for example `RS256` or `HS256`).
+    pub algorithm: String,
+    /// Shared-secret material used for HMAC JWT algorithms.
+    pub secret: Option<String>,
+    /// PEM-encoded public key used for asymmetric JWT algorithms.
+    pub public_key_pem: Option<String>,
+    /// Optional issuer constraint.
+    pub issuer: Option<String>,
+    /// Optional audience constraint.
+    pub audience: Option<String>,
 }
 
 /// Execution mode for attachment sanitization.

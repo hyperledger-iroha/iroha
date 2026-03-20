@@ -46,6 +46,306 @@ Open work for this slice now remains:
 - run the broader workspace validation sweep once the multi-hour budget is
   available.
 
+Latest sync (2026-03-20 authoritative Soracloud mailbox state-mutation write-back):
+`crates/iroha_core/src/{block.rs,smartcontracts/isi/soracloud.rs}`
+now close the next core execution gap in the private-runtime mailbox path:
+
+- `iroha_core` now applies non-empty runtime `state_mutations` into
+  authoritative Soracloud service state during replicated mailbox execution
+  instead of aborting that mailbox pass with the previous TODO guard.
+- The new shared `apply_soracloud_state_mutation()` helper reuses the same
+  binding validation and storage rules for both governance-driven
+  `MutateSoracloudState` execution and runtime-driven mailbox write-back, so
+  the two paths no longer diverge.
+- Mailbox runtime receipts are now validated against the execution request
+  before write-back, and `next_soracloud_audit_sequence()` now advances from
+  runtime-receipt `emitted_sequence` values as well as lifecycle audit events.
+- A focused `iroha_core` regression now proves that mailbox execution can
+  persist authoritative service state, link that row to the runtime receipt,
+  advance the shared Soracloud sequence space, and still suppress re-delivery
+  after the receipt is recorded.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-state-mutation-target-2 cargo check -p iroha_core`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-state-mutation-target-2 cargo test -p iroha_core valid::tests::validate_and_record_transactions_ -- --nocapture` (the targeted mailbox regressions passed; the filtered command then kept draining zero-test binaries)
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-state-mutation-target-2 cargo test -p iroha_core --lib mutate_soracloud_state_records_authoritative_service_state -- --nocapture`
+
+Open work for this slice now remains:
+- replace the placeholder mailbox executor in
+  `crates/irohad/src/soracloud_runtime.rs` with real IVM and deterministic
+  `NativeProcess` ordered execution, plus real local-read and apartment
+  execution,
+- add the dedicated `iroha_config::soracloud_runtime` configuration surface
+  and move runtime-manager hydration/restart/pruning behavior onto those
+  explicit settings,
+- finish the embedded runtime host capabilities for journals, checkpoints,
+  certified responses, secrets/credentials, egress controls, and private
+  `update` / `private_update` execution,
+- remove the remaining Torii-local Soracloud test/parity scaffolding once the
+  real execution host and authoritative read paths fully cover those flows,
+- redefine the IVM runtime/admission/syscall docs/tests around the new
+  first-release cloud-runtime ABI once the real runtime host exists.
+Latest sync (2026-03-20 core Soracloud mailbox execution path):
+`crates/iroha_core/src/{soracloud_runtime.rs,state.rs,block.rs,smartcontracts/isi/soracloud.rs}`
+and
+`crates/irohad/src/{main.rs,soracloud_runtime.rs}`
+now wire the shared Soracloud runtime contract into replicated block
+progression:
+
+- `iroha_core` now exposes the shared `SoracloudRuntime` execution trait plus
+  deterministic request/result types for local reads, ordered mailbox
+  execution, and apartment execution.
+- `State`/`StateBlock` now carry an optional shared Soracloud runtime handle,
+  and `irohad` installs the embedded runtime-manager handle into that core
+  state path.
+- The core block validator now collects ready mailbox messages during block
+  progression, invokes the shared runtime after time-trigger execution, and
+  writes runtime state / outbound mailbox messages / runtime receipts back
+  through reusable authoritative helpers instead of inventing follow-up
+  transactions.
+- `irohad` currently implements that shared mailbox interface with a
+  deterministic placeholder executor and fixed runtime-state/receipt write-back
+  behavior, which is enough to exercise the authoritative block path while the
+  real execution host is still under construction.
+- A focused `iroha_core` regression now proves that the replicated mailbox path
+  emits a runtime receipt, updates pending mailbox counts, and suppresses
+  re-delivery once a receipt exists.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-mailbox-target cargo check -p iroha_core -p irohad -p iroha_torii`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-mailbox-test-target cargo test -p iroha_core valid::tests::validate_and_record_transactions_executes_soracloud_mailbox_runtime_once -- --nocapture` (the targeted test passed; the filtered command then kept draining zero-test binaries)
+
+Open work for this slice now remains:
+- replace the placeholder/synthetic mailbox executor in
+  `crates/irohad/src/soracloud_runtime.rs` with real IVM and deterministic
+  `NativeProcess` execution, plus real local-read and apartment execution,
+- add real hydration/restart/catch-up/pruning logic in the embedded runtime
+  manager and move its configuration surface into dedicated
+  `iroha_config::soracloud_runtime` settings,
+- remove the remaining Torii-local Soracloud test/parity scaffolding once the
+  execution path and authoritative reads fully cover those behaviors,
+- redefine the IVM runtime/admission/syscall docs/tests around the new
+  first-release cloud-runtime ABI once the real execution host exists.
+
+Latest sync (2026-03-20 Torii/runtime-manager status cutover):
+`crates/iroha_core/src/soracloud_runtime.rs`,
+`crates/iroha_torii/src/lib.rs`,
+and
+`crates/irohad/src/{main.rs,soracloud_runtime.rs}`
+now thread the embedded Soracloud runtime-manager into Torii through a shared
+core contract:
+
+- `iroha_core` now owns the shared Soracloud runtime snapshot types plus a
+  read-only `SoracloudRuntimeReadHandle` trait, so Torii can depend on the
+  embedded runtime-manager contract without importing `irohad`.
+- `irohad` implements that shared trait for
+  `SoracloudRuntimeManagerHandle` and passes the runtime manager into Torii via
+  `iroha_torii::ToriiRuntimeDeps`.
+- Torii no longer exposes `AppState.soracloud_registry`; the public server
+  state stops constructing the old in-process Soracloud registry/persistence
+  layer.
+- `/v1/soracloud/status` now reads health/load/cache/mailbox state from the
+  embedded runtime-manager snapshot and exposes that snapshot directly in the
+  response, instead of reporting the previous SoraFS placeholder runtime
+  health.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-status-target cargo check -p iroha_torii -p irohad`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-status-test-target cargo test -p iroha_torii --features telemetry --lib soracloud_status_handler_returns_snapshot_sections -- --nocapture`
+
+Open work for this slice now remains:
+- expand the shared `iroha_core` runtime contract from read-only snapshot
+  access into the full local-read / mailbox-execution / apartment-execution
+  interface needed by the private-runtime execution plane,
+- use that shared runtime contract from the core replicated mailbox path so
+  ordered `update` / `private_update` execution stops depending on Torii-side
+  façades entirely,
+- remove the remaining legacy test-only Torii Soracloud registry/apply helper
+  scaffolding once the authoritative/read-only coverage is retained elsewhere,
+- add broader status/health regression coverage for nodes recovering from a
+  cold restart with a rehydrated runtime-manager snapshot.
+
+Latest sync (2026-03-20 `irohad` embedded Soracloud runtime-manager reconciliation):
+`crates/irohad/src/{main.rs,soracloud_runtime.rs}` and
+`crates/iroha_torii/src/routing.rs`
+now land the first node-embedded runtime-manager slice of the private-runtime
+plan:
+
+- `irohad` now starts an embedded Soracloud runtime-manager that reconciles
+  authoritative world state into a node-local materialization view instead of
+  relying on the old Torii-local registry model.
+- The runtime manager persists a local `runtime_snapshot.json` plus per-service
+  and per-apartment materialization plans under
+  `torii.data_dir/soracloud_runtime`, covering:
+  - active service revisions and canary candidate revisions,
+  - mailbox contracts and content-addressed artifact/bundle hydration
+    expectations,
+  - active agent apartments with lease/runtime/budget state.
+- Local materialization directories are now pruned on reconciliation, so the
+  embedded runtime state follows authoritative deployment/rollout changes over
+  time.
+- A small Torii dependency regression was fixed in the app-history route so
+  the `irohad` graph compiles cleanly again.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-agent-cutover-target cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_cli`
+- `CARGO_TARGET_DIR=/tmp/iroha-runtime-manager-target cargo check -p irohad`
+
+Open work for this slice now remains:
+- replace the bootstrap materialization planner with real SoraFS/DA hydration of
+  bundles, static assets, checkpoints, journals, and model artifacts referenced
+  by on-chain hashes,
+- connect the runtime manager to actual execution/supervision for IVM and
+  deterministic `NativeProcess` workloads instead of only persisting local
+  materialization plans,
+- thread node-local runtime-manager outputs into health/load reporting and
+  certified local-fast-path serving,
+- add first-class test coverage for the new `irohad` runtime manager once the
+  long test-profile build finishes, then broaden into multi-node replay,
+  hydration, failover, and private-runtime acceptance scenarios,
+- redefine the IVM runtime/admission/syscall docs/tests around the new
+  first-release cloud-runtime surface after the embedded execution host exists.
+
+Latest sync (2026-03-20 Soracloud private-runtime dispatch + authoritative health read):
+`crates/iroha_core/src/smartcontracts/isi/{mod,soracloud.rs}`
+and
+`crates/iroha_torii/src/soracloud.rs`
+now close the remaining mismatch between the new private-runtime ISIs and the
+transaction/read façade:
+
+- the global `InstructionBox` dispatcher now routes
+  `MutateSoracloudState`, `RunSoracloudFheJob`, and
+  `RecordSoracloudDecryptionRequest` into the Soracloud executor, so the
+  Torii lifecycle/private-runtime façade actually reaches the authoritative
+  world-state mutation handlers,
+- the Soracloud health/compliance report endpoint now derives its response from
+  authoritative audit events plus active deployment/revision state in `World`
+  instead of the Torii-local registry,
+- authoritative Torii tests now cover both ciphertext-query and
+  health/compliance world-state reads, and the core private-runtime mutation
+  tests now exercise the three new mutation paths through `InstructionBox`
+  dispatch.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_core --lib mutate_soracloud_state_records_authoritative_service_state -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_core --lib run_soracloud_fhe_job_records_ciphertext_output_state -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_core --lib record_soracloud_decryption_request_persists_policy_snapshot -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-torii-health-target cargo test -p iroha_torii --lib soracloud::tests::authoritative_ciphertext_query_reads_world_state -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-torii-health-target cargo test -p iroha_torii --lib soracloud::tests::authoritative_health_compliance_report_reads_world_state -- --nocapture`
+
+Open work for this slice now remains:
+- finish replacing the remaining Torii-local Soracloud parity paths that still
+  own runtime state in-process, especially the training/model lifecycle and the
+  agent/apartment/autonomy/wallet/mailbox handlers,
+- add authoritative Soracloud read models for the remaining parity surfaces
+  that still only exist inside the local registry,
+- add the `irohad`-embedded runtime manager that materializes active service
+  revisions on every node, hydrates artifacts from SoraFS/DA, and supervises
+  IVM plus deterministic `NativeProcess` execution,
+- redefine the IVM runtime/admission/syscall documentation and tests around
+  the new first-release cloud-runtime surface,
+- broaden validation into the longer-running multi-node replay, hydration,
+  failover, and private-runtime acceptance scenarios once the embedded runtime
+  exists.
+
+Latest sync (2026-03-20 Soracloud lifecycle ISIs + Torii façade cutover):
+`crates/iroha_data_model/src/{soracloud.rs,isi/soracloud.rs,isi/{mod,registry}.rs,visit/{mod,visit_instruction}.rs}`,
+`crates/iroha_core/src/{state.rs,smartcontracts/isi/{mod,soracloud.rs}}`,
+`crates/iroha_torii/src/{soracloud.rs,lib.rs,routing.rs,test_utils.rs}`,
+and
+`crates/iroha_cli/src/soracloud.rs`
+now cover the authoritative lifecycle/control-plane half of the private runtime
+plan:
+
+- Soracloud now has first-class lifecycle/runtime ISIs for deploy, upgrade,
+  rollback, rollout advance, runtime-state recording, mailbox recording, and
+  runtime receipts.
+- `World` now persists admitted deployment bundles, deployment/rollout state,
+  runtime state, mailbox messages, receipts, and audit events directly, and
+  the core executor updates those records under `CanManageSoracloud`.
+- Torii deploy/upgrade/rollback/rollout endpoints now act as façades over
+  normal transaction submission instead of mutating the local file-backed
+  registry, and `/v1/soracloud/registry` plus the telemetry control-plane
+  snapshot now read authoritative world state.
+- The CLI live Soracloud path now carries explicit signer material for those
+  lifecycle mutations and consumes the authoritative registry endpoint.
+
+Targeted validation passed:
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_torii --lib soracloud::tests::world_snapshot_uses_authoritative_soracloud_state -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_torii --lib soracloud::tests::deploy_upgrade_rollback_workflow_updates_registry_and_audit_log -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_cli --bin iroha soracloud::tests::signed_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_cli --bin iroha soracloud::tests::status_output_can_represent_torii_control_plane_snapshot -- --nocapture`
+
+Open work for this slice now remains:
+- finish replacing the remaining Torii-local Soracloud registry mutations and
+  parity paths outside the lifecycle slice, especially the private-runtime,
+  agent/apartment, training/model, and other non-lifecycle control-plane
+  handlers that still rely on local registry state,
+- add authoritative Soracloud queries for runtime state, mailbox flow, audit
+  receipts, and other read models beyond the current registry snapshot,
+- add the `irohad`-embedded runtime manager that materializes active service
+  revisions on every node, hydrates artifacts from SoraFS/DA, and supervises
+  IVM plus deterministic `NativeProcess` execution,
+- redefine the IVM runtime/admission/syscall documentation and tests around
+  the new first-release cloud-runtime surface,
+- broaden validation into the longer-running multi-node replay, hydration,
+  failover, and private-runtime acceptance scenarios once the embedded runtime
+  exists.
+
+Latest sync (2026-03-20 Soracloud runtime-state foundation):
+`crates/iroha_data_model/src/soracloud.rs`,
+`crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`,
+`fixtures/soracloud/{sora_service_manifest_v1,sora_deployment_bundle_v1}.json`,
+`crates/iroha_core/src/state.rs`,
+and
+`crates/iroha_cli/src/soracloud.rs`
+now cover the first authoritative state-model slice of the private runtime
+plan:
+
+- Soracloud manifests now declare explicit runtime handlers and referenced
+  artifacts, with validation for certified local-fast-path reads and mailboxed
+  replicated writes/private writes.
+- The data model now has dedicated runtime-state records for service health,
+  load, mailbox messages, and execution receipts instead of treating Soracloud
+  metadata as a Torii-local control-plane-only shape.
+- `World` now persists Soracloud service revisions, runtime state, mailbox
+  messages, and receipts directly, including snapshot/JSON support and
+  read-only/view/test accessors.
+- CLI Soracloud init templates now emit manifests that satisfy the stricter
+  runtime-state schema for `site`, `webapp`, and `pii-app`.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_data_model validate_rejects_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_core soracloud_runtime_records_are_visible_through_world_view -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-target cargo test -p iroha_cli --bin iroha soracloud::tests::init_ -- --nocapture`
+
+Open work for this slice now remains:
+- thread the new Soracloud runtime-state records through first-class ISIs and
+  queries so deploy/upgrade/rollout/mailbox/receipt mutations stop depending
+  on the Torii-local registry path,
+- replace the file-backed Torii Soracloud registry with façade logic over
+  authoritative world state plus certified responses,
+- add the `irohad`-embedded runtime manager that materializes active service
+  revisions on every node, hydrates artifacts from SoraFS/DA, and supervises
+  IVM plus deterministic `NativeProcess` execution,
+- redefine the IVM runtime/admission/syscall documentation and tests around
+  the new first-release cloud-runtime surface,
+- broaden validation from the targeted data-model/core/CLI slices into the
+  longer-running multi-node replay, hydration, and private-runtime scenarios
+  once the implementation reaches those paths.
+
 Latest sync (2026-03-20 manifest-declared structured data triggers):
 `crates/iroha_data_model/src/events/data/filters.rs`,
 `crates/kotodama_lang/src/{ast.rs,parser.rs,semantic.rs,compiler.rs}`,
@@ -70,11 +370,12 @@ Targeted validation passed:
 - `cargo fmt --all --check`
 - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_data_model asset_filter -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang trigger_decl_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang manifest_trigger_decl_ -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture`
 
 Open work for this slice now remains:
-- broaden the targeted Kotodama coverage into wider crate/workspace validation
-  once the multi-hour budget is available,
+- broaden the validation from targeted crate tests into wider crate/workspace
+  coverage once the multi-hour budget is available,
 - if downstream product-specific event families need Kotodama syntax later,
   add them explicitly instead of overloading the current core-ledger family
   surface.

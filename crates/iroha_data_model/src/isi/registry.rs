@@ -4,7 +4,7 @@ use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
         endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade,
-        settlement, smart_contract_code, social, sorafs, space_directory,
+        settlement, smart_contract_code, social, soracloud, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -101,6 +101,33 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<social::ClaimTwitterFollowReward>,
     InstructionRegistry::register::<social::SendToTwitter>,
     InstructionRegistry::register::<social::CancelTwitterEscrow>,
+    InstructionRegistry::register::<soracloud::DeploySoracloudService>,
+    InstructionRegistry::register::<soracloud::UpgradeSoracloudService>,
+    InstructionRegistry::register::<soracloud::RollbackSoracloudService>,
+    InstructionRegistry::register::<soracloud::MutateSoracloudState>,
+    InstructionRegistry::register::<soracloud::RunSoracloudFheJob>,
+    InstructionRegistry::register::<soracloud::RecordSoracloudDecryptionRequest>,
+    InstructionRegistry::register::<soracloud::DeploySoracloudAgentApartment>,
+    InstructionRegistry::register::<soracloud::RenewSoracloudAgentLease>,
+    InstructionRegistry::register::<soracloud::RestartSoracloudAgentApartment>,
+    InstructionRegistry::register::<soracloud::RevokeSoracloudAgentPolicy>,
+    InstructionRegistry::register::<soracloud::RequestSoracloudAgentWalletSpend>,
+    InstructionRegistry::register::<soracloud::ApproveSoracloudAgentWalletSpend>,
+    InstructionRegistry::register::<soracloud::EnqueueSoracloudAgentMessage>,
+    InstructionRegistry::register::<soracloud::AcknowledgeSoracloudAgentMessage>,
+    InstructionRegistry::register::<soracloud::AllowSoracloudAgentAutonomyArtifact>,
+    InstructionRegistry::register::<soracloud::RunSoracloudAgentAutonomy>,
+    InstructionRegistry::register::<soracloud::StartSoracloudTrainingJob>,
+    InstructionRegistry::register::<soracloud::CheckpointSoracloudTrainingJob>,
+    InstructionRegistry::register::<soracloud::RetrySoracloudTrainingJob>,
+    InstructionRegistry::register::<soracloud::RegisterSoracloudModelArtifact>,
+    InstructionRegistry::register::<soracloud::RegisterSoracloudModelWeight>,
+    InstructionRegistry::register::<soracloud::PromoteSoracloudModelWeight>,
+    InstructionRegistry::register::<soracloud::RollbackSoracloudModelWeight>,
+    InstructionRegistry::register::<soracloud::AdvanceSoracloudRollout>,
+    InstructionRegistry::register::<soracloud::SetSoracloudRuntimeState>,
+    InstructionRegistry::register::<soracloud::RecordSoracloudMailboxMessage>,
+    InstructionRegistry::register::<soracloud::RecordSoracloudRuntimeReceipt>,
     InstructionRegistry::register::<ExecuteTrigger>,
     InstructionRegistry::register::<Upgrade>,
     InstructionRegistry::register::<Log>,
@@ -248,6 +275,84 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id::<Upgrade>(Upgrade::WIRE_ID);
     registry = registry.register_with_id::<CustomInstruction>(CustomInstruction::WIRE_ID);
     registry = registry.register_with_id::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
+    registry = registry
+        .register_with_id::<soracloud::DeploySoracloudService>("soracloud::DeploySoracloudService");
+    registry = registry.register_with_id::<soracloud::UpgradeSoracloudService>(
+        "soracloud::UpgradeSoracloudService",
+    );
+    registry = registry.register_with_id::<soracloud::RollbackSoracloudService>(
+        "soracloud::RollbackSoracloudService",
+    );
+    registry = registry
+        .register_with_id::<soracloud::MutateSoracloudState>("soracloud::MutateSoracloudState");
+    registry =
+        registry.register_with_id::<soracloud::RunSoracloudFheJob>("soracloud::RunSoracloudFheJob");
+    registry = registry.register_with_id::<soracloud::RecordSoracloudDecryptionRequest>(
+        "soracloud::RecordSoracloudDecryptionRequest",
+    );
+    registry = registry.register_with_id::<soracloud::DeploySoracloudAgentApartment>(
+        "soracloud::DeploySoracloudAgentApartment",
+    );
+    registry = registry.register_with_id::<soracloud::RenewSoracloudAgentLease>(
+        "soracloud::RenewSoracloudAgentLease",
+    );
+    registry = registry.register_with_id::<soracloud::RestartSoracloudAgentApartment>(
+        "soracloud::RestartSoracloudAgentApartment",
+    );
+    registry = registry.register_with_id::<soracloud::RevokeSoracloudAgentPolicy>(
+        "soracloud::RevokeSoracloudAgentPolicy",
+    );
+    registry = registry.register_with_id::<soracloud::RequestSoracloudAgentWalletSpend>(
+        "soracloud::RequestSoracloudAgentWalletSpend",
+    );
+    registry = registry.register_with_id::<soracloud::ApproveSoracloudAgentWalletSpend>(
+        "soracloud::ApproveSoracloudAgentWalletSpend",
+    );
+    registry = registry.register_with_id::<soracloud::EnqueueSoracloudAgentMessage>(
+        "soracloud::EnqueueSoracloudAgentMessage",
+    );
+    registry = registry.register_with_id::<soracloud::AcknowledgeSoracloudAgentMessage>(
+        "soracloud::AcknowledgeSoracloudAgentMessage",
+    );
+    registry = registry.register_with_id::<soracloud::AllowSoracloudAgentAutonomyArtifact>(
+        "soracloud::AllowSoracloudAgentAutonomyArtifact",
+    );
+    registry = registry.register_with_id::<soracloud::RunSoracloudAgentAutonomy>(
+        "soracloud::RunSoracloudAgentAutonomy",
+    );
+    registry = registry.register_with_id::<soracloud::StartSoracloudTrainingJob>(
+        "soracloud::StartSoracloudTrainingJob",
+    );
+    registry = registry.register_with_id::<soracloud::CheckpointSoracloudTrainingJob>(
+        "soracloud::CheckpointSoracloudTrainingJob",
+    );
+    registry = registry.register_with_id::<soracloud::RetrySoracloudTrainingJob>(
+        "soracloud::RetrySoracloudTrainingJob",
+    );
+    registry = registry.register_with_id::<soracloud::RegisterSoracloudModelArtifact>(
+        "soracloud::RegisterSoracloudModelArtifact",
+    );
+    registry = registry.register_with_id::<soracloud::RegisterSoracloudModelWeight>(
+        "soracloud::RegisterSoracloudModelWeight",
+    );
+    registry = registry.register_with_id::<soracloud::PromoteSoracloudModelWeight>(
+        "soracloud::PromoteSoracloudModelWeight",
+    );
+    registry = registry.register_with_id::<soracloud::RollbackSoracloudModelWeight>(
+        "soracloud::RollbackSoracloudModelWeight",
+    );
+    registry = registry.register_with_id::<soracloud::AdvanceSoracloudRollout>(
+        "soracloud::AdvanceSoracloudRollout",
+    );
+    registry = registry.register_with_id::<soracloud::SetSoracloudRuntimeState>(
+        "soracloud::SetSoracloudRuntimeState",
+    );
+    registry = registry.register_with_id::<soracloud::RecordSoracloudMailboxMessage>(
+        "soracloud::RecordSoracloudMailboxMessage",
+    );
+    registry = registry.register_with_id::<soracloud::RecordSoracloudRuntimeReceipt>(
+        "soracloud::RecordSoracloudRuntimeReceipt",
+    );
     registry = registry.register_with_id::<consensus_keys::RegisterConsensusKey>(
         "consensus::RegisterConsensusKey",
     );

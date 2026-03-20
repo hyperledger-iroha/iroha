@@ -4079,6 +4079,102 @@ mod tests {
     }
 
     #[test]
+    fn lower_state_map_sets_keep_declared_base_names() {
+        let src = r#"
+            seiyaku StagedMintRequest {
+              state int MintRequestNextSequence;
+              state MintRequestSequenceById: Map<Name, int>;
+              state MintRequestSequences: Map<int, int>;
+              state MintRequestRequestIds: Map<int, Name>;
+              state MintRequestFiIds: Map<int, Name>;
+              state MintRequestFiAuthorities: Map<int, AccountId>;
+              state MintRequestToAccounts: Map<int, AccountId>;
+              state MintRequestAmounts: Map<int, int>;
+              state MintRequestRequestedBy: Map<int, Json>;
+              state MintRequestStates: Map<int, int>;
+              state MintRequestCreatedAt: Map<int, int>;
+              state MintRequestExpiresAt: Map<int, int>;
+              state MintRequestFinalizedAt: Map<int, int>;
+              state MintRequestCanceledAt: Map<int, int>;
+
+              fn update_record(sequence: int,
+                               request_id: Name,
+                               fi_id: Name,
+                               fi_multisig_account_id: AccountId,
+                               to_account_id: AccountId,
+                               amount_i64: int,
+                               requested_by_actor_id: Json,
+                               state_code: int,
+                               created_at_ms: int,
+                               expires_at_ms: int,
+                               finalized_at_ms: int,
+                               canceled_at_ms: int) {
+                MintRequestSequences[sequence] = sequence;
+                MintRequestRequestIds[sequence] = request_id;
+                MintRequestFiIds[sequence] = fi_id;
+                MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
+                MintRequestToAccounts[sequence] = to_account_id;
+                MintRequestAmounts[sequence] = amount_i64;
+                MintRequestRequestedBy[sequence] = requested_by_actor_id;
+                MintRequestStates[sequence] = state_code;
+                MintRequestCreatedAt[sequence] = created_at_ms;
+                MintRequestExpiresAt[sequence] = expires_at_ms;
+                MintRequestFinalizedAt[sequence] = finalized_at_ms;
+                MintRequestCanceledAt[sequence] = canceled_at_ms;
+              }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let update_record = ir
+            .functions
+            .iter()
+            .find(|func| func.name == "update_record")
+            .expect("update_record function");
+
+        let mut name_literals = HashMap::new();
+        let mut bases = Vec::new();
+        for block in &update_record.blocks {
+            for instr in &block.instrs {
+                if let Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Name,
+                    value,
+                } = instr
+                {
+                    name_literals.insert(*dest, value.clone());
+                }
+                if let Instr::PathMapKey { base, .. } = instr {
+                    let base_name = name_literals
+                        .get(base)
+                        .cloned()
+                        .expect("PathMapKey base should originate from a Name DataRef");
+                    bases.push(base_name);
+                }
+            }
+        }
+
+        assert_eq!(
+            bases,
+            vec![
+                "MintRequestSequences",
+                "MintRequestRequestIds",
+                "MintRequestFiIds",
+                "MintRequestFiAuthorities",
+                "MintRequestToAccounts",
+                "MintRequestAmounts",
+                "MintRequestRequestedBy",
+                "MintRequestStates",
+                "MintRequestCreatedAt",
+                "MintRequestExpiresAt",
+                "MintRequestFinalizedAt",
+                "MintRequestCanceledAt",
+            ]
+        );
+    }
+
+    #[test]
     fn lower_norito_bytes_literal_to_dataref() {
         let src = r#"fn main() { let _b = norito_bytes(b"ab"); }"#;
         let prog = parse(src).unwrap();

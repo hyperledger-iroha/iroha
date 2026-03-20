@@ -2591,6 +2591,125 @@ mod tests {
     }
 
     #[test]
+    fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
+        let account = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string();
+        let peer =
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D".to_string();
+        let domain = "wonderland".to_string();
+        let asset_definition = "aid:6872454e9c044641aa581ec5f3801619".to_string();
+        let nft = "n0$wonderland".to_string();
+        let trigger = "wake".to_string();
+        let role = "auditor".to_string();
+        let asset = {
+            let account_id = iroha_data_model::account::AccountId::parse_encoded(&account)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("account");
+            let definition_id: iroha_data_model::asset::AssetDefinitionId =
+                asset_definition.parse().expect("asset definition");
+            iroha_data_model::asset::AssetId::new(definition_id, account_id).canonical_encoded()
+        };
+
+        let cases = vec![
+            (
+                TriggerDataFamily::Peer,
+                "added",
+                vec![("peer".to_string(), peer)],
+            ),
+            (
+                TriggerDataFamily::Domain,
+                "created",
+                vec![("domain".to_string(), domain)],
+            ),
+            (
+                TriggerDataFamily::Account,
+                "created",
+                vec![("account".to_string(), account.clone())],
+            ),
+            (
+                TriggerDataFamily::Asset,
+                "added",
+                vec![
+                    ("asset".to_string(), asset),
+                    ("asset_definition".to_string(), asset_definition.clone()),
+                ],
+            ),
+            (
+                TriggerDataFamily::AssetDefinition,
+                "created",
+                vec![("asset_definition".to_string(), asset_definition)],
+            ),
+            (
+                TriggerDataFamily::Nft,
+                "created",
+                vec![("nft".to_string(), nft)],
+            ),
+            (
+                TriggerDataFamily::Trigger,
+                "created",
+                vec![("trigger".to_string(), trigger)],
+            ),
+            (
+                TriggerDataFamily::Role,
+                "created",
+                vec![("role".to_string(), role)],
+            ),
+            (TriggerDataFamily::Configuration, "changed", vec![]),
+            (TriggerDataFamily::Executor, "upgraded", vec![]),
+        ];
+
+        for (family, event, expected_matchers) in cases {
+            let family_literal = match family {
+                TriggerDataFamily::Peer => "peer",
+                TriggerDataFamily::Domain => "domain",
+                TriggerDataFamily::Account => "account",
+                TriggerDataFamily::Asset => "asset",
+                TriggerDataFamily::AssetDefinition => "asset_definition",
+                TriggerDataFamily::Nft => "nft",
+                TriggerDataFamily::Trigger => "trigger",
+                TriggerDataFamily::Role => "role",
+                TriggerDataFamily::Configuration => "configuration",
+                TriggerDataFamily::Executor => "executor",
+            };
+            let matcher_block = expected_matchers
+                .iter()
+                .map(|(key, value)| format!("                    {key} \"{value}\";\n"))
+                .collect::<String>();
+            let src = format!(
+                r#"
+                seiyaku C {{
+                    kotoage fn run() {{}}
+                    register_trigger wake {{
+                        call run;
+                        on data {family_literal} {event} {{
+{matcher_block}                        }}
+                    }}
+                }}
+                "#
+            );
+            let prog = parse(&src).expect("parse trigger decl");
+            let trigger = prog
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Trigger(t) => Some(t),
+                    _ => None,
+                })
+                .expect("trigger present");
+            let TriggerFilter::Data(TriggerDataFilter::Structured(filter)) = &trigger.filter else {
+                panic!("expected structured data filter");
+            };
+            assert_eq!(filter.family, family);
+            assert_eq!(filter.event, TriggerDataEventKind::Named(event.to_string()));
+            let actual_matchers = filter
+                .matchers
+                .iter()
+                .map(|matcher| (matcher.key.clone(), matcher.value.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(actual_matchers, expected_matchers);
+        }
+    }
+
+    #[test]
     fn parse_trigger_decl_with_pipeline_filter() {
         let src = r#"
         seiyaku C {

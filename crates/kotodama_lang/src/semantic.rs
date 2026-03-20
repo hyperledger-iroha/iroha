@@ -6376,6 +6376,249 @@ mod tests {
     }
 
     #[test]
+    fn trigger_decl_supports_structured_data_filters_for_core_families() {
+        use iroha_data_model::{
+            account::{AccountId, ParsedAccountId},
+            events::{
+                EventFilterBox,
+                data::{
+                    DataEventFilter,
+                    prelude::{
+                        AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter,
+                        AssetDefinitionEventSet, AssetEventFilter, AssetEventSet,
+                        ConfigurationEventFilter, ConfigurationEventSet, DomainEventFilter,
+                        DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
+                        NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet,
+                        TriggerEventFilter, TriggerEventSet,
+                    },
+                },
+            },
+            nft::NftId,
+            peer::PeerId,
+            role::RoleId,
+            trigger::TriggerId,
+        };
+
+        let account_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let account = AccountId::parse_encoded(account_literal)
+            .map(ParsedAccountId::into_account_id)
+            .expect("account");
+        let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
+        let peer: PeerId = peer_literal.parse().expect("peer");
+        let domain: DomainId = "wonderland".parse().expect("domain");
+        let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
+            .parse()
+            .expect("asset definition");
+        let asset = AssetId::new(asset_definition.clone(), account.clone());
+        let asset_literal = asset.canonical_encoded();
+        let nft: NftId = "n0$wonderland".parse().expect("nft");
+        let trigger_id: TriggerId = "wake".parse().expect("trigger");
+        let role_id: RoleId = "auditor".parse().expect("role");
+
+        let cases = vec![
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data peer added {{
+                                peer "{peer_literal}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Peer(
+                    PeerEventFilter::new()
+                        .for_events(PeerEventSet::Added)
+                        .for_peer(peer),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data domain created {{
+                                domain "{domain}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Domain(
+                    DomainEventFilter::new()
+                        .for_events(DomainEventSet::Created)
+                        .for_domain(domain.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data account created {{
+                                account "{account_literal}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Account(
+                    AccountEventFilter::new()
+                        .for_events(AccountEventSet::Created)
+                        .for_account(account.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data asset added {{
+                                asset "{asset_literal}";
+                                asset_definition "{asset_definition}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Asset(
+                    AssetEventFilter::new()
+                        .for_events(AssetEventSet::Added)
+                        .for_asset(asset.clone())
+                        .for_asset_definition(asset_definition.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data asset_definition created {{
+                                asset_definition "{asset_definition}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::AssetDefinition(
+                    AssetDefinitionEventFilter::new()
+                        .for_events(AssetDefinitionEventSet::Created)
+                        .for_asset_definition(asset_definition.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data nft created {{
+                                nft "{nft}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Nft(
+                    NftEventFilter::new()
+                        .for_events(NftEventSet::Created)
+                        .for_nft(nft),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data trigger created {{
+                                trigger "{trigger_id}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Trigger(
+                    TriggerEventFilter::new()
+                        .for_events(TriggerEventSet::Created)
+                        .for_trigger(trigger_id),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data role created {{
+                                role "{role_id}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Role(
+                    RoleEventFilter::new()
+                        .for_events(RoleEventSet::Created)
+                        .for_role(role_id),
+                )),
+            ),
+            (
+                r#"
+                seiyaku C {
+                    kotoage fn run() {}
+                    register_trigger wake {
+                        call run;
+                        on data configuration changed {}
+                    }
+                }
+                "#
+                .to_string(),
+                EventFilterBox::Data(DataEventFilter::Configuration(
+                    ConfigurationEventFilter::new().for_events(ConfigurationEventSet::Changed),
+                )),
+            ),
+            (
+                r#"
+                seiyaku C {
+                    kotoage fn run() {}
+                    register_trigger wake {
+                        call run;
+                        on data executor upgraded {}
+                    }
+                }
+                "#
+                .to_string(),
+                EventFilterBox::Data(DataEventFilter::Executor(
+                    ExecutorEventFilter::new().for_events(ExecutorEventSet::Upgraded),
+                )),
+            ),
+        ];
+
+        for (src, expected_filter) in cases {
+            let program = parse(&src).expect("parse trigger decl");
+            let typed = analyze(&program).expect("analyze trigger decl");
+            let trigger = &typed.triggers[0];
+            assert_eq!(trigger.filter, expected_filter);
+        }
+    }
+
+    #[test]
     fn trigger_decl_supports_pipeline_filter() {
         let program = parse(
             r#"

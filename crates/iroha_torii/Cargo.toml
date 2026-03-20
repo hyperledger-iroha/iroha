@@ -144,6 +144,7 @@ parking_lot = { workspace = true }
 flate2 = "1.1.5"
 zstd = { workspace = true }
 futures-util = "0.3.31"
+jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
 
 [build-dependencies]
 build-support = { path = "../build-support", default-features = false }

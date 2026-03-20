@@ -163,7 +163,7 @@ mod proof_filters;
 use crate::api_version::ApiVersion;
 pub mod sorafs;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     convert::{Infallible, TryInto},
     fmt::Debug,
     fs,
@@ -190,6 +190,8 @@ use axum::{
 };
 #[allow(unused_imports)]
 use base64::Engine;
+#[cfg(feature = "app_api")]
+use base64::engine::general_purpose::{URL_SAFE as BASE64_URL_SAFE, URL_SAFE_NO_PAD};
 use blake3::hash as blake3_hash;
 use dashmap::DashMap;
 use error_stack::{Report, ResultExt};
@@ -208,6 +210,7 @@ use iroha_core::{
     prelude::*,
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue},
+    soracloud_runtime::SharedSoracloudRuntimeHandle,
     state::{
         BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
         TransactionsReadOnly, WorldReadOnly,
@@ -257,6 +260,10 @@ use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
 use iroha_torii_shared::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot, uri};
 use ivm::iso20022::{MsgError, parse_message};
+#[cfg(feature = "app_api")]
+use jsonwebtoken::{
+    Algorithm as JwtAlgorithm, DecodingKey, crypto::verify as verify_jwt_signature, decode_header,
+};
 use mv::storage::StorageReadOnly;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 use norito::json::{self, Value};
@@ -737,6 +744,211 @@ fn resolve_alias_index_via_service(
     }
 }
 
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+enum TxHistoryJwtKey {
+    Hmac(Vec<u8>),
+    Pem(String),
+}
+
+#[cfg(feature = "app_api")]
+impl TxHistoryJwtKey {
+    fn decoding_key(&self, alg: JwtAlgorithm) -> Result<DecodingKey, String> {
+        match (self, alg) {
+            (
+                Self::Hmac(secret),
+                JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512,
+            ) => Ok(DecodingKey::from_secret(secret)),
+            (
+                Self::Pem(pem),
+                JwtAlgorithm::RS256
+                | JwtAlgorithm::RS384
+                | JwtAlgorithm::RS512
+                | JwtAlgorithm::PS256
+                | JwtAlgorithm::PS384
+                | JwtAlgorithm::PS512,
+            ) => DecodingKey::from_rsa_pem(pem.as_bytes()).map_err(|err| err.to_string()),
+            (Self::Pem(pem), JwtAlgorithm::ES256 | JwtAlgorithm::ES384) => {
+                DecodingKey::from_ec_pem(pem.as_bytes()).map_err(|err| err.to_string())
+            }
+            (Self::Pem(pem), JwtAlgorithm::EdDSA) => {
+                DecodingKey::from_ed_pem(pem.as_bytes()).map_err(|err| err.to_string())
+            }
+            (Self::Hmac(_), _) => Err("JWT_SECRET is only valid for HS256/HS384/HS512".to_string()),
+            (Self::Pem(_), _) => {
+                Err("JWT_PUBLIC_KEY_PEM is only valid for RS/PS/ES/EdDSA algorithms".to_string())
+            }
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct TxHistoryJwtConfig {
+    algorithm: JwtAlgorithm,
+    key: TxHistoryJwtKey,
+    issuer: Option<String>,
+    audience: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Default)]
+struct TxHistoryAccessPolicy {
+    jwt: Option<TxHistoryJwtConfig>,
+    mandatory_aliases: HashMap<String, HashSet<String>>,
+    allowed_asset_definition_id: Option<AssetDefinitionId>,
+}
+
+#[cfg(feature = "app_api")]
+impl TxHistoryAccessPolicy {
+    fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
+        let dataspace = dataspace_id.trim().to_ascii_lowercase();
+        let canonical_alias = canonical_tx_history_alias(alias);
+        self.mandatory_aliases
+            .get(&dataspace)
+            .is_some_and(|aliases| aliases.contains(&canonical_alias))
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct TxHistoryViewerContext {
+    subject: String,
+    dataspace_id: String,
+    alias_candidates: Vec<String>,
+    account_ids: Vec<AccountId>,
+    is_mandatory_alias: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "HS256" => Some(JwtAlgorithm::HS256),
+        "HS384" => Some(JwtAlgorithm::HS384),
+        "HS512" => Some(JwtAlgorithm::HS512),
+        "RS256" => Some(JwtAlgorithm::RS256),
+        "RS384" => Some(JwtAlgorithm::RS384),
+        "RS512" => Some(JwtAlgorithm::RS512),
+        "PS256" => Some(JwtAlgorithm::PS256),
+        "PS384" => Some(JwtAlgorithm::PS384),
+        "PS512" => Some(JwtAlgorithm::PS512),
+        "ES256" => Some(JwtAlgorithm::ES256),
+        "ES384" => Some(JwtAlgorithm::ES384),
+        "EDDSA" => Some(JwtAlgorithm::EdDSA),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_tx_history_alias(alias: &str) -> String {
+    alias.trim().to_ascii_lowercase()
+}
+
+#[cfg(feature = "app_api")]
+fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<String>> {
+    let raw = fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read tx history alias policy `{}`: {err}",
+            path.display()
+        )
+    });
+    let value: norito::json::Value = norito::json::from_str(&raw).unwrap_or_else(|err| {
+        panic!(
+            "failed to parse tx history alias policy `{}`: {err}",
+            path.display()
+        )
+    });
+    let object = value.as_object().unwrap_or_else(|| {
+        panic!(
+            "tx history alias policy `{}` must be a JSON object",
+            path.display()
+        )
+    });
+    let mut out = HashMap::new();
+    for (dataspace, aliases_value) in object {
+        let aliases = aliases_value.as_array().unwrap_or_else(|| {
+            panic!(
+                "tx history alias policy `{}` entry `{dataspace}` must be an array",
+                path.display()
+            )
+        });
+        let normalized_dataspace = dataspace.trim().to_ascii_lowercase();
+        let mut normalized_aliases = HashSet::new();
+        for alias in aliases {
+            let alias_literal = alias.as_str().unwrap_or_else(|| {
+                panic!(
+                    "tx history alias policy `{}` entry `{dataspace}` must contain strings",
+                    path.display()
+                )
+            });
+            let canonical = canonical_tx_history_alias(alias_literal);
+            if !canonical.is_empty() {
+                normalized_aliases.insert(canonical);
+            }
+        }
+        out.insert(normalized_dataspace, normalized_aliases);
+    }
+    out
+}
+
+#[cfg(feature = "app_api")]
+fn load_tx_history_access_policy(
+    config: Option<&iroha_config::parameters::actual::ToriiTxHistory>,
+) -> TxHistoryAccessPolicy {
+    let Some(config) = config else {
+        return TxHistoryAccessPolicy::default();
+    };
+    let mandatory_aliases = config
+        .mandatory_aliases_path
+        .as_deref()
+        .map(parse_tx_history_mandatory_aliases)
+        .unwrap_or_default();
+    let jwt = config.jwt.as_ref().map(|jwt| {
+        let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).unwrap_or_else(|| {
+            panic!(
+                "unsupported torii.tx_history.jwt.algorithm `{}`",
+                jwt.algorithm
+            )
+        });
+        let key = match algorithm {
+            JwtAlgorithm::HS256 | JwtAlgorithm::HS384 | JwtAlgorithm::HS512 => {
+                let secret = jwt.secret.as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "torii.tx_history.jwt.secret is required for `{}`",
+                        jwt.algorithm
+                    )
+                });
+                TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec())
+            }
+            _ => {
+                let pem = jwt.public_key_pem.as_ref().unwrap_or_else(|| {
+                    panic!(
+                        "torii.tx_history.jwt.public_key_pem is required for `{}`",
+                        jwt.algorithm
+                    )
+                });
+                TxHistoryJwtKey::Pem(pem.clone())
+            }
+        };
+        let cfg = TxHistoryJwtConfig {
+            algorithm,
+            key,
+            issuer: jwt.issuer.clone(),
+            audience: jwt.audience.clone(),
+        };
+        cfg.key
+            .decoding_key(cfg.algorithm)
+            .unwrap_or_else(|err| panic!("invalid torii.tx_history.jwt config: {err}"));
+        cfg
+    });
+
+    TxHistoryAccessPolicy {
+        jwt,
+        mandatory_aliases,
+        allowed_asset_definition_id: config.allowed_asset_definition_id.clone(),
+    }
+}
+
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     events: EventsSender,
@@ -781,6 +993,8 @@ struct AppState {
     alias_service: Option<Arc<AliasService>>,
     #[cfg(feature = "app_api")]
     identifier_resolver: Option<Arc<identifier_resolution::IdentifierResolutionService>>,
+    #[cfg(feature = "app_api")]
+    tx_history_access_policy: Arc<TxHistoryAccessPolicy>,
     telemetry: routing::MaybeTelemetry,
     telemetry_profile: TelemetryProfile,
     api_versions: api_version::ApiVersionPolicy,
@@ -857,10 +1071,9 @@ struct AppState {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
     #[cfg(feature = "app_api")]
     sns_registry: Arc<sns::Registry>,
-    #[cfg(feature = "app_api")]
-    soracloud_registry: Arc<soracloud::Registry>,
 }
 
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
@@ -2545,40 +2758,70 @@ async fn handler_account_transactions_query(
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
-    let key_hint = account_id.clone();
-    #[allow(unused_variables)]
-    let canonical_account = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut env = env;
     let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_account_transactions_with_policy(
-            app.state.clone(),
-            AxPath(account_id),
-            payload,
-            tel.clone(),
-        )
-        .await;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let (resolved_account_id, canonical_account_id) =
+        routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &account_id,
+            &tel,
+            "/v1/accounts/{account_id}/transactions/query",
+        )?;
+    let account_in_dataspace = app
+        .state
+        .view()
+        .world()
+        .domains_for_subject(&resolved_account_id)
+        .into_iter()
+        .any(|domain| {
+            domain
+                .to_string()
+                .eq_ignore_ascii_case(&viewer.dataspace_id)
+        });
+    let can_view = (viewer.is_mandatory_alias && account_in_dataspace)
+        || viewer
+            .account_ids
+            .iter()
+            .any(|candidate| candidate == &resolved_account_id);
+    if !can_view {
+        return Ok(tx_history_reject(
+            StatusCode::FORBIDDEN,
+            "tx_history_account_forbidden",
+            "requester may only query its own account history unless it is a mandatory alias for the target dataspace",
+        ));
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
+    let rate_key = format!("tx-history:{}", viewer.subject);
+    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
 
     routing::handle_v1_account_transactions_with_policy(
         app.state.clone(),
-        AxPath(key_hint),
+        AxPath(canonical_account_id),
         payload,
         tel,
+        app.tx_history_access_policy
+            .allowed_asset_definition_id
+            .clone(),
     )
     .await
+    .map(IntoResponse::into_response)
 }
 
 #[cfg(feature = "app_api")]
@@ -2697,41 +2940,113 @@ async fn handler_account_transactions_get(
     headers: axum::http::HeaderMap,
     AxPath(account_id): AxPath<String>,
     AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
-
-    let key_hint = account_id.clone();
-    #[allow(unused_variables)]
-    let canonical_account = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-
-    let norito_params: AxQuery<crate::routing::AccountTransactionsGetParams> = AxQuery(params);
-
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_account_transactions_get_with_policy(
-            app.state.clone(),
-            AxPath(account_id),
-            norito_params.clone(),
-            tel.clone(),
-        )
-        .await;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let (resolved_account_id, canonical_account_id) =
+        routing::parse_account_path_segment_with_state(
+            app.state.as_ref(),
+            &account_id,
+            &tel,
+            "/v1/accounts/{account_id}/transactions",
+        )?;
+    let account_in_dataspace = app
+        .state
+        .view()
+        .world()
+        .domains_for_subject(&resolved_account_id)
+        .into_iter()
+        .any(|domain| {
+            domain
+                .to_string()
+                .eq_ignore_ascii_case(&viewer.dataspace_id)
+        });
+    let can_view = (viewer.is_mandatory_alias && account_in_dataspace)
+        || viewer
+            .account_ids
+            .iter()
+            .any(|candidate| candidate == &resolved_account_id);
+    if !can_view {
+        return Ok(tx_history_reject(
+            StatusCode::FORBIDDEN,
+            "tx_history_account_forbidden",
+            "requester may only view its own account history unless it is a mandatory alias for the target dataspace",
+        ));
     }
+    let norito_params: AxQuery<crate::routing::AccountTransactionsGetParams> = AxQuery(params);
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
+    let rate_key = format!("tx-history:{}", viewer.subject);
+    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
 
     routing::handle_v1_account_transactions_get_with_policy(
         app.state.clone(),
-        AxPath(key_hint),
+        AxPath(canonical_account_id),
         norito_params,
         tel,
+        app.tx_history_access_policy
+            .allowed_asset_definition_id
+            .clone(),
     )
     .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_transactions_history_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
+) -> Result<Response, Error> {
+    let tel = app.telemetry.clone();
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    let cost = limits.rate_limit_cost(page_limit);
+    let rate_key = format!("tx-history:{}", viewer.subject);
+    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    let visibility = crate::routing::TxHistoryVisibilityScope {
+        viewer_account_ids: viewer.account_ids,
+        viewer_dataspace_id: viewer.dataspace_id,
+        allow_dataspace_wide: viewer.is_mandatory_alias,
+    };
+
+    routing::handle_v1_transactions_history_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        tel,
+        visibility,
+        app.tx_history_access_policy
+            .allowed_asset_definition_id
+            .clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
 }
 
 #[cfg(feature = "app_api")]
@@ -7804,6 +8119,153 @@ async fn handler_metrics(
     routing::handle_metrics(&app.telemetry, nexus_enabled).await
 }
 
+#[cfg(all(feature = "telemetry", feature = "app_api"))]
+fn soracloud_runtime_status_sections(
+    app: &SharedAppState,
+) -> (
+    norito::json::Value,
+    norito::json::Value,
+    norito::json::Value,
+) {
+    let Some(runtime) = app.soracloud_runtime.as_ref() else {
+        return (
+            json_object(vec![
+                json_entry("mode", "embedded_runtime_manager"),
+                json_entry("status", "unavailable"),
+                json_entry(
+                    "message",
+                    "embedded Soracloud runtime manager is not attached to this Torii process",
+                ),
+            ]),
+            json_object(vec![json_entry("enabled", false)]),
+            json_object(vec![json_entry("available", false)]),
+        );
+    };
+
+    let snapshot = runtime.snapshot();
+    let state_dir = runtime.state_dir().display().to_string();
+
+    let mut service_revisions = 0_u64;
+    let mut healthy_services = 0_u64;
+    let mut hydrating_services = 0_u64;
+    let mut degraded_services = 0_u64;
+    let mut unavailable_services = 0_u64;
+    let mut max_load_factor_bps = 0_u16;
+    let mut reported_pending_mailbox_messages = 0_u64;
+    let mut authoritative_pending_mailbox_messages = 0_u64;
+    let mut bundle_cache_misses = 0_u64;
+    let mut artifact_cache_misses = 0_u64;
+
+    for revisions in snapshot.services.values() {
+        for plan in revisions.values() {
+            service_revisions = service_revisions.saturating_add(1);
+            match plan.health_status {
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy => {
+                    healthy_services = healthy_services.saturating_add(1);
+                }
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Hydrating => {
+                    hydrating_services = hydrating_services.saturating_add(1);
+                }
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Degraded => {
+                    degraded_services = degraded_services.saturating_add(1);
+                }
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable => {
+                    unavailable_services = unavailable_services.saturating_add(1);
+                }
+            }
+            max_load_factor_bps = max_load_factor_bps.max(plan.load_factor_bps);
+            reported_pending_mailbox_messages = reported_pending_mailbox_messages
+                .saturating_add(u64::from(plan.reported_pending_mailbox_messages));
+            authoritative_pending_mailbox_messages = authoritative_pending_mailbox_messages
+                .saturating_add(u64::from(plan.authoritative_pending_mailbox_messages));
+            if !plan.bundle_available_locally {
+                bundle_cache_misses = bundle_cache_misses.saturating_add(1);
+            }
+            artifact_cache_misses = artifact_cache_misses.saturating_add(
+                u64::try_from(
+                    plan.artifacts
+                        .iter()
+                        .filter(|artifact| !artifact.available_locally)
+                        .count(),
+                )
+                .unwrap_or(u64::MAX),
+            );
+        }
+    }
+
+    let apartment_count = u64::try_from(snapshot.apartments.len()).unwrap_or(u64::MAX);
+    let mut running_apartments = 0_u64;
+    let mut expired_apartments = 0_u64;
+    for apartment in snapshot.apartments.values() {
+        match apartment.status {
+            iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running => {
+                running_apartments = running_apartments.saturating_add(1);
+            }
+            iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::LeaseExpired => {
+                expired_apartments = expired_apartments.saturating_add(1);
+            }
+        }
+    }
+
+    let status = if service_revisions == 0 && apartment_count == 0 {
+        "idle"
+    } else if unavailable_services > 0 || expired_apartments > 0 {
+        "unavailable"
+    } else if hydrating_services > 0 || degraded_services > 0 {
+        "degraded"
+    } else {
+        "healthy"
+    };
+    let message = match status {
+        "idle" => "no active Soracloud services or apartments are materialized on this node",
+        "unavailable" => "embedded runtime manager reports unavailable service or apartment state",
+        "degraded" => "embedded runtime manager reports hydrating or degraded workloads",
+        _ => "embedded runtime manager reports healthy hosted workloads",
+    };
+
+    let service_health = json_object(vec![
+        json_entry("mode", "embedded_runtime_manager"),
+        json_entry("status", status),
+        json_entry("message", message),
+        json_entry("observed_height", snapshot.observed_height),
+        json_entry("observed_block_hash", snapshot.observed_block_hash.clone()),
+        json_entry("state_dir", state_dir.clone()),
+        json_entry("service_revisions", service_revisions),
+        json_entry("healthy_service_revisions", healthy_services),
+        json_entry("hydrating_service_revisions", hydrating_services),
+        json_entry("degraded_service_revisions", degraded_services),
+        json_entry("unavailable_service_revisions", unavailable_services),
+        json_entry("apartments", apartment_count),
+        json_entry("running_apartments", running_apartments),
+        json_entry("expired_apartments", expired_apartments),
+    ]);
+    let runtime_pressure = json_object(vec![
+        json_entry("enabled", true),
+        json_entry("state_dir", state_dir.clone()),
+        json_entry("observed_height", snapshot.observed_height),
+        json_entry("service_revisions", service_revisions),
+        json_entry("apartments", apartment_count),
+        json_entry("max_load_factor_bps", max_load_factor_bps),
+        json_entry(
+            "reported_pending_mailbox_messages",
+            reported_pending_mailbox_messages,
+        ),
+        json_entry(
+            "authoritative_pending_mailbox_messages",
+            authoritative_pending_mailbox_messages,
+        ),
+        json_entry("bundle_cache_misses", bundle_cache_misses),
+        json_entry("artifact_cache_misses", artifact_cache_misses),
+    ]);
+    let runtime_manager = json_object(vec![
+        json_entry("available", true),
+        json_entry("state_dir", state_dir),
+        json_entry("snapshot", snapshot),
+    ]);
+
+    (service_health, runtime_pressure, runtime_manager)
+}
+
 #[cfg(feature = "telemetry")]
 async fn handler_soracloud_status(
     State(app): State<SharedAppState>,
@@ -7925,67 +8387,11 @@ async fn handler_soracloud_status(
     ]);
 
     #[cfg(feature = "app_api")]
-    let (service_health, storage_pressure) = {
-        if app.sorafs_node.is_enabled() {
-            let schedulers = app.sorafs_node.schedulers();
-            let telemetry = schedulers.telemetry_snapshot();
-            let utilisation = schedulers.utilisation_snapshot();
-            let degraded = utilisation.fetch_utilisation_bps >= 9_000
-                || utilisation.pin_queue_utilisation_bps >= 9_000
-                || utilisation.por_utilisation_bps >= 9_000
-                || telemetry.por_samples_failed > 0;
-            let status = if degraded { "degraded" } else { "healthy" };
-            (
-                json_object(vec![
-                    json_entry("mode", "sorafs_runtime"),
-                    json_entry("status", status),
-                    json_entry(
-                        "message",
-                        "runtime host integration pending; exposing SoraFS health as baseline",
-                    ),
-                ]),
-                json_object(vec![
-                    json_entry("enabled", true),
-                    json_entry("bytes_used", telemetry.bytes_used),
-                    json_entry("bytes_capacity", telemetry.bytes_capacity),
-                    json_entry(
-                        "pin_queue_depth",
-                        u64::try_from(telemetry.pin_queue_depth).unwrap_or(u64::MAX),
-                    ),
-                    json_entry(
-                        "fetch_inflight",
-                        u64::try_from(telemetry.fetch_inflight).unwrap_or(u64::MAX),
-                    ),
-                    json_entry(
-                        "por_inflight",
-                        u64::try_from(telemetry.por_inflight).unwrap_or(u64::MAX),
-                    ),
-                    json_entry("por_samples_failed_total", telemetry.por_samples_failed),
-                    json_entry("fetch_utilisation_bps", utilisation.fetch_utilisation_bps),
-                    json_entry(
-                        "pin_queue_utilisation_bps",
-                        utilisation.pin_queue_utilisation_bps,
-                    ),
-                    json_entry("por_utilisation_bps", utilisation.por_utilisation_bps),
-                ]),
-            )
-        } else {
-            (
-                json_object(vec![
-                    json_entry("mode", "local_only"),
-                    json_entry("status", "not_configured"),
-                    json_entry(
-                        "message",
-                        "SoraFS node runtime is disabled; no hosted service health is available",
-                    ),
-                ]),
-                json_object(vec![json_entry("enabled", false)]),
-            )
-        }
-    };
+    let (service_health, runtime_pressure, runtime_manager) =
+        soracloud_runtime_status_sections(&app);
 
     #[cfg(not(feature = "app_api"))]
-    let (service_health, storage_pressure) = (
+    let (service_health, runtime_pressure) = (
         json_object(vec![
             json_entry("mode", "app_api_disabled"),
             json_entry("status", "unavailable"),
@@ -8004,7 +8410,7 @@ async fn handler_soracloud_status(
         json_entry("queue_saturated", backpressure.is_saturated()),
         json_entry("high_load_threshold", high_load_threshold),
         json_entry("high_load", high_load),
-        json_entry("storage", storage_pressure),
+        json_entry("runtime", runtime_pressure),
     ]);
     let failed_admissions = json_object(vec![
         json_entry("total", failed_admission_total),
@@ -8013,7 +8419,7 @@ async fn handler_soracloud_status(
     ]);
 
     #[cfg(feature = "app_api")]
-    let control_plane = app.soracloud_registry.snapshot(None, 10).await;
+    let control_plane = soracloud::world_snapshot(&app, None, 10);
 
     #[cfg(feature = "app_api")]
     let payload = json_object(vec![
@@ -8022,6 +8428,7 @@ async fn handler_soracloud_status(
         json_entry("routing", routing),
         json_entry("resource_pressure", resource_pressure),
         json_entry("failed_admissions", failed_admissions),
+        json_entry("runtime_manager", runtime_manager),
         json_entry("control_plane", json_value(&control_plane)),
     ]);
 
@@ -14018,6 +14425,252 @@ fn normalise_alias(input: &str) -> String {
         .collect()
 }
 
+#[cfg(feature = "app_api")]
+fn tx_history_reject(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+) -> AxResponse {
+    let payload = ErrorEnvelope::new(code, message.into());
+    (status, utils::NoritoBody(payload)).into_response()
+}
+
+#[cfg(feature = "app_api")]
+fn decode_tx_history_jwt_claims(
+    auth_header: &str,
+    jwt: &TxHistoryJwtConfig,
+) -> Result<norito::json::Map, String> {
+    let token = auth_header
+        .trim()
+        .strip_prefix("Bearer ")
+        .or_else(|| auth_header.trim().strip_prefix("bearer "))
+        .ok_or_else(|| "Authorization header must use Bearer token".to_string())?;
+    let header = decode_header(token).map_err(|_| "invalid JWT header".to_string())?;
+    if header.alg != jwt.algorithm {
+        return Err("JWT algorithm does not match Torii tx_history configuration".to_string());
+    }
+    let key = jwt.key.decoding_key(jwt.algorithm)?;
+    let (signature_segment, message) = token
+        .rsplit_once('.')
+        .ok_or_else(|| "invalid JWT".to_string())?;
+    let (header_segment, payload_segment) = message
+        .split_once('.')
+        .ok_or_else(|| "invalid JWT".to_string())?;
+    let _ = header_segment;
+    let verified = verify_jwt_signature(signature_segment, message.as_bytes(), &key, header.alg)
+        .map_err(|_| "invalid JWT".to_string())?;
+    if !verified {
+        return Err("invalid JWT".to_string());
+    }
+
+    let payload_bytes = if payload_segment.trim().is_empty() {
+        Vec::new()
+    } else {
+        URL_SAFE_NO_PAD
+            .decode(payload_segment.as_bytes())
+            .or_else(|_| {
+                let mut padded = payload_segment.trim().to_string();
+                while !padded.len().is_multiple_of(4) {
+                    padded.push('=');
+                }
+                BASE64_URL_SAFE.decode(padded.as_bytes())
+            })
+            .map_err(|_| "invalid JWT payload".to_string())?
+    };
+    let claims_value = if payload_bytes.is_empty() {
+        norito::json::Value::Object(norito::json::Map::new())
+    } else {
+        norito::json::from_slice(&payload_bytes).map_err(|_| "invalid JWT payload".to_string())?
+    };
+    let claims = match claims_value {
+        norito::json::Value::Object(map) => map,
+        _ => return Err("JWT claims must be a JSON object".to_string()),
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "system clock is before UNIX_EPOCH".to_string())?
+        .as_secs();
+    let exp = claims
+        .get("exp")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| "missing exp claim".to_string())?;
+    if exp <= now {
+        return Err("JWT expired".to_string());
+    }
+    if let Some(nbf) = claims.get("nbf").and_then(norito::json::Value::as_u64)
+        && now < nbf
+    {
+        return Err("JWT is not yet valid".to_string());
+    }
+    if let Some(expected_issuer) = jwt.issuer.as_deref() {
+        let actual_issuer = claims
+            .get("iss")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| "missing iss claim".to_string())?;
+        if actual_issuer.trim() != expected_issuer {
+            return Err("invalid JWT issuer".to_string());
+        }
+    }
+    if let Some(expected_audience) = jwt.audience.as_deref() {
+        let matches = claims.get("aud").is_some_and(|audience| {
+            audience
+                .as_str()
+                .is_some_and(|value| value.trim() == expected_audience)
+                || audience.as_array().is_some_and(|values| {
+                    values
+                        .iter()
+                        .filter_map(norito::json::Value::as_str)
+                        .any(|value| value.trim() == expected_audience)
+                })
+        });
+        if !matches {
+            return Err("invalid JWT audience".to_string());
+        }
+    }
+
+    Ok(claims)
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_subject_alias_candidates(subject: &str, dataspace_id: &str) -> Vec<String> {
+    let normalized_subject = subject.trim().to_ascii_lowercase();
+    if normalized_subject.is_empty() {
+        return Vec::new();
+    }
+    if normalized_subject.contains('@') {
+        return vec![normalized_subject];
+    }
+    if normalized_subject.contains(':') {
+        return Vec::new();
+    }
+    vec![format!(
+        "{normalized_subject}@{}",
+        dataspace_id.trim().to_ascii_lowercase()
+    )]
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_tx_history_alias_account_id(
+    app: &SharedAppState,
+    alias_input: &str,
+) -> Result<Option<AccountId>, Error> {
+    if let Some((_, account_id)) = resolve_alias_on_chain(app, alias_input)? {
+        return Ok(Some(account_id));
+    }
+
+    Ok(app
+        .iso_bridge
+        .as_ref()
+        .and_then(|runtime| runtime.resolve_account(alias_input)))
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_viewer_from_headers(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+) -> Result<TxHistoryViewerContext, AxResponse> {
+    let Some(jwt) = app.tx_history_access_policy.jwt.as_ref() else {
+        return Err(tx_history_reject(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "tx_history_auth_unavailable",
+            "transaction history bearer auth is not configured",
+        ));
+    };
+    let auth_header = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            tx_history_reject(
+                StatusCode::UNAUTHORIZED,
+                "tx_history_authorization_missing",
+                "missing Authorization header",
+            )
+        })?;
+    let claims = decode_tx_history_jwt_claims(auth_header, jwt).map_err(|message| {
+        tx_history_reject(
+            StatusCode::UNAUTHORIZED,
+            "tx_history_authorization_invalid",
+            message,
+        )
+    })?;
+    let subject = claims
+        .get("sub")
+        .and_then(norito::json::Value::as_str)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            tx_history_reject(
+                StatusCode::UNAUTHORIZED,
+                "tx_history_subject_missing",
+                "missing sub claim",
+            )
+        })?;
+    let dataspace_id = claims
+        .get("dataspace_id")
+        .and_then(norito::json::Value::as_str)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            tx_history_reject(
+                StatusCode::UNAUTHORIZED,
+                "tx_history_dataspace_missing",
+                "missing dataspace_id claim",
+            )
+        })?;
+
+    let alias_candidates = tx_history_subject_alias_candidates(&subject, &dataspace_id);
+    let is_mandatory_alias = alias_candidates.iter().any(|alias| {
+        app.tx_history_access_policy
+            .is_mandatory_alias(&dataspace_id, alias)
+    });
+
+    let mut dedupe = HashSet::new();
+    let mut account_ids = Vec::new();
+
+    if let Ok(parsed) = AccountId::parse_encoded(subject.trim()) {
+        let account_id = parsed.into_account_id();
+        if dedupe.insert(account_id.to_string()) {
+            account_ids.push(account_id);
+        }
+    }
+
+    for alias in &alias_candidates {
+        match resolve_tx_history_alias_account_id(app, alias) {
+            Ok(Some(account_id)) => {
+                let key = account_id.to_string();
+                if dedupe.insert(key) {
+                    account_ids.push(account_id);
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                return Err(tx_history_reject(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "tx_history_alias_resolution_failed",
+                    err.to_string(),
+                ));
+            }
+        }
+    }
+
+    if account_ids.is_empty() && !is_mandatory_alias {
+        return Err(tx_history_reject(
+            StatusCode::FORBIDDEN,
+            "tx_history_requester_unbound",
+            "requester is not bound to a visible transaction account",
+        ));
+    }
+
+    Ok(TxHistoryViewerContext {
+        subject,
+        dataspace_id,
+        alias_candidates,
+        account_ids,
+        is_mandatory_alias,
+    })
+}
+
 #[cfg(feature = "telemetry")]
 async fn handler_rbc_sessions(
     State(app): State<SharedAppState>,
@@ -14733,6 +15386,8 @@ pub struct Torii {
     alias_service: Option<Arc<AliasService>>,
     #[cfg(feature = "app_api")]
     identifier_resolver: Option<Arc<identifier_resolution::IdentifierResolutionService>>,
+    #[cfg(feature = "app_api")]
+    tx_history_access_policy: Arc<TxHistoryAccessPolicy>,
     rbc_store_dir: Option<PathBuf>,
     rbc_sampling: iroha_config::parameters::actual::RbcSampling,
     da_receipt_signer: KeyPair,
@@ -14769,6 +15424,38 @@ pub struct Torii {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
+}
+
+/// Optional runtime-owned Torii dependencies that are not present in all embeddings.
+#[derive(Clone)]
+pub struct ToriiRuntimeDeps {
+    telemetry: routing::MaybeTelemetry,
+    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
+}
+
+impl ToriiRuntimeDeps {
+    /// Construct runtime dependencies from the resolved telemetry handle.
+    #[must_use]
+    pub fn new(telemetry: routing::MaybeTelemetry) -> Self {
+        Self {
+            telemetry,
+            soracloud_runtime: None,
+        }
+    }
+
+    /// Attach the embedded Soracloud runtime-manager handle.
+    #[must_use]
+    pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntimeHandle) -> Self {
+        self.soracloud_runtime = Some(runtime);
+        self
+    }
+}
+
+impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
+    fn from(telemetry: routing::MaybeTelemetry) -> Self {
+        Self::new(telemetry)
+    }
 }
 
 impl Torii {
@@ -15584,6 +16271,10 @@ impl Torii {
                 .route(
                     "/v1/accounts/{account_id}/transactions/query",
                     post(handler_account_transactions_query),
+                )
+                .route(
+                    "/v1/transactions/history",
+                    get(handler_transactions_history_get),
                 )
                 .route(
                     "/v1/accounts/{account_id}/assets",
@@ -16528,8 +17219,11 @@ impl Torii {
         da_receipt_signer: KeyPair,
         online_peers: OnlinePeersProvider,
         sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-        telemetry: routing::MaybeTelemetry,
+        runtime_deps: impl Into<ToriiRuntimeDeps>,
     ) -> Self {
+        let runtime_deps = runtime_deps.into();
+        let telemetry = runtime_deps.telemetry.clone();
+        let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         routing::debug_match_flag::set_from_config(config.debug_match_filters);
         routing::set_app_query_limits(routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
@@ -16917,6 +17611,9 @@ impl Torii {
             }
             Some(service)
         });
+        #[cfg(feature = "app_api")]
+        let tx_history_access_policy =
+            Arc::new(load_tx_history_access_policy(config.tx_history.as_ref()));
         let pipeline_status_cache = Arc::new(PipelineStatusCache::new());
 
         Self {
@@ -16983,6 +17680,8 @@ impl Torii {
             alias_service,
             #[cfg(feature = "app_api")]
             identifier_resolver,
+            #[cfg(feature = "app_api")]
+            tx_history_access_policy,
             rbc_store_dir: None,
             rbc_sampling: config.rbc_sampling.clone(),
             da_receipt_signer,
@@ -17027,6 +17726,7 @@ impl Torii {
             offline_issuer,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
+            soracloud_runtime,
         }
     }
 
@@ -17220,6 +17920,8 @@ impl Torii {
             alias_service: self.alias_service.clone(),
             #[cfg(feature = "app_api")]
             identifier_resolver: self.identifier_resolver.clone(),
+            #[cfg(feature = "app_api")]
+            tx_history_access_policy: self.tx_history_access_policy.clone(),
             telemetry: self.telemetry.clone(),
             telemetry_profile: self.telemetry_profile,
             api_versions: self.api_versions.clone(),
@@ -17304,19 +18006,9 @@ impl Torii {
             offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
+            soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
-            #[cfg(feature = "app_api")]
-            soracloud_registry: Arc::new({
-                #[cfg(test)]
-                {
-                    soracloud::Registry::default()
-                }
-                #[cfg(not(test))]
-                {
-                    soracloud::Registry::with_default_persistence()
-                }
-            }),
         });
 
         #[cfg(feature = "app_api")]
@@ -17355,8 +18047,8 @@ impl Torii {
             &app_state.sorafs_chunk_range_overrides,
             &app_state.offline_issuer,
             &app_state.uaid_onboarding,
+            &app_state.soracloud_runtime,
             &app_state.sns_registry,
-            &app_state.soracloud_registry,
         );
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -19239,6 +19931,8 @@ pub(crate) mod tests_runtime_handlers {
             alias_service,
             #[cfg(feature = "app_api")]
             identifier_resolver: None,
+            #[cfg(feature = "app_api")]
+            tx_history_access_policy: Arc::new(TxHistoryAccessPolicy::default()),
             telemetry,
             telemetry_profile,
             api_versions: api_version::ApiVersionPolicy::default(),
@@ -19295,10 +19989,9 @@ pub(crate) mod tests_runtime_handlers {
             offline_issuer: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
+            soracloud_runtime: None,
             #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
-            #[cfg(feature = "app_api")]
-            soracloud_registry: Arc::new(soracloud::Registry::default()),
             rbc_sampling_enabled: false,
             rbc_sampling_store_dir: None,
             rbc_sampling_max_samples: 0,
@@ -21145,7 +21838,98 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn soracloud_status_handler_returns_snapshot_sections() {
-        let app = mk_app_state_for_tests();
+        #[derive(Clone)]
+        struct TestSoracloudRuntimeHandle {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
+            state_dir: PathBuf,
+        }
+
+        impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestSoracloudRuntimeHandle {
+            fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+                self.snapshot.clone()
+            }
+
+            fn state_dir(&self) -> PathBuf {
+                self.state_dir.clone()
+            }
+        }
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let state = Arc::get_mut(&mut app).expect("unique app state");
+            let mut services = std::collections::BTreeMap::new();
+            services.insert(
+                "web_portal".to_string(),
+                std::collections::BTreeMap::from([(
+                    "1.0.0".to_string(),
+                    iroha_core::soracloud_runtime::SoracloudRuntimeServicePlan {
+                        service_name: "web_portal".to_string(),
+                        service_version: "1.0.0".to_string(),
+                        role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
+                        traffic_percent: 100,
+                        runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
+                        bundle_hash: "hash:bundle".to_string(),
+                        bundle_path: "service.to".to_string(),
+                        entrypoint: "start".to_string(),
+                        bundle_cache_path: "/tmp/soracloud/runtime/web_portal/1.0.0/service.to"
+                            .to_string(),
+                        bundle_available_locally: true,
+                        process_generation: Some(7),
+                        health_status:
+                            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+                        load_factor_bps: 2_500,
+                        reported_pending_mailbox_messages: 2,
+                        authoritative_pending_mailbox_messages: 3,
+                        rollout_handle: None,
+                        materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0".to_string(),
+                        mailboxes: vec![],
+                        artifacts: vec![
+                            iroha_core::soracloud_runtime::SoracloudRuntimeArtifactPlan {
+                                kind: iroha_data_model::soracloud::SoraArtifactKindV1::Bundle,
+                                artifact_hash: "hash:artifact".to_string(),
+                                artifact_path: "public/index.html".to_string(),
+                                handler_name: Some("asset".to_string()),
+                                local_cache_path:
+                                    "/tmp/soracloud/cache/hash-artifact/public-index.html"
+                                        .to_string(),
+                                available_locally: false,
+                            },
+                        ],
+                    },
+                )]),
+            );
+
+            let apartments = std::collections::BTreeMap::from([(
+                "ops_agent".to_string(),
+                iroha_core::soracloud_runtime::SoracloudRuntimeApartmentPlan {
+                    apartment_name: "ops_agent".to_string(),
+                    manifest_hash: "hash:manifest".to_string(),
+                    status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
+                    process_generation: 3,
+                    lease_expires_sequence: 90,
+                    last_active_sequence: 88,
+                    materialization_dir: "/tmp/soracloud/runtime/apartments/ops_agent".to_string(),
+                    pending_wallet_request_count: 1,
+                    pending_mailbox_message_count: 4,
+                    autonomy_budget_remaining_units: 120,
+                    approved_artifact_count: 2,
+                    autonomy_run_count: 5,
+                    revoked_policy_capability_count: 1,
+                },
+            )]);
+
+            state.soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
+                snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+                    schema_version: 1,
+                    observed_height: 42,
+                    observed_block_hash: Some("hash:block".to_string()),
+                    services,
+                    apartments,
+                },
+                state_dir: PathBuf::from("/tmp/soracloud/runtime"),
+            }));
+        }
+
         let response = super::handler_soracloud_status(State(app), HeaderMap::new(), None)
             .await
             .expect("soracloud status should succeed");
@@ -21198,6 +21982,23 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(norito::json::Value::as_object)
                 .is_some(),
             "control_plane section should be present"
+        );
+        #[cfg(feature = "app_api")]
+        assert_eq!(
+            payload
+                .get("service_health")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|value| value.get("mode"))
+                .and_then(norito::json::Value::as_str),
+            Some("embedded_runtime_manager")
+        );
+        #[cfg(feature = "app_api")]
+        assert!(
+            payload
+                .get("runtime_manager")
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "runtime_manager section should be present"
         );
     }
 
