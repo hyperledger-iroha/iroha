@@ -310,6 +310,42 @@ final class TxBuilderTests: XCTestCase {
                                       ttlMs: ttlMs)
     }
 
+    private func makeClaimIdentifierRequest(authority: String,
+                                            ttlMs: UInt64? = 30) throws -> ClaimIdentifierRequest {
+        let receiptJSON = """
+        {
+          "policy_id":"phone#retail",
+          "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
+          "receipt_hash":"\(String(repeating: "55", count: 32))",
+          "uaid":"uaid:\(String(repeating: "66", count: 31))67",
+          "account_id":"\(authority)",
+          "resolved_at_ms":7,
+          "expires_at_ms":107,
+          "backend":"bfv-programmed-sha3-256-v1",
+          "signature":"\(String(repeating: "AB", count: 64))",
+          "signature_payload_hex":"01020304A0",
+          "signature_payload":{
+            "policy_id":"phone#retail",
+            "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
+            "receipt_hash":"\(String(repeating: "55", count: 32))",
+            "uaid":"uaid:\(String(repeating: "66", count: 31))67",
+            "account_id":"\(authority)",
+            "resolved_at_ms":7,
+            "expires_at_ms":107
+          }
+        }
+        """
+        let receipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(receiptJSON.utf8)
+        )
+        return ClaimIdentifierRequest(chainId: Self.fixtureChainId,
+                                      authority: authority,
+                                      accountId: authority,
+                                      receipt: receipt,
+                                      ttlMs: ttlMs)
+    }
+
     func testBuildSignedTransferProducesEnvelope() throws {
         try requireEd25519Encoder()
         let keypair = try Keypair.generate()
@@ -844,6 +880,18 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(envelope.transactionHash.count, 32)
     }
 
+    func testBuildClaimIdentifierProducesEnvelope() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+                      "Native transaction encoder unavailable")
+        let keypair = try makeFixtureKeypair()
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 60)
+        let envelope = try sdk.buildClaimIdentifier(request: request, keypair: keypair)
+        XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
+        XCTAssertEqual(envelope.transactionHash.count, 32)
+    }
+
     func testVerifyingKeyIdReferenceValidation() {
         XCTAssertThrowsError(try VerifyingKeyIdReference(backend: "", name: "vk")) { error in
             XCTAssertEqual(error as? VerifyingKeyIdError, .emptyBackend)
@@ -1084,6 +1132,39 @@ final class TxBuilderTests: XCTestCase {
             privateKey: keypair.privateKeyBytes
         ) else {
             XCTFail("Expected native bridge set metadata encoding")
+            return
+        }
+
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
+        XCTAssertEqual(native.hash, fallback.transactionHash)
+        XCTAssertEqual(normalized.norito, fallback.norito)
+    }
+
+    func testClaimIdentifierMatchesNativeBridge() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+                      "Native transaction encoder unavailable")
+
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 75)
+
+        let fallback = try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                         keypair: keypair,
+                                                                         creationTimeMs: Self.fixtureCreationTimeMs)
+
+        let receiptJSON = try JSONEncoder().encode(request.receipt)
+        guard let native = try? NoritoNativeBridge.shared.encodeClaimIdentifier(
+            chainId: request.chainId,
+            authority: request.authority,
+            creationTimeMs: Self.fixtureCreationTimeMs,
+            ttlMs: request.ttlMs,
+            accountId: request.accountId,
+            receiptJSON: receiptJSON,
+            privateKey: keypair.privateKeyBytes,
+            algorithm: .ed25519
+        ) else {
+            XCTFail("Expected native bridge claim identifier encoding")
             return
         }
 

@@ -81,6 +81,18 @@ public final class TransferWirePayloadEncoder {
   }
 
   /**
+   * Encodes an {@code AccountId} bare payload using the same layout expected by transaction
+   * instruction fields.
+   */
+  static byte[] encodeAccountIdPayload(String accountId) {
+    Objects.requireNonNull(accountId, "accountId");
+    final AccountId parsed = AccountId.parse(accountId);
+    final NoritoEncoder encoder = new NoritoEncoder(0);
+    new AccountIdAdapter().encode(encoder, parsed);
+    return encoder.toByteArray();
+  }
+
+  /**
    * Encodes the TransferBox payload with Norito framing.
    *
    * <p>Format: NoritoHeader + TransferBox::Asset(Transfer { source, object, destination })

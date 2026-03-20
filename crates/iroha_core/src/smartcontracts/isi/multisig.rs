@@ -1398,14 +1398,45 @@ fn execute_approve(
     }
 
     upsert_subject_approval(&mut proposal_state.approvals, approver);
+    iroha_logger::info!(
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        approvals = proposal_state.approvals.len(),
+        "multisig approval storing updated proposal state"
+    );
     store_multisig_proposal_state(state_transaction, &proposal_state)?;
+    iroha_logger::info!(
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        "multisig approval stored updated proposal state"
+    );
 
     let approved_weight = approved_weight_by_subject(&spec, &proposal_state.approvals);
     let is_authenticated = approved_weight >= u32::from(spec.quorum.get());
+    iroha_logger::info!(
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        approved_weight,
+        quorum = u32::from(spec.quorum.get()),
+        is_authenticated,
+        "multisig approval evaluated quorum"
+    );
 
     if is_authenticated {
         match proposal_state.is_relayed {
-            None => prune_down(state_transaction, &multisig_account, &instructions_hash)?,
+            None => {
+                iroha_logger::info!(
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    "multisig approval pruning proposal tree"
+                );
+                prune_down(state_transaction, &multisig_account, &instructions_hash)?;
+                iroha_logger::info!(
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    "multisig approval pruned proposal tree"
+                );
+            }
             Some(false) => {
                 proposal_state.is_relayed = Some(true);
                 store_multisig_proposal_state(state_transaction, &proposal_state)?;
@@ -1414,9 +1445,22 @@ fn execute_approve(
         }
 
         for instruction in proposal_state.instructions {
+            iroha_logger::info!(
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                approver = %authority,
+                instruction = ?instruction,
+                "multisig approval executing authenticated instruction"
+            );
             instruction
                 .execute(&multisig_account, state_transaction)
                 .map_err(ValidationFail::from)?;
+            iroha_logger::info!(
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                approver = %authority,
+                "multisig approval finished authenticated instruction"
+            );
         }
     }
 

@@ -10936,6 +10936,16 @@ pub trait WorldReadOnly {
         Ok(f(account))
     }
 
+    /// Resolve the dataspace binding for a concrete account when a UAID-backed
+    /// Space Directory entry exists.
+    fn dataspace_for_account(&self, account_id: &AccountId) -> Option<DataSpaceId> {
+        let account = self.account(account_id).ok()?;
+        let uaid = account.value().uaid().copied()?;
+        self.uaid_dataspaces()
+            .get(&uaid)
+            .and_then(|bindings| bindings.dataspace_for_account(account_id))
+    }
+
     /// Get [`Account`]'s [`RoleId`]s
     // NOTE: have to use concreate type because don't want to capture lifetme of `id`
     #[allow(clippy::type_complexity)]
@@ -13112,13 +13122,37 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
-    /// Canonicalize an [`AssetId`] into the current execution scope.
+    /// Canonicalize an [`AssetId`] into the effective execution scope.
+    ///
+    /// When `dataspace_hint` is provided for a dataspace-restricted asset, it
+    /// overrides the ambient execution dataspace. This is used for transfers
+    /// whose destination account is bound to a different dataspace than the
+    /// caller's current execution scope.
     ///
     /// # Errors
-    /// Returns an error when the requested id contradicts the active scope policy
-    /// (for example, cross-dataspace access for restricted assets).
-    pub fn resolve_asset_id_for_current_scope(&self, id: &AssetId) -> Result<AssetId, Error> {
-        let expected_scope = self.resolve_asset_balance_scope(id.definition())?;
+    /// Returns an error when the requested id contradicts the effective scope
+    /// policy (for example, cross-dataspace access for restricted assets).
+    pub fn resolve_asset_id_for_scope_hint(
+        &self,
+        id: &AssetId,
+        dataspace_hint: Option<DataSpaceId>,
+    ) -> Result<AssetId, Error> {
+        let definition = self
+            .asset_definition(id.definition())
+            .map_err(Error::from)?;
+        let expected_scope = match definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted => dataspace_hint
+                .or(self.current_dataspace_id)
+                .map(AssetBalanceScope::Dataspace)
+                .ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "dataspace-restricted asset access requires transaction dataspace context"
+                            .into(),
+                    )
+                })?,
+        };
+
         match (id.scope(), &expected_scope) {
             (AssetBalanceScope::Global, AssetBalanceScope::Global) => {}
             (AssetBalanceScope::Global, AssetBalanceScope::Dataspace(_)) => {}
@@ -13143,6 +13177,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         ))
     }
 
+    /// Canonicalize an [`AssetId`] into the current execution scope.
+    ///
+    /// # Errors
+    /// Returns an error when the requested id contradicts the active scope policy
+    /// (for example, cross-dataspace access for restricted assets).
+    pub fn resolve_asset_id_for_current_scope(&self, id: &AssetId) -> Result<AssetId, Error> {
+        self.resolve_asset_id_for_scope_hint(id, None)
+    }
+
     /// Get asset or inserts new with `default_asset_value`.
     ///
     /// # Errors
@@ -13154,6 +13197,24 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         default_asset_value: impl Into<Numeric>,
     ) -> Result<&mut AssetValue, Error> {
         let resolved_id = self.resolve_asset_id_for_current_scope(asset_id)?;
+        self.asset_or_insert_exact(&resolved_id, default_asset_value)
+    }
+
+    /// Get asset or inserts new with `default_asset_value` using the exact provided [`AssetId`].
+    ///
+    /// Callers must only use this with a balance id that has already been canonicalized for the
+    /// intended scope. This is required for transfer destinations whose bound account dataspace
+    /// differs from the current execution dataspace.
+    ///
+    /// # Errors
+    /// - There is no account with such name.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn asset_or_insert_exact(
+        &mut self,
+        asset_id: &AssetId,
+        default_asset_value: impl Into<Numeric>,
+    ) -> Result<&mut AssetValue, Error> {
+        let resolved_id = asset_id.clone();
         self.asset_definition(resolved_id.definition())?;
         self.account(resolved_id.account())?;
 
@@ -23999,10 +24060,17 @@ impl StateTransaction<'_, '_> {
             let amount_str = changed.amount().to_string();
             let asset_definition_id = asset_id.definition().to_string();
             let linked_domains = self.world.domains_for_subject(asset_id.account());
-            let account_domain = linked_domains
-                .iter()
-                .map(ToString::to_string)
-                .find(|domain| matches!(domain.as_str(), "hbl" | "ubl" | "sbp"))
+            let account_domain = self
+                .world
+                .accounts
+                .get(asset_id.account())
+                .and_then(|value| value.as_ref().label().map(|label| label.domain.to_string()))
+                .or_else(|| {
+                    linked_domains
+                        .iter()
+                        .map(ToString::to_string)
+                        .find(|domain| matches!(domain.as_str(), "hbl" | "ubl" | "sbp"))
+                })
                 .or_else(|| linked_domains.first().map(ToString::to_string))
                 .unwrap_or_else(|| account_event.origin_domain().to_string());
             let asset_definition_name = (!asset_id.definition().is_opaque_canonical())
@@ -24169,7 +24237,20 @@ impl StateTransaction<'_, '_> {
                         vm.set_max_cycles(eff_cycles);
                     }
                     vm.set_gas_limit(gas_limit);
+                    iroha_logger::info!(
+                        trigger_id = %id,
+                        authority = %authority,
+                        gas_limit,
+                        eff_cycles,
+                        "execute_trigger starting vm.run_with_host"
+                    );
                     let run_result = vm.run_with_host(&mut host);
+                    iroha_logger::info!(
+                        trigger_id = %id,
+                        authority = %authority,
+                        run_ok = run_result.is_ok(),
+                        "execute_trigger finished vm.run_with_host"
+                    );
                     cached_runtime.vm = vm;
                     {
                         let mut cache = self.ivm_cache.lock();
@@ -24183,7 +24264,18 @@ impl StateTransaction<'_, '_> {
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
                     let artifacts = host.into_execution_artifacts()?;
+                    iroha_logger::info!(
+                        trigger_id = %id,
+                        authority = %authority,
+                        "execute_trigger applying queued ISIs from host"
+                    );
                     let queued = artifacts.apply_to_transaction(self, authority)?;
+                    iroha_logger::info!(
+                        trigger_id = %id,
+                        authority = %authority,
+                        queued_isi_count = queued.len(),
+                        "execute_trigger finished applying queued ISIs from host"
+                    );
                     let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                     (Ok(cvs.into()), None)
                 } else {
@@ -25831,6 +25923,62 @@ mod tests {
     }
 
     #[test]
+    fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_missing() {
+        let recipient_domain: DomainId = "sbp".parse().unwrap();
+        let asset_domain: DomainId = "cbuae".parse().unwrap();
+        let (subject, _) = gen_account_in("ghost");
+        let account_label = AccountLabel::new(
+            recipient_domain.clone(),
+            "admin1".parse().expect("valid label"),
+        );
+        let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
+        let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        Register::domain(Domain::new(recipient_domain.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let account = Account {
+            id: subject.clone(),
+            metadata: Metadata::default(),
+            label: Some(account_label),
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
+        };
+        let (account_id, account_value) = account.into_key_value();
+        stx.world
+            .insert_account_with_links(account_id, account_value);
+
+        let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
+            data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+                asset: asset_id,
+                amount: Numeric::from(1_u32),
+            })),
+        ));
+
+        let args = stx.trigger_args_from_data_event(&event);
+        let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
+        let obj = payload.as_object().expect("trigger args object");
+
+        assert_eq!(obj.get("account_domain"), Some(&norito::json!("sbp")));
+        assert_eq!(
+            obj.get("account_id"),
+            Some(&norito::json!(subject.to_string()))
+        );
+        assert_eq!(
+            obj.get("asset_definition_id"),
+            Some(&norito::json!(asset_definition.to_string()))
+        );
+    }
+
+    #[test]
     fn has_committed_transaction_reads_transactions_index() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -26185,7 +26333,6 @@ mod tests {
         assert_eq!(subjects_in_acme, vec![shared_subject]);
     }
 
-    #[test]
     fn unlink_last_domain_keeps_subject_record_materialized() {
         let keypair = KeyPair::random();
         let solo: DomainId = "solo".parse().expect("domain id");

@@ -6846,11 +6846,51 @@ pub async fn handle_post_contract_call(
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder
-        .with_metadata(metadata)
-        .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
+    let resolved_entrypoint = match (entrypoint.as_deref(), manifest.entrypoints.as_ref()) {
+        (Some(selector), Some(entrypoints)) => {
+            let descriptor = entrypoints
+                .iter()
+                .find(|candidate| candidate.name == selector)
+                .ok_or_else(|| {
+                    conversion_error(format!("unknown contract entrypoint `{selector}`"))
+                })?;
+            match descriptor.kind {
+                iroha_data_model::smart_contract::manifest::EntryPointKind::Public => {
+                    Some(selector)
+                }
+                _ => {
+                    return Err(conversion_error(format!(
+                        "contract entrypoint `{selector}` is not a public by-call entrypoint"
+                    )));
+                }
+            }
+        }
+        (Some(_), None) | (None, _) => None,
+    };
+    let builder = if let Some(selector) = resolved_entrypoint {
+        let instructions = build_direct_contract_call_instructions(
+            &authority,
+            &namespace,
+            &contract_id,
+            selector,
+            payload.as_ref(),
+            gas_asset_id.as_deref(),
+            fee_sponsor.as_ref(),
+            gas_limit,
+            &manifest,
+            &code_hash,
             code_bytes,
-        )));
+        )?;
+        builder
+            .with_metadata(metadata)
+            .with_instructions(instructions)
+    } else {
+        builder
+            .with_metadata(metadata)
+            .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
+                code_bytes,
+            )))
+    };
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let response =
@@ -7038,8 +7078,9 @@ fn build_contract_call_metadata(
 }
 
 #[cfg(feature = "app_api")]
-fn derive_multisig_contract_call_trigger_id(
-    multisig_account_id: &iroha_data_model::account::AccountId,
+fn derive_contract_call_trigger_id(
+    prefix: &str,
+    action_authority: &iroha_data_model::account::AccountId,
     namespace: &str,
     contract_id: &str,
     entrypoint: &str,
@@ -7057,19 +7098,20 @@ fn derive_multisig_contract_call_trigger_id(
         .unwrap_or_default();
     let gas_asset_repr = gas_asset_id.unwrap_or_default();
     let seed = format!(
-        "{multisig_account_id}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
+        "{action_authority}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
         hex::encode(code_hash.as_ref())
     );
     let digest = blake3_hash(seed.as_bytes());
-    let trigger_name = format!("msig_cc_{}", &hex::encode(digest.as_bytes())[..24]);
+    let trigger_name = format!("{prefix}_{}", &hex::encode(digest.as_bytes())[..24]);
     let trigger_name = Name::from_str(&trigger_name)
         .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
     Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
 }
 
 #[cfg(feature = "app_api")]
-fn build_multisig_contract_call_instructions(
-    multisig_account_id: &iroha_data_model::account::AccountId,
+fn build_contract_call_trigger_instructions(
+    prefix: &str,
+    action_authority: &iroha_data_model::account::AccountId,
     namespace: &str,
     contract_id: &str,
     entrypoint: &str,
@@ -7080,12 +7122,10 @@ fn build_multisig_contract_call_instructions(
     manifest: &manifest::ContractManifest,
     code_hash: &Hash,
     code_bytes: Vec<u8>,
-) -> Result<(
-    Vec<iroha_data_model::isi::InstructionBox>,
-    HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
-)> {
-    let trigger_id = derive_multisig_contract_call_trigger_id(
-        multisig_account_id,
+) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
+    let trigger_id = derive_contract_call_trigger_id(
+        prefix,
+        action_authority,
         namespace,
         contract_id,
         entrypoint,
@@ -7112,30 +7152,95 @@ fn build_multisig_contract_call_instructions(
             iroha_data_model::transaction::IvmBytecode::from_compiled(code_bytes),
         ),
         iroha_data_model::trigger::action::Repeats::Exactly(1),
-        multisig_account_id.clone(),
+        action_authority.clone(),
         filter,
     )
     .with_metadata(trigger_metadata);
     let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
+    let execute_trigger = if let Some(payload_value) = payload.cloned() {
+        iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()).with_args(payload_value)
+    } else {
+        iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone())
+    };
     let instructions = vec![
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
             trigger,
         )),
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
-            trigger_id.clone(),
-        )),
+        iroha_data_model::isi::InstructionBox::from(execute_trigger),
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Unregister::trigger(
             trigger_id,
         )),
     ];
+    Ok(instructions)
+}
+
+#[cfg(feature = "app_api")]
+fn build_direct_contract_call_instructions(
+    authority: &iroha_data_model::account::AccountId,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+    manifest: &manifest::ContractManifest,
+    code_hash: &Hash,
+    code_bytes: Vec<u8>,
+) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
+    build_contract_call_trigger_instructions(
+        "cc",
+        authority,
+        namespace,
+        contract_id,
+        entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+        manifest,
+        code_hash,
+        code_bytes,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn build_multisig_contract_call_instructions(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+    manifest: &manifest::ContractManifest,
+    code_hash: &Hash,
+    code_bytes: Vec<u8>,
+) -> Result<(
+    Vec<iroha_data_model::isi::InstructionBox>,
+    HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+)> {
+    let instructions = build_contract_call_trigger_instructions(
+        "msig_cc",
+        multisig_account_id,
+        namespace,
+        contract_id,
+        entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+        manifest,
+        code_hash,
+        code_bytes,
+    )?;
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
 }
 
 #[cfg(feature = "app_api")]
 const MULTISIG_SPEC_METADATA_KEY: &str = "multisig/spec";
-#[cfg(feature = "app_api")]
-const MULTISIG_PROPOSAL_METADATA_PREFIX: &str = "multisig/proposals/";
 
 #[cfg(feature = "app_api")]
 fn multisig_account_state_contract_key(
@@ -7146,6 +7251,30 @@ fn multisig_account_state_contract_key(
         HashOf::new(multisig_account_id)
     ))
     .expect("multisig account state contract key")
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_state_prefix(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+) -> Name {
+    Name::from_str(&format!(
+        "multisig/proposal/{}/",
+        HashOf::new(multisig_account_id)
+    ))
+    .expect("multisig proposal state prefix")
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_state_contract_key(
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+) -> Name {
+    Name::from_str(&format!(
+        "{}{}",
+        multisig_proposal_state_prefix(multisig_account_id).as_ref(),
+        instructions_hash
+    ))
+    .expect("multisig proposal state contract key")
 }
 
 #[cfg(feature = "app_api")]
@@ -7276,20 +7405,27 @@ fn load_multisig_proposal_value(
     instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
 ) -> Result<Option<iroha_executor_data_model::isi::multisig::MultisigProposalValue>> {
     let world = state.world_view();
-    let account = world.account(multisig_account_id).map_err(|_| {
+    world.account(multisig_account_id).map_err(|_| {
         conversion_error(format!("multisig account not found: {multisig_account_id}"))
     })?;
-    let key = Name::from_str(&format!(
-        "{MULTISIG_PROPOSAL_METADATA_PREFIX}{instructions_hash}"
-    ))
-    .map_err(|err| conversion_error(format!("invalid multisig proposal metadata key: {err}")))?;
-    let Some(value) = account.metadata().get(&key).cloned() else {
+    let storage = world.smart_contract_state();
+    let key = multisig_proposal_state_contract_key(multisig_account_id, instructions_hash);
+    let Some(bytes) = storage.get(key.as_ref()) else {
         return Ok(None);
     };
-    value
-        .try_into_any_norito()
-        .map(Some)
-        .map_err(|err| conversion_error(format!("invalid multisig proposal metadata: {err}")))
+    let proposal_state = norito::decode_from_bytes::<
+        iroha_executor_data_model::isi::multisig::MultisigProposalState,
+    >(bytes)
+    .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+    Ok(Some(
+        iroha_executor_data_model::isi::multisig::MultisigProposalValue::new(
+            proposal_state.instructions,
+            proposal_state.proposed_at_ms,
+            proposal_state.expires_at_ms,
+            proposal_state.approvals,
+            proposal_state.is_relayed,
+        ),
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -7356,21 +7492,31 @@ fn list_multisig_nonterminal_proposals(
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
 ) -> Result<Vec<MultisigProposalEntryDto>> {
     let world = state.world_view();
-    let account = world.account(multisig_account_id).map_err(|_| {
+    world.account(multisig_account_id).map_err(|_| {
         conversion_error(format!("multisig account not found: {multisig_account_id}"))
     })?;
+    let storage = world.smart_contract_state();
+    let prefix = multisig_proposal_state_prefix(multisig_account_id);
+    let prefix_literal = prefix.as_ref().to_owned();
     let now_ms = current_time_millis();
     let mut proposals = Vec::new();
 
-    for (key, value) in account.metadata().iter() {
+    for (key, value) in storage.range(prefix.clone()..) {
         let key_str = key.as_ref();
-        let Some(hash_literal) = key_str.strip_prefix(MULTISIG_PROPOSAL_METADATA_PREFIX) else {
-            continue;
+        let Some(hash_literal) = key_str.strip_prefix(prefix_literal.as_str()) else {
+            break;
         };
-        let proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue =
-            value.clone().try_into_any_norito().map_err(|err| {
-                conversion_error(format!("invalid multisig proposal metadata: {err}"))
-            })?;
+        let proposal_state = norito::decode_from_bytes::<
+            iroha_executor_data_model::isi::multisig::MultisigProposalState,
+        >(value)
+        .map_err(|err| conversion_error(format!("invalid multisig proposal state: {err}")))?;
+        let proposal = iroha_executor_data_model::isi::multisig::MultisigProposalValue::new(
+            proposal_state.instructions,
+            proposal_state.proposed_at_ms,
+            proposal_state.expires_at_ms,
+            proposal_state.approvals,
+            proposal_state.is_relayed,
+        );
         if !multisig_proposal_is_nonterminal(spec, &proposal, now_ms) {
             continue;
         }
@@ -7589,53 +7735,12 @@ mod multisig_selector_tests {
 
         let active_instructions = vec![dm::Log::new(dm::Level::INFO, "active".to_owned()).into()];
         let active_hash = HashOf::new(&active_instructions);
-        multisig_metadata.insert(
-            Name::from_str(&format!("{MULTISIG_PROPOSAL_METADATA_PREFIX}{active_hash}"))
-                .expect("proposal key"),
-            IrohaJson::new(MultisigProposalValue {
-                instructions: active_instructions,
-                proposed_at_ms: 1_700_000_000_000,
-                expires_at_ms: 4_000_000_000_000,
-                approvals: BTreeSet::from([signer_one_id.clone().into()]),
-                is_relayed: None,
-            }),
-        );
-
         let executed_instructions =
             vec![dm::Log::new(dm::Level::INFO, "executed".to_owned()).into()];
         let executed_hash = HashOf::new(&executed_instructions);
-        multisig_metadata.insert(
-            Name::from_str(&format!(
-                "{MULTISIG_PROPOSAL_METADATA_PREFIX}{executed_hash}"
-            ))
-            .expect("proposal key"),
-            IrohaJson::new(MultisigProposalValue {
-                instructions: executed_instructions,
-                proposed_at_ms: 1_700_000_000_001,
-                expires_at_ms: 4_000_000_000_000,
-                approvals: BTreeSet::from([
-                    signer_one_id.clone().into(),
-                    signer_two_id.clone().into(),
-                ]),
-                is_relayed: Some(true),
-            }),
-        );
 
         let expired_instructions = vec![dm::Log::new(dm::Level::INFO, "expired".to_owned()).into()];
         let expired_hash = HashOf::new(&expired_instructions);
-        multisig_metadata.insert(
-            Name::from_str(&format!(
-                "{MULTISIG_PROPOSAL_METADATA_PREFIX}{expired_hash}"
-            ))
-            .expect("proposal key"),
-            IrohaJson::new(MultisigProposalValue {
-                instructions: expired_instructions,
-                proposed_at_ms: 1_600_000_000_000,
-                expires_at_ms: 1,
-                approvals: BTreeSet::new(),
-                is_relayed: None,
-            }),
-        );
 
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
         let authority = signer_one_id.account().clone();
@@ -7647,12 +7752,59 @@ mod multisig_selector_tests {
         let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
         let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
 
+        let mut world = World::with(
+            [domain],
+            [multisig_account, signer_one_account, signer_two_account],
+            [],
+        );
+        world.smart_contract_state.insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    active_hash,
+                    active_instructions,
+                    1_700_000_000_000,
+                    4_000_000_000_000,
+                    BTreeSet::from([signer_one_id.clone().into()]),
+                    None,
+                ),
+            )
+            .expect("encode active proposal state"),
+        );
+        world.smart_contract_state.insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &executed_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    executed_hash,
+                    executed_instructions,
+                    1_700_000_000_001,
+                    4_000_000_000_000,
+                    BTreeSet::from([signer_one_id.clone().into(), signer_two_id.clone().into()]),
+                    Some(true),
+                ),
+            )
+            .expect("encode executed proposal state"),
+        );
+        world.smart_contract_state.insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &expired_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    expired_hash,
+                    expired_instructions,
+                    1_600_000_000_000,
+                    1,
+                    BTreeSet::new(),
+                    None,
+                ),
+            )
+            .expect("encode expired proposal state"),
+        );
+
         (
-            World::with(
-                [domain],
-                [multisig_account, signer_one_account, signer_two_account],
-                [],
-            ),
+            world,
             multisig_account_id,
             signer_one_id.into(),
             signer_two_id.into(),

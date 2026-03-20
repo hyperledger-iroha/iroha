@@ -3895,6 +3895,48 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::ResolveAccountAlias {
+                            dest,
+                            label,
+                            domain,
+                        } => {
+                            if let Some(label_str) = string_map
+                                .get(&(func_idx, *label))
+                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 10, label_str);
+                            } else {
+                                let r = src_reg(label, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(domain_str) = string_map
+                                .get(&(func_idx, *domain))
+                                .map(|s| DataKey(DataKind::Domain, s.clone()))
+                            {
+                                emit_literal_stub(&mut code, &mut fixups, 11, domain_str);
+                            } else {
+                                let r = src_reg(domain, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::GetTriggerEvent { dest } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(

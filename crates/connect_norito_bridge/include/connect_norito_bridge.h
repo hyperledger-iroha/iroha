@@ -619,6 +619,31 @@ int32_t connect_norito_encode_zk_transfer_signed_transaction_alg(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
+int32_t connect_norito_encode_claim_identifier_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* account_id, unsigned long account_id_len,
+    const char* receipt_json, unsigned long receipt_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_claim_identifier_signed_transaction_alg(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* account_id, unsigned long account_id_len,
+    const char* receipt_json, unsigned long receipt_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 int32_t connect_norito_encode_set_key_value_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,

@@ -2745,6 +2745,23 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::AccountId,
                     })
                 }
+                "resolve_account_alias" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Name
+                        || arg_typed[1].ty != Type::DomainId
+                    {
+                        return Err(SemanticError {
+                            message: "resolve_account_alias expects (Name, DomainId)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::AccountId,
+                    })
+                }
                 // Current trigger event payload as Json (data/by-call triggers).
                 "trigger_event" => {
                     if !arg_typed.is_empty() {
@@ -5553,6 +5570,29 @@ mod tests {
         )
         .expect("parse trigger_event");
         analyze(&program).expect("trigger_event should type-check");
+    }
+
+    #[test]
+    fn resolve_account_alias_accepts_name_and_domain() {
+        let program = parse(
+            "fn f() { let _acct = resolve_account_alias(name(\"banking\"), domain(\"sbp\")); }",
+        )
+        .expect("parse resolve_account_alias");
+        analyze(&program).expect("resolve_account_alias should type-check");
+    }
+
+    #[test]
+    fn equality_between_event_account_and_resolved_alias_type_checks() {
+        let program = parse(
+            "fn f() { \
+                let ev = trigger_event(); \
+                let dst = json_get_account_id(ev, name(\"account_id\")); \
+                let sink = resolve_account_alias(name(\"banking\"), domain(\"sbp\")); \
+                let _same = dst == sink; \
+            }",
+        )
+        .expect("parse account equality");
+        analyze(&program).expect("account-id equality should type-check");
     }
 
     #[test]

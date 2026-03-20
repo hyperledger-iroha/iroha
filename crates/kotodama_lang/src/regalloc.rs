@@ -387,6 +387,10 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*num);
             f(*denom);
         }
+        ResolveAccountAlias { label, domain, .. } => {
+            f(*label);
+            f(*domain);
+        }
         Abs { src, .. } => f(*src),
         Isqrt { src, .. } => f(*src),
         Poseidon2 { a, b, .. } => {
@@ -777,6 +781,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Valcom { dest, .. }
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
+        | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
         | Instr::Copy { dest, .. }
         | Instr::PointerFromString { dest, .. }

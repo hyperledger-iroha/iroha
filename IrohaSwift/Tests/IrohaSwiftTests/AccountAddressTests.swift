@@ -217,6 +217,15 @@ final class AccountAddressTests: XCTestCase {
         }
     }
 
+    func testParseLiveLinkedBankReserveLiteral() throws {
+        let liveReserveLiteral =
+            "soraﾁｷVMXKﾏtKAoQﾅzSeﾈGCWYﾑｸpqM88ﾓqﾁ8MwFｹﾀﾐeﾅ1ｻﾕDBﾔヱGﾅ6ﾅﾄﾐﾃｻeﾗﾕ3ﾀﾎRﾋﾈヰaﾊmquﾗﾚ8ﾒﾕﾆﾅVﾅｷk7cﾕﾖg2yﾙhkﾓDfwpﾀｵcpｲcﾚヱﾊﾐMBTｽｿヰﾁeﾒ4Mﾜr7hqJﾒｳﾈUｿaFｳgkXｻｼｴﾍGﾚNA37KF"
+
+        let parsed = try AccountAddress.parseEncoded(liveReserveLiteral, expectedPrefix: nil)
+        XCTAssertEqual(try parsed.toI105Default(), liveReserveLiteral)
+        XCTAssertNotNil(try parsed.multisigPolicyInfo())
+    }
+
     func testUnsupportedAlgorithmRejected() {
         XCTAssertThrowsError(
             try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAA, count: 32),

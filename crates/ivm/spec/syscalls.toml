@@ -565,6 +565,12 @@ ret = "u64=0"
 gas = "G_sub_usage"
 
 [[syscall]]
+number = "0xA7"
+args = "r10=&Name(label), r11=&DomainId(domain)"
+ret = "ptr (&ScopedAccountId in INPUT)"
+gas = "G_alias_resolve"
+
+[[syscall]]
 number = "0xB0"
 args = "r10=&AxtDescriptor"
 ret = "u64=0"

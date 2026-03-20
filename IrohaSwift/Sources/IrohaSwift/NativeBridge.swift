@@ -362,6 +362,7 @@ enum NativeBridgeError: Error, Equatable {
     case hex
     case accountList
     case multisigSpec
+    case identifierReceipt
     case verifyingKeyId
     case zkAssetMode
     case secpParse
@@ -406,6 +407,7 @@ enum NativeBridgeError: Error, Equatable {
         case -305: return .offlineCommitment
         case -306: return .offlineBlinding
         case -402: return .multisigSpec
+        case -406: return .identifierReceipt
         case -403: return .verifyingKeyId
         case -404: return .zkAssetMode
         default: return .unknown(status)
@@ -704,6 +706,37 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> Int32
 
     private typealias EncodeMultisigRegisterWithAlgFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UInt8,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
+
+    private typealias EncodeClaimIdentifierFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
+
+    private typealias EncodeClaimIdentifierWithAlgFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UInt64,
@@ -1518,6 +1551,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeRegisterZkAssetWithAlgFn: EncodeRegisterZkAssetWithAlgFn? = nil
     private var encodeMultisigRegisterFn: EncodeMultisigRegisterFn? = nil
     private var encodeMultisigRegisterWithAlgFn: EncodeMultisigRegisterWithAlgFn? = nil
+    private var encodeClaimIdentifierFn: EncodeClaimIdentifierFn? = nil
+    private var encodeClaimIdentifierWithAlgFn: EncodeClaimIdentifierWithAlgFn? = nil
     private var encodeBurnFn: EncodeBurnFn? = nil
     private var encodeBurnWithAlgFn: EncodeBurnWithAlgFn? = nil
     private var encodeSetKeyValueFn: EncodeSetKeyValueFn? = nil
@@ -1631,6 +1666,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeRegisterZkAssetWithAlgFn: Any? = nil
     private let encodeMultisigRegisterFn: Any? = nil
     private let encodeMultisigRegisterWithAlgFn: Any? = nil
+    private let encodeClaimIdentifierFn: Any? = nil
+    private let encodeClaimIdentifierWithAlgFn: Any? = nil
     private let encodeBurnFn: Any? = nil
     private let encodeBurnWithAlgFn: Any? = nil
     private let encodeSetKeyValueFn: Any? = nil
@@ -1872,6 +1909,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.encodeMultisigRegisterWithAlgFn = unsafeBitCast(multisigRegisterAlgSymbol, to: EncodeMultisigRegisterWithAlgFn.self)
             } else {
                 self.encodeMultisigRegisterWithAlgFn = nil
+            }
+            if let claimIdentifierSymbol = dlsym(handle, "connect_norito_encode_claim_identifier_signed_transaction") {
+                self.encodeClaimIdentifierFn = unsafeBitCast(claimIdentifierSymbol, to: EncodeClaimIdentifierFn.self)
+            } else {
+                self.encodeClaimIdentifierFn = nil
+            }
+            if let claimIdentifierAlgSymbol = dlsym(handle, "connect_norito_encode_claim_identifier_signed_transaction_alg") {
+                self.encodeClaimIdentifierWithAlgFn = unsafeBitCast(claimIdentifierAlgSymbol, to: EncodeClaimIdentifierWithAlgFn.self)
+            } else {
+                self.encodeClaimIdentifierWithAlgFn = nil
             }
             if let burnSymbol = dlsym(handle, "connect_norito_encode_burn_signed_transaction") {
                 self.encodeBurnFn = unsafeBitCast(burnSymbol, to: EncodeBurnFn.self)
@@ -2368,6 +2415,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeZkTransferWithAlgFn = nil
             self.encodeRegisterZkAssetFn = nil
             self.encodeRegisterZkAssetWithAlgFn = nil
+            self.encodeMultisigRegisterFn = nil
+            self.encodeMultisigRegisterWithAlgFn = nil
+            self.encodeClaimIdentifierFn = nil
+            self.encodeClaimIdentifierWithAlgFn = nil
             self.encodeBurnFn = nil
             self.encodeBurnWithAlgFn = nil
             self.encodeSetKeyValueFn = nil
@@ -3799,6 +3850,105 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 }
             }
         }
+        }
+
+        if status != 0 {
+            if let signedPtr { freeFn(signedPtr) }
+            try throwOnStatus(status)
+            return nil
+        }
+        guard let signedPtr else { return nil }
+
+        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
+        freeFn(signedPtr)
+        let hashData = Data(hashBytes)
+        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
+        #else
+        return nil
+        #endif
+    }
+
+    func encodeClaimIdentifier(
+        chainId: String,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        accountId: String,
+        receiptJSON: Data,
+        privateKey: Data,
+        algorithm: SigningAlgorithm
+    ) throws -> NativeSignedTransaction? {
+        #if canImport(Darwin)
+        guard let freeFn else { return nil }
+        let useAlg = algorithm != .ed25519 && encodeClaimIdentifierWithAlgFn != nil
+        guard useAlg || encodeClaimIdentifierFn != nil else { return nil }
+
+        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
+        var signedLen: UInt = 0
+        var hashBytes = [UInt8](repeating: 0, count: 32)
+        let hashLength = UInt(hashBytes.count)
+        let algorithmRaw = algorithm.noritoDiscriminant
+        let ttlValue = ttlMs ?? 0
+        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
+
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr -> Int32 in
+                authority.withCString { authorityPtr -> Int32 in
+                    accountId.withCString { accountPtr -> Int32 in
+                        receiptJSON.withUnsafeBytes { receiptBuffer -> Int32 in
+                            guard let receiptPtr = receiptBuffer.bindMemory(to: CChar.self).baseAddress else {
+                                return -1
+                            }
+                            return privateKey.withUnsafeBytes { keyBuffer -> Int32 in
+                                guard let keyPtr = keyBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                                    return -1
+                                }
+                                return hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
+                                    guard let hashPtr = hashBuffer.baseAddress else {
+                                        return -1
+                                    }
+                                    return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
+                                        if useAlg, let encodeClaimIdentifierWithAlgFn {
+                                            return encodeClaimIdentifierWithAlgFn(
+                                                chainPtr, UInt(chainId.utf8.count),
+                                                authorityPtr, UInt(authority.utf8.count),
+                                                creationTimeMs,
+                                                ttlValue,
+                                                ttlFlag,
+                                                accountPtr, UInt(accountId.utf8.count),
+                                                receiptPtr, UInt(receiptJSON.count),
+                                                keyPtr, UInt(privateKey.count),
+                                                algorithmRaw,
+                                                signedPtrPtr,
+                                                signedLenPtr,
+                                                hashPtr,
+                                                hashLength
+                                            )
+                                        } else if let encodeClaimIdentifierFn {
+                                            return encodeClaimIdentifierFn(
+                                                chainPtr, UInt(chainId.utf8.count),
+                                                authorityPtr, UInt(authority.utf8.count),
+                                                creationTimeMs,
+                                                ttlValue,
+                                                ttlFlag,
+                                                accountPtr, UInt(accountId.utf8.count),
+                                                receiptPtr, UInt(receiptJSON.count),
+                                                keyPtr, UInt(privateKey.count),
+                                                signedPtrPtr,
+                                                signedLenPtr,
+                                                hashPtr,
+                                                hashLength
+                                            )
+                                        } else {
+                                            return -1
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if status != 0 {

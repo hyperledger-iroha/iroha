@@ -4514,10 +4514,7 @@ fn identifier_receipt_response(
     backend: &str,
 ) -> Result<routing::IdentifierResolveResponseDto, Error> {
     let signature_payload = receipt.payload();
-    let signature_payload_hex = receipt
-        .payload_bytes()
-        .map(hex::encode_upper)
-        .map_err(|err| identifier_internal_error(err.to_string()))?;
+    let signature_payload_hex = hex::encode_upper(receipt.payload_bytes());
     Ok(routing::IdentifierResolveResponseDto {
         policy_id: receipt.payload.policy_id.to_string(),
         opaque_id: receipt.payload.opaque_id.to_string(),

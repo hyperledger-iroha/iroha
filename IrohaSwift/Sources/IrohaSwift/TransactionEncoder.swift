@@ -520,6 +520,38 @@ struct SwiftTransactionEncoder {
         return wrap(native: native)
     }
 
+    static func encodeClaimIdentifier(request: ClaimIdentifierRequest,
+                                      keypair: Keypair,
+                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeClaimIdentifier(request: request,
+                                         signingKey: signingKey,
+                                         creationTimeMs: creationTimeMs)
+    }
+
+    static func encodeClaimIdentifier(request: ClaimIdentifierRequest,
+                                      signingKey: SigningKey,
+                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+                                                         authorityId: request.authority,
+                                                         accountIds: [
+                                                            TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId)
+                                                         ])
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let receiptJSON = try JSONEncoder().encode(request.receipt)
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeClaimIdentifier(chainId: ids.chainId,
+                                                                authority: ids.authorityId,
+                                                                creationTimeMs: creationTimeMs,
+                                                                ttlMs: request.ttlMs,
+                                                                accountId: ids.accountIds["account"] ?? request.accountId,
+                                                                receiptJSON: receiptJSON,
+                                                                privateKey: privateKey,
+                                                                algorithm: signingKey.algorithm)
+        }
+        return wrap(native: native)
+    }
+
     static func encodeSetMetadata(request: SetMetadataRequest,
                                   keypair: Keypair,
                                   creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {

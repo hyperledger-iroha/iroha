@@ -795,6 +795,14 @@ final class ToriiClientTests: XCTestCase {
                   },
                   "max_input_bytes":32
                 },
+                "ram_fhe_profile":{
+                  "profile_version":1,
+                  "register_count":4,
+                  "memory_lane_count":32,
+                  "ciphertext_mul_per_step":1,
+                  "encrypted_input_mode":"resolver_canonicalized_envelope_v1",
+                  "min_ciphertext_modulus":1099511627776
+                },
                 "note":"retail phone policy"
               }]
             }
@@ -817,6 +825,80 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(
             response.items.first?.inputEncryptionPublicParametersDecoded?.parameters.decompositionBaseLog,
             12
+        )
+        XCTAssertEqual(response.items.first?.ramFheProfile?.profileVersion, 1)
+        XCTAssertEqual(response.items.first?.ramFheProfile?.registerCount, 4)
+        XCTAssertEqual(response.items.first?.ramFheProfile?.memoryLaneCount, 32)
+        XCTAssertEqual(
+            response.items.first?.ramFheProfile?.encryptedInputMode,
+            .resolverCanonicalizedEnvelopeV1
+        )
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListIdentifierPoliciesAcceptsTaggedEncryptedInputMode() async throws {
+        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifier-policies")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = """
+            {
+              "total": 1,
+              "items": [{
+                "policy_id":"email#retail",
+                "owner":"\(owner)",
+                "active":true,
+                "normalization":"email_address",
+                "resolver_public_key":"ed25519:resolver-key",
+                "backend":"bfv-programmed-sha3-256-v1",
+                "input_encryption":"bfv-v1",
+                "input_encryption_public_parameters":"ABCD",
+                "input_encryption_public_parameters_decoded":{
+                  "parameters":{
+                    "polynomial_degree":64,
+                    "plaintext_modulus":256,
+                    "ciphertext_modulus":4503599627370496,
+                    "decomposition_base_log":12
+                  },
+                  "public_key":{
+                    "b":[1,2,3],
+                    "a":[4,5,6]
+                  },
+                  "max_input_bytes":63
+                },
+                "ram_fhe_profile":{
+                  "profile_version":1,
+                  "register_count":4,
+                  "memory_lane_count":32,
+                  "ciphertext_mul_per_step":1,
+                  "encrypted_input_mode":{
+                    "mode":"ResolverCanonicalizedEnvelopeV1",
+                    "value":null
+                  },
+                  "min_ciphertext_modulus":4503599627370496
+                },
+                "note":"retail email policy"
+              }]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let response = try await makeClient().listIdentifierPolicies()
+        XCTAssertEqual(response.total, 1)
+        XCTAssertEqual(response.items.first?.policyId, "email#retail")
+        XCTAssertEqual(
+            response.items.first?.ramFheProfile?.encryptedInputMode,
+            .resolverCanonicalizedEnvelopeV1
+        )
+        XCTAssertEqual(
+            response.items.first?.inputEncryptionPublicParametersDecoded?.maxInputBytes,
+            63
         )
     }
 
@@ -888,6 +970,7 @@ final class ToriiClientTests: XCTestCase {
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
             note: nil
         )
         XCTAssertEqual(try receipt?.verifySignature(using: policy), true)
@@ -913,6 +996,87 @@ final class ToriiClientTests: XCTestCase {
             encryptedInputHex: "0xABCD"
         )
         XCTAssertNil(receipt)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testResolveIdentifierDecodesNestedExecutionPayload() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let opaqueId = "opaque:\(String(repeating: "77", count: 32))"
+        let receiptHash = String(repeating: "88", count: 32)
+        let uaid = "uaid:\(String(repeating: "99", count: 31))9b"
+        let signed = try signedIdentifierReceiptFixture(accountId: accountId,
+                                                        resolvedAtMs: 42,
+                                                        expiresAtMs: 142)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/identifiers/resolve")
+            XCTAssertEqual(request.httpMethod, "POST")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "resolved_at_ms":42,
+              "expires_at_ms":142,
+              "backend":"bfv-programmed-sha3-256-v1",
+              "signature":"\(signed.signatureHex)",
+              "signature_payload_hex":"\(signed.signaturePayloadHex)",
+              "signature_payload":{
+                "policy_id":{
+                  "kind":"phone",
+                  "business_rule":"retail"
+                },
+                "execution":{
+                  "program_id":{
+                    "name":"identifier_lookup_retail"
+                  },
+                  "program_digest":"hash:\(String(repeating: "11", count: 32).uppercased())#ABCD",
+                  "backend":"bfv-programmed-sha3-256-v1",
+                  "verification_mode":{
+                    "mode":"Signed",
+                    "value":null
+                  },
+                  "output_hash":"hash:\(String(repeating: "22", count: 32).uppercased())#BCDE",
+                  "associated_data_hash":"hash:\(String(repeating: "33", count: 32).uppercased())#CDEF",
+                  "executed_at_ms":42,
+                  "expires_at_ms":142
+                },
+                "opaque_id":[
+                  "hash:\(String(repeating: "77", count: 32).uppercased())#1234"
+                ],
+                "receipt_hash":"hash:\(receiptHash.uppercased())#5678",
+                "uaid":[
+                  "hash:\(String(repeating: "99", count: 31).uppercased())9B#9ABC"
+                ],
+                "account_id":"\(accountId)"
+              }
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let receipt = try await makeClient().resolveIdentifier(
+            policyId: "phone#retail",
+            encryptedInputHex: "ABCD"
+        )
+        XCTAssertEqual(receipt?.resolvedAtMs, 42)
+        XCTAssertEqual(receipt?.expiresAtMs, 142)
+        XCTAssertEqual(receipt?.signaturePayload.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.signaturePayload.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.signaturePayload.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.signaturePayload.uaid, uaid)
+        XCTAssertEqual(receipt?.signaturePayload.execution?.programId, "identifier_lookup_retail")
+        XCTAssertEqual(receipt?.signaturePayload.execution?.programDigest, String(repeating: "11", count: 32))
+        XCTAssertEqual(receipt?.signaturePayload.execution?.verificationMode, "signed")
+        XCTAssertEqual(receipt?.signaturePayload.execution?.outputHash, String(repeating: "22", count: 32))
+        XCTAssertEqual(receipt?.signaturePayload.execution?.associatedDataHash, String(repeating: "33", count: 32))
+        XCTAssertEqual(receipt?.signaturePayload.execution?.executedAtMs, 42)
+        XCTAssertEqual(receipt?.signaturePayload.execution?.expiresAtMs, 142)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -973,6 +1137,91 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testIssueIdentifierClaimReceiptDecodesNestedExecutionPayload() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        let opaqueId = "opaque:\(String(repeating: "aa", count: 32))"
+        let receiptHash = String(repeating: "bb", count: 32)
+        let uaid = "uaid:\(String(repeating: "cc", count: 31))cd"
+        let signed = try signedIdentifierReceiptFixture(accountId: accountId,
+                                                        resolvedAtMs: 7,
+                                                        expiresAtMs: 77)
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.path,
+                "/v1/accounts/\(accountId)/identifiers/claim-receipt"
+            )
+            XCTAssertEqual(request.httpMethod, "POST")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+              "policy_id":"phone#retail",
+              "opaque_id":"\(opaqueId)",
+              "receipt_hash":"\(receiptHash)",
+              "uaid":"\(uaid)",
+              "account_id":"\(accountId)",
+              "resolved_at_ms":7,
+              "expires_at_ms":77,
+              "backend":"bfv-programmed-sha3-256-v1",
+              "signature":"\(signed.signatureHex)",
+              "signature_payload_hex":"\(signed.signaturePayloadHex)",
+              "signature_payload":{
+                "policy_id":{
+                  "kind":"phone",
+                  "business_rule":"retail"
+                },
+                "execution":{
+                  "program_id":{
+                    "name":"identifier_lookup_retail"
+                  },
+                  "program_digest":"hash:\(String(repeating: "12", count: 32).uppercased())#CDEF",
+                  "backend":"bfv-programmed-sha3-256-v1",
+                  "verification_mode":{
+                    "mode":"Signed",
+                    "value":null
+                  },
+                  "output_hash":"hash:\(String(repeating: "23", count: 32).uppercased())#DEF0",
+                  "associated_data_hash":"hash:\(String(repeating: "34", count: 32).uppercased())#EF01",
+                  "executed_at_ms":7,
+                  "expires_at_ms":77
+                },
+                "opaque_id":[
+                  "hash:\(String(repeating: "aa", count: 32).uppercased())#0ABC"
+                ],
+                "receipt_hash":"hash:\(receiptHash.uppercased())#1BCD",
+                "uaid":[
+                  "hash:\(String(repeating: "cc", count: 31).uppercased())CD#2CDE"
+                ],
+                "account_id":"\(accountId)"
+              }
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let receipt = try await makeClient().issueIdentifierClaimReceipt(
+            accountId: accountId,
+            policyId: "phone#retail",
+            encryptedInputHex: "ABCD"
+        )
+        XCTAssertEqual(receipt?.resolvedAtMs, 7)
+        XCTAssertEqual(receipt?.expiresAtMs, 77)
+        XCTAssertEqual(receipt?.signaturePayload.policyId, "phone#retail")
+        XCTAssertEqual(receipt?.signaturePayload.opaqueId, opaqueId)
+        XCTAssertEqual(receipt?.signaturePayload.receiptHash, receiptHash)
+        XCTAssertEqual(receipt?.signaturePayload.uaid, uaid)
+        XCTAssertEqual(receipt?.signaturePayload.execution?.programId, "identifier_lookup_retail")
+        XCTAssertEqual(receipt?.signaturePayload.execution?.programDigest, String(repeating: "12", count: 32))
+        XCTAssertEqual(receipt?.signaturePayload.execution?.verificationMode, "signed")
+        XCTAssertEqual(receipt?.signaturePayload.execution?.outputHash, String(repeating: "23", count: 32))
+        XCTAssertEqual(receipt?.signaturePayload.execution?.associatedDataHash, String(repeating: "34", count: 32))
+        XCTAssertEqual(receipt?.signaturePayload.execution?.executedAtMs, 7)
+        XCTAssertEqual(receipt?.signaturePayload.execution?.expiresAtMs, 77)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetIdentifierClaimByReceiptHashAsync() async throws {
         let accountId = try canonicalOwnerLiteral()
         StubURLProtocol.handler = { request in
@@ -1030,6 +1279,7 @@ final class ToriiClientTests: XCTestCase {
             inputEncryption: "bfv-v1",
             inputEncryptionPublicParameters: nil,
             inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
             note: nil
         )
         let request = try policy.plaintextRequest(input: " +1 (555) 123-4567 ")
@@ -1061,6 +1311,7 @@ final class ToriiClientTests: XCTestCase {
                 ),
                 maxInputBytes: 3
             ),
+            ramFheProfile: nil,
             note: nil
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"

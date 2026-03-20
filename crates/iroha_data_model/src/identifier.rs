@@ -247,11 +247,9 @@ impl IdentifierResolutionReceipt {
     }
 
     /// Encode the canonical signed payload bytes used by resolver signatures.
-    ///
-    /// # Errors
-    /// Returns the underlying Norito encoding error when the payload cannot be encoded.
-    pub fn payload_bytes(&self) -> Result<Vec<u8>, norito::core::Error> {
-        norito::to_bytes(&self.payload())
+    #[must_use]
+    pub fn payload_bytes(&self) -> Vec<u8> {
+        self.payload.encode()
     }
 
     /// Resolution timestamp in milliseconds since Unix epoch.
@@ -340,6 +338,10 @@ fn normalize_account_number(raw: &str) -> Result<String, IdentifierNormalization
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use iroha_crypto::{KeyPair, RamLfeBackend, RamLfeVerificationMode};
+
     use super::*;
 
     #[test]
@@ -362,5 +364,42 @@ mod tests {
             .normalize(" Alice.Example@Example.COM ")
             .expect("email should normalize");
         assert_eq!(normalized, "alice.example@example.com");
+    }
+
+    #[test]
+    fn receipt_payload_bytes_match_signed_encode_bytes() {
+        let account_signatory = PublicKey::from_str(
+            "ed0120726654A541B0D9AC7466975A924DF6B5F47057287AC98FDC5B39350E6A4E68",
+        )
+        .expect("valid account signatory");
+        let payload = IdentifierResolutionReceiptPayload {
+            policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
+            execution: RamLfeExecutionReceiptPayload {
+                program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
+                program_digest: Hash::new(b"program"),
+                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                verification_mode: RamLfeVerificationMode::Signed,
+                output_hash: Hash::new(b"output"),
+                associated_data_hash: Hash::new(b"associated-data"),
+                executed_at_ms: 1_777_777_777_000,
+                expires_at_ms: Some(1_777_777_877_000),
+            },
+            opaque_id: OpaqueAccountId::from_hash(Hash::new(b"opaque")),
+            receipt_hash: Hash::new(b"receipt"),
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
+            account_id: AccountId::new(account_signatory),
+        };
+        let receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            signature: None,
+            proof: None,
+        };
+        let signer = KeyPair::random();
+        let signature = SignatureOf::new(signer.private_key(), &payload);
+
+        assert_eq!(receipt.payload_bytes(), payload.encode());
+        signature
+            .verify(signer.public_key(), &payload)
+            .expect("signature should verify against bare encode bytes");
     }
 }

@@ -2819,7 +2819,18 @@ fn dispatch_instruction_with_ivm(
     let gas_limit = state_transaction
         .executor_fuel_remaining
         .unwrap_or(base_fuel);
+    eprintln!(
+        "executor starting instruction validation instruction_id={} authority={} gas_limit={}",
+        instruction_id, authority, gas_limit
+    );
     let report = run_executor_validation(executor, &payload, instruction_id, gas_limit)?;
+    eprintln!(
+        "executor finished instruction validation instruction_id={} authority={} gas_used={} verdict_ok={}",
+        instruction_id,
+        authority,
+        report.gas_used,
+        report.verdict.is_ok()
+    );
     if let Some(remaining) = state_transaction.executor_fuel_remaining.as_mut() {
         *remaining = remaining.saturating_sub(report.gas_used);
     }
@@ -2875,11 +2886,19 @@ fn execute_multisig_custom_instruction_if_present(
         return Ok(false);
     };
 
+    eprintln!(
+        "executor dispatching multisig custom instruction authority={}",
+        authority
+    );
     crate::smartcontracts::isi::multisig::execute_multisig_instruction(
         state_transaction,
         authority,
         multisig,
     )?;
+    eprintln!(
+        "executor finished multisig custom instruction authority={}",
+        authority
+    );
 
     Ok(true)
 }

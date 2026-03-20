@@ -42,12 +42,14 @@ use iroha_data_model::{
     da::manifest::DaManifestV1,
     domain::DomainId,
     governance::types::AtWindow,
+    identifier::IdentifierResolutionReceipt,
     isi::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
         },
+        identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
         transfer::Transfer,
         zk,
@@ -147,6 +149,7 @@ const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
 const ERR_ZK_ASSET_MODE: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
+const ERR_IDENTIFIER_RECEIPT: c_int = -406;
 
 const OFFLINE_BALANCE_PROOF_VERSION: u8 = 1;
 const OFFLINE_DELTA_PROOF_BYTES: usize = 96;
@@ -196,6 +199,7 @@ enum BridgeError {
     Hex,
     AccountList,
     MultisigSpec,
+    IdentifierReceipt,
     VerifyingKeyId,
     ZkAssetMode,
     SecpParse,
@@ -237,6 +241,7 @@ impl BridgeError {
             BridgeError::Hex => ERR_HEX,
             BridgeError::AccountList => ERR_ACCOUNT_LIST,
             BridgeError::MultisigSpec => ERR_MULTISIG_SPEC,
+            BridgeError::IdentifierReceipt => ERR_IDENTIFIER_RECEIPT,
             BridgeError::VerifyingKeyId => ERR_VERIFYING_KEY_ID,
             BridgeError::ZkAssetMode => ERR_ZK_ASSET_MODE,
             BridgeError::SecpParse => ERR_SECP_PARSE,
@@ -1345,6 +1350,18 @@ fn parse_multisig_spec_bytes(ptr: *const c_char, len: c_ulong) -> BridgeResult<M
     }
     let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
     norito::json::from_slice::<MultisigSpec>(bytes).map_err(|_| BridgeError::MultisigSpec)
+}
+
+fn parse_identifier_receipt_bytes(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<IdentifierResolutionReceipt> {
+    if ptr.is_null() || len == 0 {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
+    norito::json::from_slice::<IdentifierResolutionReceipt>(bytes)
+        .map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn write_optional_error(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -9181,6 +9198,120 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
                 let burn = Burn::asset_numeric(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    account_ptr: *const c_char,
+    account_len: c_ulong,
+    receipt_ptr: *const c_char,
+    receipt_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        if private_key_ptr.is_null() || account_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
+        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
+        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
+        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let authority = parse_account_id(authority_str)?;
+        let account = parse_account_id(account_str)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key(key_slice)?;
+        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
+
+        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            private_key,
+            InstructionBox::from(ClaimIdentifier { account, receipt }),
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction_alg(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    account_ptr: *const c_char,
+    account_len: c_ulong,
+    receipt_ptr: *const c_char,
+    receipt_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    algorithm_code: u8,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        if private_key_ptr.is_null() || account_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let algorithm = parse_algorithm_code(algorithm_code)?;
+        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
+        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
+        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
+        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let authority = parse_account_id(authority_str)?;
+        let account = parse_account_id(account_str)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
+        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
+
+        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            private_key,
+            InstructionBox::from(ClaimIdentifier { account, receipt }),
         );
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
