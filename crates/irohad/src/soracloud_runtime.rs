@@ -3,12 +3,15 @@
 //! This subsystem does not execute workloads yet. Its job in this first slice
 //! is to continuously project authoritative Soracloud world state into a
 //! node-local materialization plan so later hydration, IVM hosting, and
-//! deterministic `NativeProcess` supervision can attach to a concrete runtime
-//! manager instead of ad hoc Torii-local state.
+//! private-runtime capability enforcement can attach to a concrete runtime
+//! manager instead of ad hoc Torii-local state. Soracloud runtime v1 is
+//! currently `Ivm`-only; `NativeProcess` deployments are rejected during
+//! admission and runtime activation.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs, io,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -38,27 +41,34 @@ use mv::storage::StorageReadOnly;
 use parking_lot::RwLock;
 use tokio::task::JoinHandle;
 
-const DEFAULT_RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
-
-/// Runtime-manager configuration derived from node storage settings.
+/// Runtime-manager configuration derived from the explicit Soracloud runtime settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SoracloudRuntimeManagerConfig {
     /// Root directory for local runtime materialization state.
     pub state_dir: PathBuf,
     /// Reconciliation cadence against authoritative state.
     pub reconcile_interval: Duration,
+    /// Reserved concurrency budget for future hydration workers.
+    pub hydration_concurrency: NonZeroUsize,
+    /// Configured artifact-cache budgets for the embedded runtime manager.
+    pub cache_budgets: iroha_config::parameters::actual::SoracloudRuntimeCacheBudgets,
+    /// Deterministic `NativeProcess` hosting limits.
+    pub native_process: iroha_config::parameters::actual::SoracloudRuntimeNativeProcess,
+    /// Outbound egress policy for embedded runtimes.
+    pub egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
 }
 
 impl SoracloudRuntimeManagerConfig {
-    /// Build a runtime-manager configuration from the node configuration.
+    /// Build a runtime-manager configuration from the parsed Soracloud runtime settings.
     #[must_use]
-    pub fn from_node_config(config: &iroha_config::parameters::actual::Root) -> Self {
-        // TODO: Promote this into explicit `iroha_config` parameters once the
-        // embedded runtime grows real hydration/execution workers and needs
-        // user-facing tuning beyond the current bootstrap materialization layer.
+    pub fn from_runtime_config(config: &iroha_config::parameters::actual::SoracloudRuntime) -> Self {
         Self {
-            state_dir: config.torii.data_dir.join("soracloud_runtime"),
-            reconcile_interval: DEFAULT_RECONCILE_INTERVAL,
+            state_dir: config.state_dir.clone(),
+            reconcile_interval: config.reconcile_interval,
+            hydration_concurrency: config.hydration_concurrency,
+            cache_budgets: config.cache_budgets.clone(),
+            native_process: config.native_process.clone(),
+            egress: config.egress.clone(),
         }
     }
 }
@@ -109,6 +119,17 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         &self,
         request: SoracloudOrderedMailboxExecutionRequest,
     ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError> {
+        ensure_ivm_runtime(
+            request.bundle.container.runtime,
+            request.deployment.service_name.as_ref(),
+            &request.deployment.current_service_version,
+        )
+        .map_err(|message| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                message,
+            )
+        })?;
         let handler_class = request
             .handler
             .as_ref()
@@ -196,6 +217,13 @@ impl SoracloudRuntimeManager {
     /// Start the background reconciliation loop.
     pub fn start(self, shutdown_signal: ShutdownSignal) -> (SoracloudRuntimeManagerHandle, Child) {
         let manager = Arc::new(self);
+        if let Err(error) = manager.restore_persisted_snapshot() {
+            iroha_logger::warn!(
+                ?error,
+                state_dir = %manager.config.state_dir.display(),
+                "failed to restore persisted Soracloud runtime-manager snapshot"
+            );
+        }
         if let Err(error) = manager.reconcile_once() {
             iroha_logger::warn!(
                 ?error,
@@ -248,6 +276,12 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.apartments_root().display()))?;
         fs::create_dir_all(self.artifacts_root())
             .wrap_err_with(|| format!("create {}", self.artifacts_root().display()))?;
+        fs::create_dir_all(self.journals_root())
+            .wrap_err_with(|| format!("create {}", self.journals_root().display()))?;
+        fs::create_dir_all(self.checkpoints_root())
+            .wrap_err_with(|| format!("create {}", self.checkpoints_root().display()))?;
+        fs::create_dir_all(self.secrets_root())
+            .wrap_err_with(|| format!("create {}", self.secrets_root().display()))?;
 
         let view = self.state.view();
         let bundle_registry = collect_service_revision_registry(&view);
@@ -270,6 +304,21 @@ impl SoracloudRuntimeManager {
         Ok(())
     }
 
+    fn runtime_snapshot_path(&self) -> PathBuf {
+        self.config.state_dir.join("runtime_snapshot.json")
+    }
+
+    fn restore_persisted_snapshot(&self) -> eyre::Result<bool> {
+        let path = self.runtime_snapshot_path();
+        let Some(snapshot) = read_json_optional::<SoracloudRuntimeSnapshot>(&path)
+            .wrap_err_with(|| format!("read {}", path.display()))?
+        else {
+            return Ok(false);
+        };
+        *self.snapshot.write() = snapshot;
+        Ok(true)
+    }
+
     fn services_root(&self) -> PathBuf {
         self.config.state_dir.join("services")
     }
@@ -280,6 +329,18 @@ impl SoracloudRuntimeManager {
 
     fn artifacts_root(&self) -> PathBuf {
         self.config.state_dir.join("artifacts")
+    }
+
+    fn journals_root(&self) -> PathBuf {
+        self.config.state_dir.join("journals")
+    }
+
+    fn checkpoints_root(&self) -> PathBuf {
+        self.config.state_dir.join("checkpoints")
+    }
+
+    fn secrets_root(&self) -> PathBuf {
+        self.config.state_dir.join("secrets")
     }
 
     fn write_service_materializations(
@@ -392,6 +453,8 @@ fn build_runtime_snapshot(
                         "deployment for service `{service_name}` references missing admitted revision `{service_version}`"
                     )
                 })?;
+            ensure_ivm_runtime(bundle.container.runtime, &service_name, &service_version)
+                .map_err(eyre::Report::msg)?;
             let is_runtime_active = runtime_state
                 .as_ref()
                 .is_some_and(|state| state.active_service_version == service_version);
@@ -656,6 +719,19 @@ fn updated_runtime_state(
     runtime_state
 }
 
+fn ensure_ivm_runtime(
+    runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1,
+    service_name: &str,
+    service_version: &str,
+) -> Result<(), String> {
+    match runtime {
+        iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm => Ok(()),
+        iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess => Err(format!(
+            "service `{service_name}` revision `{service_version}` targets unsupported Soracloud runtime `NativeProcess`; v1 currently admits only `Ivm`"
+        )),
+    }
+}
+
 fn hash_cache_name(hash: Hash) -> String {
     sanitize_path_component(&hash.to_string())
 }
@@ -746,6 +822,23 @@ where
     Ok(())
 }
 
+fn read_json_optional<T>(path: &Path) -> io::Result<Option<T>>
+where
+    T: norito::json::JsonDeserialize,
+{
+    let payload = match fs::read(path) {
+        Ok(payload) => payload,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    if payload.is_empty() {
+        return Ok(None);
+    }
+    norito::json::from_slice(&payload)
+        .map(Some)
+        .map_err(|error| io::Error::other(format!("deserialize json: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     //! Tests for the embedded Soracloud runtime manager.
@@ -756,7 +849,6 @@ mod tests {
     use eyre::Result;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_data_model::{
-        prelude::Name,
         soracloud::{
             AgentApartmentManifestV1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
             SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
@@ -781,7 +873,7 @@ mod tests {
     }
 
     fn test_state() -> Result<Arc<State>> {
-        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         Ok(Arc::new(State::new_for_testing(World::new(), kura, query)))
     }
@@ -849,15 +941,67 @@ mod tests {
         }
     }
 
+    fn test_runtime_manager_config(state_dir: PathBuf) -> SoracloudRuntimeManagerConfig {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime {
+            state_dir,
+            ..Default::default()
+        };
+        SoracloudRuntimeManagerConfig::from_runtime_config(&runtime)
+    }
+
+    #[test]
+    fn manager_config_uses_explicit_soracloud_runtime_settings() {
+        let runtime = iroha_config::parameters::actual::SoracloudRuntime {
+            state_dir: PathBuf::from("/tmp/iroha-soracloud-runtime-config"),
+            reconcile_interval: Duration::from_secs(17),
+            hydration_concurrency: std::num::NonZeroUsize::new(9)
+                .expect("nonzero hydration concurrency"),
+            cache_budgets: iroha_config::parameters::actual::SoracloudRuntimeCacheBudgets {
+                bundle_bytes: std::num::NonZeroU64::new(1_024).expect("nonzero"),
+                static_asset_bytes: std::num::NonZeroU64::new(2_048).expect("nonzero"),
+                journal_bytes: std::num::NonZeroU64::new(3_072).expect("nonzero"),
+                checkpoint_bytes: std::num::NonZeroU64::new(4_096).expect("nonzero"),
+                model_artifact_bytes: std::num::NonZeroU64::new(5_120).expect("nonzero"),
+                model_weight_bytes: std::num::NonZeroU64::new(6_144).expect("nonzero"),
+            },
+            native_process: iroha_config::parameters::actual::SoracloudRuntimeNativeProcess {
+                max_concurrent_processes: std::num::NonZeroUsize::new(3)
+                    .expect("nonzero concurrent processes"),
+                cpu_millis: std::num::NonZeroU32::new(1_500).expect("nonzero cpu"),
+                memory_bytes: std::num::NonZeroU64::new(65_536).expect("nonzero memory"),
+                ephemeral_storage_bytes: std::num::NonZeroU64::new(131_072)
+                    .expect("nonzero storage"),
+                max_open_files: std::num::NonZeroU32::new(64).expect("nonzero files"),
+                max_tasks: std::num::NonZeroU16::new(32).expect("nonzero tasks"),
+                start_grace: Duration::from_secs(3),
+                stop_grace: Duration::from_secs(5),
+            },
+            egress: iroha_config::parameters::actual::SoracloudRuntimeEgress {
+                default_allow: true,
+                allowed_hosts: vec!["cdn.sora.test".to_string()],
+                rate_per_minute: std::num::NonZeroU32::new(120),
+                max_bytes_per_minute: std::num::NonZeroU64::new(262_144),
+            },
+        };
+
+        let manager = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
+        assert_eq!(manager.state_dir, runtime.state_dir);
+        assert_eq!(manager.reconcile_interval, runtime.reconcile_interval);
+        assert_eq!(manager.hydration_concurrency, runtime.hydration_concurrency);
+        assert_eq!(manager.cache_budgets, runtime.cache_budgets);
+        assert_eq!(manager.native_process, runtime.native_process);
+        assert_eq!(manager.egress, runtime.egress);
+    }
+
     #[test]
     fn reconcile_once_persists_active_service_and_apartment_materializations() -> Result<()> {
-        let state = test_state()?;
+        let mut state = test_state()?;
         let bundle = load_deployment_bundle_fixture()?;
         let deployment = sample_deployment_state(&bundle);
         let runtime = sample_runtime_state(&bundle);
         let apartment = sample_agent_record()?;
         {
-            let world = state.world();
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             world
                 .soracloud_service_revisions_mut_for_testing()
                 .insert(
@@ -875,15 +1019,12 @@ mod tests {
                 .insert(bundle.service.service_name.clone(), runtime);
             world
                 .soracloud_agent_apartments_mut_for_testing()
-                .insert(apartment.manifest.apartment_name.clone(), apartment);
+                .insert(apartment.manifest.apartment_name.to_string(), apartment);
         }
 
         let temp_dir = tempfile::tempdir()?;
         let manager = SoracloudRuntimeManager::new(
-            SoracloudRuntimeManagerConfig {
-                state_dir: temp_dir.path().to_path_buf(),
-                reconcile_interval: Duration::from_secs(60),
-            },
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
         );
         manager.reconcile_once()?;
@@ -919,6 +1060,9 @@ mod tests {
             .path()
             .join("services/web_portal/2026.02.0/deployment_bundle.json")
             .exists());
+        assert!(temp_dir.path().join("journals").exists());
+        assert!(temp_dir.path().join("checkpoints").exists());
+        assert!(temp_dir.path().join("secrets").exists());
         assert!(temp_dir
             .path()
             .join("apartments/ops_agent/runtime_plan.json")
@@ -932,10 +1076,10 @@ mod tests {
 
     #[test]
     fn reconcile_once_prunes_stale_materializations_and_reports_missing_bundle_cache() -> Result<()> {
-        let state = test_state()?;
+        let mut state = test_state()?;
         let bundle = load_deployment_bundle_fixture()?;
         {
-            let world = state.world();
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             world
                 .soracloud_service_revisions_mut_for_testing()
                 .insert(
@@ -962,10 +1106,7 @@ mod tests {
         fs::write(stale_dir.join("runtime_plan.json"), "{}")?;
 
         let manager = SoracloudRuntimeManager::new(
-            SoracloudRuntimeManagerConfig {
-                state_dir: temp_dir.path().to_path_buf(),
-                reconcile_interval: Duration::from_secs(60),
-            },
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
         );
         manager.reconcile_once()?;
@@ -982,6 +1123,124 @@ mod tests {
             .iter()
             .any(|artifact| artifact.kind == SoraArtifactKindV1::Bundle && !artifact.available_locally));
         assert!(!temp_dir.path().join("services/stale_service").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_rejects_unsupported_native_process_runtime() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.container.runtime = SoraContainerRuntimeV1::NativeProcess;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        bundle.service.service_version.clone(),
+                    ),
+                    bundle.clone(),
+                );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        let error = manager
+            .reconcile_once()
+            .expect_err("native-process revisions must be rejected during activation");
+        assert!(
+            error.to_string().contains("admits only `Ivm`"),
+            "unexpected reconcile error: {error:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restore_persisted_snapshot_preserves_last_snapshot_if_reconcile_fails() -> Result<()> {
+        let mut state = test_state()?;
+        let bundle = load_deployment_bundle_fixture()?;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let expected_snapshot = SoracloudRuntimeSnapshot {
+            schema_version: SoracloudRuntimeSnapshot::default().schema_version,
+            observed_height: 77,
+            observed_block_hash: Some(Hash::prehashed([0x55; Hash::LENGTH]).to_string()),
+            services: BTreeMap::from([(
+                "restored_service".to_string(),
+                BTreeMap::from([(
+                    "2026.03.0".to_string(),
+                    SoracloudRuntimeServicePlan {
+                        service_name: "restored_service".to_string(),
+                        service_version: "2026.03.0".to_string(),
+                        role: SoracloudRuntimeRevisionRole::Active,
+                        traffic_percent: 100,
+                        runtime: SoraContainerRuntimeV1::Ivm,
+                        bundle_hash: Hash::prehashed([0x33; Hash::LENGTH]).to_string(),
+                        bundle_path: "sorafs://restored.bundle".to_string(),
+                        entrypoint: "main".to_string(),
+                        bundle_cache_path: temp_dir
+                            .path()
+                            .join("artifacts/restored_bundle")
+                            .display()
+                            .to_string(),
+                        bundle_available_locally: true,
+                        process_generation: Some(9),
+                        health_status: SoraServiceHealthStatusV1::Healthy,
+                        load_factor_bps: 250,
+                        reported_pending_mailbox_messages: 2,
+                        authoritative_pending_mailbox_messages: 2,
+                        rollout_handle: None,
+                        materialization_dir: temp_dir
+                            .path()
+                            .join("services/restored_service/2026.03.0")
+                            .display()
+                            .to_string(),
+                        mailboxes: Vec::new(),
+                        artifacts: Vec::new(),
+                    },
+                )]),
+            )]),
+            apartments: BTreeMap::new(),
+        };
+        write_json_atomic(
+            temp_dir.path().join("runtime_snapshot.json").as_path(),
+            &expected_snapshot,
+        )?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        assert!(manager.restore_persisted_snapshot()?);
+        let error = manager
+            .reconcile_once()
+            .expect_err("reconcile should fail without the admitted revision bundle");
+        assert!(
+            error
+                .to_string()
+                .contains("references missing admitted revision"),
+            "unexpected reconcile error: {error:?}"
+        );
+        assert_eq!(manager.snapshot.read().clone(), expected_snapshot);
         Ok(())
     }
 }

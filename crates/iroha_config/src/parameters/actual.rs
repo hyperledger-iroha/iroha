@@ -94,6 +94,8 @@ pub struct Root {
     pub genesis: Genesis,
     /// Torii API configuration.
     pub torii: Torii,
+    /// Embedded Soracloud runtime-manager configuration.
+    pub soracloud_runtime: SoracloudRuntime,
     /// Block storage (Kura) configuration.
     pub kura: Kura,
     /// Consensus (Sumeragi) configuration.
@@ -160,6 +162,136 @@ pub struct Root {
     pub settlement: Settlement,
     /// Streaming configuration (control-plane key material).
     pub streaming: Streaming,
+}
+
+/// Embedded Soracloud runtime-manager configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoracloudRuntime {
+    /// Root directory for node-local Soracloud runtime state.
+    pub state_dir: PathBuf,
+    /// Reconciliation cadence against authoritative world state.
+    pub reconcile_interval: Duration,
+    /// Maximum concurrent artifact hydration workers.
+    pub hydration_concurrency: NonZeroUsize,
+    /// Cache budgets for hydrated Soracloud artifacts.
+    pub cache_budgets: SoracloudRuntimeCacheBudgets,
+    /// Deterministic native-process hosting limits.
+    pub native_process: SoracloudRuntimeNativeProcess,
+    /// Outbound egress policy enforced by the embedded runtime manager.
+    pub egress: SoracloudRuntimeEgress,
+}
+
+impl Default for SoracloudRuntime {
+    fn default() -> Self {
+        Self {
+            state_dir: defaults::soracloud_runtime::state_dir(),
+            reconcile_interval: Duration::from_millis(
+                defaults::soracloud_runtime::RECONCILE_INTERVAL_MS,
+            ),
+            hydration_concurrency: defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
+            cache_budgets: SoracloudRuntimeCacheBudgets::default(),
+            native_process: SoracloudRuntimeNativeProcess::default(),
+            egress: SoracloudRuntimeEgress::default(),
+        }
+    }
+}
+
+/// Cache budgets for hydrated Soracloud runtime artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoracloudRuntimeCacheBudgets {
+    /// Cache budget for executable service bundles.
+    pub bundle_bytes: NonZeroU64,
+    /// Cache budget for hydrated static assets.
+    pub static_asset_bytes: NonZeroU64,
+    /// Cache budget for runtime journals.
+    pub journal_bytes: NonZeroU64,
+    /// Cache budget for runtime checkpoints.
+    pub checkpoint_bytes: NonZeroU64,
+    /// Cache budget for model artifacts.
+    pub model_artifact_bytes: NonZeroU64,
+    /// Cache budget for model weights.
+    pub model_weight_bytes: NonZeroU64,
+}
+
+impl Default for SoracloudRuntimeCacheBudgets {
+    fn default() -> Self {
+        Self {
+            bundle_bytes: defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
+            static_asset_bytes: defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES,
+            journal_bytes: defaults::soracloud_runtime::JOURNAL_CACHE_BUDGET_BYTES,
+            checkpoint_bytes: defaults::soracloud_runtime::CHECKPOINT_CACHE_BUDGET_BYTES,
+            model_artifact_bytes: defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES,
+            model_weight_bytes: defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES,
+        }
+    }
+}
+
+/// Resource ceilings for deterministic `NativeProcess` Soracloud workloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoracloudRuntimeNativeProcess {
+    /// Maximum number of native-process workloads hosted concurrently.
+    pub max_concurrent_processes: NonZeroUsize,
+    /// CPU budget in millicores per hosted process.
+    pub cpu_millis: NonZeroU32,
+    /// Memory budget in bytes per hosted process.
+    pub memory_bytes: NonZeroU64,
+    /// Ephemeral filesystem budget in bytes per hosted process.
+    pub ephemeral_storage_bytes: NonZeroU64,
+    /// Open-file ceiling per hosted process.
+    pub max_open_files: NonZeroU32,
+    /// Task/thread ceiling per hosted process.
+    pub max_tasks: NonZeroU16,
+    /// Startup grace window before the manager treats the process as failed.
+    pub start_grace: Duration,
+    /// Shutdown grace window before the manager force-stops the process.
+    pub stop_grace: Duration,
+}
+
+impl Default for SoracloudRuntimeNativeProcess {
+    fn default() -> Self {
+        Self {
+            max_concurrent_processes:
+                defaults::soracloud_runtime::NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES,
+            cpu_millis: defaults::soracloud_runtime::NATIVE_PROCESS_CPU_MILLIS,
+            memory_bytes: defaults::soracloud_runtime::NATIVE_PROCESS_MEMORY_BYTES,
+            ephemeral_storage_bytes:
+                defaults::soracloud_runtime::NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES,
+            max_open_files: defaults::soracloud_runtime::NATIVE_PROCESS_MAX_OPEN_FILES,
+            max_tasks: defaults::soracloud_runtime::NATIVE_PROCESS_MAX_TASKS,
+            start_grace: Duration::from_millis(
+                defaults::soracloud_runtime::NATIVE_PROCESS_START_GRACE_MS,
+            ),
+            stop_grace: Duration::from_millis(
+                defaults::soracloud_runtime::NATIVE_PROCESS_STOP_GRACE_MS,
+            ),
+        }
+    }
+}
+
+/// Outbound egress policy for embedded Soracloud runtimes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoracloudRuntimeEgress {
+    /// Whether egress is allowed by default when a destination is not explicitly listed.
+    pub default_allow: bool,
+    /// Explicit destination allowlist applied when `default_allow` is false.
+    pub allowed_hosts: Vec<String>,
+    /// Optional outbound request-rate cap per service/minute.
+    pub rate_per_minute: Option<NonZeroU32>,
+    /// Optional outbound byte budget per service/minute.
+    pub max_bytes_per_minute: Option<NonZeroU64>,
+}
+
+impl Default for SoracloudRuntimeEgress {
+    fn default() -> Self {
+        Self {
+            default_allow: defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW,
+            allowed_hosts: defaults::soracloud_runtime::egress_allowed_hosts(),
+            rate_per_minute: defaults::soracloud_runtime::EGRESS_RATE_PER_MINUTE
+                .and_then(NonZeroU32::new),
+            max_bytes_per_minute: defaults::soracloud_runtime::EGRESS_MAX_BYTES_PER_MINUTE
+                .and_then(NonZeroU64::new),
+        }
+    }
 }
 
 /// See [`Root::from_toml_source`]

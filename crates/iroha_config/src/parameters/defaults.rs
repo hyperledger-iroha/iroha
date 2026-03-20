@@ -9,6 +9,7 @@
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+    path::PathBuf,
     str::FromStr,
     time::Duration,
 };
@@ -158,6 +159,62 @@ pub mod genesis {
     pub const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
     /// Maximum number of bootstrap attempts before failing startup.
     pub const BOOTSTRAP_MAX_ATTEMPTS: u32 = 5;
+}
+
+/// Embedded Soracloud runtime-manager defaults.
+pub mod soracloud_runtime {
+    use super::*;
+
+    /// Default root directory for Soracloud runtime-manager state.
+    pub const STATE_DIR: &str = "./storage/soracloud_runtime";
+    /// Default reconciliation cadence in milliseconds.
+    pub const RECONCILE_INTERVAL_MS: u64 = 5_000;
+    /// Default number of concurrent hydration workers reserved for artifact fetchers.
+    pub const HYDRATION_CONCURRENCY: NonZeroUsize = nonzero!(4_usize);
+    /// Default bundle cache budget in bytes.
+    pub const BUNDLE_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
+    /// Default static-asset cache budget in bytes.
+    pub const STATIC_ASSET_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
+    /// Default journal cache budget in bytes.
+    pub const JOURNAL_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
+    /// Default checkpoint cache budget in bytes.
+    pub const CHECKPOINT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
+    /// Default model-artifact cache budget in bytes.
+    pub const MODEL_ARTIFACT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(1_024_u64 * 1024 * 1024);
+    /// Default model-weight cache budget in bytes.
+    pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
+    /// Default concurrent deterministic native processes allowed on one node.
+    pub const NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES: NonZeroUsize = nonzero!(8_usize);
+    /// Default CPU budget in millicores for one deterministic native process.
+    pub const NATIVE_PROCESS_CPU_MILLIS: NonZeroU32 = nonzero!(2_000_u32);
+    /// Default memory budget in bytes for one deterministic native process.
+    pub const NATIVE_PROCESS_MEMORY_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
+    /// Default ephemeral storage budget in bytes for one deterministic native process.
+    pub const NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
+    /// Default open-file ceiling for one deterministic native process.
+    pub const NATIVE_PROCESS_MAX_OPEN_FILES: NonZeroU32 = nonzero!(256_u32);
+    /// Default task/thread ceiling for one deterministic native process.
+    pub const NATIVE_PROCESS_MAX_TASKS: std::num::NonZeroU16 = nonzero!(64_u16);
+    /// Default startup grace window in milliseconds for deterministic native processes.
+    pub const NATIVE_PROCESS_START_GRACE_MS: u64 = 5_000;
+    /// Default shutdown grace window in milliseconds for deterministic native processes.
+    pub const NATIVE_PROCESS_STOP_GRACE_MS: u64 = 5_000;
+    /// Default outbound egress posture for the embedded runtime manager.
+    pub const EGRESS_DEFAULT_ALLOW: bool = false;
+    /// Default outbound request-rate cap per service/minute. `None` means quota is unset.
+    pub const EGRESS_RATE_PER_MINUTE: Option<u32> = None;
+    /// Default outbound byte budget per service/minute. `None` means budget is unset.
+    pub const EGRESS_MAX_BYTES_PER_MINUTE: Option<u64> = None;
+
+    /// Default root directory for Soracloud runtime-manager state.
+    pub fn state_dir() -> PathBuf {
+        PathBuf::from(STATE_DIR)
+    }
+
+    /// Default allowlist for outbound runtime egress destinations.
+    pub fn egress_allowed_hosts() -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Pending-transaction queue defaults used by consensus and Torii.

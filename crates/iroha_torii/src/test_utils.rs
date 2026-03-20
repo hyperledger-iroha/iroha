@@ -691,6 +691,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             onboarding: None,
             offline_issuer: None,
         },
+        soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(std::env::temp_dir()),

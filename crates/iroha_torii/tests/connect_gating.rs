@@ -358,6 +358,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             onboarding: None,
             offline_issuer: None,
         },
+        soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(std::env::temp_dir()),

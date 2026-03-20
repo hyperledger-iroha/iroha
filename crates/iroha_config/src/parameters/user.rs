@@ -719,6 +719,8 @@ pub struct Root {
     #[config(nested)]
     torii: Torii,
     #[config(nested)]
+    soracloud_runtime: SoracloudRuntime,
+    #[config(nested)]
     sorafs: Sorafs,
     #[config(nested)]
     pipeline: Pipeline,
@@ -1015,6 +1017,7 @@ impl Root {
             sorafs_por,
         ) = self.sorafs.parse();
         let (mut torii, live_query_store) = self.torii.parse();
+        let soracloud_runtime = self.soracloud_runtime.parse();
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = if self.telemetry_enabled {
             actual::TelemetryProfile::from(self.telemetry_profile)
@@ -1126,6 +1129,7 @@ impl Root {
             network,
             genesis,
             torii,
+            soracloud_runtime,
             kura,
             sumeragi,
             block_sync,
@@ -13451,6 +13455,163 @@ pub struct Snapshot {
     pub signing_private_key: Option<ExposedPrivateKey>,
 }
 
+/// User-level configuration container for the embedded Soracloud runtime manager.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct SoracloudRuntime {
+    /// Root directory for node-local Soracloud runtime state.
+    #[config(default = "PathBuf::from(defaults::soracloud_runtime::STATE_DIR)")]
+    pub state_dir: WithOrigin<PathBuf>,
+    /// Reconciliation cadence against authoritative world state (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS))"
+    )]
+    pub reconcile_interval_ms: DurationMs,
+    /// Maximum concurrent artifact hydration workers.
+    #[config(default = "defaults::soracloud_runtime::HYDRATION_CONCURRENCY")]
+    pub hydration_concurrency: NonZeroUsize,
+    /// Cache budgets for hydrated Soracloud artifacts.
+    #[config(nested)]
+    pub cache_budgets: SoracloudRuntimeCacheBudgets,
+    /// Deterministic `NativeProcess` hosting limits.
+    #[config(nested)]
+    pub native_process: SoracloudRuntimeNativeProcess,
+    /// Outbound egress policy for embedded runtimes.
+    #[config(nested)]
+    pub egress: SoracloudRuntimeEgress,
+}
+
+impl SoracloudRuntime {
+    fn parse(self) -> actual::SoracloudRuntime {
+        actual::SoracloudRuntime {
+            state_dir: self.state_dir.resolve_relative_path(),
+            reconcile_interval: self.reconcile_interval_ms.get().max(MIN_TIMER_INTERVAL),
+            hydration_concurrency: self.hydration_concurrency,
+            cache_budgets: self.cache_budgets.parse(),
+            native_process: self.native_process.parse(),
+            egress: self.egress.parse(),
+        }
+    }
+}
+
+/// User-level cache budget settings for hydrated Soracloud artifacts.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct SoracloudRuntimeCacheBudgets {
+    /// Cache budget for executable service bundles.
+    #[config(default = "defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES")]
+    pub bundle_bytes: NonZeroU64,
+    /// Cache budget for hydrated static assets.
+    #[config(default = "defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES")]
+    pub static_asset_bytes: NonZeroU64,
+    /// Cache budget for runtime journals.
+    #[config(default = "defaults::soracloud_runtime::JOURNAL_CACHE_BUDGET_BYTES")]
+    pub journal_bytes: NonZeroU64,
+    /// Cache budget for runtime checkpoints.
+    #[config(default = "defaults::soracloud_runtime::CHECKPOINT_CACHE_BUDGET_BYTES")]
+    pub checkpoint_bytes: NonZeroU64,
+    /// Cache budget for model artifacts.
+    #[config(default = "defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES")]
+    pub model_artifact_bytes: NonZeroU64,
+    /// Cache budget for model weights.
+    #[config(default = "defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES")]
+    pub model_weight_bytes: NonZeroU64,
+}
+
+impl SoracloudRuntimeCacheBudgets {
+    fn parse(self) -> actual::SoracloudRuntimeCacheBudgets {
+        actual::SoracloudRuntimeCacheBudgets {
+            bundle_bytes: self.bundle_bytes,
+            static_asset_bytes: self.static_asset_bytes,
+            journal_bytes: self.journal_bytes,
+            checkpoint_bytes: self.checkpoint_bytes,
+            model_artifact_bytes: self.model_artifact_bytes,
+            model_weight_bytes: self.model_weight_bytes,
+        }
+    }
+}
+
+/// User-level deterministic `NativeProcess` resource ceilings.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct SoracloudRuntimeNativeProcess {
+    /// Maximum number of deterministic native processes hosted concurrently.
+    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES")]
+    pub max_concurrent_processes: NonZeroUsize,
+    /// CPU budget in millicores per hosted process.
+    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_CPU_MILLIS")]
+    pub cpu_millis: NonZeroU32,
+    /// Memory budget in bytes per hosted process.
+    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MEMORY_BYTES")]
+    pub memory_bytes: NonZeroU64,
+    /// Ephemeral filesystem budget in bytes per hosted process.
+    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES")]
+    pub ephemeral_storage_bytes: NonZeroU64,
+    /// Open-file ceiling per hosted process.
+    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MAX_OPEN_FILES")]
+    pub max_open_files: NonZeroU32,
+    /// Task/thread ceiling per hosted process.
+    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MAX_TASKS")]
+    pub max_tasks: NonZeroU16,
+    /// Startup grace window in milliseconds.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::NATIVE_PROCESS_START_GRACE_MS))"
+    )]
+    pub start_grace_ms: DurationMs,
+    /// Shutdown grace window in milliseconds.
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::NATIVE_PROCESS_STOP_GRACE_MS))"
+    )]
+    pub stop_grace_ms: DurationMs,
+}
+
+impl SoracloudRuntimeNativeProcess {
+    fn parse(self) -> actual::SoracloudRuntimeNativeProcess {
+        actual::SoracloudRuntimeNativeProcess {
+            max_concurrent_processes: self.max_concurrent_processes,
+            cpu_millis: self.cpu_millis,
+            memory_bytes: self.memory_bytes,
+            ephemeral_storage_bytes: self.ephemeral_storage_bytes,
+            max_open_files: self.max_open_files,
+            max_tasks: self.max_tasks,
+            start_grace: self.start_grace_ms.get().max(MIN_TIMER_INTERVAL),
+            stop_grace: self.stop_grace_ms.get().max(MIN_TIMER_INTERVAL),
+        }
+    }
+}
+
+/// User-level outbound egress policy for embedded Soracloud runtimes.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct SoracloudRuntimeEgress {
+    /// Whether egress is allowed by default when a destination is not explicitly listed.
+    #[config(default = "defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW")]
+    pub default_allow: bool,
+    /// Explicit destination allowlist for outbound requests.
+    #[config(default = "defaults::soracloud_runtime::egress_allowed_hosts()")]
+    pub allowed_hosts: Vec<String>,
+    /// Optional outbound request-rate cap per service/minute.
+    pub rate_per_minute: Option<u32>,
+    /// Optional outbound byte budget per service/minute.
+    pub max_bytes_per_minute: Option<u64>,
+}
+
+impl SoracloudRuntimeEgress {
+    fn parse(self) -> actual::SoracloudRuntimeEgress {
+        let mut allowed_hosts: Vec<String> = self
+            .allowed_hosts
+            .into_iter()
+            .map(|host| host.trim().to_string())
+            .filter(|host| !host.is_empty())
+            .collect();
+        allowed_hosts.sort();
+        allowed_hosts.dedup();
+
+        actual::SoracloudRuntimeEgress {
+            default_allow: self.default_allow,
+            allowed_hosts,
+            rate_per_minute: self.rate_per_minute.and_then(NonZeroU32::new),
+            max_bytes_per_minute: self.max_bytes_per_minute.and_then(NonZeroU64::new),
+        }
+    }
+}
+
 /// User-level configuration container for `Torii`.
 #[derive(Debug, ReadConfig)]
 pub struct Torii {
@@ -17179,6 +17340,151 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
         assert!(actual.tiered_state.enabled);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
+    }
+
+    #[test]
+    fn soracloud_runtime_defaults_apply() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.soracloud_runtime.state_dir,
+            defaults::soracloud_runtime::state_dir()
+        );
+        assert_eq!(
+            actual.soracloud_runtime.reconcile_interval,
+            StdDuration::from_millis(defaults::soracloud_runtime::RECONCILE_INTERVAL_MS)
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hydration_concurrency,
+            defaults::soracloud_runtime::HYDRATION_CONCURRENCY
+        );
+        assert_eq!(
+            actual.soracloud_runtime.cache_budgets.bundle_bytes,
+            defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .native_process
+                .max_concurrent_processes,
+            defaults::soracloud_runtime::NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES
+        );
+        assert_eq!(
+            actual.soracloud_runtime.egress.default_allow,
+            defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW
+        );
+    }
+
+    #[test]
+    fn soracloud_runtime_parse_applies_explicit_overrides() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        runtime.insert(
+            "state_dir".into(),
+            Value::String("./runtime/custom".to_string()),
+        );
+        runtime.insert("reconcile_interval_ms".into(), Value::Integer(2_500));
+        runtime.insert("hydration_concurrency".into(), Value::Integer(7));
+
+        let mut cache_budgets = Table::new();
+        cache_budgets.insert("bundle_bytes".into(), Value::Integer(1_024));
+        cache_budgets.insert("static_asset_bytes".into(), Value::Integer(2_048));
+        cache_budgets.insert("journal_bytes".into(), Value::Integer(3_072));
+        cache_budgets.insert("checkpoint_bytes".into(), Value::Integer(4_096));
+        cache_budgets.insert("model_artifact_bytes".into(), Value::Integer(5_120));
+        cache_budgets.insert("model_weight_bytes".into(), Value::Integer(6_144));
+        runtime.insert("cache_budgets".into(), Value::Table(cache_budgets));
+
+        let mut native_process = Table::new();
+        native_process.insert("max_concurrent_processes".into(), Value::Integer(3));
+        native_process.insert("cpu_millis".into(), Value::Integer(1_500));
+        native_process.insert("memory_bytes".into(), Value::Integer(65_536));
+        native_process.insert("ephemeral_storage_bytes".into(), Value::Integer(131_072));
+        native_process.insert("max_open_files".into(), Value::Integer(64));
+        native_process.insert("max_tasks".into(), Value::Integer(32));
+        native_process.insert("start_grace_ms".into(), Value::Integer(1_500));
+        native_process.insert("stop_grace_ms".into(), Value::Integer(2_500));
+        runtime.insert("native_process".into(), Value::Table(native_process));
+
+        let mut egress = Table::new();
+        egress.insert("default_allow".into(), Value::Boolean(true));
+        egress.insert(
+            "allowed_hosts".into(),
+            Value::Array(vec![
+                Value::String("cdn.sora.test".to_string()),
+                Value::String(" api.sora.test ".to_string()),
+                Value::String("cdn.sora.test".to_string()),
+            ]),
+        );
+        egress.insert("rate_per_minute".into(), Value::Integer(120));
+        egress.insert("max_bytes_per_minute".into(), Value::Integer(262_144));
+        runtime.insert("egress".into(), Value::Table(egress));
+
+        let actual = load_root(table);
+        assert!(
+            actual
+                .soracloud_runtime
+                .state_dir
+                .to_string_lossy()
+                .ends_with("runtime/custom"),
+            "resolved path should retain configured suffix: {}",
+            actual.soracloud_runtime.state_dir.display()
+        );
+        assert_eq!(
+            actual.soracloud_runtime.reconcile_interval,
+            StdDuration::from_millis(2_500)
+        );
+        assert_eq!(actual.soracloud_runtime.hydration_concurrency.get(), 7);
+        assert_eq!(
+            actual.soracloud_runtime.cache_budgets.bundle_bytes.get(),
+            1_024
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .cache_budgets
+                .model_weight_bytes
+                .get(),
+            6_144
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .native_process
+                .max_concurrent_processes
+                .get(),
+            3
+        );
+        assert_eq!(
+            actual.soracloud_runtime.native_process.start_grace,
+            StdDuration::from_millis(1_500)
+        );
+        assert!(actual.soracloud_runtime.egress.default_allow);
+        assert_eq!(
+            actual.soracloud_runtime.egress.allowed_hosts,
+            vec!["api.sora.test".to_string(), "cdn.sora.test".to_string()]
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .egress
+                .rate_per_minute
+                .expect("rate cap")
+                .get(),
+            120
+        );
+        assert_eq!(
+            actual
+                .soracloud_runtime
+                .egress
+                .max_bytes_per_minute
+                .expect("byte cap")
+                .get(),
+            262_144
+        );
     }
 
     #[test]

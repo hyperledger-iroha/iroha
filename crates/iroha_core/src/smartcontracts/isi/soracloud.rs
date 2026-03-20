@@ -5365,6 +5365,31 @@ mod tests {
     }
 
     #[test]
+    fn deploy_soracloud_service_rejects_native_process_runtime() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let mut bundle = sample_bundle("portal", "1.0.0", 0);
+        bundle.container.runtime = SoraContainerRuntimeV1::NativeProcess;
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let error = isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            provenance: bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("native-process deployment must be rejected");
+        assert!(
+            format!("{error}").contains("admits only `Ivm`"),
+            "unexpected error: {error:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn upgrade_soracloud_service_starts_canary_rollout() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;

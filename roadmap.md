@@ -2,6 +2,86 @@
 
 Last updated: 2026-03-20
 
+Latest sync (2026-03-21 Soracloud IVM-only admission/runtime cutover):
+`crates/iroha_data_model/src/soracloud.rs`,
+`crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+`crates/irohad/src/soracloud_runtime.rs`, and
+`crates/iroha_cli/src/soracloud.rs` now enforce the revised v1 scope:
+
+- Soracloud container manifests reject `NativeProcess` during validation, so
+  on-chain admission accepts only `Ivm`.
+- Core Soracloud deployment coverage now exercises that rejection path through
+  the real admission/executor surface.
+- The embedded runtime manager now creates the full v1 host-state root layout
+  (`journals`, `checkpoints`, and `secrets` in addition to the existing
+  `services`, `apartments`, and `artifacts`) and refuses to activate
+  `NativeProcess` revisions during reconcile/runtime activation.
+- Soracloud CLI init templates now emit `Ivm` manifests instead of
+  `NativeProcess` targets.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `git diff --check`
+
+Verification note:
+- the local shared Cargo target/cache hit an environment failure while running
+  targeted tests (`generic-array` reported a missing `typenum` `.rmeta` in the
+  existing `target/debug` tree), so isolated reruns were started with fresh
+  `CARGO_HOME`/`CARGO_TARGET_DIR`.
+
+Open work for this slice now remains:
+- replace the planner/synthetic runtime manager with real IVM hydration,
+  materialization, local-read, and mailbox execution,
+- remove or re-home the remaining Torii Soracloud shadow-registry shim/tests
+  now that public routes already use authoritative world state,
+- finish the private-runtime capability layer and certified fast-path serving,
+- redefine the IVM cloud-runtime ABI/syscall surface and refresh goldens/docs
+  once the real host surface is in place.
+
+Latest sync (2026-03-20 Soracloud runtime config + restart snapshot recovery):
+`crates/iroha_config/src/parameters/{defaults.rs,actual.rs,user.rs}`,
+`crates/irohad/src/{main.rs,soracloud_runtime.rs}`, and Torii test helpers
+now expose and consume the dedicated embedded-runtime-manager configuration
+surface:
+
+- `actual::Root` now carries `soracloud_runtime`, and `user::Root` parses a
+  first-class Soracloud runtime section with defaults for state directory,
+  reconcile cadence, hydration concurrency, cache budgets, deterministic
+  `NativeProcess` limits, and egress posture.
+- `irohad` now builds `SoracloudRuntimeManagerConfig` directly from
+  `config.soracloud_runtime` instead of inferring runtime-manager behavior from
+  `torii.data_dir`.
+- The embedded runtime manager now restores the last persisted
+  `runtime_snapshot.json` before its first reconciliation pass, so node-local
+  health/status reads can survive cold restart or temporary reconcile failure
+  with the most recent persisted snapshot.
+- Focused regressions now cover both config parsing/defaults and persisted
+  snapshot recovery on reconcile failure.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `git diff --check`
+- `CARGO_TARGET_DIR=/tmp/iroha-soracloud-runtime-verify-check cargo check -p iroha_config -p irohad`
+- `CARGO_TARGET_DIR=/tmp/iroha-soracloud-runtime-verify-tests cargo test -p iroha_config --lib soracloud_runtime_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-soracloud-runtime-verify-tests cargo test -p irohad soracloud_runtime::tests:: -- --nocapture`
+
+Open work for this slice now remains:
+- use the new `iroha_config::soracloud_runtime` settings to drive real
+  SoraFS/DA hydration, verification, cache-budget enforcement, deterministic
+  pruning, and `NativeProcess` host policy instead of only reconciliation and
+  snapshot recovery,
+- replace the placeholder mailbox executor in
+  `crates/irohad/src/soracloud_runtime.rs` with real IVM and deterministic
+  `NativeProcess` ordered execution, plus real local-read and apartment
+  execution,
+- finish the embedded runtime host capabilities for journals, checkpoints,
+  certified responses, secrets/credentials, egress controls, and private
+  `update` / `private_update` execution,
+- remove the remaining Torii-local Soracloud test/parity scaffolding once the
+  real execution host and authoritative read paths fully cover those flows,
+- redefine the IVM runtime/admission/syscall docs/tests around the new
+  first-release cloud-runtime ABI once the real runtime host exists.
+
 Latest sync (2026-03-20 authoritative Soracloud mailbox state-mutation write-back):
 `crates/iroha_core/src/{block.rs,smartcontracts/isi/soracloud.rs}`
 now close the next core execution gap in the private-runtime mailbox path:
@@ -33,9 +113,9 @@ Open work for this slice now remains:
   `crates/irohad/src/soracloud_runtime.rs` with real IVM and deterministic
   `NativeProcess` ordered execution, plus real local-read and apartment
   execution,
-- add the dedicated `iroha_config::soracloud_runtime` configuration surface
-  and move runtime-manager hydration/restart/pruning behavior onto those
-  explicit settings,
+- move runtime-manager hydration, verification, and pruning behavior onto the
+  new explicit `iroha_config::soracloud_runtime` settings instead of the
+  current plan-only/restart-recovery usage,
 - finish the embedded runtime host capabilities for journals, checkpoints,
   certified responses, secrets/credentials, egress controls, and private
   `update` / `private_update` execution,

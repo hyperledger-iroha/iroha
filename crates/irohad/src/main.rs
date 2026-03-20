@@ -4583,7 +4583,9 @@ impl Iroha {
         }
 
         let (soracloud_runtime, child) = SoracloudRuntimeManager::new(
-            soracloud_runtime::SoracloudRuntimeManagerConfig::from_node_config(&config),
+            soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
+                &config.soracloud_runtime,
+            ),
             Arc::clone(&state),
         )
         .start(supervisor.shutdown_signal());

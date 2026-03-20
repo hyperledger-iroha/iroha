@@ -6303,10 +6303,10 @@ fn apply_init_template_defaults(
     match template {
         InitTemplate::Baseline => Ok(()),
         InitTemplate::Site => {
-            container.runtime = SoraContainerRuntimeV1::NativeProcess;
-            container.bundle_path = "/bundles/site-static.car".to_owned();
-            container.entrypoint = "/usr/bin/sorafs-static-gateway".to_owned();
-            container.args = vec!["--root=/app/dist".to_owned(), "--port=8080".to_owned()];
+            container.runtime = SoraContainerRuntimeV1::Ivm;
+            container.bundle_path = "/bundles/site-static.to".to_owned();
+            container.entrypoint = "main".to_owned();
+            container.args = vec!["--http".to_owned(), "--port=8080".to_owned()];
             container
                 .env
                 .insert("SORACLOUD_TEMPLATE".to_owned(), "site".to_owned());
@@ -6342,10 +6342,10 @@ fn apply_init_template_defaults(
             Ok(())
         }
         InitTemplate::Webapp => {
-            container.runtime = SoraContainerRuntimeV1::NativeProcess;
-            container.bundle_path = "/bundles/webapp-api.car".to_owned();
-            container.entrypoint = "/app/api/server.mjs".to_owned();
-            container.args = vec!["--port=8787".to_owned()];
+            container.runtime = SoraContainerRuntimeV1::Ivm;
+            container.bundle_path = "/bundles/webapp-api.to".to_owned();
+            container.entrypoint = "main".to_owned();
+            container.args = vec!["--http".to_owned(), "--port=8787".to_owned()];
             container
                 .env
                 .insert("SORACLOUD_TEMPLATE".to_owned(), "webapp".to_owned());
@@ -6432,10 +6432,10 @@ fn apply_init_template_defaults(
             Ok(())
         }
         InitTemplate::PiiApp => {
-            container.runtime = SoraContainerRuntimeV1::NativeProcess;
-            container.bundle_path = "/bundles/pii-app-api.car".to_owned();
-            container.entrypoint = "/app/api/server.mjs".to_owned();
-            container.args = vec!["--port=8788".to_owned()];
+            container.runtime = SoraContainerRuntimeV1::Ivm;
+            container.bundle_path = "/bundles/pii-app-api.to".to_owned();
+            container.entrypoint = "main".to_owned();
+            container.args = vec!["--http".to_owned(), "--port=8788".to_owned()];
             container
                 .env
                 .insert("SORACLOUD_TEMPLATE".to_owned(), "pii-app".to_owned());
@@ -9935,7 +9935,7 @@ mod tests {
 
         let container: SoraContainerManifestV1 =
             load_json(&dir.join("container_manifest.json")).expect("container manifest");
-        assert_eq!(container.runtime, SoraContainerRuntimeV1::NativeProcess);
+        assert_eq!(container.runtime, SoraContainerRuntimeV1::Ivm);
         let service: SoraServiceManifestV1 =
             load_json(&dir.join("service_manifest.json")).expect("service manifest");
         assert_eq!(

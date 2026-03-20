@@ -16,6 +16,7 @@ CRATE_DIR="$ROOT_DIR/crates/connect_norito_bridge"
 INC_DIR="$CRATE_DIR/include"
 OUT_DIR="$ROOT_DIR/dist"
 BUILD_DIR="$ROOT_DIR/build/norito_bridge"
+STAGE_DIR="$BUILD_DIR/stage"
 
 LIB_CRATE_NAME="connect_norito_bridge"
 FRAMEWORK_NAME="NoritoBridge"
@@ -24,6 +25,7 @@ FRAMEWORK_BUNDLE_ID="${FRAMEWORK_BUNDLE_ID:-org.hyperledger.iroha.NoritoBridge}"
 : "${IPHONEOS_DEPLOYMENT_TARGET:=15.0}"
 : "${IPHONESIMULATOR_DEPLOYMENT_TARGET:=15.0}"
 export IPHONESIMULATOR_DEPLOYMENT_TARGET
+CARGO_BUILD_DIR="$BUILD_DIR/cargo-ios${IPHONEOS_DEPLOYMENT_TARGET//./_}-sim${IPHONESIMULATOR_DEPLOYMENT_TARGET//./_}"
 
 BRIDGE_VERSION=""
 while [[ $# -gt 0 ]]; do
@@ -51,6 +53,9 @@ done
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
 
+rm -rf "$CARGO_BUILD_DIR" "$STAGE_DIR" "$OUT_DIR/NoritoBridge.xcframework"
+mkdir -p "$STAGE_DIR" "$OUT_DIR"
+
 DEVICE_TRIPLE="aarch64-apple-ios"
 SIM_ARM_TRIPLE="aarch64-apple-ios-sim"
 SIM_X64_TRIPLE="x86_64-apple-ios"
@@ -63,17 +68,20 @@ echo "    (Make sure you have installed targets via: rustup target add $DEVICE_T
 # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
 # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
 env IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
+  CARGO_TARGET_DIR="$CARGO_BUILD_DIR" \
   cargo build -p "$LIB_CRATE_NAME" --release --target "$DEVICE_TRIPLE"
 env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
   IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
+  CARGO_TARGET_DIR="$CARGO_BUILD_DIR" \
   cargo build -p "$LIB_CRATE_NAME" --release --target "$SIM_ARM_TRIPLE"
 env IPHONEOS_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
   IPHONESIMULATOR_DEPLOYMENT_TARGET="$IPHONESIMULATOR_DEPLOYMENT_TARGET" \
+  CARGO_TARGET_DIR="$CARGO_BUILD_DIR" \
   cargo build -p "$LIB_CRATE_NAME" --release --target "$SIM_X64_TRIPLE"
 
-LIB_DEV="$ROOT_DIR/target/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-LIB_SIM_ARM="$ROOT_DIR/target/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
-LIB_SIM_X64="$ROOT_DIR/target/$SIM_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+LIB_DEV="$CARGO_BUILD_DIR/$DEVICE_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+LIB_SIM_ARM="$CARGO_BUILD_DIR/$SIM_ARM_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
+LIB_SIM_X64="$CARGO_BUILD_DIR/$SIM_X64_TRIPLE/release/lib${LIB_CRATE_NAME}.a"
 
 if [[ ! -f "$LIB_DEV" || ! -f "$LIB_SIM_ARM" || ! -f "$LIB_SIM_X64" ]]; then
   echo "[-] Missing built libraries. Did the cargo builds succeed?" >&2
@@ -97,16 +105,13 @@ if [[ -z "$BRIDGE_BUNDLE_VERSION" ]]; then
   BRIDGE_BUNDLE_VERSION="1"
 fi
 
-rm -rf "$BUILD_DIR" "$OUT_DIR/NoritoBridge.xcframework"
-mkdir -p "$BUILD_DIR" "$OUT_DIR"
-
 echo "[+] Creating simulator universal static library" >&2
-SIM_UNI="$BUILD_DIR/${FRAMEWORK_NAME}-sim-universal.a"
+SIM_UNI="$STAGE_DIR/${FRAMEWORK_NAME}-sim-universal.a"
 lipo -create -output "$SIM_UNI" "$LIB_SIM_ARM" "$LIB_SIM_X64"
 
 echo "[+] Staging Frameworks" >&2
-FW_DEV_ROOT="$BUILD_DIR/device"
-FW_SIM_ROOT="$BUILD_DIR/simulator"
+FW_DEV_ROOT="$STAGE_DIR/device"
+FW_SIM_ROOT="$STAGE_DIR/simulator"
 FW_DEV="$FW_DEV_ROOT/${FRAMEWORK_NAME}.framework"
 FW_SIM="$FW_SIM_ROOT/${FRAMEWORK_NAME}.framework"
 

@@ -2,6 +2,81 @@
 
 Last updated: 2026-03-20
 
+## 2026-03-21 Follow-up: Soracloud v1 now rejects `NativeProcess` and the runtime-manager prepares the IVM-only host layout
+- Closed the revised IVM-only admission/runtime gap across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`, and
+  `crates/iroha_cli/src/soracloud.rs`:
+  - `SoraContainerManifestV1::validate()` now rejects
+    `SoraContainerRuntimeV1::NativeProcess`, so Soracloud v1 admission accepts
+    only `Ivm`,
+  - core Soracloud deployment tests now cover that admission rejection path,
+  - the embedded runtime manager now creates the full v1 state roots
+    (`services`, `apartments`, `artifacts`, `journals`, `checkpoints`,
+    `secrets`) and rejects `NativeProcess` revisions during reconcile/runtime
+    activation instead of projecting them as partially supported plans,
+  - Soracloud CLI init templates (`site`, `webapp`, `pii-app`) now emit `Ivm`
+    manifests and no longer scaffold `NativeProcess` container targets.
+- Added focused regressions for the new behavior in the data model, core
+  admission path, and runtime-manager reconcile path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `git diff --check` (pass)
+  - targeted cargo tests were rerun in isolated Cargo homes/target dirs after a
+    shared-cache failure in the local environment (`generic-array` reported a
+    missing `typenum` `.rmeta` in the existing `target/debug` tree); those
+    isolated compiles were still in progress at the time of this status update.
+- Remaining execution-plane work in this area:
+  - the embedded runtime manager still does not perform real SoraFS/DA
+    hydration, deterministic cache pruning, or real IVM/local-read execution,
+  - Torii still contains the large legacy Soracloud shadow-registry/test shim
+    that should be re-homed or deleted once authoritative coverage replaces it,
+  - the Soracloud fast path, private-runtime capability layer, and IVM
+    cloud-runtime ABI/syscall cutover remain outstanding.
+
+## 2026-03-20 Follow-up: Soracloud runtime manager now has explicit config and restart snapshot recovery
+- Closed the next embedded-runtime-manager control-plane gap across
+  `crates/iroha_config/src/parameters/{defaults.rs,actual.rs,user.rs}`,
+  `crates/irohad/src/{main.rs,soracloud_runtime.rs}`, and Torii test helpers:
+  - added the dedicated `iroha_config::soracloud_runtime` surface with
+    explicit defaults for the runtime-manager state directory, reconcile
+    cadence, hydration concurrency, cache budgets, deterministic
+    `NativeProcess` limits, and outbound egress policy,
+  - threaded the parsed `actual::SoracloudRuntime` into
+    `actual::Root`, user parsing, and `irohad` construction so the embedded
+    runtime manager no longer derives its state directory or cadence from
+    `torii.data_dir`,
+  - updated the runtime-manager config conversion tests and Torii test-only
+    minimal config builders to carry the new authoritative root field.
+- Added the first restart/catch-up recovery behavior to the embedded runtime
+  manager in `crates/irohad/src/soracloud_runtime.rs`:
+  - the manager now restores the last persisted `runtime_snapshot.json`
+    before its first reconciliation pass,
+  - if initial reconciliation fails, the read-only runtime snapshot remains
+    seeded from that persisted snapshot instead of dropping back to an empty
+    in-memory view,
+  - added focused regression coverage proving both explicit config mapping and
+    persisted-snapshot recovery across reconcile failure.
+- Added focused validation coverage for the new config surface in
+  `crates/iroha_config/src/parameters/user.rs`, including default parsing and
+  explicit override parsing for cache budgets, resource ceilings, and egress
+  settings.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `git diff --check` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracloud-runtime-verify-check cargo check -p iroha_config -p irohad` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracloud-runtime-verify-tests cargo test -p iroha_config --lib soracloud_runtime_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-soracloud-runtime-verify-tests cargo test -p irohad soracloud_runtime::tests:: -- --nocapture` (pass)
+- Remaining execution-plane work in this area:
+  - the embedded runtime manager still uses those new settings only for
+    planning/reconciliation and snapshot recovery; it does not yet perform
+    real SoraFS/DA hydration, cache-budget enforcement, or deterministic
+    `NativeProcess` supervision,
+  - ordered mailbox execution is still synthetic, and local reads/apartments,
+    certified fast paths, private secret/credential enforcement, and the IVM
+    cloud-runtime ABI cutover remain outstanding.
+
 ## 2026-03-20 Follow-up: Soracloud mailbox execution now applies authoritative runtime state mutations
 - Closed the next core execution gap in the shared mailbox path across
   `crates/iroha_core/src/{block.rs,smartcontracts/isi/soracloud.rs}`:
