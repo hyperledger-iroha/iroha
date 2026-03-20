@@ -26,11 +26,12 @@ Targeted validation passed:
 - `cargo fmt --all --check`
 - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_data_model asset_filter -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang trigger_decl_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p kotodama_lang manifest_trigger_decl_ -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/iroha-trigger-dsl-target cargo test -p iroha_core --test contract_manifest_triggers -- --nocapture`
 
 Open work for this slice now remains:
-- broaden the targeted Kotodama coverage into wider crate/workspace validation
-  once the multi-hour budget is available,
+- broaden the validation from targeted crate tests into wider crate/workspace
+  coverage once the multi-hour budget is available,
 - if downstream product-specific event families need Kotodama syntax later,
   add them explicitly instead of overloading the current core-ledger family
   surface.

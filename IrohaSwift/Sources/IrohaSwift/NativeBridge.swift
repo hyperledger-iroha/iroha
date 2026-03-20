@@ -39,6 +39,10 @@ enum NoritoBridgeLoader {
         "ios-arm64": "962ad99cb7ee30946771b302026feb4411ebcf500ff1bf960284e9e7118f8e91",
         "ios-arm64_x86_64-simulator": "aedfbbf4e4ca3151e40d336a584c1162d1a2ad4b67ed20c21bf7c3c47bb1bb7f"
     ]
+    private static let requiredSymbols = [
+        "connect_norito_free",
+        "connect_norito_encode_transfer_signed_transaction"
+    ]
 
     private struct ArtifactManifest {
         let version: String
@@ -59,7 +63,7 @@ enum NoritoBridgeLoader {
                 let debugHandle = debugDylibURL.path.withCString { ptr in
                     dlopen(ptr, RTLD_NOW | RTLD_GLOBAL)
                 }
-                let hasFree = debugHandle.flatMap { dlsym($0, "connect_norito_free") } != nil
+                let hasFree = hasRequiredSymbols(in: debugHandle)
                 let hasTransfer = debugHandle.flatMap {
                     dlsym($0, "connect_norito_encode_transfer_signed_transaction")
                 } != nil
@@ -80,6 +84,18 @@ enum NoritoBridgeLoader {
             NSLog("[NoritoBridgeLoader] Bundle.main.executableURL is nil")
         }
 
+        if let executableURL = Bundle.main.executableURL,
+           let executableHandle = openImageIfSymbolsPresent(at: executableURL) {
+            NSLog("[NoritoBridgeLoader] loaded bridge symbols from main executable %@", executableURL.path)
+            return (executableHandle, .valid(path: executableURL.path, identifier: currentIdentifier()))
+        }
+
+        if let defaultHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL),
+           hasRequiredSymbols(in: defaultHandle) {
+            NSLog("[NoritoBridgeLoader] loaded bridge symbols from RTLD_DEFAULT")
+            return (defaultHandle, .valid(path: "RTLD_DEFAULT", identifier: currentIdentifier()))
+        }
+
         var lastFailure: ValidationStatus = .missing(path: defaultBridgeBinaryPath())
         for path in candidateLibraryPaths() {
             let status = validateBridge(at: path, allowUntrustedLocation: false)
@@ -89,7 +105,7 @@ enum NoritoBridgeLoader {
                     dlopen(pointer, RTLD_NOW | RTLD_GLOBAL)
                 }
                 if let handle,
-                   dlsym(handle, "connect_norito_free") != nil {
+                   hasRequiredSymbols(in: handle) {
                     return (handle, status)
                 }
                 if let handle {
@@ -102,6 +118,27 @@ enum NoritoBridgeLoader {
         }
 
         return (nil, lastFailure)
+    }
+
+    private static func hasRequiredSymbols(in handle: UnsafeMutableRawPointer?) -> Bool {
+        guard let handle else { return false }
+        for symbol in requiredSymbols where dlsym(handle, symbol) == nil {
+            return false
+        }
+        return true
+    }
+
+    private static func openImageIfSymbolsPresent(at url: URL) -> UnsafeMutableRawPointer? {
+        let handle = url.path.withCString { pointer in
+            dlopen(pointer, RTLD_NOW | RTLD_GLOBAL)
+        }
+        guard hasRequiredSymbols(in: handle) else {
+            if let handle {
+                dlclose(handle)
+            }
+            return nil
+        }
+        return handle
     }
 
     #if DEBUG
@@ -246,6 +283,22 @@ enum NoritoBridgeLoader {
                 .appendingPathComponent("Frameworks"))
             roots.append(executableURL.deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent("Frameworks"))
+        }
+
+        // XCTest and simulator launches often expose the real build-products directory through
+        // dyld environment variables even when the app bundle only embeds a stub framework.
+        let processInfo = ProcessInfo.processInfo
+        for key in ["BUILT_PRODUCTS_DIR", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH"] {
+            guard let rawValue = processInfo.environment[key]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !rawValue.isEmpty else {
+                continue
+            }
+            for component in rawValue.split(separator: ":") {
+                let path = String(component).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !path.isEmpty else { continue }
+                roots.append(URL(fileURLWithPath: path))
+            }
         }
 
         let sourceFile = URL(fileURLWithPath: #filePath)

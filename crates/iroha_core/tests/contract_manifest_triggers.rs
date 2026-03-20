@@ -386,3 +386,129 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
             .is_none()
     );
 }
+
+#[test]
+fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
+    let (state, authority, kp) = setup_state();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let register_perm: permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
+    Grant::account_permission(register_perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant CanRegisterSmartContractCode");
+    let enact_perm: permission::Permission =
+        iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
+    Grant::account_permission(enact_perm, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant CanEnactGovernance");
+
+    let authority_literal = authority.to_string();
+    let source = format!(
+        r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger asset_added {{
+    call run;
+    on data asset added {{
+      asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+    }}
+    authority "{authority_literal}";
+    metadata {{
+      tag: "data";
+    }}
+  }}
+  register_trigger block_seen {{
+    call run;
+    on pipeline block;
+    metadata {{
+      tag: "pipeline";
+    }}
+  }}
+}}
+"#
+    );
+
+    let (program, manifest) = ivm::KotodamaCompiler::new()
+        .compile_source_with_manifest(&source)
+        .expect("compile source with manifest");
+    let parsed = ivm::ProgramMetadata::parse(&program).expect("ivm header");
+    let code_hash = iroha_crypto::Hash::new(&program[parsed.header_len..]);
+
+    RegisterSmartContractBytes {
+        code_hash,
+        code: program,
+    }
+    .execute(&authority, &mut stx)
+    .expect("register contract bytes");
+
+    RegisterSmartContractCode {
+        manifest: manifest.signed(&kp),
+    }
+    .execute(&authority, &mut stx)
+    .expect("register manifest");
+
+    ActivateContractInstance {
+        namespace: "apps".to_string(),
+        contract_id: "kotodama.demo".to_string(),
+        code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect("activate");
+
+    let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
+    let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
+    let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
+        .parse()
+        .expect("asset definition");
+
+    let data_action = stx
+        .world
+        .triggers()
+        .data_triggers()
+        .get(&data_trigger_id)
+        .expect("data trigger registered");
+    assert_eq!(
+        data_action.filter,
+        DataEventFilter::Asset(
+            AssetEventFilter::new()
+                .for_events(AssetEventSet::Added)
+                .for_asset_definition(asset_definition),
+        )
+    );
+    assert_eq!(data_action.authority, authority);
+    assert_contract_trigger_metadata(
+        &data_action.metadata,
+        "apps",
+        "kotodama.demo",
+        "run",
+        code_hash,
+        &data_trigger_id,
+        "tag",
+        "data",
+    );
+
+    let pipeline_action = stx
+        .world
+        .triggers()
+        .pipeline_triggers()
+        .get(&pipeline_trigger_id)
+        .expect("pipeline trigger registered");
+    assert_eq!(
+        pipeline_action.filter,
+        PipelineEventFilterBox::Block(BlockEventFilter::default())
+    );
+    assert_eq!(pipeline_action.authority, authority);
+    assert_contract_trigger_metadata(
+        &pipeline_action.metadata,
+        "apps",
+        "kotodama.demo",
+        "run",
+        code_hash,
+        &pipeline_trigger_id,
+        "tag",
+        "pipeline",
+    );
+}

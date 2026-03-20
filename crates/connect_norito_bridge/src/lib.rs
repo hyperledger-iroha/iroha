@@ -42,7 +42,7 @@ use iroha_data_model::{
     da::manifest::DaManifestV1,
     domain::DomainId,
     governance::types::AtWindow,
-    identifier::IdentifierResolutionReceipt,
+    identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         governance::{
@@ -1360,8 +1360,69 @@ fn parse_identifier_receipt_bytes(
         return Err(BridgeError::IdentifierReceipt);
     }
     let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
-    norito::json::from_slice::<IdentifierResolutionReceipt>(bytes)
-        .map_err(|_| BridgeError::IdentifierReceipt)
+    if let Ok(receipt) = norito::json::from_slice::<IdentifierResolutionReceipt>(bytes) {
+        return Ok(receipt);
+    }
+    let value =
+        norito::json::from_slice::<JsonValue>(bytes).map_err(|_| BridgeError::IdentifierReceipt)?;
+    parse_identifier_receipt_value(value)
+}
+
+fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierResolutionReceipt> {
+    let JsonValue::Object(object) = value else {
+        return Err(BridgeError::IdentifierReceipt);
+    };
+
+    let signature = parse_identifier_receipt_signature(object.get("signature"))?;
+
+    if let Some(payload_hex) = object.get("signature_payload_hex").and_then(JsonValue::as_str) {
+        let payload_bytes = decode_identifier_receipt_hex(payload_hex)?;
+        if let Ok(payload) = decode_from_bytes::<IdentifierResolutionReceiptPayload>(&payload_bytes) {
+            return Ok(IdentifierResolutionReceipt {
+                payload,
+                signature: Some(signature.clone()),
+                proof: None,
+            });
+        }
+    }
+
+    if let Some(payload_value) = object
+        .get("signature_payload")
+        .cloned()
+        .or_else(|| object.get("payload").cloned())
+    {
+        if let Ok(payload) = norito::json::from_value::<IdentifierResolutionReceiptPayload>(
+            payload_value,
+        ) {
+            return Ok(IdentifierResolutionReceipt {
+                payload,
+                signature: Some(signature),
+                proof: None,
+            });
+        }
+    }
+
+    Err(BridgeError::IdentifierReceipt)
+}
+
+fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult<Signature> {
+    let signature_hex = value
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
+    Ok(Signature::from_bytes(&signature_bytes))
+}
+
+fn decode_identifier_receipt_hex(value: &str) -> BridgeResult<Vec<u8>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    let body = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    hex::decode(body).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn write_optional_error(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -11953,6 +12014,85 @@ mod tests {
         assert_eq!(valid, 1, "signature must verify");
 
         (signature, public_key)
+    }
+
+    fn sample_identifier_receipt_payload() -> IdentifierResolutionReceiptPayload {
+        let signatory = KeyPair::random().public_key().clone();
+        IdentifierResolutionReceiptPayload {
+            policy_id: "email#retail".parse().expect("valid policy id"),
+            execution: iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload {
+                program_id: "identifier_lookup_retail"
+                    .parse()
+                    .expect("valid program id"),
+                program_digest: Hash::new(b"program"),
+                backend: iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1,
+                verification_mode: iroha_crypto::RamLfeVerificationMode::Signed,
+                output_hash: Hash::new(b"output"),
+                associated_data_hash: Hash::new(b"associated-data"),
+                executed_at_ms: 7,
+                expires_at_ms: Some(107),
+            },
+            opaque_id: iroha_data_model::account::OpaqueAccountId::from_hash(Hash::new(b"opaque")),
+            receipt_hash: Hash::new(b"receipt"),
+            uaid: iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid")),
+            account_id: AccountId::new(signatory),
+        }
+    }
+
+    fn sample_identifier_signature_hex() -> String {
+        "ab".repeat(64)
+    }
+
+    #[test]
+    fn parse_identifier_receipt_accepts_torii_payload_hex() {
+        let payload = sample_identifier_receipt_payload();
+        let payload_hex = hex::encode(to_bytes(&payload).expect("encode payload"));
+        let receipt = parse_identifier_receipt_value(json_object([
+            ("signature", JsonValue::from(sample_identifier_signature_hex())),
+            ("signature_payload_hex", JsonValue::from(payload_hex)),
+        ]))
+        .expect("parse torii payload hex receipt");
+
+        assert_eq!(receipt.payload, payload);
+        assert_eq!(
+            hex::encode(receipt.signature.expect("signature").payload()),
+            sample_identifier_signature_hex()
+        );
+    }
+
+    #[test]
+    fn parse_identifier_receipt_accepts_signature_payload_fallback() {
+        let payload = sample_identifier_receipt_payload();
+        let payload_value = norito::json::to_value(&payload).expect("payload json");
+        let receipt = parse_identifier_receipt_value(json_object([
+            ("signature", JsonValue::from(sample_identifier_signature_hex())),
+            ("signature_payload_hex", JsonValue::from("01020304a0")),
+            ("signature_payload", payload_value),
+        ]))
+        .expect("parse torii payload object receipt");
+
+        assert_eq!(receipt.payload, payload);
+        assert_eq!(
+            hex::encode(receipt.signature.expect("signature").payload()),
+            sample_identifier_signature_hex()
+        );
+    }
+
+    #[test]
+    fn parse_identifier_receipt_accepts_payload_envelope_fallback() {
+        let payload = sample_identifier_receipt_payload();
+        let payload_value = norito::json::to_value(&payload).expect("payload json");
+        let receipt = parse_identifier_receipt_value(json_object([
+            ("signature", JsonValue::from(sample_identifier_signature_hex())),
+            ("payload", payload_value),
+        ]))
+        .expect("parse payload envelope receipt");
+
+        assert_eq!(receipt.payload, payload);
+        assert_eq!(
+            hex::encode(receipt.signature.expect("signature").payload()),
+            sample_identifier_signature_hex()
+        );
     }
 
     #[test]

@@ -330,8 +330,16 @@ final class TxBuilderTests: XCTestCase {
             "receipt_hash":"\(String(repeating: "55", count: 32))",
             "uaid":"uaid:\(String(repeating: "66", count: 31))67",
             "account_id":"\(authority)",
-            "resolved_at_ms":7,
-            "expires_at_ms":107
+            "execution":{
+              "program_id":"identifier_lookup_retail",
+              "program_digest":"\(String(repeating: "11", count: 32))",
+              "backend":"bfv-programmed-sha3-256-v1",
+              "verification_mode":"signed",
+              "output_hash":"\(String(repeating: "22", count: 32))",
+              "associated_data_hash":"\(String(repeating: "33", count: 32))",
+              "executed_at_ms":7,
+              "expires_at_ms":107
+            }
           }
         }
         """

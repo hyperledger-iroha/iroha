@@ -162,6 +162,18 @@ Notes:
 - `configuration` and `executor` filters currently expose event-kind selection only and do not accept matcher fields.
 - The DSL covers the core ledger data families above. Specialized product-specific event families still use the lower-level filter APIs when needed.
 
+Accepted data event kinds by family:
+- `peer`: `any`, `added`, `removed`
+- `domain`: `any`, `created`, `deleted`, `asset_definition`, `nft`, `account`, `account_linked`, `account_unlinked`, `metadata_inserted`, `metadata_removed`, `owner_changed`, `kaigi_roster_summary`, `kaigi_relay_registered`, `kaigi_relay_manifest_updated`, `kaigi_usage_summary`, `kaigi_relay_health_updated`, `streaming_ticket_ready`, `streaming_ticket_revoked`
+- `account`: `any`, `created`, `deleted`, `asset`, `permission_added`, `permission_removed`, `role_granted`, `role_revoked`, `metadata_inserted`, `metadata_removed`, `repo`
+- `asset`: `any`, `created`, `deleted`, `added`, `removed`, `metadata_inserted`, `metadata_removed`
+- `asset_definition`: `any`, `created`, `deleted`, `metadata_inserted`, `metadata_removed`, `mintability_changed`, `mintability_changed_detailed`, `total_quantity_changed`, `owner_changed`
+- `nft`: `any`, `created`, `deleted`, `metadata_inserted`, `metadata_removed`, `owner_changed`
+- `trigger`: `any`, `created`, `deleted`, `extended`, `shortened`, `metadata_inserted`, `metadata_removed`
+- `role`: `any`, `created`, `deleted`, `permission_added`, `permission_removed`
+- `configuration`: `any`, `changed`
+- `executor`: `any`, `upgraded`
+
 ### Parameters & Returns [Parsed/Enforced]
 ```
 ParamList  = Param { "," Param } ;
