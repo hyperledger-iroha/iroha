@@ -29711,6 +29711,121 @@ async fn clean_rbc_sessions_for_block_clears_seed_inflight() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn clean_rbc_sessions_for_block_preserves_retained_status_summary() {
+    let mut harness = test_actor_harness(4).await;
+    let height = harness
+        .actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0u64;
+    let parent = harness.actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let session_key = Actor::session_key(&block_hash, height, view);
+    let now = Instant::now();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0).expect("session");
+    session.test_set_delivered(true);
+
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session.clone());
+    harness.actor.subsystems.da_rbc.rbc.pending.insert(
+        session_key,
+        super::pending_rbc::PendingRbcMessages::new(now),
+    );
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .payload_rebroadcast_last_sent
+        .insert(session_key, now);
+    harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .persisted_full_sessions
+        .insert(session_key);
+    harness.actor.subsystems.da_rbc.rbc.seed_inflight.insert(
+        session_key,
+        RbcSeedIntent {
+            rebroadcast_missing_init: false,
+        },
+    );
+
+    harness
+        .actor
+        .clean_rbc_sessions_for_block(block_hash, height);
+
+    let summary = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&session_key)
+        .expect("commit cleanup should retain the final RBC summary");
+    assert!(
+        summary.delivered,
+        "retained summary should preserve deliver state"
+    );
+    assert_eq!(
+        summary.total_chunks,
+        session.total_chunks(),
+        "retained summary should preserve chunk totals"
+    );
+    assert_eq!(
+        summary.received_chunks,
+        session.received_chunks(),
+        "retained summary should preserve received chunk counts"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&session_key),
+        "commit cleanup should clear the persisted-full-session marker"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .seed_inflight
+            .contains_key(&session_key),
+        "commit cleanup should clear seed inflight markers"
+    );
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_rebroadcast_last_sent
+            .contains_key(&session_key),
+        "commit cleanup should clear rebroadcast cooldown state"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn kura_and_state_alignment_requires_matching_tip() {
     let pending_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32]));

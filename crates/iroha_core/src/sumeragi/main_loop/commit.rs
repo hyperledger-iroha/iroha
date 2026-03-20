@@ -5356,7 +5356,9 @@ impl Actor {
             .into_iter()
             .collect();
         for key in orphan_keys {
-            self.purge_rbc_state(key, key.0, key.1, key.2);
+            // Commit cleanup should retain the final status summary for observability and
+            // restart recovery, while still clearing all runtime-only RBC state.
+            self.clear_rbc_runtime_state(key, false);
         }
 
         let telemetry_ref = self.telemetry_handle();

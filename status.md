@@ -1,6 +1,46 @@
 # Status
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
+
+## 2026-03-20 Follow-up: Torii multisig selector tests no longer reach into `World` private storage
+- Added a narrow smart-contract-state test/API scaffolding accessor in
+  `crates/iroha_core/src/state.rs` so cross-crate callers can seed durable
+  contract state without reopening the `World` field visibility.
+- Updated the multisig selector regression coverage in
+  `crates/iroha_torii/src/routing.rs` to use that accessor when seeding the
+  fallback `MultisigAccountState`, fixing the `E0616` build break after
+  `World.smart_contract_state` became private.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib --no-run` (pass)
+  - `cargo test -p iroha_torii multisig_spec_falls_back_to_contract_state_when_metadata_is_missing -- --nocapture` (pass)
+
+## 2026-03-20 Follow-up: retained RBC session summaries now survive commit cleanup, and multilane Kura again provisions per-lane merge logs
+- Restored per-lane merge-ledger file naming in
+  `crates/iroha_config/src/parameters/actual.rs` so multilane Kura layouts now
+  provision `merge_ledger/lane_*_merge.log` again instead of collapsing every
+  lane onto a shared `universal.log`.
+- Fixed the DA/RBC observability regression in
+  `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,tests.rs}` and
+  `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - commit cleanup still drains the runtime RBC session state, but it now keeps
+    the retained status summary written during cleanup instead of immediately
+    deleting that summary when clearing auxiliary caches such as rebroadcast
+    cooldowns, persisted-session markers, and seed-worker state,
+  - this restores the evidence expected by the cross-peer consistency and
+    restart-recovery tests, which read `/v1/sumeragi/rbc/sessions` and the
+    persisted `rbc_sessions/sessions.norito` snapshot after commit/restart.
+- Added focused regression coverage for both fixes:
+  - config assertions now lock the canonical per-lane merge-log paths,
+  - Sumeragi unit tests now verify that `clean_rbc_sessions_for_block(...)`
+    clears stale runtime-only RBC state without erasing the retained summary.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config lane_config_from_catalog_preserves_alias_metadata -- --nocapture` (pass)
+  - `cargo test -p iroha_core clean_rbc_sessions_for_block_ -- --nocapture` (pass)
+  - `cargo test -p integration_tests multilane_kura_layout::kura_prepares_multilane_storage_layout -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod extra_functional::seven_peer_consistency::seven_peer_cross_peer_consistency_basic -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture` (pass)
 
 ## 2026-03-19 Follow-up: merge conflicts are resolved and the workspace compile gate is green
 - Resolved the remaining merge conflicts across the Rust workspace, SDKs,

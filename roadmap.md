@@ -1,6 +1,58 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-19
+Last updated: 2026-03-20
+
+Latest sync (2026-03-20 Torii multisig selector private-field compile fix):
+`crates/iroha_core/src/state.rs` and `crates/iroha_torii/src/routing.rs`
+now close the immediate `E0616` regression from the recent `World` visibility
+tightening:
+
+- `iroha_core::state::World` now exposes a narrow
+  `smart_contract_state_mut_for_testing()` helper for test/API scaffolding,
+- the Torii multisig selector regression test now seeds fallback contract state
+  through that helper instead of reaching into a private field directly.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii --lib --no-run`
+- `cargo test -p iroha_torii multisig_spec_falls_back_to_contract_state_when_metadata_is_missing -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the broader workspace validation sweep, especially if more cross-crate
+  tests still seed `World` internals directly after the recent privacy
+  tightening.
+
+Latest sync (2026-03-20 RBC observability retention + multilane Kura merge-log regression):
+`crates/iroha_config/src/parameters/actual.rs`,
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+close the two regressions behind the recent failing integration slice:
+
+- multilane Kura now derives a distinct merge-ledger log path for each lane
+  again, which restores the expected on-disk layout for Nexus-enabled
+  multi-lane test networks,
+- commit cleanup now preserves the retained RBC status summary written during
+  drain/commit while still clearing runtime-only caches, so delivered/recovered
+  RBC evidence remains visible to `/v1/sumeragi/rbc/sessions` and the persisted
+  `rbc_sessions/sessions.norito` snapshot after commit and restart.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_config lane_config_from_catalog_preserves_alias_metadata -- --nocapture`
+- `cargo test -p iroha_core clean_rbc_sessions_for_block_ -- --nocapture`
+- `cargo test -p integration_tests multilane_kura_layout::kura_prepares_multilane_storage_layout -- --nocapture`
+- `cargo test -p integration_tests --test mod extra_functional::seven_peer_consistency::seven_peer_cross_peer_consistency_basic -- --nocapture`
+- `cargo test -p integration_tests --test mod sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the rest of the previously failing DA/RBC integration set
+  (`sumeragi_rbc_da_large_payload_*`, `sumeragi_rbc_background_queue_synchronous`,
+  `sumeragi_da_commit_certificate_history_four_peers`,
+  `sumeragi_rbc_recovers_after_restart_with_roster_change`) under the longer
+  multi-hour budget to confirm the retained-summary fix removes the remaining
+  topology-specific failures as well.
 
 Latest sync (2026-03-19 merge-conflict resolution + workspace compile gate):
 the branch no longer has unresolved merge entries, and the merged workspace now

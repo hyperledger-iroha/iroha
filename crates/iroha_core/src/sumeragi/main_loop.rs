@@ -26377,9 +26377,34 @@ impl Actor {
         height: u64,
         view: u64,
     ) {
+        self.clear_rbc_runtime_state(key, true);
+        if self.ensure_rbc_chunk_store() {
+            if let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() {
+                if let Err(err) = store.remove(&key) {
+                    warn!(
+                        ?err,
+                        ?block_hash,
+                        height,
+                        view,
+                        "failed to purge persisted RBC session"
+                    );
+                }
+            }
+        }
+
+        self.publish_rbc_backlog_snapshot();
+    }
+
+    fn clear_rbc_runtime_state(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        clear_status_summary: bool,
+    ) {
         self.subsystems.da_rbc.rbc.sessions.remove(&key);
         self.clear_rbc_session_roster(&key);
-        self.subsystems.da_rbc.rbc.status_handle.remove(&key);
+        if clear_status_summary {
+            self.subsystems.da_rbc.rbc.status_handle.remove(&key);
+        }
         self.subsystems.da_rbc.rbc.pending.remove(&key);
         self.subsystems
             .da_rbc
@@ -26409,21 +26434,6 @@ impl Actor {
             .remove(&key);
         self.subsystems.da_rbc.rbc.persist_inflight.remove(&key);
         self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
-        if self.ensure_rbc_chunk_store() {
-            if let Some(store) = self.subsystems.da_rbc.rbc.chunk_store.as_ref() {
-                if let Err(err) = store.remove(&key) {
-                    warn!(
-                        ?err,
-                        ?block_hash,
-                        height,
-                        view,
-                        "failed to purge persisted RBC session"
-                    );
-                }
-            }
-        }
-
-        self.publish_rbc_backlog_snapshot();
     }
 
     fn trigger_view_change_after_validation_reject(

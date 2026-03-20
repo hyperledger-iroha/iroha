@@ -8092,7 +8092,7 @@ mod multisig_selector_tests {
         );
         let account_state =
             MultisigAccountState::new(multisig_account_id.clone(), domain_id.clone(), spec.clone());
-        world.smart_contract_state.insert(
+        world.smart_contract_state_mut_for_testing().insert(
             multisig_account_state_contract_key(&multisig_account_id),
             norito::to_bytes(&account_state).expect("encode account state"),
         );
