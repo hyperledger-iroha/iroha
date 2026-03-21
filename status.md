@@ -2,6 +2,30 @@
 
 Last updated: 2026-03-21
 
+## 2026-03-21 Follow-up: RBC restart recovery now survives the post-restart roster-change reset
+- Fixed `crates/iroha_core/src/sumeragi/main_loop/commit.rs` so
+  `reset_consensus_state_for_roster_change()` no longer clears the
+  operator-facing `rbc_status` snapshot, which is the source of
+  `/v1/sumeragi/rbc/sessions`; recovered sessions loaded from disk now remain
+  observable while runtime-only RBC state is cleared on membership change.
+- Added
+  `rbc_status_summary_survives_roster_change_reset_after_restart_recovery`
+  in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` to persist an
+  in-flight RBC session, reload it as recovered, apply the roster-reset path,
+  and verify that the recovered status summary survives while the live session
+  cache is still cleared.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib rbc_status_summary_survives_roster_change_reset_after_restart_recovery -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib rbc_session_roster_persists_across_restart_with_roster_change -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture --exact --test-threads=1` (pass)
+- Notes:
+  - The integration rerun still emitted the existing non-fatal
+    `iroha_test_network` teardown warnings (`forcing peer shutdown after fatal
+    signal`, `timed out waiting for log flush`) and a temp-store recovery
+    warning from `rbc_status`; the test passed and all peers exited with
+    `status(0)`.
+
 ## 2026-03-21 Follow-up: account transaction routes no longer fall back to tx-history JWT gating, and account-scoped history is authority-scoped again
 - Restored the `/v1/accounts/{account_id}/transactions` and
   `/v1/accounts/{account_id}/transactions/query` Torii wrappers in

@@ -6061,7 +6061,8 @@ impl Actor {
         self.subsystems.da_rbc.rbc.deliver_deferral.clear();
         self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
         self.subsystems.da_rbc.rbc.persist_inflight.clear();
-        self.subsystems.da_rbc.rbc.status_handle.clear();
+        // Preserve operator-facing RBC summaries across roster resets so sessions recovered from
+        // disk remain observable while the runtime-only consensus state is cleared.
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();
         self.subsystems.da_rbc.da.sealed_commitments.clear();

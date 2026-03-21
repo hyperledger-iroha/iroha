@@ -2,6 +2,31 @@
 
 Last updated: 2026-03-21
 
+Latest sync (2026-03-21 RBC restart recovery survives roster-change reset):
+`crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+and `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the `sumeragi_rbc_recovers_after_restart_with_roster_change`
+regression:
+
+- The roster-change cache reset no longer wipes the operator-facing
+  `rbc_status` snapshot, so `/v1/sumeragi/rbc/sessions` can still report a
+  session recovered from disk even if the restarted peer immediately catches a
+  membership-changing commit.
+- Added a focused unit test that persists an in-flight RBC session, reloads it
+  through restart recovery, applies `reset_consensus_state_for_roster_change()`,
+  and asserts the recovered summary remains while the runtime RBC session cache
+  is cleared.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_core --lib rbc_status_summary_survives_roster_change_reset_after_restart_recovery -- --nocapture`
+- `cargo test -p iroha_core --lib rbc_session_roster_persists_across_restart_with_roster_change -- --nocapture`
+- `cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture --exact --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader Sumeragi/integration sweep, or the full
+  `cargo test --workspace`, when the multi-hour validation budget is available.
+
 Latest sync (2026-03-21 Soracloud complete; workspace blocker was unrelated IVM metadata drift):
 `crates/ivm_abi/src/metadata.rs`,
 `crates/ivm/tests/metadata.rs`,

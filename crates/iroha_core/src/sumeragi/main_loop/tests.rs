@@ -28832,6 +28832,88 @@ async fn rbc_session_roster_persists_across_restart_with_roster_change() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rbc_status_summary_survives_roster_change_reset_after_restart_recovery() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let rbc_cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let key = session_key();
+    let payload = b"payload".to_vec();
+    let payload_hash = Hash::new(&payload);
+
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(rbc_cfg.clone())).await;
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    let roster = harness.actor.effective_commit_topology();
+    harness
+        .actor
+        .record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    harness.actor.persist_rbc_session(key, &session);
+    harness.shutdown.send();
+    drop(harness);
+
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(rbc_cfg)).await;
+    let summary_before = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&key)
+        .expect("recovered summary");
+    assert!(
+        summary_before.recovered_from_disk,
+        "restart should mark the persisted session summary as recovered"
+    );
+    assert!(
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&key),
+        "restart should rebuild the live RBC session before the roster reset"
+    );
+
+    harness.actor.reset_consensus_state_for_roster_change(true);
+
+    assert!(
+        !harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&key),
+        "roster reset should still clear runtime RBC sessions"
+    );
+    let summary_after = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&key)
+        .expect("retained summary after roster reset");
+    assert!(
+        summary_after.recovered_from_disk,
+        "roster reset should retain the recovered RBC status summary"
+    );
+    assert_eq!(
+        summary_after.received_chunks, 1,
+        "retained summary should keep the persisted chunk-progress snapshot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn duplicate_rbc_deliver_is_ignored() {
     let mut harness = test_actor_harness(4).await;
     let key = session_key();
