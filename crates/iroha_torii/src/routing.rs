@@ -16055,7 +16055,12 @@ fn tx_matches_account_history_subject(
     tx: &iroha_data_model::query::CommittedTransaction,
     account_id: &iroha_data_model::account::AccountId,
 ) -> bool {
-    tx_references_account_id(tx, account_id)
+    match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => {
+            signed.authority().controller() == account_id.controller()
+        }
+        TransactionEntrypoint::Time(_) => false,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -17759,6 +17764,8 @@ pub async fn handle_v1_transactions_history_get(
 ) -> Result<impl IntoResponse> {
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
+    #[cfg(not(feature = "telemetry"))]
+    let _ = &telemetry;
 
     #[cfg(not(feature = "telemetry"))]
     let _ = &telemetry;
@@ -19847,7 +19854,7 @@ mod tx_query_integration_smoke {
     }
 
     #[tokio::test]
-    async fn account_transactions_get_includes_counterparty_transfer_for_recipient_account() {
+    async fn account_transactions_get_excludes_counterparty_transfer_for_recipient_account() {
         use iroha_crypto::Algorithm;
 
         let kura = Kura::blank_kura_for_testing();
@@ -19944,7 +19951,7 @@ mod tx_query_integration_smoke {
             .and_then(|address| address.to_i105())
             .expect("recipient i105 literal");
         let resp = handle_v1_account_transactions_get(
-            state,
+            state.clone(),
             axum::extract::Path(bob_literal),
             crate::NoritoQuery(AccountTransactionsGetParams {
                 limit: Some(10),
@@ -19955,6 +19962,32 @@ mod tx_query_integration_smoke {
         )
         .await
         .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(parsed["total"].as_u64(), Some(0));
+        assert!(items.is_empty());
+
+        let resp = handle_v1_transactions_history_get(
+            state,
+            crate::NoritoQuery(AccountTransactionsGetParams {
+                limit: Some(10),
+                offset: 0,
+                asset_id: Some(def_id.to_string()),
+            }),
+            crate::routing::MaybeTelemetry::for_tests(),
+            TxHistoryVisibilityScope {
+                viewer_account_ids: vec![bob_id.account().clone()],
+                viewer_dataspace_id: domain_id.to_string(),
+                allow_dataspace_wide: false,
+            },
+            None,
+        )
+        .await
+        .expect("history handler ok")
         .into_response();
 
         assert_eq!(resp.status(), StatusCode::OK);
@@ -19999,11 +20032,7 @@ mod tx_query_integration_smoke {
             .ok();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::ScopedAccountId::new(domain_id.clone(), kp_a.public_key().clone());
-        let account_literal = acc_a
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
+        let account_literal = acc_a.account().to_string();
         dm::Register::account(dm::Account::new(acc_a.clone()))
             .execute(exec_id.account(), &mut stx)
             .ok();
@@ -20229,11 +20258,7 @@ mod tx_query_integration_smoke {
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
         // Query with fetch_size smaller than total to ensure streaming totals kick in.
-        let authority_literal = actor_id
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("actor i105 literal");
+        let authority_literal = actor_id.account().to_string();
         let env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
@@ -20394,13 +20419,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                acc_b
-                    .account()
-                    .to_account_address()
-                    .and_then(|address| address.to_i105())
-                    .expect("account i105 literal"),
-            ),
+            axum::extract::Path(acc_b.account().to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -20829,16 +20848,8 @@ mod tx_query_integration_smoke {
         let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
         let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
         let acc_c = dm::ScopedAccountId::new(dom.clone(), kp_c.public_key().clone());
-        let acc_a_str = acc_a
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
-        let acc_b_str = acc_b
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
+        let acc_a_str = acc_a.account().to_string();
+        let acc_b_str = acc_b.account().to_string();
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -20984,21 +20995,9 @@ mod tx_query_integration_smoke {
         let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
         let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
         let acc_c = dm::ScopedAccountId::new(dom.clone(), kp_c.public_key().clone());
-        let acc_a_str = acc_a
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
-        let acc_b_str = acc_b
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
-        let acc_c_str = acc_c
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
+        let acc_a_str = acc_a.account().to_string();
+        let acc_b_str = acc_b.account().to_string();
+        let acc_c_str = acc_c.account().to_string();
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -21184,11 +21183,7 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random();
         let dom: dm::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
-        let account_literal = acc_a
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
+        let account_literal = acc_a.account().to_string();
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -21394,11 +21389,7 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random();
         let dom: dm::domain::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::account::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
-        let account_literal = acc_a
-            .account()
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("account i105 literal");
+        let account_literal = acc_a.account().to_string();
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -21721,13 +21712,7 @@ mod tx_query_integration_smoke {
 
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                acc_b
-                    .account()
-                    .to_account_address()
-                    .and_then(|address| address.to_i105())
-                    .expect("account i105 literal"),
-            ),
+            axum::extract::Path(acc_b.account().to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -21891,13 +21876,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(
-                acc_a
-                    .account()
-                    .to_account_address()
-                    .and_then(|address| address.to_i105())
-                    .expect("account i105 literal"),
-            ),
+            axum::extract::Path(acc_a.account().to_string()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )

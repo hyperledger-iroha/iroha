@@ -7,7 +7,8 @@ Soracloud v1 is an authoritative, IVM-only runtime.
   artifacts for Soracloud services.
 - All other Soracloud CLI commands are network-backed only and require
   `--torii-url`.
-- The CLI no longer maintains `.soracloud/registry.json`.
+- The CLI does not maintain any local Soracloud control-plane mirror or state
+  file.
 - Torii serves public Soracloud status and mutation routes directly from
   authoritative world state plus the embedded Soracloud runtime manager.
 
@@ -65,13 +66,12 @@ instead of falling back to local state mirrors.
 `/v1/soracloud/status` is the only documented Soracloud status endpoint in v1.
 There is no separate `/v1/soracloud/registry` route.
 
-## Removed Local Contracts
+## Removed Local Scaffolding
 
-These older local-simulation contracts no longer exist:
+These older local-simulation concepts no longer exist in v1:
 
-- `.soracloud/registry.json`
-- CLI `--registry` / local registry-path options
-- Torii Soracloud persistence at `torii.data_dir/soracloud/registry_state.to`
+- CLI-local registry/state files or registry-path options
+- Torii-local file-backed control-plane mirrors
 
 ## Example
 

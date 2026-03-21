@@ -2,6 +2,27 @@
 
 Last updated: 2026-03-21
 
+## 2026-03-21 Follow-up: account transaction routes no longer fall back to tx-history JWT gating, and account-scoped history is authority-scoped again
+- Restored the `/v1/accounts/{account_id}/transactions` and
+  `/v1/accounts/{account_id}/transactions/query` Torii wrappers in
+  `crates/iroha_torii/src/lib.rs` to the normal App API access path so invalid
+  account literals still fail during route parsing with `400`, and valid
+  requests no longer degrade to `503 Service Unavailable` when
+  `torii.tx_history` is unset.
+- Updated `crates/iroha_torii/src/routing.rs` so the account-scoped transaction
+  endpoints match committed transactions by entrypoint authority, which aligns
+  the live behavior with the documented "transactions authored by an account"
+  contract and the address canonicalisation integration coverage.
+- Kept `/v1/transactions/history` on the broader viewer-visibility model, and
+  added/updated focused routing tests to cover that split along with canonical
+  I105 path literals.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry account_transactions_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test address_parsing --features app_api,telemetry transactions_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test account_query_subrouter_smoke --features app_api,telemetry -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation account_ -- --nocapture` (pass)
+
 ## 2026-03-21 Follow-up: Soracloud is complete and the workspace validation blocker was an unrelated IVM metadata mismatch
 - The remaining red uncovered during the long workspace validation sweep was not
   in Soracloud. It came from an IVM metadata-policy mismatch across
@@ -177,7 +198,7 @@ Last updated: 2026-03-21
     apartment/runtime operations are added so capability enforcement remains in
     the runtime host instead of drifting back into Torii-local scaffolding.
 
-## 2026-03-21 Follow-up: Soracloud now uses the v1 IVM host ABI for ordered mailbox execution, Torii no longer persists a live shadow registry, and the CLI is network-only
+## 2026-03-21 Follow-up: Soracloud now uses the v1 IVM host ABI for ordered mailbox execution, Torii no longer persists a live file-backed control-plane mirror, and the CLI is network-only
 - Closed the next Soracloud execution/control-plane gap across
   `crates/iroha_data_model/src/soracloud.rs`,
   `crates/ivm_abi/src/{syscalls.rs,pointer_abi.rs}`,
@@ -199,25 +220,25 @@ Last updated: 2026-03-21
     secret/credential/egress access constrained to the private runtime path,
     and execution failures now return deterministic degraded receipts without
     partially applying state, mailbox, journal, or checkpoint writes,
-  - Soracloud CLI `init` no longer writes `registry.json`, and the deploy,
-    status, upgrade, rollback, rollout, and agent lifecycle/mailbox/autonomy
-    commands are now Torii-backed only via `--torii-url`.
+  - Soracloud CLI `init` no longer writes a local control-plane state file,
+    and the deploy, status, upgrade, rollback, rollout, and agent
+    lifecycle/mailbox/autonomy commands are now Torii-backed only via
+    `--torii-url`.
 - Replaced the Soracloud CLI local-control-plane documentation with a live
   control-plane guide that describes the IVM-only scope, authoritative Torii
-  status/mutation routes, and the removal of local registry contracts.
-- Removed the live Torii Soracloud registry persistence path from
+  status/mutation routes, and the removal of local simulator contracts.
+- Removed the live Torii Soracloud file-backed control-plane persistence path from
   `crates/iroha_torii/src/soracloud.rs`:
-  - the `registry_state.to` persistence snapshot contract is no longer
-    compiled into production, and
-  - the remaining in-memory `Registry` harness plus the CLI-side
-    `RegistryState`/`registry.json` simulator helpers have now been deleted
-    from `crates/iroha_torii/src/soracloud.rs` and
-    `crates/iroha_cli/src/soracloud.rs`, leaving only the authoritative world
-    state + runtime-manager path in-tree.
+  - the old persistence snapshot contract is no longer compiled into
+    production, and
+  - the remaining in-memory `Registry` harness plus the CLI-side simulator
+    helpers have now been deleted from `crates/iroha_torii/src/soracloud.rs`
+    and `crates/iroha_cli/src/soracloud.rs`, leaving only the authoritative
+    world state + runtime-manager path in-tree.
 - Refreshed the checked-in Soracloud CLI help, Vue runbook, and
   `integration_tests/tests/iroha_cli.rs` so the public contract and binary
   tests now match the network-only `--torii-url` requirement instead of the
-  removed local `registry.json` simulator.
+  removed local simulator path.
 - Switched the CLI `status` command over to Torii’s
   `/v1/soracloud/status` endpoint so status reads now include the runtime
   manager’s authoritative health snapshot plus the embedded control-plane

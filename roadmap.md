@@ -185,14 +185,14 @@ now close the ABI and public-CLI half of the Soracloud runtime cutover:
   deterministic failure paths return degraded receipts without partial writes.
 - Soracloud CLI `init` remains offline scaffold generation only; the deploy,
   status, upgrade, rollback, rollout, and agent lifecycle/mailbox/autonomy
-  commands are now Torii-backed only and no longer depend on
-  `.soracloud/registry.json`.
-- The live Torii Soracloud registry persistence path has been removed from the
-  production build; `registry_state.to` is no longer part of the live server
-  contract, and the last in-tree Torii/CLI registry simulator scaffolding has
-  now been deleted from the source tree.
+  commands are now Torii-backed only and no longer depend on any CLI-local
+  control-plane state file.
+- The live Torii Soracloud file-backed control-plane persistence path has been
+  removed from the production build, and the last in-tree Torii/CLI simulator
+  scaffolding has now been deleted from the source tree.
 - Soracloud CLI `status` now reads `/v1/soracloud/status` rather than the old
-  registry snapshot route, while preserving `--service-name` by filtering the
+  `/v1/soracloud/registry` route, while preserving `--service-name` by
+  filtering the
   embedded authoritative `control_plane.services` payload client-side.
 - The embedded runtime manager now enforces deterministic
   `soracloud_runtime.cache_budgets` pruning across hydrated artifact,
@@ -3575,16 +3575,16 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Define and freeze `SoraContainerManifestV1`, `SoraServiceManifestV1`, and `SoraStateBindingV1` Norito schemas (versioned, deterministic, with docs + fixtures). (`crates/iroha_data_model/src/soracloud.rs`, `crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`, `fixtures/soracloud/*.json`, `docs/source/soracloud/manifest_schemas.md`)
  - [x] Add deterministic deployment-bundle admission validation (`SoraDeploymentBundleV1`) to bind container hash/schema, enforce mutable-state capability policy, and require public-route health probes (`crates/iroha_data_model/src/soracloud.rs`, `fixtures/soracloud/sora_deployment_bundle_v1.json`).
  - [x] Implement Sora Container Runtime (SCR) host integration (no Docker): process sandbox, capability policy, deterministic admission, resource limits, lifecycle hooks. (Torii deploy/upgrade/rollback admission now enforces deterministic SCR host policy in `crates/iroha_torii/src/soracloud.rs`: bounded resource caps (`cpu_millis`, `memory_bytes`, `ephemeral_storage_bytes`, `max_open_files`, `max_tasks`), lifecycle grace caps (`start_grace_secs`, `stop_grace_secs`), mutable-binding vs `allow_state_writes` capability compatibility, and validated egress allowlist policy. Each admitted revision stores host-runtime snapshot fields (`runtime`, capability flags, network policy, resource/lifecycle limits, deterministic `sandbox_profile_hash`) plus monotonic simulated process lifecycle markers (`process_generation`, `process_started_sequence`) across deploy/upgrade/rollback paths.)
- - [x] Implement service registry + routing control-plane (deploy/status/upgrade/rollback) with signed manifests and audit events (`crates/iroha_torii/src/soracloud.rs`, routes wired in `crates/iroha_torii/src/lib.rs`, CLI network mutations in `crates/iroha_cli/src/soracloud.rs`).
+ - [x] Implement the Soracloud service control plane + routing (deploy/status/upgrade/rollback) with signed manifests and audit events (`crates/iroha_torii/src/soracloud.rs`, routes wired in `crates/iroha_torii/src/lib.rs`, CLI network mutations in `crates/iroha_cli/src/soracloud.rs`).
  - [x] Implement deterministic state-binding guardrails so SCR services can only mutate canonical state through IVM-governed bindings (signed `POST /v1/soracloud/state/mutate` in `crates/iroha_torii/src/soracloud.rs` enforces binding prefix, mutability class, encryption policy, and per-binding byte quotas with append-only/read-only protection and auditable governance transaction hash linkage).
- - [x] Add `iroha app soracloud` CLI baseline (`init`, `deploy`, `status`, `upgrade`, `rollback`) with machine-readable output and deterministic local registry/audit simulation (`crates/iroha_cli/src/soracloud.rs`, wired in `crates/iroha_cli/src/main_shared.rs`, with unit coverage).
+ - [x] Add `iroha app soracloud` CLI baseline (`init`, `deploy`, `status`, `upgrade`, `rollback`) with machine-readable output, offline init scaffolding, and Torii-backed lifecycle/status flows (`crates/iroha_cli/src/soracloud.rs`, wired in `crates/iroha_cli/src/main_shared.rs`, with unit coverage).
  - [x] Extend `iroha app soracloud` with network-backed integration tests against live control-plane endpoints (`integration_tests/tests/iroha_cli.rs`: `soracloud_status_uses_live_torii_control_plane`, `soracloud_mutations_use_live_torii_control_plane`; validates live Torii-backed status + deploy/upgrade/rollback flows through CLI `--torii-url` mode).
- - [x] Add telemetry and `/v1/soracloud/*` status surfaces (service health, routing, resource pressure, failed admissions, control-plane registry snapshot) via `GET /v1/soracloud/status` in Torii with telemetry-profile gating, token/rate-limit enforcement, and machine-readable JSON/Norito negotiation (`crates/iroha_torii/src/lib.rs` + `crates/iroha_cli/src/soracloud.rs` network mode).
+ - [x] Add `/v1/soracloud/status` and related Soracloud status surfaces (service health, routing, resource pressure, failed admissions, control-plane snapshot) in Torii with token/rate-limit enforcement, machine-readable JSON/Norito negotiation, and telemetry affecting only the admission-counter subsection (`crates/iroha_torii/src/lib.rs` + `crates/iroha_cli/src/soracloud.rs` network mode).
 
 36. **SORACLOUD-WEB-FOUNDATION — Static + dynamic web frameworks** (DevEx/Web, Line: Iroha 3, Owner: SDK + SoraFS WG, Priority: High, Status: 🈴 Completed, target TBD)
  - [x] Ship `sora init site` template (Vue3/Vite static SPA) with SoraFS publish + SoraDNS binding workflow. (`iroha app soracloud init --template site` now scaffolds `site/` Vue3 starter files, SoraFS packaging flow, and SoraDNS alias-binding command templates in `README.md` via `crates/iroha_cli/src/soracloud.rs`, documented in `docs/source/soracloud/cli_local_control_plane.md`)
  - [x] Ship `sora init webapp` template (Vue3 SPA + API service on SCR) with auth/session + chain identity integration. (`iroha app soracloud init --template webapp` now scaffolds `webapp/frontend` (Vue3/Vite), `webapp/api/server.mjs` (session/auth + chain-ID verification hook), and Soracloud API deploy flow docs via `crates/iroha_cli/src/soracloud.rs`)
- - [x] Implement zero-downtime rollout primitives (canary %, health gates, rollback handles) for site + API bundles. (Torii now exposes signed `POST /v1/soracloud/rollout` with canary promotion, health-failure tracking, and auto-rollback to baseline; `iroha app soracloud` now includes `rollout` (local + `--torii-url` mode), local registry tracks `active_rollout`/`last_rollout`, and live CLI integration covers deploy/upgrade/rollout/rollback flow in `integration_tests/tests/iroha_cli.rs`.)
+ - [x] Implement zero-downtime rollout primitives (canary %, health gates, rollback handles) for site + API bundles. (Torii now exposes signed `POST /v1/soracloud/rollout` with canary promotion, health-failure tracking, and auto-rollback to baseline; `iroha app soracloud` now includes `rollout` over the Torii-backed Soracloud control plane, authoritative status exposes `active_rollout`/`last_rollout`, and live CLI integration covers deploy/upgrade/rollout/rollback flow in `integration_tests/tests/iroha_cli.rs`.)
  - [x] Add framework docs/runbooks for Vue3 SPA + API deployment and production operations. (Added `docs/source/soracloud/vue3_spa_api_runbook.md` and linked it from `docs/source/soracloud/cli_local_control_plane.md` with generation/build/package/deploy/rollout/rollback operational guidance.)
  - [x] Add end-to-end integration tests: build Vue3 app, deploy static site, deploy API, bind route, assert upgrade/rollback correctness. (`integration_tests/tests/iroha_cli.rs`: `soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback` now scaffolds `site` + `webapp`, validates template `vite build` script presence, deploys both services against live Torii, verifies route bindings, and exercises upgrade -> rollout -> rollback correctness for the site service.)
 

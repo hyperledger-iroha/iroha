@@ -2775,7 +2775,9 @@ async fn handler_account_transactions_query(
             AxPath(account_id),
             payload,
             tel.clone(),
-            None,
+            app.tx_history_access_policy
+                .allowed_asset_definition_id
+                .clone(),
         )
         .await
         .map(IntoResponse::into_response);
@@ -2791,7 +2793,9 @@ async fn handler_account_transactions_query(
         AxPath(key_hint),
         payload,
         tel,
-        None,
+        app.tx_history_access_policy
+            .allowed_asset_definition_id
+            .clone(),
     )
     .await
     .map(IntoResponse::into_response)
@@ -2920,14 +2924,15 @@ async fn handler_account_transactions_get(
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    let norito_params: AxQuery<crate::routing::AccountTransactionsGetParams> = AxQuery(params);
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return routing::handle_v1_account_transactions_get_with_policy(
             app.state.clone(),
             AxPath(account_id),
-            norito_params,
+            AxQuery(params),
             tel.clone(),
-            None,
+            app.tx_history_access_policy
+                .allowed_asset_definition_id
+                .clone(),
         )
         .await
         .map(IntoResponse::into_response);
@@ -2941,9 +2946,11 @@ async fn handler_account_transactions_get(
     routing::handle_v1_account_transactions_get_with_policy(
         app.state.clone(),
         AxPath(key_hint),
-        norito_params,
+        AxQuery(params),
         tel,
-        None,
+        app.tx_history_access_policy
+            .allowed_asset_definition_id
+            .clone(),
     )
     .await
     .map(IntoResponse::into_response)
