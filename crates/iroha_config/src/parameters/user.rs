@@ -13750,8 +13750,6 @@ pub struct Torii {
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
     pub ram_lfe: Option<ToriiRamLfe>,
-    /// Optional hidden-identifier resolver configuration for app API endpoints.
-    pub identifier_resolver: Option<ToriiIdentifierResolver>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
     pub tx_history: Option<ToriiTxHistory>,
 }
@@ -14201,9 +14199,6 @@ impl Torii {
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
-            identifier_resolver: self
-                .identifier_resolver
-                .and_then(ToriiIdentifierResolver::parse),
             tx_history: self.tx_history.and_then(ToriiTxHistory::parse),
             app_api: actual::AppApi {
                 default_list_limit,

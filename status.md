@@ -1,6 +1,23 @@
 # Status
 
-Last updated: 2026-03-20
+Last updated: 2026-03-21
+
+## 2026-03-21 Follow-up: removed the last stale `torii.identifier_resolver` config references from `iroha_config`
+- Cleaned up the leftover `ToriiIdentifierResolver` field references in
+  `crates/iroha_config/src/parameters/{user.rs,actual.rs}` after the
+  `torii.ram_lfe` rename landed, so `iroha_config` no longer refers to a type
+  that was deleted during the config-surface migration.
+- Updated config fixtures and helper `actual::Torii` constructors in
+  `crates/iroha_config/tests/fixtures.rs`,
+  `crates/iroha_core/src/kiso.rs`,
+  `crates/iroha_torii/src/test_utils.rs`, and
+  `crates/iroha_torii/tests/connect_gating.rs`
+  to match the canonical `torii.ram_lfe`-only shape.
+- Validation:
+  - `cargo check -p iroha_config` (pass)
+  - `cargo test -p iroha_config torii_ram_lfe_parses -- --nocapture` (pass)
+  - `cargo fmt --all --check` (pass)
+  - `cargo check -p iroha_core -p iroha_torii` (pass; existing unrelated warning remains in `crates/iroha_torii/src/routing.rs`)
 
 ## 2026-03-20 Follow-up: JS, Swift, and Android Torii clients now expose the generic RAM-LFE policy, execute, and verify routes
 - Extended the three client SDKs to the generic Torii RAM-LFE surface so they

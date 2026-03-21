@@ -992,7 +992,6 @@ fn minimal_config_snapshot() {
                 },
                 onboarding: None,
                 offline_issuer: None,
-                identifier_resolver: None,
                 tx_history: None,
                 app_api: AppApi {
                     default_list_limit: 100,

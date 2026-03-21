@@ -4796,8 +4796,6 @@ pub struct Torii {
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration.
     pub ram_lfe: Option<ToriiRamLfe>,
-    /// Optional hidden-identifier resolver runtime configuration.
-    pub identifier_resolver: Option<ToriiIdentifierResolver>,
     /// Optional transaction-history visibility/auth configuration.
     pub tx_history: Option<ToriiTxHistory>,
     /// App-facing query/backpressure limits.
