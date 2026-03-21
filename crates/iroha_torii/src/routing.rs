@@ -1692,6 +1692,128 @@ pub struct AliasErrorResponseDto {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+/// Summary information for a registered RAM-LFE program policy.
+pub struct RamLfeProgramPolicySummaryDto {
+    pub program_id: String,
+    pub owner: String,
+    pub active: bool,
+    pub resolver_public_key: String,
+    pub backend: String,
+    pub verification_mode: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption_public_parameters: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub input_encryption_public_parameters_decoded:
+        Option<iroha_crypto::BfvIdentifierPublicParameters>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub ram_fhe_profile: Option<iroha_crypto::BfvRamProgramProfile>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// List response for RAM-LFE program policies.
+pub struct RamLfeProgramPolicyListDto {
+    pub total: u64,
+    pub items: Vec<RamLfeProgramPolicySummaryDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+/// Execute one RAM-LFE program from plaintext or BFV-encrypted input.
+pub struct RamLfeExecuteRequestDto {
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub input_hex: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub encrypted_input: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Successful response emitted by `/v1/ram-lfe/programs/{program_id}/execute`.
+pub struct RamLfeExecuteResponseDto {
+    pub program_id: String,
+    pub opaque_hash: String,
+    pub receipt_hash: String,
+    pub output_hex: String,
+    pub output_hash: String,
+    pub associated_data_hash: String,
+    pub executed_at_ms: u64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
+    pub backend: String,
+    pub verification_mode: String,
+    pub receipt: iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Stateless receipt-verification request for RAM-LFE execution receipts.
+pub struct RamLfeReceiptVerifyRequestDto {
+    pub receipt: iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub output_hex: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Stateless RAM-LFE receipt-verification result.
+pub struct RamLfeReceiptVerifyResponseDto {
+    pub valid: bool,
+    pub program_id: String,
+    pub backend: String,
+    pub verification_mode: String,
+    pub output_hash: String,
+    pub associated_data_hash: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub output_hash_matches: Option<bool>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 /// Summary information for a registered identifier policy.
 pub struct IdentifierPolicySummaryDto {
     pub policy_id: String,

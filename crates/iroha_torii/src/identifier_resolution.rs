@@ -28,21 +28,31 @@ use iroha_data_model::{
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
-struct PolicyRuntime {
+struct ProgramRuntime {
     secret: Vec<u8>,
     signer: KeyPair,
     receipt_ttl_ms: Option<u64>,
 }
 
-/// In-process identifier resolver used by Torii app endpoints.
+/// In-process RAM-LFE runtime used by Torii app endpoints.
 #[derive(Debug, Default)]
 pub struct IdentifierResolutionService {
-    // TODO: migrate this runtime map to `RamLfeProgramId` when
-    // `torii.identifier_resolver` is replaced by the generic `torii.ram_lfe`
-    // runtime config. The current map remains keyed by identifier policy id so
-    // the existing config surface keeps working while the generic Torii API is
-    // still being wired.
-    policy_runtimes: RwLock<BTreeMap<IdentifierPolicyId, PolicyRuntime>>,
+    program_runtimes: RwLock<BTreeMap<RamLfeProgramId, ProgramRuntime>>,
+}
+
+/// Draft returned by RAM-LFE execution before route-specific projection.
+#[derive(Debug, Clone)]
+pub struct RamLfeExecutionDraft {
+    pub output: Vec<u8>,
+    pub opaque_hash: Hash,
+    pub receipt_hash: Hash,
+    pub executed_at_ms: u64,
+    pub expires_at_ms: Option<u64>,
+    pub backend: RamLfeBackend,
+    pub output_hash: Hash,
+    pub associated_data_hash: Hash,
+    pub program_digest: Hash,
+    pub verification_mode: RamLfeVerificationMode,
 }
 
 /// Draft returned by hidden-function evaluation before ledger binding lookup.
@@ -60,14 +70,16 @@ pub struct IdentifierResolutionDraft {
 
 #[derive(Debug, Error)]
 pub enum IdentifierResolutionError {
-    #[error("identifier policy {0} is not configured in the resolver service")]
-    UnknownPolicy(IdentifierPolicyId),
+    #[error("RAM-LFE program {0} is not configured in the Torii runtime")]
+    UnknownProgram(RamLfeProgramId),
     #[error("resolver signing key does not match the policy public key")]
     SignerMismatch,
     #[error("identifier policy does not publish BFV input-encryption parameters")]
     MissingFheParameters,
     #[error("identifier policy BFV parameters are invalid: {0}")]
     InvalidFheParameters(String),
+    #[error("RAM-LFE backend {0:?} does not yet support Torii app execution receipts")]
+    UnsupportedBackend(RamLfeBackend),
     #[error("resolver BFV key material does not match the policy commitment")]
     FheKeyMismatch,
     #[error("encrypted identifier input is not valid UTF-8")]
@@ -78,6 +90,8 @@ pub enum IdentifierResolutionError {
     Fhe(#[from] BfvError),
     #[error("identifier policy transcript encoding failed: {0}")]
     Encoding(String),
+    #[error("Torii cannot issue proof-mode RAM-LFE receipts without prover runtime support")]
+    ProofModeUnsupported,
 }
 
 impl IdentifierResolutionService {
@@ -87,20 +101,20 @@ impl IdentifierResolutionService {
         Self::default()
     }
 
-    /// Register in-process policy material for identifier resolution.
-    pub fn register_policy_runtime(
+    /// Register in-process program material for RAM-LFE execution.
+    pub fn register_program_runtime(
         &self,
-        policy_id: IdentifierPolicyId,
+        program_id: RamLfeProgramId,
         secret: Vec<u8>,
         signer: KeyPair,
         receipt_ttl_ms: Option<u64>,
     ) {
-        self.policy_runtimes
+        self.program_runtimes
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
-                policy_id,
-                PolicyRuntime {
+                program_id,
+                ProgramRuntime {
                     secret,
                     signer,
                     receipt_ttl_ms,
@@ -108,103 +122,131 @@ impl IdentifierResolutionService {
             );
     }
 
-    /// Derive the opaque identifier for a normalized input under the given policy.
-    pub fn derive(
+    /// Execute one RAM-LFE program from plaintext input bytes.
+    pub fn execute(
         &self,
-        policy: &IdentifierPolicy,
         program_policy: &RamLfeProgramPolicy,
-        normalized_input: &str,
-    ) -> Result<IdentifierResolutionDraft, IdentifierResolutionError> {
-        let runtime = self.runtime(policy)?;
-        let request_payload = match program_policy.commitment.backend {
-            RamLfeBackend::HkdfSha3_512PrfV1 => normalized_input.as_bytes().to_vec(),
-            RamLfeBackend::BfvAffineSha3_256V1 | RamLfeBackend::BfvProgrammedSha3_256V1 => {
-                let public_parameters = decode_bfv_public_parameters(program_policy)?;
-                let ciphertext = encrypt_identifier_from_seed(
-                    &public_parameters,
-                    normalized_input.as_bytes(),
-                    &derive_plaintext_encryption_seed(policy, normalized_input),
-                )?;
-                norito::to_bytes(&ciphertext)
-                    .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?
-            }
-        };
+        input: &[u8],
+    ) -> Result<RamLfeExecutionDraft, IdentifierResolutionError> {
+        if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedSha3_256V1 {
+            return Err(IdentifierResolutionError::UnsupportedBackend(
+                program_policy.commitment.backend,
+            ));
+        }
+        let public_parameters = decode_bfv_public_parameters(program_policy)?;
+        let ciphertext = encrypt_identifier_from_seed(
+            &public_parameters,
+            input,
+            &derive_program_plaintext_encryption_seed(program_policy, input),
+        )?;
+        self.execute_request_payload(
+            program_policy,
+            norito::to_bytes(&ciphertext)
+                .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?,
+        )
+    }
+
+    /// Execute one RAM-LFE program from a BFV ciphertext envelope.
+    pub fn execute_encrypted(
+        &self,
+        program_policy: &RamLfeProgramPolicy,
+        ciphertext: &BfvIdentifierCiphertext,
+    ) -> Result<RamLfeExecutionDraft, IdentifierResolutionError> {
+        if program_policy.commitment.backend != RamLfeBackend::BfvProgrammedSha3_256V1 {
+            return Err(IdentifierResolutionError::UnsupportedBackend(
+                program_policy.commitment.backend,
+            ));
+        }
+        // Canonicalize onto the resolver's deterministic envelope so receipt
+        // hashes stay stable across semantically equivalent BFV encryptions.
+        let raw = self.decrypt_program_input(program_policy, ciphertext)?;
+        self.execute(program_policy, raw.as_bytes())
+    }
+
+    fn execute_request_payload(
+        &self,
+        program_policy: &RamLfeProgramPolicy,
+        request_payload: Vec<u8>,
+    ) -> Result<RamLfeExecutionDraft, IdentifierResolutionError> {
+        let runtime = self.runtime(program_policy)?;
+        let associated_data = program_id_bytes(&program_policy.program_id);
         let request = ClientRequest {
             normalized_input: request_payload,
-            associated_data: program_id_bytes(&program_policy.program_id),
+            associated_data: associated_data.clone(),
         };
         let EvalResponse {
-            output, backend, ..
+            output,
+            opaque_id,
+            receipt_hash,
+            backend,
         } = evaluate_commitment(&runtime.secret, &program_policy.commitment, &request)?;
         let output_hash = ram_lfe_output_hash(&output);
-        let program_id_bytes = program_id_bytes(&program_policy.program_id);
-        let (opaque_id, receipt_hash) =
-            identifier_hashes_from_output_hash(&program_id_bytes, &output_hash);
         let programmed_public_parameters = decode_programmed_public_parameters(program_policy)?
-            .ok_or(IdentifierResolutionError::MissingFheParameters)?;
-        let resolved_at_ms = now_ms();
+            .ok_or(IdentifierResolutionError::UnsupportedBackend(
+                program_policy.commitment.backend,
+            ))?;
+        let executed_at_ms = now_ms();
         let expires_at_ms = runtime
             .receipt_ttl_ms
-            .and_then(|ttl| resolved_at_ms.checked_add(ttl));
-        Ok(IdentifierResolutionDraft {
-            opaque_id: OpaqueAccountId::from_hash(opaque_id),
+            .and_then(|ttl| executed_at_ms.checked_add(ttl));
+        Ok(RamLfeExecutionDraft {
+            output,
+            opaque_hash: opaque_id,
             receipt_hash,
-            resolved_at_ms,
+            executed_at_ms,
             expires_at_ms,
             backend,
             output_hash,
+            associated_data_hash: Hash::new(associated_data),
             program_digest: programmed_public_parameters.hidden_program_digest,
             verification_mode: program_policy.verification_mode,
+        })
+    }
+
+    /// Derive the opaque identifier for a normalized input under the given policy.
+    pub fn derive(
+        &self,
+        _policy: &IdentifierPolicy,
+        program_policy: &RamLfeProgramPolicy,
+        normalized_input: &str,
+    ) -> Result<IdentifierResolutionDraft, IdentifierResolutionError> {
+        let execution = self.execute(program_policy, normalized_input.as_bytes())?;
+        let program_id_bytes = program_id_bytes(&program_policy.program_id);
+        let (opaque_id, receipt_hash) =
+            identifier_hashes_from_output_hash(&program_id_bytes, &execution.output_hash);
+        Ok(IdentifierResolutionDraft {
+            opaque_id: OpaqueAccountId::from_hash(opaque_id),
+            receipt_hash,
+            resolved_at_ms: execution.executed_at_ms,
+            expires_at_ms: execution.expires_at_ms,
+            backend: execution.backend,
+            output_hash: execution.output_hash,
+            program_digest: execution.program_digest,
+            verification_mode: execution.verification_mode,
         })
     }
 
     /// Evaluate a BFV-encrypted identifier request under the selected policy.
     pub fn derive_encrypted(
         &self,
-        policy: &IdentifierPolicy,
+        _policy: &IdentifierPolicy,
         program_policy: &RamLfeProgramPolicy,
         ciphertext: &BfvIdentifierCiphertext,
     ) -> Result<IdentifierResolutionDraft, IdentifierResolutionError> {
-        match program_policy.commitment.backend {
-            RamLfeBackend::HkdfSha3_512PrfV1 | RamLfeBackend::BfvProgrammedSha3_256V1 => {
-                // Canonicalize onto the resolver's deterministic envelope so
-                // receipt hashes stay stable across semantically equivalent BFV encryptions.
-                let raw = self.decrypt_input(policy, program_policy, ciphertext)?;
-                self.derive(policy, program_policy, &raw)
-            }
-            RamLfeBackend::BfvAffineSha3_256V1 => {
-                let runtime = self.runtime(policy)?;
-                let request = ClientRequest {
-                    normalized_input: norito::to_bytes(ciphertext)
-                        .map_err(|err| IdentifierResolutionError::Encoding(err.to_string()))?,
-                    associated_data: program_id_bytes(&program_policy.program_id),
-                };
-                let EvalResponse {
-                    output, backend, ..
-                } = evaluate_commitment(&runtime.secret, &program_policy.commitment, &request)?;
-                let output_hash = ram_lfe_output_hash(&output);
-                let program_id_bytes = program_id_bytes(&program_policy.program_id);
-                let (opaque_id, receipt_hash) =
-                    identifier_hashes_from_output_hash(&program_id_bytes, &output_hash);
-                let programmed_public_parameters =
-                    decode_programmed_public_parameters(program_policy)?
-                        .ok_or(IdentifierResolutionError::MissingFheParameters)?;
-                let resolved_at_ms = now_ms();
-                let expires_at_ms = runtime
-                    .receipt_ttl_ms
-                    .and_then(|ttl| resolved_at_ms.checked_add(ttl));
-                Ok(IdentifierResolutionDraft {
-                    opaque_id: OpaqueAccountId::from_hash(opaque_id),
-                    receipt_hash,
-                    resolved_at_ms,
-                    expires_at_ms,
-                    backend,
-                    output_hash,
-                    program_digest: programmed_public_parameters.hidden_program_digest,
-                    verification_mode: program_policy.verification_mode,
-                })
-            }
-        }
+        let execution = self.execute_encrypted(program_policy, ciphertext)?;
+        let program_id_bytes = program_id_bytes(&program_policy.program_id);
+        let (opaque_id, receipt_hash) =
+            identifier_hashes_from_output_hash(&program_id_bytes, &execution.output_hash);
+        Ok(IdentifierResolutionDraft {
+            opaque_id: OpaqueAccountId::from_hash(opaque_id),
+            receipt_hash,
+            resolved_at_ms: execution.executed_at_ms,
+            expires_at_ms: execution.expires_at_ms,
+            backend: execution.backend,
+            output_hash: execution.output_hash,
+            program_digest: execution.program_digest,
+            verification_mode: execution.verification_mode,
+        })
     }
 
     /// Decrypt BFV-wrapped identifier input published against the policy commitment.
@@ -214,7 +256,17 @@ impl IdentifierResolutionService {
         program_policy: &RamLfeProgramPolicy,
         ciphertext: &BfvIdentifierCiphertext,
     ) -> Result<String, IdentifierResolutionError> {
-        let runtime = self.runtime(policy)?;
+        let _ = policy;
+        self.decrypt_program_input(program_policy, ciphertext)
+    }
+
+    /// Decrypt BFV-wrapped program input published against the program commitment.
+    pub fn decrypt_program_input(
+        &self,
+        program_policy: &RamLfeProgramPolicy,
+        ciphertext: &BfvIdentifierCiphertext,
+    ) -> Result<String, IdentifierResolutionError> {
+        let runtime = self.runtime(program_policy)?;
         let public_parameters = decode_bfv_public_parameters(program_policy)?;
         let associated_data = program_id_bytes(&program_policy.program_id);
         let (expected_public_parameters, secret_key, _) = derive_identifier_key_material_from_seed(
@@ -259,6 +311,38 @@ impl IdentifierResolutionService {
         self.issue_receipt(policy, program_policy, draft, uaid, account_id)
     }
 
+    /// Sign a generic RAM-LFE execution receipt.
+    pub fn issue_execution_receipt(
+        &self,
+        program_policy: &RamLfeProgramPolicy,
+        draft: &RamLfeExecutionDraft,
+    ) -> Result<iroha_data_model::ram_lfe::RamLfeExecutionReceipt, IdentifierResolutionError> {
+        let runtime = self.runtime(program_policy)?;
+        if runtime.signer.public_key() != &program_policy.resolver_public_key {
+            return Err(IdentifierResolutionError::SignerMismatch);
+        }
+        if draft.verification_mode != RamLfeVerificationMode::Signed {
+            return Err(IdentifierResolutionError::ProofModeUnsupported);
+        }
+
+        let payload = RamLfeExecutionReceiptPayload {
+            program_id: program_policy.program_id.clone(),
+            program_digest: draft.program_digest,
+            backend: draft.backend,
+            verification_mode: draft.verification_mode,
+            output_hash: draft.output_hash,
+            associated_data_hash: draft.associated_data_hash,
+            executed_at_ms: draft.executed_at_ms,
+            expires_at_ms: draft.expires_at_ms,
+        };
+        let signature: Signature = SignatureOf::new(runtime.signer.private_key(), &payload).into();
+        Ok(iroha_data_model::ram_lfe::RamLfeExecutionReceipt {
+            payload,
+            signature: Some(signature),
+            proof: None,
+        })
+    }
+
     fn issue_receipt(
         &self,
         policy: &IdentifierPolicy,
@@ -267,9 +351,12 @@ impl IdentifierResolutionService {
         uaid: UniversalAccountId,
         account_id: AccountId,
     ) -> Result<IdentifierResolutionReceipt, IdentifierResolutionError> {
-        let runtime = self.runtime(policy)?;
+        let runtime = self.runtime(program_policy)?;
         if runtime.signer.public_key() != &program_policy.resolver_public_key {
             return Err(IdentifierResolutionError::SignerMismatch);
+        }
+        if draft.verification_mode != RamLfeVerificationMode::Signed {
+            return Err(IdentifierResolutionError::ProofModeUnsupported);
         }
 
         let execution = RamLfeExecutionReceiptPayload {
@@ -301,14 +388,16 @@ impl IdentifierResolutionService {
 
     fn runtime(
         &self,
-        policy: &IdentifierPolicy,
-    ) -> Result<PolicyRuntime, IdentifierResolutionError> {
-        self.policy_runtimes
+        program_policy: &RamLfeProgramPolicy,
+    ) -> Result<ProgramRuntime, IdentifierResolutionError> {
+        self.program_runtimes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&policy.id)
+            .get(&program_policy.program_id)
             .cloned()
-            .ok_or_else(|| IdentifierResolutionError::UnknownPolicy(policy.id.clone()))
+            .ok_or_else(|| {
+                IdentifierResolutionError::UnknownProgram(program_policy.program_id.clone())
+            })
     }
 }
 
@@ -366,23 +455,19 @@ pub(crate) fn decode_ram_fhe_profile(
     Ok(decode_programmed_public_parameters(program_policy)?.map(|value| value.ram_fhe_profile))
 }
 
-pub(crate) fn policy_id_bytes(policy_id: &IdentifierPolicyId) -> Vec<u8> {
-    policy_id.to_string().into_bytes()
-}
-
 pub(crate) fn program_id_bytes(program_id: &RamLfeProgramId) -> Vec<u8> {
     norito::to_bytes(program_id).expect("RAM-LFE program id encoding must succeed")
 }
 
-fn derive_plaintext_encryption_seed(
-    policy: &IdentifierPolicy,
-    normalized_input: &str,
+fn derive_program_plaintext_encryption_seed(
+    program_policy: &RamLfeProgramPolicy,
+    input: &[u8],
 ) -> [u8; Hash::LENGTH] {
     Hash::new(
         [
-            b"iroha.identifier_resolution.plaintext_bfv.v1".as_slice(),
-            policy.id.to_string().as_bytes(),
-            normalized_input.as_bytes(),
+            b"iroha.ram_lfe.execute.plaintext_bfv.v1".as_slice(),
+            &program_id_bytes(&program_policy.program_id),
+            input,
         ]
         .concat(),
     )
@@ -472,7 +557,12 @@ mod tests {
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner.clone(), &signer, &secret);
-        service.register_policy_runtime(policy_id.clone(), secret, signer.clone(), Some(30_000));
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            signer.clone(),
+            Some(30_000),
+        );
 
         let draft = service
             .derive(&policy, &program_policy, "+15551234567")
@@ -517,7 +607,8 @@ mod tests {
             .expect_err("missing runtime must fail");
         assert!(matches!(
             err,
-            IdentifierResolutionError::UnknownPolicy(found) if found == policy_id
+            IdentifierResolutionError::UnknownProgram(found)
+                if found == program_policy.program_id
         ));
     }
 
@@ -530,7 +621,12 @@ mod tests {
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        service.register_policy_runtime(policy_id.clone(), secret, signer, Some(30_000));
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            signer,
+            Some(30_000),
+        );
 
         let public_parameters =
             decode_bfv_public_parameters(&program_policy).expect("decode BFV params");
@@ -556,7 +652,12 @@ mod tests {
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        service.register_policy_runtime(policy_id, secret, signer, Some(30_000));
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            signer,
+            Some(30_000),
+        );
 
         let first = service
             .derive(&policy, &program_policy, "+15551234567")
@@ -578,7 +679,12 @@ mod tests {
         let secret = b"hidden-phone-policy".to_vec();
         let (policy, program_policy) =
             sample_policy_bundle(policy_id.clone(), owner, &signer, &secret);
-        service.register_policy_runtime(policy_id, secret, signer, Some(30_000));
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            secret,
+            signer,
+            Some(30_000),
+        );
 
         let plaintext = service
             .derive(&policy, &program_policy, "+15551234567")

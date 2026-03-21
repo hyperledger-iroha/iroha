@@ -41329,6 +41329,7 @@ mod tests {
                 from_handler: "query".parse().expect("valid name"),
                 to_service: service_name.clone(),
                 to_handler: "query".parse().expect("valid name"),
+                payload_bytes: b"payload".to_vec(),
                 payload_commitment: Hash::new(b"payload"),
                 enqueue_sequence: 4,
                 available_after_sequence: 4,

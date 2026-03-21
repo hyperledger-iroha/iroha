@@ -84,10 +84,18 @@ Current Torii routes:
 
 | Route | Purpose |
 |-------|---------|
+| `GET /v1/ram-lfe/program-policies` | Lists active and inactive RAM-LFE program policies plus their public execution metadata, including optional BFV `input_encryption` parameters and the programmed-backend `ram_fhe_profile`. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Accepts exactly one of `{ input_hex }` or `{ encrypted_input }` and returns the stateless `RamLfeExecutionReceipt` plus `{ output_hex, output_hash, receipt_hash }` for the selected program. The current Torii runtime issues receipts for the programmed BFV backend. |
+| `POST /v1/ram-lfe/receipts/verify` | Statelessly validates a `RamLfeExecutionReceipt` against the published on-chain program policy and optionally checks that a caller-supplied `output_hex` matches the receipt `output_hash`. |
 | `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters, the required `normalization` mode for encrypted client-side input, and `ram_fhe_profile` for programmed BFV policies. |
 | `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint then derives the `opaque:` handle and returns a signed receipt that `ClaimIdentifier` can submit on-chain, including both the raw `signature_payload_hex` and the parsed `signature_payload`. |
 | `POST /v1/identifiers/resolve` | Accepts exactly one of `{ input }` or `{ encrypted_input }`. Plaintext `input` is normalized server-side; BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint resolves the identifier into `{ opaque_id, receipt_hash, uaid, account_id, signature }` when an active claim exists, and also returns the canonical signed payload as `{ signature_payload_hex, signature_payload }`. |
 | `GET /v1/identifiers/receipts/{receipt_hash}` | Looks up the persisted `IdentifierClaimRecord` bound to a deterministic receipt hash so operators and SDKs can audit claim ownership or diagnose replay / mismatch failures without scanning the full identifier index. |
+
+Torii's in-process execution runtime is configured under
+`torii.ram_lfe.programs[*]`, keyed by `program_id`. The identifier routes now
+reuse that same RAM-LFE runtime instead of a separate `identifier_resolver`
+config surface.
 
 Current SDK support:
 

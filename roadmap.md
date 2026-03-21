@@ -1,6 +1,52 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-20
+Last updated: 2026-03-21
+
+Latest sync (2026-03-21 Soracloud authoritative local reads + apartment execution):
+`crates/iroha_core/src/soracloud_runtime.rs`,
+`crates/irohad/src/soracloud_runtime.rs`,
+`crates/iroha_torii/src/{lib.rs,soracloud.rs}`,
+`crates/iroha_data_model/src/soracloud.rs`, and
+`crates/iroha_config/src/parameters/{actual.rs,user.rs}` now close the next
+runtime-plane slice:
+
+- the shared Soracloud runtime API now carries canonical local-read request
+  envelopes, certified response metadata/bindings, and explicit apartment
+  operation/result commitments,
+- the embedded runtime manager now serves authoritative asset/query fast-path
+  reads from the committed snapshot plus the hydrated local cache, and rejects
+  stale/unhydrated reads/apartment operations with `Unavailable` instead of
+  serving uncertified data,
+- Torii now resolves public Soracloud asset/query routes directly from
+  authoritative world state and serves them through the shared runtime
+  interface, returning `503` when the local runtime snapshot is behind, and
+- authoritative Soracloud mailbox messages now persist opaque `payload_bytes`
+  alongside `payload_commitment`, removing the commitment-only mailbox model
+  gap ahead of the real IVM ordered-mailbox cutover.
+
+Validation completed so far:
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-target cargo test -p iroha_torii soracloud_public_local_read_route --lib`
+- `CARGO_HOME=/tmp/iroha-codex-cargo-home-irohad CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-target cargo test -p irohad execute_local_read`
+- `CARGO_HOME=/tmp/iroha-codex-cargo-home-irohad CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-target cargo test -p irohad execute_apartment_returns_authoritative_status_and_commitment`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-target cargo test -p iroha_data_model service_mailbox_message_validate`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-core-target cargo test -p iroha_core validate_and_record_transactions_persists_soracloud_mailbox_state_mutations`
+
+Open work for this slice now remains:
+- replace the synthetic ordered-mailbox executor in
+  `crates/irohad/src/soracloud_runtime.rs` with real IVM `update` /
+  `private_update` execution using the authoritative mailbox payload bytes,
+- teach the embedded runtime manager to fetch/verify missing Soracloud bundles
+  and artifacts from SoraFS/DA, rebuild hydrated state from committed world
+  state after restart, and prune deterministically by authoritative observation
+  order and stable key,
+- delete or re-home the remaining Torii Soracloud shadow-registry code/tests
+  now that public local reads are served from authoritative state plus the
+  embedded runtime snapshot,
+- implement the node-local private-runtime capability layer (secrets,
+  credential pools, wrapped secret unwrap, egress enforcement, quotas, and
+  ciphertext-only write-back paths), and
+- redefine the IVM cloud-runtime ABI/syscall surface and refresh docs/goldens
+  once the real host execution path is in place.
 
 Latest sync (2026-03-21 Soracloud IVM-only admission/runtime cutover):
 `crates/iroha_data_model/src/soracloud.rs`,
@@ -82,6 +128,84 @@ Open work for this slice now remains:
 - redefine the IVM runtime/admission/syscall docs/tests around the new
   first-release cloud-runtime ABI once the real runtime host exists.
 
+Latest sync (2026-03-20 JS/Swift/Android RAM-LFE client surface):
+`javascript/iroha_js/{src/toriiClient.js,test/toriiClient.ramLfe.test.js,index.d.ts}`,
+`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
+`IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`,
+and
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/{HttpClientTransport.java,RamLfeJsonParser.java,RamLfeProgramPolicySummary.java,RamLfeProgramPolicyListResponse.java,RamLfeExecuteRequest.java,RamLfeExecuteResponse.java,RamLfeReceiptVerifyRequest.java,RamLfeReceiptVerifyResponse.java}`
+plus
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+now close the SDK API-shape half of the generic RAM-LFE follow-up:
+
+- the JS SDK now exposes `listRamLfeProgramPolicies(...)`,
+  `executeRamLfeProgram(...)`, and `verifyRamLfeReceipt(...)`,
+- the Swift SDK now exposes matching async and completion-based RAM-LFE policy,
+  execute, and verify methods plus typed request/response models,
+- the Android SDK now exposes matching `HttpClientTransport` RAM-LFE helpers
+  and DTO/parser coverage, and
+- Swift and Android SDKs both preserve nested execution receipts as raw JSON
+  maps so execute-response receipts can be posted back to
+  `/v1/ram-lfe/receipts/verify` without guessing the data-model JSON wire form
+  for nested `program_id`, enum-tagged `verification_mode`, or nullable
+  `signature` / `proof` members.
+
+Targeted validation passed:
+- `swift test --filter ToriiClientTests/testListRamLfeProgramPoliciesAsync`
+- `swift test --filter ToriiClientTests/testExecuteRamLfeProgramAsync`
+- `swift test --filter ToriiClientTests/testExecuteRamLfeProgramReturnsNilOnNotFound`
+- `swift test --filter ToriiClientTests/testVerifyRamLfeReceiptAsync`
+- `git diff --check`
+
+Validation still blocked in this environment:
+- JS tests are pending local execution because `node` / `npm` are unavailable.
+- Android tests are pending local execution because no Java runtime is installed.
+
+Latest sync (2026-03-20 generic Torii RAM-LFE routes + `torii.ram_lfe` config):
+`crates/iroha_config/src/parameters/{actual.rs,user.rs,defaults.rs}`,
+`crates/iroha_torii/src/{identifier_resolution.rs,lib.rs,routing.rs,openapi.rs,test_utils.rs}`,
+`crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs`,
+`crates/iroha_torii/tests/connect_gating.rs`,
+and
+`docs/source/universal_accounts_guide.md`
+now close the Torii runtime/config/API half of the generic RAM-LFE follow-up:
+
+- the in-process app runtime is now configured under `torii.ram_lfe`, with
+  `programs[*]` keyed by `program_id` instead of identifier policy id,
+- Torii now exposes:
+  - `GET /v1/ram-lfe/program-policies`,
+  - `POST /v1/ram-lfe/programs/{program_id}/execute`, and
+  - `POST /v1/ram-lfe/receipts/verify`,
+- program-policy list responses publish decoded BFV input-encryption metadata
+  and the programmed `ram_fhe_profile`,
+- generic execute responses now return stateless `RamLfeExecutionReceipt`
+  payloads plus `{ output_hex, output_hash, receipt_hash, opaque_hash }`,
+- receipt verification is now a shared stateless helper wired through
+  `iroha_core::smartcontracts::isi::ram_lfe::validate_execution_receipt(...)`,
+  so Torii reuses the same attestation checks as core admission,
+- identifier routes still work, but they now reuse the shared RAM-LFE runtime
+  keyed by `program_id` rather than the removed `torii.identifier_resolver`
+  config surface, and
+- proof-mode receipt issuance is now rejected explicitly until a prover runtime
+  is wired, rather than emitting invalid signed receipts for proof-mode
+  policies.
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_config torii_ram_lfe_parses -- --nocapture`
+- `cargo test -p iroha_torii --lib ram_lfe -- --nocapture`
+- `cargo test -p iroha_torii --lib identifier_ -- --nocapture`
+
+Open work for this slice now remains:
+- add explicit Torii prover runtime/config support for
+  `verification_mode = proof` RAM-LFE policies so execute/claim-receipt flows
+  can issue proof-carrying receipts instead of rejecting them,
+- execute the new JS and Android RAM-LFE client suites once local `node` and
+  Java toolchains are available, then fold those commands into the validation
+  checklist for this slice,
+- run the broader workspace validation sweep once the multi-hour budget is
+  available.
+
 Latest sync (2026-03-20 authoritative Soracloud mailbox state-mutation write-back):
 `crates/iroha_core/src/{block.rs,smartcontracts/isi/soracloud.rs}`
 now close the next core execution gap in the private-runtime mailbox path:
@@ -123,7 +247,6 @@ Open work for this slice now remains:
   real execution host and authoritative read paths fully cover those flows,
 - redefine the IVM runtime/admission/syscall docs/tests around the new
   first-release cloud-runtime ABI once the real runtime host exists.
-
 Latest sync (2026-03-20 core Soracloud mailbox execution path):
 `crates/iroha_core/src/{soracloud_runtime.rs,state.rs,block.rs,smartcontracts/isi/soracloud.rs}`
 and

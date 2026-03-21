@@ -1910,6 +1910,32 @@ export class ToriiClient {
   }
 
   /**
+   * List globally registered RAM-LFE program policies (`GET /v1/ram-lfe/program-policies`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{total: number, items: Array<Record<string, unknown>>}>}
+   */
+  async listRamLfeProgramPolicies(options = {}) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "listRamLfeProgramPolicies",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "listRamLfeProgramPolicies options");
+    const response = await this._request("GET", "/v1/ram-lfe/program-policies", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("ram-lfe program policy list endpoint returned no payload");
+    }
+    return normalizeRamLfeProgramPolicyListResponse(
+      payload,
+      "ram-lfe program policy list response",
+    );
+  }
+
+  /**
    * Resolve an identifier through a hidden-function policy (`POST /v1/identifiers/resolve`).
    * Returns null when the policy or identifier binding is missing (404).
    * @param {{policyId: string, input?: string, encryptedInput?: string, signal?: AbortSignal}} options
@@ -1944,6 +1970,53 @@ export class ToriiClient {
       throw new Error("identifier resolve endpoint returned no payload");
     }
     return normalizeIdentifierResolveResponse(body, "identifier resolve response");
+  }
+
+  /**
+   * Execute one RAM-LFE program from plaintext or BFV-encrypted input
+   * (`POST /v1/ram-lfe/programs/{program_id}/execute`).
+   * Returns null when the program policy is missing (404).
+   * @param {string} programId
+   * @param {{inputHex?: string, encryptedInput?: string, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown> | null>}
+   */
+  async executeRamLfeProgram(programId, options) {
+    const normalizedProgramId = requireNonEmptyString(
+      programId,
+      "executeRamLfeProgram.programId",
+    );
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "executeRamLfeProgram",
+    );
+    const payload = buildRamLfeExecuteRequest(rest, "executeRamLfeProgram");
+    const response = await this._request(
+      "POST",
+      `/v1/ram-lfe/programs/${encodeURIComponent(normalizedProgramId)}/execute`,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    if (response.status === 409) {
+      throw new Error("RAM-LFE program policy is inactive");
+    }
+    if (response.status === 503) {
+      throw new Error("RAM-LFE runtime is disabled on the target node");
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("ram-lfe execute endpoint returned no payload");
+    }
+    return normalizeRamLfeExecuteResponse(body, "ram-lfe execute response");
   }
 
   /**
@@ -2030,6 +2103,37 @@ export class ToriiClient {
       throw new Error("identifier claim-receipt endpoint returned no payload");
     }
     return normalizeIdentifierResolveResponse(body, "identifier claim receipt response");
+  }
+
+  /**
+   * Verify a RAM-LFE execution receipt against the node's registered program policy
+   * (`POST /v1/ram-lfe/receipts/verify`).
+   * @param {{receipt: Record<string, unknown>, outputHex?: string, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async verifyRamLfeReceipt(options) {
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "verifyRamLfeReceipt",
+    );
+    const payload = buildRamLfeReceiptVerifyRequest(rest, "verifyRamLfeReceipt");
+    const response = await this._request("POST", "/v1/ram-lfe/receipts/verify", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("ram-lfe receipt verify endpoint returned no payload");
+    }
+    return normalizeRamLfeReceiptVerifyResponse(
+      body,
+      "ram-lfe receipt verify response",
+    );
   }
 
   /**
@@ -17605,6 +17709,59 @@ function buildIdentifierResolveRequest(options, context) {
   return payload;
 }
 
+function buildRamLfeExecuteRequest(options, context) {
+  const record = ensureRecord(options, `${context} options`);
+  assertSupportedOptionKeys(
+    record,
+    new Set(["inputHex", "encryptedInput"]),
+    `${context} options`,
+  );
+  const hasInputHex = record.inputHex !== undefined && record.inputHex !== null;
+  const hasEncryptedInput =
+    record.encryptedInput !== undefined && record.encryptedInput !== null;
+  if (hasInputHex === hasEncryptedInput) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options must supply exactly one of inputHex or encryptedInput`,
+      `${context}.inputHex`,
+    );
+  }
+  if (hasInputHex) {
+    return {
+      input_hex: requireHexString(record.inputHex, `${context}.inputHex`),
+    };
+  }
+  return {
+    encrypted_input: requireHexString(
+      record.encryptedInput,
+      `${context}.encryptedInput`,
+    ),
+  };
+}
+
+function buildRamLfeReceiptVerifyRequest(options, context) {
+  const record = ensureRecord(options, `${context} options`);
+  assertSupportedOptionKeys(
+    record,
+    new Set(["receipt", "outputHex"]),
+    `${context} options`,
+  );
+  if (record.receipt === undefined || record.receipt === null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options must supply a receipt object`,
+      `${context}.receipt`,
+    );
+  }
+  const payload = {
+    receipt: ensureRecord(record.receipt, `${context}.receipt`),
+  };
+  if (record.outputHex !== undefined && record.outputHex !== null) {
+    payload.output_hex = requireHexString(record.outputHex, `${context}.outputHex`);
+  }
+  return payload;
+}
+
 function normalizeIdentifierBfvParameters(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   return {
@@ -18078,6 +18235,72 @@ function normalizeIdentifierPolicyListResponse(
   };
 }
 
+function normalizeRamLfeProgramPolicyListResponse(
+  payload,
+  context = "ram-lfe program policy list response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const itemsValue = record.items;
+  if (!Array.isArray(itemsValue)) {
+    throw new Error(`${context}.items must be an array`);
+  }
+  return {
+    total: ToriiClient._normalizeUnsignedInteger(record.total ?? itemsValue.length, `${context}.total`, {
+      allowZero: true,
+    }),
+    items: itemsValue.map((item, index) =>
+      normalizeRamLfeProgramPolicySummary(item, `${context}.items[${index}]`),
+    ),
+  };
+}
+
+function normalizeRamLfeProgramPolicySummary(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const result = {
+    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
+    owner: ToriiClient._requireAccountId(record.owner, `${context}.owner`),
+    active: record.active === true,
+    resolver_public_key: requireNonEmptyString(
+      record.resolver_public_key,
+      `${context}.resolver_public_key`,
+    ),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    verification_mode: requireNonEmptyString(
+      record.verification_mode,
+      `${context}.verification_mode`,
+    ).toLowerCase(),
+  };
+  if (record.input_encryption !== undefined && record.input_encryption !== null) {
+    result.input_encryption = requireNonEmptyString(
+      record.input_encryption,
+      `${context}.input_encryption`,
+    );
+  }
+  if (
+    record.input_encryption_public_parameters !== undefined &&
+    record.input_encryption_public_parameters !== null
+  ) {
+    result.input_encryption_public_parameters = requireHexString(
+      record.input_encryption_public_parameters,
+      `${context}.input_encryption_public_parameters`,
+    );
+  }
+  if (
+    record.input_encryption_public_parameters_decoded !== undefined &&
+    record.input_encryption_public_parameters_decoded !== null
+  ) {
+    result.input_encryption_public_parameters_decoded =
+      normalizeIdentifierBfvPublicParameters(
+        record.input_encryption_public_parameters_decoded,
+        `${context}.input_encryption_public_parameters_decoded`,
+      );
+  }
+  if (record.note !== undefined && record.note !== null) {
+    result.note = requireNonEmptyString(record.note, `${context}.note`);
+  }
+  return result;
+}
+
 function normalizeIdentifierPolicySummary(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const result = {
@@ -18210,8 +18433,73 @@ function normalizeIdentifierClaimLookupResponse(
           record.expires_at_ms,
           `${context}.expires_at_ms`,
           { allowZero: true },
-        ),
+    ),
   };
+}
+
+function normalizeRamLfeExecuteResponse(
+  payload,
+  context = "ram-lfe execute response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
+    opaque_hash: requireNonEmptyString(record.opaque_hash, `${context}.opaque_hash`),
+    receipt_hash: requireNonEmptyString(record.receipt_hash, `${context}.receipt_hash`),
+    output_hex: requireHexString(record.output_hex, `${context}.output_hex`),
+    output_hash: requireNonEmptyString(record.output_hash, `${context}.output_hash`),
+    associated_data_hash: requireNonEmptyString(
+      record.associated_data_hash,
+      `${context}.associated_data_hash`,
+    ),
+    executed_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.executed_at_ms,
+      `${context}.executed_at_ms`,
+      { allowZero: true },
+    ),
+    expires_at_ms:
+      record.expires_at_ms === undefined || record.expires_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+          record.expires_at_ms,
+          `${context}.expires_at_ms`,
+          { allowZero: true },
+        ),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    verification_mode: requireNonEmptyString(
+      record.verification_mode,
+      `${context}.verification_mode`,
+    ).toLowerCase(),
+    receipt: ensureRecord(record.receipt ?? {}, `${context}.receipt`),
+  };
+}
+
+function normalizeRamLfeReceiptVerifyResponse(
+  payload,
+  context = "ram-lfe receipt verify response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const result = {
+    valid: record.valid === true,
+    program_id: requireNonEmptyString(record.program_id, `${context}.program_id`),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    verification_mode: requireNonEmptyString(
+      record.verification_mode,
+      `${context}.verification_mode`,
+    ).toLowerCase(),
+    output_hash: requireNonEmptyString(record.output_hash, `${context}.output_hash`),
+    associated_data_hash: requireNonEmptyString(
+      record.associated_data_hash,
+      `${context}.associated_data_hash`,
+    ),
+  };
+  if (record.output_hash_matches !== undefined && record.output_hash_matches !== null) {
+    result.output_hash_matches = record.output_hash_matches === true;
+  }
+  if (record.error !== undefined && record.error !== null) {
+    result.error = requireNonEmptyString(record.error, `${context}.error`);
+  }
+  return result;
 }
 
 function buildSorafsAliasListParams(options = {}) {

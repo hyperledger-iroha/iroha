@@ -9,6 +9,7 @@ import java.security.KeyPairGenerator;
 import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -81,10 +82,14 @@ public final class HttpClientTransportTests {
     uaidBindingsRequestParsesResponse();
     uaidManifestsRequestSupportsQuery();
     identifierPoliciesRequestParsesResponse();
+    ramLfeProgramPoliciesRequestParsesResponse();
     identifierResolveRequestParsesResponse();
     identifierResolveRequestAllowsNotFound();
     identifierClaimLookupAllowsNotFound();
     identifierClaimReceiptUsesAccountPath();
+    ramLfeExecuteRequestParsesResponse();
+    ramLfeExecuteRequestAllowsNotFound();
+    ramLfeReceiptVerifyUsesRawReceipt();
     identifierNormalizationCanonicalizesInputs();
     identifierResolveRequestBuilderCanonicalizesPolicyInput();
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
@@ -1013,6 +1018,57 @@ public final class HttpClientTransportTests {
         : "Identifier policy request must accept JSON";
   }
 
+  private static void ramLfeProgramPoliciesRequestParsesResponse() {
+    final String json =
+        "{"
+            + "\"total\":1,"
+            + "\"items\":[{"
+            + "\"program_id\":\"identifier_lookup_retail\","
+            + "\"owner\":\"alice@wonderland\","
+            + "\"active\":true,"
+            + "\"resolver_public_key\":\"ed25519:resolver-key\","
+            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+            + "\"verification_mode\":\"signed\","
+            + "\"input_encryption\":\"bfv-v1\","
+            + "\"input_encryption_public_parameters\":\"ABCD\","
+            + "\"input_encryption_public_parameters_decoded\":{"
+            + "\"parameters\":{\"polynomial_degree\":64,\"plaintext_modulus\":257,\"ciphertext_modulus\":1099511627776,\"decomposition_base_log\":12},"
+            + "\"public_key\":{\"b\":[1,2,3],\"a\":[4,5,6]},"
+            + "\"max_input_bytes\":32"
+            + "},"
+            + "\"note\":\"retail programmed policy\""
+            + "}]"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final RamLfeProgramPolicyListResponse response = transport.listRamLfeProgramPolicies().join();
+    assert response.total() == 1L : "RAM-LFE policy list total mismatch";
+    assert response.items().size() == 1 : "Expected one RAM-LFE program policy";
+    final RamLfeProgramPolicySummary item = response.items().get(0);
+    assert "identifier_lookup_retail".equals(item.programId()) : "Program id mismatch";
+    assert "alice@wonderland".equals(item.owner()) : "Owner mismatch";
+    assert item.active() : "Program policy should be active";
+    assert "signed".equals(item.verificationMode()) : "Verification mode mismatch";
+    assert "bfv-v1".equals(item.inputEncryption()) : "Input encryption mismatch";
+    assert item.inputEncryptionPublicParametersDecoded() != null
+        : "Decoded BFV parameters should be present";
+    assert item.inputEncryptionPublicParametersDecoded().parameters().polynomialDegree() == 64L
+        : "Decoded BFV polynomial degree mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "RAM-LFE policy request must be captured";
+    assert "GET".equals(request.method()) : "RAM-LFE policy list must use GET";
+    assert request.uri().toString().equals("https://torii.example/v1/ram-lfe/program-policies")
+        : "RAM-LFE policy URI mismatch";
+    assert request.headers().getOrDefault("Accept", List.of()).contains("application/json")
+        : "RAM-LFE policy request must accept JSON";
+  }
+
   private static IdentifierReceiptFixture signedIdentifierReceiptFixture(
       final long resolvedAtMs, final Long expiresAtMs) {
     try {
@@ -1227,6 +1283,135 @@ public final class HttpClientTransportTests {
         : "Identifier claim receipt path must encode account id";
     assert readBody(request).equals("{\"encrypted_input\":\"abcd\",\"policy_id\":\"phone#retail\"}")
         : "Identifier claim payload mismatch";
+  }
+
+  private static void ramLfeExecuteRequestParsesResponse() {
+    final String json =
+        "{"
+            + "\"program_id\":\"identifier_lookup_retail\","
+            + "\"opaque_hash\":\"opaque-hash-literal\","
+            + "\"receipt_hash\":\"receipt-hash-literal\","
+            + "\"output_hex\":\"c0ffee\","
+            + "\"output_hash\":\"output-hash-literal\","
+            + "\"associated_data_hash\":\"associated-data-hash-literal\","
+            + "\"executed_at_ms\":42,"
+            + "\"expires_at_ms\":142,"
+            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+            + "\"verification_mode\":\"signed\","
+            + "\"receipt\":{"
+            + "\"payload\":{"
+            + "\"program_id\":{\"name\":\"identifier_lookup_retail\"},"
+            + "\"program_digest\":\"hash:"
+            + "11".repeat(32).toUpperCase()
+            + "#ABCD\","
+            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+            + "\"verification_mode\":{\"mode\":\"Signed\",\"value\":null},"
+            + "\"output_hash\":\"hash:"
+            + "22".repeat(32).toUpperCase()
+            + "#BCDE\","
+            + "\"associated_data_hash\":\"hash:"
+            + "33".repeat(32).toUpperCase()
+            + "#CDEF\","
+            + "\"executed_at_ms\":42,"
+            + "\"expires_at_ms\":142"
+            + "},"
+            + "\"signature\":\""
+            + "aa".repeat(64)
+            + "\""
+            + "}"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<RamLfeExecuteResponse> response =
+        transport.executeRamLfeProgram("identifier_lookup_retail", "0xABCD", null).join();
+    assert response.isPresent() : "Expected RAM-LFE execute response";
+    final RamLfeExecuteResponse execute = response.orElseThrow();
+    assert "identifier_lookup_retail".equals(execute.programId()) : "Program id mismatch";
+    assert "c0ffee".equals(execute.outputHex()) : "Output hex mismatch";
+    assert "signed".equals(execute.verificationMode()) : "Verification mode mismatch";
+    assert execute.receipt().containsKey("payload") : "Raw receipt payload must be preserved";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "RAM-LFE execute request must be captured";
+    assert "POST".equals(request.method()) : "RAM-LFE execute must use POST";
+    assert request
+        .uri()
+        .toString()
+        .equals("https://torii.example/v1/ram-lfe/programs/identifier_lookup_retail/execute")
+        : "RAM-LFE execute URI mismatch";
+    assert readBody(request).equals("{\"input_hex\":\"abcd\"}") : "RAM-LFE execute payload mismatch";
+  }
+
+  private static void ramLfeExecuteRequestAllowsNotFound() {
+    final StubResponseExecutor executor = new StubResponseExecutor(404, new byte[0], "not found");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<RamLfeExecuteResponse> response =
+        transport.executeRamLfeProgram("identifier_lookup_retail", null, "ABCD").join();
+    assert response.isEmpty() : "404 RAM-LFE execute should return Optional.empty";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "RAM-LFE execute request must be captured";
+    assert readBody(request).equals("{\"encrypted_input\":\"abcd\"}")
+        : "Encrypted RAM-LFE execute payload mismatch";
+  }
+
+  private static void ramLfeReceiptVerifyUsesRawReceipt() {
+    final String json =
+        "{"
+            + "\"valid\":true,"
+            + "\"program_id\":\"identifier_lookup_retail\","
+            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+            + "\"verification_mode\":\"signed\","
+            + "\"output_hash\":\"output-hash-literal\","
+            + "\"associated_data_hash\":\"associated-data-hash-literal\","
+            + "\"output_hash_matches\":true"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final Map<String, Object> verificationMode = new LinkedHashMap<>();
+    verificationMode.put("mode", "Signed");
+    verificationMode.put("value", null);
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("program_id", Map.of("name", "identifier_lookup_retail"));
+    payload.put("backend", "bfv-programmed-sha3-256-v1");
+    payload.put("verification_mode", verificationMode);
+    payload.put("program_digest", "hash:" + "11".repeat(32).toUpperCase() + "#ABCD");
+    payload.put("output_hash", "hash:" + "22".repeat(32).toUpperCase() + "#BCDE");
+    payload.put(
+        "associated_data_hash", "hash:" + "33".repeat(32).toUpperCase() + "#CDEF");
+    payload.put("executed_at_ms", 42L);
+    payload.put("expires_at_ms", 142L);
+    final Map<String, Object> receipt = new LinkedHashMap<>();
+    receipt.put("payload", payload);
+    receipt.put("signature", "aa".repeat(64));
+
+    final RamLfeReceiptVerifyResponse response =
+        transport.verifyRamLfeReceipt(receipt, "C0FFEE").join();
+    assert response.valid() : "RAM-LFE verify response should be valid";
+    assert "identifier_lookup_retail".equals(response.programId()) : "Program id mismatch";
+    assert Boolean.TRUE.equals(response.outputHashMatches()) : "Output-hash match mismatch";
+
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "RAM-LFE verify request must be captured";
+    assert request.uri().toString().equals("https://torii.example/api/v1/ram-lfe/receipts/verify")
+        : "RAM-LFE verify URI mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> payload = (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert "c0ffee".equals(payload.get("output_hex")) : "Verify output_hex mismatch";
+    assert payload.get("receipt") instanceof Map<?, ?> : "Verify request must preserve raw receipt";
   }
 
   private static void identifierNormalizationCanonicalizesInputs() {

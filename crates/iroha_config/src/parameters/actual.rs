@@ -54,7 +54,6 @@ use iroha_data_model::{
     },
     domain::DomainId,
     hijiri::HijiriFeePolicy as ModelHijiriFeePolicy,
-    identifier::IdentifierPolicyId,
     jurisdiction::JdgSignatureScheme,
     name::Name,
     nexus::{
@@ -4927,8 +4926,8 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional offline certificate issuer configuration.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
-    /// Optional hidden-identifier resolver runtime configuration.
-    pub identifier_resolver: Option<ToriiIdentifierResolver>,
+    /// Optional RAM-LFE runtime configuration.
+    pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration.
     pub tx_history: Option<ToriiTxHistory>,
     /// App-facing query/backpressure limits.
@@ -5468,23 +5467,23 @@ pub struct ToriiOfflineIssuer {
     pub allowed_controllers: Vec<AccountId>,
 }
 
-/// Hidden-identifier resolver configuration exposed to Torii.
+/// RAM-LFE runtime configuration exposed to Torii.
 #[derive(Debug, Clone)]
-pub struct ToriiIdentifierResolver {
-    /// Policy runtimes keyed by on-chain policy id.
-    pub policies: Vec<ToriiIdentifierResolverPolicy>,
+pub struct ToriiRamLfe {
+    /// Program runtimes keyed by on-chain RAM-LFE program id.
+    pub programs: Vec<ToriiRamLfeProgram>,
 }
 
-/// Per-policy secret/signer material for the Torii identifier resolver.
+/// Per-program secret/signer material for the Torii RAM-LFE runtime.
 #[derive(Debug, Clone)]
-pub struct ToriiIdentifierResolverPolicy {
-    /// On-chain policy namespace handled by this runtime entry.
-    pub policy_id: IdentifierPolicyId,
-    /// Hidden derivation secret committed by the on-chain policy.
+pub struct ToriiRamLfeProgram {
+    /// On-chain RAM-LFE program handled by this runtime entry.
+    pub program_id: iroha_data_model::ram_lfe::RamLfeProgramId,
+    /// Hidden derivation secret committed by the on-chain program policy.
     pub secret: Vec<u8>,
-    /// Private key used to sign receipts for this policy.
+    /// Private key used to sign receipts for this program.
     pub signer_private_key: ExposedPrivateKey,
-    /// Optional receipt TTL enforced by the resolver.
+    /// Optional receipt TTL enforced by the runtime.
     pub receipt_ttl: Option<Duration>,
 }
 

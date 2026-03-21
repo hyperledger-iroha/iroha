@@ -225,13 +225,48 @@ pub struct SoracloudLocalReadRequest {
     pub handler_name: String,
     /// Handler class for the request.
     pub handler_class: SoracloudLocalReadKind,
+    /// HTTP method or logical read method used to invoke the handler.
+    pub request_method: String,
+    /// Full request path as received by Torii.
+    pub request_path: String,
+    /// Request path relative to the matched handler route.
+    pub handler_path: String,
+    /// Optional raw query string without the leading `?`.
+    pub request_query: Option<String>,
+    /// Canonicalized request headers made visible to the handler.
+    pub request_headers: BTreeMap<String, String>,
+    /// Opaque request payload bytes supplied to the handler.
+    pub request_body: Vec<u8>,
     /// Deterministic commitment over the request envelope.
     pub request_commitment: Hash,
+}
+
+/// Committed artifact/state binding attached to a certified local read response.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudLocalReadBinding {
+    /// Binding name when the response is derived from authoritative service state.
+    pub binding_name: Option<String>,
+    /// State key when the response is derived from a specific state entry.
+    pub state_key: Option<String>,
+    /// Commitment for the bound state entry, when applicable.
+    pub payload_commitment: Option<Hash>,
+    /// Bound artifact digest when the response is served from hydrated local content.
+    pub artifact_hash: Option<Hash>,
 }
 
 /// Shared response envelope for deterministic local Soracloud reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoracloudLocalReadResponse {
+    /// Raw response bytes emitted by the runtime.
+    pub response_bytes: Vec<u8>,
+    /// MIME type of the response payload, when known.
+    pub content_type: Option<String>,
+    /// Optional content encoding metadata for the response.
+    pub content_encoding: Option<String>,
+    /// Optional cache-control metadata for the response.
+    pub cache_control: Option<String>,
+    /// Committed bindings that certify the response payload.
+    pub bindings: Vec<SoracloudLocalReadBinding>,
     /// Commitment over the response envelope.
     pub result_commitment: Hash,
     /// Certification mode selected for this read.
@@ -298,17 +333,30 @@ pub struct SoracloudOrderedMailboxExecutionResult {
 pub struct SoracloudApartmentExecutionRequest {
     /// Authoritative height pinned for the apartment execution.
     pub observed_height: u64,
+    /// Latest committed block hash visible to the runtime.
+    pub observed_block_hash: Option<Hash>,
     /// Apartment targeted by the runtime.
     pub apartment_name: String,
     /// Expected apartment process generation.
     pub process_generation: u64,
+    /// Logical apartment operation to execute.
+    pub operation: String,
+    /// Deterministic commitment over the apartment request.
+    pub request_commitment: Hash,
 }
 
 /// Shared result for deterministic apartment execution.
+#[allow(missing_copy_implementations)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SoracloudApartmentExecutionResult {
     /// Latest apartment status reported by the runtime.
     pub status: SoraAgentRuntimeStatusV1,
+    /// Optional committed checkpoint hash materialized by the operation.
+    pub checkpoint_artifact_hash: Option<Hash>,
+    /// Optional committed journal hash materialized by the operation.
+    pub journal_artifact_hash: Option<Hash>,
+    /// Deterministic commitment over the apartment result.
+    pub result_commitment: Hash,
 }
 
 /// Shared execution interface for the embedded Soracloud runtime.

@@ -18,6 +18,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use iroha_core::soracloud_runtime::SoracloudLocalReadKind;
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -1037,6 +1038,15 @@ pub(crate) struct RegistrySnapshot {
     pub services: Vec<ServiceStatusSnapshot>,
     #[norito(default)]
     pub recent_audit_events: Vec<RegistryAuditEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalReadRouteMatch {
+    pub service_name: String,
+    pub service_version: String,
+    pub handler_name: String,
+    pub handler_class: SoracloudLocalReadKind,
+    pub handler_path: String,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -8584,6 +8594,130 @@ fn deployment_bundle_to_registry_revision(
     }
 }
 
+pub(crate) fn resolve_public_local_read_route(
+    app: &SharedAppState,
+    host: &str,
+    request_path: &str,
+) -> Option<LocalReadRouteMatch> {
+    let normalized_host = normalize_public_route_host(host);
+    if normalized_host.is_empty() {
+        return None;
+    }
+    let normalized_path = normalize_public_route_path(request_path);
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let mut best_match: Option<(usize, LocalReadRouteMatch)> = None;
+
+    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
+        let service_name = service_id.to_string();
+        let Some(bundle) = world.soracloud_service_revisions().get(&(
+            service_name.clone(),
+            deployment.current_service_version.clone(),
+        )) else {
+            continue;
+        };
+        let Some(route) = bundle.service.route.as_ref() else {
+            continue;
+        };
+        if route.visibility != iroha_data_model::soracloud::SoraRouteVisibilityV1::Public {
+            continue;
+        }
+        if !route.host.eq_ignore_ascii_case(normalized_host) {
+            continue;
+        }
+
+        for handler in &bundle.service.handlers {
+            let handler_class = match handler.class {
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Asset => {
+                    SoracloudLocalReadKind::Asset
+                }
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query => {
+                    SoracloudLocalReadKind::Query
+                }
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+                | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate => {
+                    continue;
+                }
+            };
+            let full_route = join_public_route_paths(
+                route.path_prefix.as_str(),
+                handler.route_path.as_deref().unwrap_or("/"),
+            );
+            let Some(handler_path) = split_public_handler_path(normalized_path, &full_route) else {
+                continue;
+            };
+            let route_len = full_route.len();
+            let route_match = LocalReadRouteMatch {
+                service_name: service_name.clone(),
+                service_version: deployment.current_service_version.clone(),
+                handler_name: handler.handler_name.to_string(),
+                handler_class,
+                handler_path,
+            };
+            let replace = best_match.as_ref().is_none_or(|(best_len, best)| {
+                route_len > *best_len
+                    || (route_len == *best_len
+                        && (
+                            route_match.service_name.as_str(),
+                            route_match.service_version.as_str(),
+                            route_match.handler_name.as_str(),
+                        ) < (
+                            best.service_name.as_str(),
+                            best.service_version.as_str(),
+                            best.handler_name.as_str(),
+                        ))
+            });
+            if replace {
+                best_match = Some((route_len, route_match));
+            }
+        }
+    }
+
+    best_match.map(|(_route_len, route_match)| route_match)
+}
+
+fn normalize_public_route_host(host: &str) -> &str {
+    host.trim()
+        .trim_end_matches('.')
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim()
+}
+
+fn normalize_public_route_path(path: &str) -> &str {
+    if path.is_empty() { "/" } else { path }
+}
+
+fn join_public_route_paths(prefix: &str, handler_path: &str) -> String {
+    let prefix = normalize_public_route_path(prefix).trim_end_matches('/');
+    let handler_path = normalize_public_route_path(handler_path).trim_start_matches('/');
+    match (prefix.is_empty(), handler_path.is_empty()) {
+        (true, true) => "/".to_owned(),
+        (true, false) => format!("/{handler_path}"),
+        (false, true) => prefix.to_owned(),
+        (false, false) => format!("{prefix}/{handler_path}"),
+    }
+}
+
+fn split_public_handler_path(request_path: &str, full_route: &str) -> Option<String> {
+    if full_route == "/" {
+        return Some(request_path.to_owned());
+    }
+    if request_path == full_route {
+        return Some("/".to_owned());
+    }
+    if request_path.starts_with(full_route)
+        && request_path
+            .as_bytes()
+            .get(full_route.len())
+            .is_some_and(|separator| *separator == b'/')
+    {
+        return Some(request_path[full_route.len()..].to_owned());
+    }
+    None
+}
+
 pub(crate) fn world_snapshot(
     app: &SharedAppState,
     service_name: Option<&str>,
@@ -10166,6 +10300,64 @@ mod tests {
             assert_eq!(snapshot.recent_audit_events.len(), 1);
             Ok(())
         })
+    }
+
+    #[test]
+    fn resolve_public_local_read_route_uses_authoritative_service_route_state() {
+        use iroha_core::state::World;
+
+        let mut world = World::new();
+        let bundle = fixture_bundle("2026.02.0");
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                },
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let assets = resolve_public_local_read_route(&app, "portal.sora:443", "/app/assets")
+            .expect("asset route");
+        assert_eq!(assets.service_name, "web_portal");
+        assert_eq!(assets.service_version, "2026.02.0");
+        assert_eq!(assets.handler_name, "assets");
+        assert_eq!(assets.handler_class, SoracloudLocalReadKind::Asset);
+        assert_eq!(assets.handler_path, "/");
+
+        let query = resolve_public_local_read_route(&app, "portal.sora", "/app/query/stats")
+            .expect("query route");
+        assert_eq!(query.handler_name, "query");
+        assert_eq!(query.handler_class, SoracloudLocalReadKind::Query);
+        assert_eq!(query.handler_path, "/stats");
+
+        assert!(
+            resolve_public_local_read_route(&app, "portal.sora", "/app/private/update").is_none(),
+            "replicated write handlers must not resolve through the local read fast path"
+        );
+        assert!(
+            resolve_public_local_read_route(&app, "wrong.sora", "/app/assets").is_none(),
+            "host matching must stay authoritative"
+        );
     }
 
     #[test]

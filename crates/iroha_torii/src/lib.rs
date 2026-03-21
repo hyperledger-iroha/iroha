@@ -163,7 +163,7 @@ mod proof_filters;
 use crate::api_version::ApiVersion;
 pub mod sorafs;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     convert::{Infallible, TryInto},
     fmt::Debug,
     fs,
@@ -186,7 +186,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Request, StatusCode, header::HeaderName},
     middleware::Next,
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, post},
+    routing::{any, delete, get, post},
 };
 #[allow(unused_imports)]
 use base64::Engine;
@@ -210,7 +210,9 @@ use iroha_core::{
     prelude::*,
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue},
-    soracloud_runtime::SharedSoracloudRuntimeHandle,
+    soracloud_runtime::{
+        SharedSoracloudRuntime, SoracloudLocalReadRequest, SoracloudRuntimeExecutionErrorKind,
+    },
     state::{
         BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
         TransactionsReadOnly, WorldReadOnly,
@@ -1071,7 +1073,7 @@ struct AppState {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
-    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
+    soracloud_runtime: Option<SharedSoracloudRuntime>,
     #[cfg(feature = "app_api")]
     sns_registry: Arc<sns::Registry>,
 }
@@ -4745,6 +4747,63 @@ fn parse_encrypted_identifier_ciphertext(
 }
 
 #[cfg(feature = "app_api")]
+fn parse_hex_bytes(raw: &str, field_name: &str) -> Result<Vec<u8>, Error> {
+    let literal = raw.trim();
+    if literal.is_empty() {
+        return Err(identifier_conversion_error(format!(
+            "{field_name} must not be empty"
+        )));
+    }
+    hex::decode(literal.trim_start_matches("0x"))
+        .map_err(|err| identifier_conversion_error(format!("{field_name} is not valid hex: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_verification_mode_label(mode: iroha_crypto::RamLfeVerificationMode) -> &'static str {
+    match mode {
+        iroha_crypto::RamLfeVerificationMode::Signed => "signed",
+        iroha_crypto::RamLfeVerificationMode::Proof => "proof",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn derive_ram_lfe_request_draft(
+    resolver: &identifier_resolution::IdentifierResolutionService,
+    program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
+    request: &routing::RamLfeExecuteRequestDto,
+) -> Result<identifier_resolution::RamLfeExecutionDraft, Error> {
+    match (
+        request.input_hex.as_deref(),
+        request.encrypted_input.as_deref(),
+    ) {
+        (Some(input_hex), None) => {
+            let input = parse_hex_bytes(input_hex, "input_hex")?;
+            resolver
+                .execute(program_policy, &input)
+                .map_err(|err| identifier_internal_error(err.to_string()))
+        }
+        (None, Some(ciphertext_hex)) => {
+            let ciphertext = parse_encrypted_identifier_ciphertext(ciphertext_hex)?;
+            resolver
+                .execute_encrypted(program_policy, &ciphertext)
+                .map_err(|err| match err {
+                    identifier_resolution::IdentifierResolutionError::Fhe(_)
+                    | identifier_resolution::IdentifierResolutionError::InvalidUtf8 => {
+                        identifier_conversion_error(err.to_string())
+                    }
+                    _ => identifier_internal_error(err.to_string()),
+                })
+        }
+        (Some(_), Some(_)) => Err(identifier_conversion_error(
+            "supply exactly one of `input_hex` or `encrypted_input`",
+        )),
+        (None, None) => Err(identifier_conversion_error(
+            "one of `input_hex` or `encrypted_input` is required",
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn derive_identifier_request_draft(
     resolver: &identifier_resolution::IdentifierResolutionService,
     policy: &iroha_data_model::identifier::IdentifierPolicy,
@@ -4792,6 +4851,34 @@ fn derive_identifier_request_draft(
 }
 
 #[cfg(feature = "app_api")]
+fn ram_lfe_program_policy_summary_dto(
+    program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
+) -> routing::RamLfeProgramPolicySummaryDto {
+    let public_parameters =
+        identifier_resolution::decode_bfv_public_parameters(program_policy).ok();
+    let ram_fhe_profile = identifier_resolution::decode_ram_fhe_profile(program_policy)
+        .ok()
+        .flatten();
+    routing::RamLfeProgramPolicySummaryDto {
+        program_id: program_policy.program_id.to_string(),
+        owner: program_policy.owner.to_string(),
+        active: program_policy.active,
+        resolver_public_key: program_policy.resolver_public_key.to_string(),
+        backend: program_policy.commitment.backend.as_str().to_owned(),
+        verification_mode: ram_lfe_verification_mode_label(program_policy.verification_mode)
+            .to_owned(),
+        input_encryption: public_parameters.as_ref().map(|_| "bfv-v1".to_owned()),
+        input_encryption_public_parameters: public_parameters
+            .as_ref()
+            .and_then(|value| norito::to_bytes(value).ok())
+            .map(hex::encode_upper),
+        input_encryption_public_parameters_decoded: public_parameters,
+        ram_fhe_profile,
+        note: program_policy.note.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn identifier_policy_summary_dto(
     policy: &iroha_data_model::identifier::IdentifierPolicy,
     program_policy: Option<&iroha_data_model::ram_lfe::RamLfeProgramPolicy>,
@@ -4820,6 +4907,45 @@ fn identifier_policy_summary_dto(
         input_encryption_public_parameters_decoded: public_parameters,
         ram_fhe_profile,
         note: policy.note.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_execute_response(
+    receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+    draft: &identifier_resolution::RamLfeExecutionDraft,
+) -> routing::RamLfeExecuteResponseDto {
+    routing::RamLfeExecuteResponseDto {
+        program_id: receipt.payload.program_id.to_string(),
+        opaque_hash: draft.opaque_hash.to_string(),
+        receipt_hash: draft.receipt_hash.to_string(),
+        output_hex: hex::encode_upper(&draft.output),
+        output_hash: draft.output_hash.to_string(),
+        associated_data_hash: draft.associated_data_hash.to_string(),
+        executed_at_ms: draft.executed_at_ms,
+        expires_at_ms: draft.expires_at_ms,
+        backend: draft.backend.as_str().to_owned(),
+        verification_mode: ram_lfe_verification_mode_label(draft.verification_mode).to_owned(),
+        receipt: receipt.clone(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn ram_lfe_receipt_verify_response(
+    receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
+    output_hash_matches: Option<bool>,
+    error: Option<String>,
+) -> routing::RamLfeReceiptVerifyResponseDto {
+    routing::RamLfeReceiptVerifyResponseDto {
+        valid: error.is_none(),
+        program_id: receipt.payload.program_id.to_string(),
+        backend: receipt.payload.backend.as_str().to_owned(),
+        verification_mode: ram_lfe_verification_mode_label(receipt.payload.verification_mode)
+            .to_owned(),
+        output_hash: receipt.payload.output_hash.to_string(),
+        associated_data_hash: receipt.payload.associated_data_hash.to_string(),
+        output_hash_matches,
+        error,
     }
 }
 
@@ -8140,6 +8266,167 @@ fn soracloud_runtime_status_sections(
     ]);
 
     (service_health, runtime_pressure, runtime_manager)
+}
+
+#[cfg(feature = "app_api")]
+fn canonicalize_soracloud_local_read_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_owned()))
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn soracloud_local_read_request_commitment(request: &SoracloudLocalReadRequest) -> Hash {
+    Hash::new(
+        norito::to_bytes(&(
+            request.observed_height,
+            request.observed_block_hash,
+            request.service_name.as_str(),
+            request.service_version.as_str(),
+            request.handler_name.as_str(),
+            request.handler_class.handler_class(),
+            request.request_method.as_str(),
+            request.request_path.as_str(),
+            request.handler_path.as_str(),
+            request.request_query.clone(),
+            request.request_headers.clone(),
+            request.request_body.clone(),
+        ))
+        .expect("Soracloud local read request commitment encoding should be infallible"),
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn soracloud_local_read_response(
+    response: iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
+) -> Response {
+    let mut builder = Response::builder().status(StatusCode::OK);
+    if let Some(content_type) = response.content_type.as_deref() {
+        builder = builder.header(axum::http::header::CONTENT_TYPE, content_type);
+    }
+    if let Some(content_encoding) = response.content_encoding.as_deref() {
+        builder = builder.header(axum::http::header::CONTENT_ENCODING, content_encoding);
+    }
+    if let Some(cache_control) = response.cache_control.as_deref() {
+        builder = builder.header(axum::http::header::CACHE_CONTROL, cache_control);
+    }
+    builder = builder
+        .header(
+            "x-iroha-soracloud-certified-by",
+            match response.certified_by {
+                iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None => "none",
+                iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::StateCommitment => {
+                    "state_commitment"
+                }
+                iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt => {
+                    "audit_receipt"
+                }
+            },
+        )
+        .header(
+            "x-iroha-soracloud-result-commitment",
+            response.result_commitment.to_string(),
+        );
+
+    if let Ok(bindings_json) = norito::json::to_json(&response.bindings) {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bindings_json);
+        builder = builder.header("x-iroha-soracloud-bindings", encoded);
+    }
+    if let Some(receipt) = response.runtime_receipt.as_ref() {
+        builder = builder.header(
+            "x-iroha-soracloud-receipt-id",
+            receipt.receipt_id.to_string(),
+        );
+        if let Ok(receipt_json) = norito::json::to_json(receipt) {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(receipt_json);
+            builder = builder.header("x-iroha-soracloud-receipt", encoded);
+        }
+    }
+
+    builder
+        .body(Body::from(response.response_bytes))
+        .unwrap_or_else(|error| {
+            iroha_logger::error!(?error, "failed to build Soracloud local-read response");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("failed to build Soracloud local-read response"))
+                .expect("static response build succeeds")
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn soracloud_local_read_error_response(
+    error: iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+) -> Response {
+    let status = match error.kind {
+        SoracloudRuntimeExecutionErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        SoracloudRuntimeExecutionErrorKind::InvalidRequest => StatusCode::BAD_REQUEST,
+        SoracloudRuntimeExecutionErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    Response::builder()
+        .status(status)
+        .body(Body::from(error.message))
+        .unwrap_or_else(|build_error| {
+            iroha_logger::error!(
+                ?build_error,
+                "failed to build Soracloud local-read error response"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        })
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_soracloud_public_local_read(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let Some(route_match) = soracloud::resolve_public_local_read_route(&app, host, uri.path())
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(runtime) = app.soracloud_runtime.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+
+    let state_view = app.state.view();
+    let observed_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+    let observed_block_hash = state_view.latest_block_hash().map(Hash::from);
+    drop(state_view);
+    let request_headers = canonicalize_soracloud_local_read_headers(&headers);
+    let mut request = SoracloudLocalReadRequest {
+        observed_height,
+        observed_block_hash,
+        service_name: route_match.service_name,
+        service_version: route_match.service_version,
+        handler_name: route_match.handler_name,
+        handler_class: route_match.handler_class,
+        request_method: method.as_str().to_owned(),
+        request_path: uri.path().to_owned(),
+        handler_path: route_match.handler_path,
+        request_query: uri.query().map(ToOwned::to_owned),
+        request_headers,
+        request_body: body.to_vec(),
+        request_commitment: Hash::new(b""),
+    };
+    request.request_commitment = soracloud_local_read_request_commitment(&request);
+
+    match runtime.execute_local_read(request) {
+        Ok(response) => soracloud_local_read_response(response),
+        Err(error) => soracloud_local_read_error_response(error),
+    }
 }
 
 #[cfg(feature = "telemetry")]
@@ -14014,6 +14301,117 @@ async fn handler_asset_alias_resolve(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_ram_lfe_program_policies(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, None, "v1/ram-lfe/program-policies").await?;
+    let world = app.state.world_view();
+    let items = world
+        .ram_lfe_program_policies_iter()
+        .map(ram_lfe_program_policy_summary_dto)
+        .collect::<Vec<_>>();
+    json_ok(routing::RamLfeProgramPolicyListDto {
+        total: u64::try_from(items.len()).unwrap_or(u64::MAX),
+        items,
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_ram_lfe_execute(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    AxPath(program_id_literal): AxPath<String>,
+    NoritoJson(request): NoritoJson<routing::RamLfeExecuteRequestDto>,
+) -> Result<AxResponse, Error> {
+    check_access(
+        &app,
+        &headers,
+        None,
+        "v1/ram-lfe/programs/{program_id}/execute",
+    )
+    .await?;
+    let program_id = iroha_data_model::ram_lfe::RamLfeProgramId::from_str(
+        program_id_literal.trim(),
+    )
+    .map_err(|err| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+        ))
+    })?;
+    let world = app.state.world_view();
+    let Some(program_policy) = world.ram_lfe_program_policies().get(&program_id).cloned() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if !program_policy.active {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
+    let Some(resolver) = app.identifier_resolver.as_ref() else {
+        return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
+    };
+    let draft = derive_ram_lfe_request_draft(resolver, &program_policy, &request)?;
+    let receipt = resolver
+        .issue_execution_receipt(&program_policy, &draft)
+        .map_err(|err| identifier_internal_error(err.to_string()))?;
+    json_ok(ram_lfe_execute_response(&receipt, &draft))
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_ram_lfe_receipt_verify(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(request): NoritoJson<routing::RamLfeReceiptVerifyRequestDto>,
+) -> Result<AxResponse, Error> {
+    check_access(&app, &headers, None, "v1/ram-lfe/receipts/verify").await?;
+    let output_hash_matches = match request.output_hex.as_deref() {
+        Some(output_hex) => match parse_hex_bytes(output_hex, "output_hex") {
+            Ok(output) => Some(
+                iroha_crypto::ram_lfe_output_hash(&output) == request.receipt.payload.output_hash,
+            ),
+            Err(err) => {
+                return json_ok(ram_lfe_receipt_verify_response(
+                    &request.receipt,
+                    None,
+                    Some(err.to_string()),
+                ));
+            }
+        },
+        None => None,
+    };
+    let world = app.state.world_view();
+    let Some(program_policy) = world
+        .ram_lfe_program_policies()
+        .get(&request.receipt.payload.program_id)
+        .cloned()
+    else {
+        return json_ok(ram_lfe_receipt_verify_response(
+            &request.receipt,
+            output_hash_matches,
+            Some(format!(
+                "RAM-LFE program policy {} is not registered",
+                request.receipt.payload.program_id
+            )),
+        ));
+    };
+    let validation = iroha_core::smartcontracts::isi::ram_lfe::validate_execution_receipt(
+        &request.receipt,
+        &program_policy,
+    )
+    .err();
+    let validation = match (validation, output_hash_matches) {
+        (None, Some(false)) => {
+            Some("provided output_hex does not match receipt output_hash".to_owned())
+        }
+        (result, _) => result,
+    };
+    json_ok(ram_lfe_receipt_verify_response(
+        &request.receipt,
+        output_hash_matches,
+        validation,
+    ))
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_identifier_policies(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -15189,14 +15587,14 @@ pub struct Torii {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
-    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
+    soracloud_runtime: Option<SharedSoracloudRuntime>,
 }
 
 /// Optional runtime-owned Torii dependencies that are not present in all embeddings.
 #[derive(Clone)]
 pub struct ToriiRuntimeDeps {
     telemetry: routing::MaybeTelemetry,
-    soracloud_runtime: Option<SharedSoracloudRuntimeHandle>,
+    soracloud_runtime: Option<SharedSoracloudRuntime>,
 }
 
 impl ToriiRuntimeDeps {
@@ -15211,7 +15609,7 @@ impl ToriiRuntimeDeps {
 
     /// Attach the embedded Soracloud runtime-manager handle.
     #[must_use]
-    pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntimeHandle) -> Self {
+    pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntime) -> Self {
         self.soracloud_runtime = Some(runtime);
         self
     }
@@ -16114,6 +16512,18 @@ impl Torii {
                     "/v1/space-directory/manifests/revoke",
                     post(handler_space_directory_manifest_revoke),
                 )
+                .route(
+                    "/v1/ram-lfe/program-policies",
+                    get(handler_ram_lfe_program_policies),
+                )
+                .route(
+                    "/v1/ram-lfe/programs/{program_id}/execute",
+                    post(handler_ram_lfe_execute),
+                )
+                .route(
+                    "/v1/ram-lfe/receipts/verify",
+                    post(handler_ram_lfe_receipt_verify),
+                )
                 .route("/v1/identifier-policies", get(handler_identifier_policies))
                 .route(
                     "/v1/accounts/{account_id}/identifiers/claim-receipt",
@@ -16581,6 +16991,12 @@ impl Torii {
                         .route("/v1/webhooks/{id}", delete(handler_webhooks_delete))
                 })
         });
+    }
+
+    #[cfg(feature = "app_api")]
+    fn add_soracloud_public_runtime_routes(&self, builder: &mut RouterBuilder) {
+        let _ = self;
+        builder.apply(|router| router.fallback(any(handler_soracloud_public_local_read)));
     }
 
     #[cfg(feature = "app_api")]
@@ -17342,29 +17758,24 @@ impl Torii {
             }
         });
         #[cfg(feature = "app_api")]
-        let identifier_resolver = config.identifier_resolver.as_ref().and_then(|cfg| {
-            if cfg.policies.is_empty() {
-                iroha_logger::warn!(
-                    "torii.identifier_resolver is enabled but no policies are configured"
-                );
+        let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
+            if cfg.programs.is_empty() {
+                iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
                 return None;
             }
             let service = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-            for (index, policy_cfg) in cfg.policies.iter().enumerate() {
-                let signer =
-                    KeyPair::from_private_key(policy_cfg.signer_private_key.0.clone())
-                        .unwrap_or_else(|err| {
-                            panic!(
-                                "invalid torii.identifier_resolver.policies[{index}].signer_private_key: {err}"
-                            )
-                        });
-                service.register_policy_runtime(
-                    policy_cfg.policy_id.clone(),
-                    policy_cfg.secret.clone(),
+            for (index, program_cfg) in cfg.programs.iter().enumerate() {
+                let signer = KeyPair::from_private_key(program_cfg.signer_private_key.0.clone())
+                    .unwrap_or_else(|err| {
+                        panic!("invalid torii.ram_lfe.programs[{index}].signer_private_key: {err}")
+                    });
+                service.register_program_runtime(
+                    program_cfg.program_id.clone(),
+                    program_cfg.secret.clone(),
                     signer,
-                    policy_cfg.receipt_ttl.and_then(|ttl| {
-                        u64::try_from(ttl.as_millis()).ok()
-                    }),
+                    program_cfg
+                        .receipt_ttl
+                        .and_then(|ttl| u64::try_from(ttl.as_millis()).ok()),
                 );
             }
             Some(service)
@@ -17873,6 +18284,8 @@ impl Torii {
         // App-facing JSON API
         #[cfg(feature = "app_api")]
         self.add_app_api_routes(&mut builder);
+        #[cfg(feature = "app_api")]
+        self.add_soracloud_public_runtime_routes(&mut builder);
 
         let router = builder
             .finish()
@@ -19954,22 +20367,17 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn torii_identifier_resolver_uses_config_runtime() {
+    async fn torii_ram_lfe_uses_config_runtime() {
         let mut cfg = crate::test_utils::mk_minimal_root_cfg();
         let signer = KeyPair::random();
-        cfg.torii.identifier_resolver =
-            Some(iroha_config::parameters::actual::ToriiIdentifierResolver {
-                policies: vec![
-                    iroha_config::parameters::actual::ToriiIdentifierResolverPolicy {
-                        policy_id: "phone#retail".parse().expect("policy id"),
-                        secret: vec![0x01, 0x02, 0x03, 0x04],
-                        signer_private_key: iroha_crypto::ExposedPrivateKey(
-                            signer.private_key().clone(),
-                        ),
-                        receipt_ttl: Some(Duration::from_secs(30)),
-                    },
-                ],
-            });
+        cfg.torii.ram_lfe = Some(iroha_config::parameters::actual::ToriiRamLfe {
+            programs: vec![iroha_config::parameters::actual::ToriiRamLfeProgram {
+                program_id: "phone_retail".parse().expect("program id"),
+                secret: vec![0x01, 0x02, 0x03, 0x04],
+                signer_private_key: iroha_crypto::ExposedPrivateKey(signer.private_key().clone()),
+                receipt_ttl: Some(Duration::from_secs(30)),
+            }],
+        });
 
         let (kiso, _child) = KisoHandle::start(cfg.clone());
         let kura = Kura::blank_kura_for_testing();
@@ -21477,6 +21885,287 @@ pub(crate) mod tests_runtime_handlers {
         src: &iroha_data_model::prelude::ExposedPrivateKey,
     ) -> iroha_data_model::prelude::ExposedPrivateKey {
         iroha_data_model::prelude::ExposedPrivateKey(src.0.clone())
+    }
+
+    #[derive(Clone)]
+    struct TestLocalReadRuntime {
+        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
+        state_dir: PathBuf,
+        result: Result<
+            iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        >,
+        captured_requests: Arc<std::sync::Mutex<Vec<SoracloudLocalReadRequest>>>,
+    }
+
+    impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestLocalReadRuntime {
+        fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+            self.snapshot.clone()
+        }
+
+        fn state_dir(&self) -> PathBuf {
+            self.state_dir.clone()
+        }
+    }
+
+    impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
+        fn execute_local_read(
+            &self,
+            request: SoracloudLocalReadRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            self.captured_requests
+                .lock()
+                .expect("capture lock")
+                .push(request);
+            self.result.clone()
+        }
+
+        fn execute_ordered_mailbox(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test runtime does not implement mailbox execution",
+                ),
+            )
+        }
+
+        fn execute_apartment(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudApartmentExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test runtime does not implement apartment execution",
+                ),
+            )
+        }
+    }
+
+    fn seed_public_soracloud_world() -> World {
+        let mut world = World::new();
+        let service_name: iroha_data_model::name::Name = "web_portal".parse().expect("service");
+        let bundle = iroha_data_model::soracloud::SoraDeploymentBundleV1 {
+            schema_version: iroha_data_model::soracloud::SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container: iroha_data_model::soracloud::SoraContainerManifestV1 {
+                schema_version: iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+                runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
+                bundle_hash: Hash::new(b"public-bundle"),
+                bundle_path: "/bundles/public.to".to_owned(),
+                entrypoint: "main".to_owned(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
+                    network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
+                    allow_wallet_signing: false,
+                    allow_state_writes: false,
+                    allow_model_training: false,
+                },
+                resources: iroha_data_model::soracloud::SoraResourceLimitsV1 {
+                    cpu_millis: std::num::NonZeroU32::new(500).expect("cpu"),
+                    memory_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024).expect("memory"),
+                    ephemeral_storage_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024)
+                        .expect("storage"),
+                    max_open_files: std::num::NonZeroU32::new(256).expect("files"),
+                    max_tasks: std::num::NonZeroU16::new(16).expect("tasks"),
+                },
+                lifecycle: iroha_data_model::soracloud::SoraLifecycleHooksV1 {
+                    start_grace_secs: std::num::NonZeroU32::new(5).expect("start grace"),
+                    stop_grace_secs: std::num::NonZeroU32::new(5).expect("stop grace"),
+                    healthcheck_path: Some("/health".to_owned()),
+                },
+            },
+            service: iroha_data_model::soracloud::SoraServiceManifestV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: "2026.02.0".to_owned(),
+                container: iroha_data_model::soracloud::SoraContainerManifestRefV1 {
+                    manifest_hash: Hash::new(b"public-container-manifest"),
+                    expected_schema_version:
+                        iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+                },
+                replicas: std::num::NonZeroU16::new(1).expect("replicas"),
+                route: Some(iroha_data_model::soracloud::SoraRouteTargetV1 {
+                    host: "portal.sora".to_owned(),
+                    path_prefix: "/app".to_owned(),
+                    service_port: std::num::NonZeroU16::new(8080).expect("port"),
+                    visibility: iroha_data_model::soracloud::SoraRouteVisibilityV1::Public,
+                    tls_mode: iroha_data_model::soracloud::SoraTlsModeV1::Required,
+                }),
+                rollout: iroha_data_model::soracloud::SoraRolloutPolicyV1 {
+                    canary_percent: 0,
+                    max_unavailable_replicas: 0,
+                    health_window_secs: std::num::NonZeroU32::new(30).expect("window"),
+                    automatic_rollback_failures: std::num::NonZeroU32::new(1)
+                        .expect("rollback"),
+                },
+                state_bindings: Vec::new(),
+                handlers: vec![
+                    iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                        handler_name: "assets".parse().expect("handler"),
+                        class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Asset,
+                        entrypoint: "serve_assets".to_owned(),
+                        route_path: Some("/assets".to_owned()),
+                        certified_response:
+                            iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::StateCommitment,
+                        mailbox: None,
+                    },
+                    iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                        handler_name: "query".parse().expect("handler"),
+                        class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+                        entrypoint: "serve_query".to_owned(),
+                        route_path: Some("/query".to_owned()),
+                        certified_response:
+                            iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+                        mailbox: None,
+                    },
+                ],
+                artifacts: Vec::new(),
+            },
+        };
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                service_name.as_ref().to_owned(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name,
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                },
+            );
+        world
+    }
+
+    #[tokio::test]
+    async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_context() {
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+
+        let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            result: Ok(iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
+                response_bytes: b"asset-body".to_vec(),
+                content_type: Some("text/plain; charset=utf-8".to_owned()),
+                content_encoding: None,
+                cache_control: Some("public, max-age=60".to_owned()),
+                bindings: vec![iroha_core::soracloud_runtime::SoracloudLocalReadBinding {
+                    binding_name: None,
+                    state_key: None,
+                    payload_commitment: None,
+                    artifact_hash: Some(Hash::new(b"asset-hash")),
+                }],
+                result_commitment: Hash::new(b"result"),
+                certified_by:
+                    iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::StateCommitment,
+                runtime_receipt: None,
+            }),
+            captured_requests: Arc::clone(&captured_requests),
+        };
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(runtime));
+        let router = axum::Router::new()
+            .fallback(any(handler_soracloud_public_local_read))
+            .with_state(app);
+
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/app/assets")
+                    .header(axum::http::header::HOST, "portal.sora")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-soracloud-certified-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("state_commitment")
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert_eq!(body.as_ref(), b"asset-body");
+
+        let captured = captured_requests.lock().expect("capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].service_name, "web_portal");
+        assert_eq!(captured[0].handler_name, "assets");
+        assert_eq!(captured[0].request_path, "/app/assets");
+        assert_eq!(captured[0].handler_path, "/");
+    }
+
+    #[tokio::test]
+    async fn soracloud_public_local_read_route_returns_503_for_unhydrated_runtime() {
+        use tower::ServiceExt as _;
+
+        let runtime = TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "runtime hydration incomplete",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(runtime));
+        let router = axum::Router::new()
+            .fallback(any(handler_soracloud_public_local_read))
+            .with_state(app);
+
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/app/query")
+                    .header(axum::http::header::HOST, "portal.sora")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -23206,6 +23895,23 @@ mod tests {
         .expect("activate policy");
     }
 
+    fn register_and_activate_program_policy(
+        authority: &AccountId,
+        tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+        program_policy: &RamLfeProgramPolicy,
+    ) {
+        RegisterRamLfeProgramPolicy {
+            policy: program_policy.clone(),
+        }
+        .execute(authority, tx)
+        .expect("register program policy");
+        ActivateRamLfeProgramPolicy {
+            program_id: program_policy.program_id.clone(),
+        }
+        .execute(authority, tx)
+        .expect("activate program policy");
+    }
+
     fn seed_proof_record_at_height(
         app: &SharedAppState,
         backend: &str,
@@ -23640,6 +24346,182 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
+    async fn ram_lfe_program_policies_list_registered_program() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (_policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let mut app = mk_app_state_for_tests();
+
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&authority, &mut tx, &program_policy);
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_ram_lfe_program_policies(State(app), HeaderMap::new())
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::RamLfeProgramPolicyListDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items.len(), 1);
+        assert_eq!(
+            dto.items[0].program_id,
+            program_policy.program_id.to_string()
+        );
+        assert_eq!(dto.items[0].backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.items[0].verification_mode, "signed");
+        assert!(dto.items[0].active);
+        assert_eq!(dto.items[0].input_encryption.as_deref(), Some("bfv-v1"));
+        assert!(dto.items[0].ram_fhe_profile.is_some());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn ram_lfe_execute_returns_receipt() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (_policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let mut app = mk_app_state_for_tests();
+
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&authority, &mut tx, &program_policy);
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let response = handler_ram_lfe_execute(
+            State(app),
+            HeaderMap::new(),
+            AxPath(program_policy.program_id.to_string()),
+            NoritoJson(routing::RamLfeExecuteRequestDto {
+                input_hex: Some(hex::encode("identifier-input")),
+                encrypted_input: None,
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::RamLfeExecuteResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.program_id, program_policy.program_id.to_string());
+        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.verification_mode, "signed");
+        assert!(!dto.output_hex.is_empty());
+        assert_eq!(dto.receipt.payload.program_id.to_string(), dto.program_id);
+        assert_eq!(dto.receipt.payload.output_hash.to_string(), dto.output_hash);
+        assert_eq!(
+            dto.receipt.payload.associated_data_hash.to_string(),
+            dto.associated_data_hash
+        );
+        assert!(dto.receipt.signature.is_some());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn ram_lfe_receipt_verify_reports_valid_receipt_and_output_match() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+        let signer = KeyPair::random();
+        let (_policy, program_policy) =
+            sample_programmed_identifier_policy(&authority, &signer, &policy_id);
+        let mut app = mk_app_state_for_tests();
+
+        let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"resolver-secret".to_vec(),
+            signer,
+            Some(30_000),
+        );
+        Arc::get_mut(&mut app)
+            .expect("unique app")
+            .identifier_resolver = Some(resolver.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&authority, &mut tx, &program_policy);
+        tx.apply();
+        block.commit().expect("commit block");
+
+        let draft = resolver
+            .execute(&program_policy, b"receipt-verify-input")
+            .expect("execute program");
+        let receipt = resolver
+            .issue_execution_receipt(&program_policy, &draft)
+            .expect("issue RAM-LFE receipt");
+
+        let response = handler_ram_lfe_receipt_verify(
+            State(app),
+            HeaderMap::new(),
+            NoritoJson(routing::RamLfeReceiptVerifyRequestDto {
+                receipt,
+                output_hex: Some(hex::encode(&draft.output)),
+            }),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let dto: routing::RamLfeReceiptVerifyResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert!(dto.valid);
+        assert_eq!(dto.program_id, program_policy.program_id.to_string());
+        assert_eq!(dto.backend, "bfv-programmed-sha3-256-v1");
+        assert_eq!(dto.verification_mode, "signed");
+        assert_eq!(dto.output_hash_matches, Some(true));
+        assert!(dto.error.is_none());
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
     async fn identifier_policies_lists_registered_policy() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "directory".parse().expect("domain id");
@@ -23656,8 +24538,8 @@ mod tests {
         let signer = KeyPair::random();
         let (policy, program_policy) = sample_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23725,8 +24607,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23820,8 +24702,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -23925,8 +24807,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -24019,8 +24901,8 @@ mod tests {
             &public_parameters,
         );
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -24151,8 +25033,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),
@@ -24222,8 +25104,8 @@ mod tests {
         let (policy, program_policy) =
             sample_programmed_identifier_policy(&authority, &signer, &policy_id);
         let resolver = Arc::new(identifier_resolution::IdentifierResolutionService::new());
-        resolver.register_policy_runtime(
-            policy_id.clone(),
+        resolver.register_program_runtime(
+            program_policy.program_id.clone(),
             b"resolver-secret".to_vec(),
             signer,
             Some(30_000),

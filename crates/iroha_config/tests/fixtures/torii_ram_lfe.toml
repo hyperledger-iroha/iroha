@@ -1,10 +1,10 @@
 extends = ["base.toml"]
 
-[torii.identifier_resolver]
+[torii.ram_lfe]
 enabled = true
 
-[[torii.identifier_resolver.policies]]
-policy_id = "phone#retail"
+[[torii.ram_lfe.programs]]
+program_id = "phone_retail"
 secret_hex = "0x01020304"
 signer_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
 receipt_ttl_ms = 30000

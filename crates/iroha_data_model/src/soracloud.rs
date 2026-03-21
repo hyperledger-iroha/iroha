@@ -4950,6 +4950,8 @@ pub struct SoraServiceMailboxMessageV1 {
     pub to_service: Name,
     /// Destination handler name.
     pub to_handler: Name,
+    /// Opaque mailbox payload bytes replicated through authoritative state.
+    pub payload_bytes: Vec<u8>,
     /// Commitment over the opaque message payload.
     pub payload_commitment: Hash,
     /// Ordered sequence at which the message was enqueued.
@@ -4981,6 +4983,14 @@ impl SoraServiceMailboxMessageV1 {
                 manifest: "sora service mailbox message",
                 field: "available_after_sequence",
                 reason: "must be >= enqueue_sequence".to_string(),
+            });
+        }
+
+        if Hash::new(self.payload_bytes.as_slice()) != self.payload_commitment {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service mailbox message",
+                field: "payload_commitment",
+                reason: "must match payload_bytes".to_string(),
             });
         }
 
@@ -7072,7 +7082,8 @@ mod tests {
             from_handler: "update".parse().expect("valid name"),
             to_service: "audit".parse().expect("valid name"),
             to_handler: "private_update".parse().expect("valid name"),
-            payload_commitment: sample_hash(163),
+            payload_bytes: b"ciphertext".to_vec(),
+            payload_commitment: Hash::new(b"ciphertext"),
             enqueue_sequence: 10,
             available_after_sequence: 12,
             expires_at_sequence: Some(12),
@@ -7085,6 +7096,34 @@ mod tests {
             error,
             SoraCloudManifestError::InvalidField {
                 field: "expires_at_sequence",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn service_mailbox_message_validate_rejects_payload_commitment_mismatch() {
+        let message = SoraServiceMailboxMessageV1 {
+            schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+            message_id: sample_hash(162),
+            from_service: "portal".parse().expect("valid name"),
+            from_handler: "update".parse().expect("valid name"),
+            to_service: "audit".parse().expect("valid name"),
+            to_handler: "private_update".parse().expect("valid name"),
+            payload_bytes: b"ciphertext".to_vec(),
+            payload_commitment: sample_hash(163),
+            enqueue_sequence: 10,
+            available_after_sequence: 10,
+            expires_at_sequence: Some(12),
+        };
+
+        let error = message
+            .validate()
+            .expect_err("message commitment must bind the authoritative payload bytes");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "payload_commitment",
                 ..
             }
         ));

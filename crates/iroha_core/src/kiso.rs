@@ -792,12 +792,12 @@ mod tests {
                 api_high_load_tx_threshold: None,
                 api_high_load_stream_threshold: None,
                 api_high_load_subscription_threshold: None,
+                ram_lfe: None,
                 tx_history: None,
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
                 .expect("non-zero events buffer capacity"),
-                identifier_resolver: None,
                 ws_message_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
                 ),
@@ -968,6 +968,7 @@ mod tests {
                     apns_auth_token: None,
                 },
             },
+            soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
             kura: Kura {
                 init_mode: iroha_config::kura::InitMode::Strict,
                 store_dir: WithOrigin::inline(std::env::temp_dir()),

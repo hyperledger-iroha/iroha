@@ -218,6 +218,13 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, IdentifierJsonParser::parsePolicyList, "identifier policy list");
   }
 
+  /** Fetches globally registered RAM-LFE program policies from `/v1/ram-lfe/program-policies`. */
+  public CompletableFuture<RamLfeProgramPolicyListResponse> listRamLfeProgramPolicies() {
+    final TransportRequest request =
+        buildJsonGetRequest("/v1/ram-lfe/program-policies", Map.of());
+    return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
+  }
+
   /** Fetches a persisted identifier claim by its deterministic receipt hash. */
   public CompletableFuture<Optional<IdentifierClaimRecord>> getIdentifierClaimByReceiptHash(
       final String receiptHash) {
@@ -281,6 +288,49 @@ public final class HttpClientTransport implements IrohaClient {
       final String encryptedInputHex) {
     return issueIdentifierClaimReceipt(
         accountId, buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
+  }
+
+  /** Executes a RAM-LFE program using a typed request wrapper. */
+  public CompletableFuture<Optional<RamLfeExecuteResponse>> executeRamLfeProgram(
+      final String programId, final RamLfeExecuteRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final String normalizedProgramId = normalizeNonBlank(programId, "programId");
+    final byte[] body =
+        encodeJsonBody(
+            buildRamLfeExecutePayload(requestBody.inputHex(), requestBody.encryptedInputHex()));
+    final TransportRequest request =
+        buildJsonPostRequest(
+            "/v1/ram-lfe/programs/" + encodePathSegment(normalizedProgramId) + "/execute", body);
+    return fetchJsonAllowingNotFound(
+        request, RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute");
+  }
+
+  /**
+   * Executes a RAM-LFE program by posting either plaintext input bytes or BFV ciphertext hex to
+   * `/v1/ram-lfe/programs/{program_id}/execute`.
+   */
+  public CompletableFuture<Optional<RamLfeExecuteResponse>> executeRamLfeProgram(
+      final String programId, final String inputHex, final String encryptedInputHex) {
+    return executeRamLfeProgram(
+        programId, buildRamLfeExecuteRequest(inputHex, encryptedInputHex));
+  }
+
+  /** Verifies a RAM-LFE execution receipt against the node's registered program policy. */
+  public CompletableFuture<RamLfeReceiptVerifyResponse> verifyRamLfeReceipt(
+      final RamLfeReceiptVerifyRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        encodeJsonBody(
+            buildRamLfeReceiptVerifyPayload(requestBody.receipt(), requestBody.outputHex()));
+    final TransportRequest request = buildJsonPostRequest("/v1/ram-lfe/receipts/verify", body);
+    return fetchJson(
+        request, RamLfeJsonParser::parseReceiptVerifyResponse, "ram-lfe receipt verify");
+  }
+
+  /** Verifies a RAM-LFE execution receipt against the node's registered program policy. */
+  public CompletableFuture<RamLfeReceiptVerifyResponse> verifyRamLfeReceipt(
+      final Map<String, Object> receipt, final String outputHex) {
+    return verifyRamLfeReceipt(new RamLfeReceiptVerifyRequest(receipt, outputHex));
   }
 
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
@@ -1158,6 +1208,23 @@ public final class HttpClientTransport implements IrohaClient {
         : IdentifierResolveRequest.encrypted(policyId, normalizedEncryptedInput);
   }
 
+  static RamLfeExecuteRequest buildRamLfeExecuteRequest(
+      final String inputHex, final String encryptedInputHex) {
+    final String normalizedInputHex =
+        inputHex == null ? null : normalizeEvenLengthHex(inputHex, "inputHex");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null
+            ? null
+            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInputHex == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of inputHex or encryptedInputHex must be provided");
+    }
+    return normalizedInputHex != null
+        ? RamLfeExecuteRequest.plaintext(normalizedInputHex)
+        : RamLfeExecuteRequest.encrypted(normalizedEncryptedInput);
+  }
+
   static Map<String, Object> buildIdentifierResolvePayload(
       final String policyId, final String input, final String encryptedInputHex) {
     final String normalizedPolicyId = normalizeNonBlank(policyId, "policyId");
@@ -1174,6 +1241,37 @@ public final class HttpClientTransport implements IrohaClient {
       payload.put("input", normalizedInput);
     } else {
       payload.put("encrypted_input", normalizedEncryptedInput);
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildRamLfeExecutePayload(
+      final String inputHex, final String encryptedInputHex) {
+    final String normalizedInputHex =
+        inputHex == null ? null : normalizeEvenLengthHex(inputHex, "inputHex");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null
+            ? null
+            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInputHex == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of inputHex or encryptedInputHex must be provided");
+    }
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    if (normalizedInputHex != null) {
+      payload.put("input_hex", normalizedInputHex);
+    } else {
+      payload.put("encrypted_input", normalizedEncryptedInput);
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildRamLfeReceiptVerifyPayload(
+      final Map<String, Object> receipt, final String outputHex) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("receipt", new LinkedHashMap<>(Objects.requireNonNull(receipt, "receipt")));
+    if (outputHex != null) {
+      payload.put("output_hex", normalizeEvenLengthHex(outputHex, "outputHex"));
     }
     return payload;
   }

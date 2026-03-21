@@ -6300,6 +6300,16 @@ export declare class ToriiClient {
   evaluateAliasVoprf(blindedElementHex: string): Promise<AliasVoprfEvaluateResponse>;
   resolveAlias(alias: string): Promise<AliasResolutionDto | null>;
   resolveAliasByIndex(index: number | string | bigint): Promise<AliasResolutionDto | null>;
+  listRamLfeProgramPolicies(
+    options?: { signal?: AbortSignal },
+  ): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
+  executeRamLfeProgram(
+    programId: string,
+    options: { inputHex?: string; encryptedInput?: string; signal?: AbortSignal },
+  ): Promise<Record<string, unknown> | null>;
+  verifyRamLfeReceipt(
+    options: { receipt: Record<string, unknown>; outputHex?: string; signal?: AbortSignal },
+  ): Promise<Record<string, unknown>>;
   listSorafsPinManifests(options?: SorafsPinListOptions): Promise<SorafsPinListResponse>;
   iterateSorafsPinManifests(
     options?: SorafsPinListOptions & PaginationIteratorOptions,

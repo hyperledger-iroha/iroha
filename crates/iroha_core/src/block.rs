@@ -9984,6 +9984,7 @@ pub(crate) mod valid {
                     from_handler: "update".parse().expect("valid from handler"),
                     to_service: service_name.clone(),
                     to_handler: "update".parse().expect("valid to handler"),
+                    payload_bytes: b"portal-mailbox-payload".to_vec(),
                     payload_commitment: Hash::new(b"portal-mailbox-payload"),
                     enqueue_sequence: 1,
                     available_after_sequence: 1,

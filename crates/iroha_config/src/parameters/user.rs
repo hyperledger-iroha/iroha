@@ -166,7 +166,6 @@ use iroha_data_model::{
         FeeMultiplierBand as ModelFeeMultiplierBand, FeePolicyError as ModelFeePolicyError,
         HijiriFeePolicy as ModelHijiriFeePolicy, Q16 as ModelQ16,
     },
-    identifier::IdentifierPolicyId,
     jurisdiction::JdgSignatureScheme,
     name::Name,
     nexus::{
@@ -13910,8 +13909,8 @@ pub struct Torii {
     pub onboarding: Option<ToriiOnboarding>,
     /// Optional offline certificate issuer configuration for app API endpoints.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
-    /// Optional hidden-identifier resolver configuration for app API endpoints.
-    pub identifier_resolver: Option<ToriiIdentifierResolver>,
+    /// Optional RAM-LFE runtime configuration for app API endpoints.
+    pub ram_lfe: Option<ToriiRamLfe>,
     /// Optional transaction-history visibility/auth configuration for direct wallet reads.
     pub tx_history: Option<ToriiTxHistory>,
 }
@@ -14360,9 +14359,7 @@ impl Torii {
             push,
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
-            identifier_resolver: self
-                .identifier_resolver
-                .and_then(ToriiIdentifierResolver::parse),
+            ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.and_then(ToriiTxHistory::parse),
             app_api: actual::AppApi {
                 default_list_limit,
@@ -14913,63 +14910,64 @@ impl ToriiOfflineIssuer {
     }
 }
 
-/// Hidden-identifier resolver configuration.
+/// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiIdentifierResolver {
-    /// Master enable switch for Torii's in-process identifier resolver.
-    #[config(default = "defaults::torii::identifier_resolver::ENABLED")]
+pub struct ToriiRamLfe {
+    /// Master enable switch for Torii's in-process RAM-LFE runtime.
+    #[config(default = "defaults::torii::ram_lfe::ENABLED")]
     pub enabled: bool,
-    /// Per-policy resolver runtime entries.
+    /// Per-program runtime entries.
     #[config(default)]
-    pub policies: Vec<ToriiIdentifierResolverPolicy>,
+    pub programs: Vec<ToriiRamLfeProgram>,
 }
 
-impl ToriiIdentifierResolver {
-    fn parse(self) -> Option<actual::ToriiIdentifierResolver> {
+impl ToriiRamLfe {
+    fn parse(self) -> Option<actual::ToriiRamLfe> {
         if !self.enabled {
             return None;
         }
-        Some(actual::ToriiIdentifierResolver {
-            policies: self
-                .policies
+        Some(actual::ToriiRamLfe {
+            programs: self
+                .programs
                 .into_iter()
                 .enumerate()
-                .map(|(index, policy)| policy.parse(index))
+                .map(|(index, program)| program.parse(index))
                 .collect(),
         })
     }
 }
 
-/// Per-policy runtime material for Torii's identifier resolver.
+/// Per-program runtime material for Torii's RAM-LFE runtime.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiIdentifierResolverPolicy {
-    /// On-chain identifier policy namespace.
-    pub policy_id: String,
+pub struct ToriiRamLfeProgram {
+    /// On-chain RAM-LFE program identifier.
+    pub program_id: String,
     /// Hidden derivation secret encoded as hex.
     pub secret_hex: String,
-    /// Private key used to sign receipts for this policy.
+    /// Private key used to sign receipts for this program.
     pub signer_private_key: ExposedPrivateKey,
     /// Optional receipt TTL expressed in milliseconds.
     pub receipt_ttl_ms: Option<DurationMs>,
 }
 
-impl ToriiIdentifierResolverPolicy {
-    fn parse(self, index: usize) -> actual::ToriiIdentifierResolverPolicy {
-        let policy_id: IdentifierPolicyId = self.policy_id.parse().unwrap_or_else(|err| {
-            panic!(
-                "invalid torii.identifier_resolver.policies[{index}].policy_id `{}`: {err}",
-                self.policy_id
-            )
-        });
+impl ToriiRamLfeProgram {
+    fn parse(self, index: usize) -> actual::ToriiRamLfeProgram {
+        let program_id: iroha_data_model::ram_lfe::RamLfeProgramId =
+            self.program_id.parse().unwrap_or_else(|err| {
+                panic!(
+                    "invalid torii.ram_lfe.programs[{index}].program_id `{}`: {err}",
+                    self.program_id
+                )
+            });
         let secret_literal = self.secret_hex.trim().trim_start_matches("0x");
         let secret = Vec::from_hex(secret_literal).unwrap_or_else(|err| {
-            panic!("invalid torii.identifier_resolver.policies[{index}].secret_hex: {err}")
+            panic!("invalid torii.ram_lfe.programs[{index}].secret_hex: {err}")
         });
         if secret.is_empty() {
-            panic!("torii.identifier_resolver.policies[{index}].secret_hex must not be empty");
+            panic!("torii.ram_lfe.programs[{index}].secret_hex must not be empty");
         }
-        actual::ToriiIdentifierResolverPolicy {
-            policy_id,
+        actual::ToriiRamLfeProgram {
+            program_id,
             secret,
             signer_private_key: self.signer_private_key,
             receipt_ttl: self.receipt_ttl_ms.map(DurationMs::get),
