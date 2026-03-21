@@ -22306,6 +22306,53 @@ pub(crate) mod tests_runtime_handlers {
             }
         }
 
+        impl iroha_core::soracloud_runtime::SoracloudRuntime for TestSoracloudRuntimeHandle {
+            fn execute_local_read(
+                &self,
+                _request: SoracloudLocalReadRequest,
+            ) -> Result<
+                iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+            > {
+                Err(
+                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        "test runtime handle does not implement local reads",
+                    ),
+                )
+            }
+
+            fn execute_ordered_mailbox(
+                &self,
+                _request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
+            ) -> Result<
+                iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+            > {
+                Err(
+                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        "test runtime handle does not implement mailbox execution",
+                    ),
+                )
+            }
+
+            fn execute_apartment(
+                &self,
+                _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
+            ) -> Result<
+                iroha_core::soracloud_runtime::SoracloudApartmentExecutionResult,
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+            > {
+                Err(
+                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        "test runtime handle does not implement apartment execution",
+                    ),
+                )
+            }
+        }
+
         let mut app = mk_app_state_for_tests();
         {
             let state = Arc::get_mut(&mut app).expect("unique app state");

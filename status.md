@@ -2,6 +2,30 @@
 
 Last updated: 2026-03-21
 
+## 2026-03-21 Follow-up: `iroha_torii` telemetry Soracloud status test shim now satisfies the shared runtime trait
+- Updated the telemetry-gated Soracloud status test helper in
+  `crates/iroha_torii/src/lib.rs` so `TestSoracloudRuntimeHandle` implements
+  the full `iroha_core::soracloud_runtime::SoracloudRuntime` trait, not only
+  the read-handle half.
+- The added test-only execution methods return deterministic `Unavailable`
+  errors, which is sufficient for the status handler coverage while matching
+  the concrete `Arc<dyn SoracloudRuntime>` type stored in Torii app state.
+- Validation:
+  - `cargo test -p iroha_torii soracloud_status_handler_returns_snapshot_sections --lib --features telemetry` (pass)
+  - `cargo fmt --all --check` (pass)
+
+## 2026-03-21 Follow-up: `iroha_cli` Soracloud signature tests now use the current domainless `AccountId` constructor
+- Updated the Soracloud signed-agent request tests in
+  `crates/iroha_cli/src/soracloud.rs` to stop parsing the removed legacy
+  `"alice@wonderland"` literal as an `AccountId`.
+- Those tests now construct authorities with `AccountId::new(...)`, which
+  matches the current data-model API where `AccountId` is domainless and
+  controller-keyed.
+- Validation:
+  - `cargo test -p iroha_cli signed_agent_deploy_request_uses_verifiable_signature` (pass)
+  - `cargo test -p iroha_cli signed_agent_ -- --nocapture` (pass)
+  - `cargo fmt --all --check` (pass)
+
 ## 2026-03-21 Follow-up: Soracloud now serves authoritative local reads and apartment execution through the embedded runtime manager
 - Extended the shared/runtime-manager Soracloud execution surface across
   `crates/iroha_core/src/soracloud_runtime.rs`,
