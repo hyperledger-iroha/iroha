@@ -2762,60 +2762,35 @@ async fn handler_account_transactions_query(
     >,
 ) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
+    let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut env = env;
     let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    let (resolved_account_id, canonical_account_id) =
-        routing::parse_account_path_segment_with_state(
-            app.state.as_ref(),
-            &account_id,
-            &tel,
-            "/v1/accounts/{account_id}/transactions/query",
-        )?;
-    let account_in_dataspace = app
-        .state
-        .view()
-        .world()
-        .domains_for_subject(&resolved_account_id)
-        .into_iter()
-        .any(|domain| {
-            domain
-                .to_string()
-                .eq_ignore_ascii_case(&viewer.dataspace_id)
-        });
-    let can_view = (viewer.is_mandatory_alias && account_in_dataspace)
-        || viewer
-            .account_ids
-            .iter()
-            .any(|candidate| candidate == &resolved_account_id);
-    if !can_view {
-        return Ok(tx_history_reject(
-            StatusCode::FORBIDDEN,
-            "tx_history_account_forbidden",
-            "requester may only query its own account history unless it is a mandatory alias for the target dataspace",
-        ));
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_account_transactions_with_policy(
+            app.state.clone(),
+            AxPath(account_id),
+            payload,
+            tel.clone(),
+            app.tx_history_access_policy
+                .allowed_asset_definition_id
+                .clone(),
+        )
+        .await
+        .map(IntoResponse::into_response);
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    let rate_key = format!("tx-history:{}", viewer.subject);
-    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
     routing::handle_v1_account_transactions_with_policy(
         app.state.clone(),
-        AxPath(canonical_account_id),
+        AxPath(key_hint),
         payload,
         tel,
         app.tx_history_access_policy
@@ -2944,60 +2919,34 @@ async fn handler_account_transactions_get(
     AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
 ) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
+    let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    let (resolved_account_id, canonical_account_id) =
-        routing::parse_account_path_segment_with_state(
-            app.state.as_ref(),
-            &account_id,
-            &tel,
-            "/v1/accounts/{account_id}/transactions",
-        )?;
-    let account_in_dataspace = app
-        .state
-        .view()
-        .world()
-        .domains_for_subject(&resolved_account_id)
-        .into_iter()
-        .any(|domain| {
-            domain
-                .to_string()
-                .eq_ignore_ascii_case(&viewer.dataspace_id)
-        });
-    let can_view = (viewer.is_mandatory_alias && account_in_dataspace)
-        || viewer
-            .account_ids
-            .iter()
-            .any(|candidate| candidate == &resolved_account_id);
-    if !can_view {
-        return Ok(tx_history_reject(
-            StatusCode::FORBIDDEN,
-            "tx_history_account_forbidden",
-            "requester may only view its own account history unless it is a mandatory alias for the target dataspace",
-        ));
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_account_transactions_get_with_policy(
+            app.state.clone(),
+            AxPath(account_id),
+            AxQuery(params),
+            tel.clone(),
+            app.tx_history_access_policy
+                .allowed_asset_definition_id
+                .clone(),
+        )
+        .await
+        .map(IntoResponse::into_response);
     }
-    let norito_params: AxQuery<crate::routing::AccountTransactionsGetParams> = AxQuery(params);
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    let rate_key = format!("tx-history:{}", viewer.subject);
-    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
     routing::handle_v1_account_transactions_get_with_policy(
         app.state.clone(),
-        AxPath(canonical_account_id),
-        norito_params,
+        AxPath(key_hint),
+        AxQuery(params),
         tel,
         app.tx_history_access_policy
             .allowed_asset_definition_id

@@ -2,6 +2,27 @@
 
 Last updated: 2026-03-21
 
+## 2026-03-21 Follow-up: account transaction routes no longer fall back to tx-history JWT gating, and account-scoped history is authority-scoped again
+- Restored the `/v1/accounts/{account_id}/transactions` and
+  `/v1/accounts/{account_id}/transactions/query` Torii wrappers in
+  `crates/iroha_torii/src/lib.rs` to the normal App API access path so invalid
+  account literals still fail during route parsing with `400`, and valid
+  requests no longer degrade to `503 Service Unavailable` when
+  `torii.tx_history` is unset.
+- Updated `crates/iroha_torii/src/routing.rs` so the account-scoped transaction
+  endpoints match committed transactions by entrypoint authority, which aligns
+  the live behavior with the documented "transactions authored by an account"
+  contract and the address canonicalisation integration coverage.
+- Kept `/v1/transactions/history` on the broader viewer-visibility model, and
+  added/updated focused routing tests to cover that split along with canonical
+  I105 path literals.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib --features app_api,telemetry account_transactions_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test address_parsing --features app_api,telemetry transactions_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test account_query_subrouter_smoke --features app_api,telemetry -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation account_ -- --nocapture` (pass)
+
 ## 2026-03-21 Follow-up: `iroha_torii` telemetry Soracloud status test shim now satisfies the shared runtime trait
 - Updated the telemetry-gated Soracloud status test helper in
   `crates/iroha_torii/src/lib.rs` so `TestSoracloudRuntimeHandle` implements
