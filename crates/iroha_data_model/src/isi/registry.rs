@@ -240,7 +240,15 @@ fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> Instruct
 }
 
 /// Attach stable wire identifiers for instructions that expose one explicitly.
-fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
+fn with_stable_ids(registry: InstructionRegistry) -> InstructionRegistry {
+    let registry = with_core_stable_ids(registry);
+    let registry = with_soracloud_stable_ids(registry);
+    let registry = with_consensus_stable_ids(registry);
+    let registry = with_identity_stable_ids(registry);
+    with_runtime_upgrade_stable_ids(registry)
+}
+
+fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     // Provide a stable wire id for a commonly used instruction as a starting point.
     // Others continue to use their Rust `type_name` as the wire id.
     registry = registry.register_with_id::<Log>(Log::WIRE_ID);
@@ -275,6 +283,10 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id::<Upgrade>(Upgrade::WIRE_ID);
     registry = registry.register_with_id::<CustomInstruction>(CustomInstruction::WIRE_ID);
     registry = registry.register_with_id::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
+    registry
+}
+
+fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry
         .register_with_id::<soracloud::DeploySoracloudService>("soracloud::DeploySoracloudService");
     registry = registry.register_with_id::<soracloud::UpgradeSoracloudService>(
@@ -353,6 +365,10 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id::<soracloud::RecordSoracloudRuntimeReceipt>(
         "soracloud::RecordSoracloudRuntimeReceipt",
     );
+    registry
+}
+
+fn with_consensus_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id::<consensus_keys::RegisterConsensusKey>(
         "consensus::RegisterConsensusKey",
     );
@@ -375,6 +391,10 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
         registry.register_with_id::<domain_link::SetAccountLabel>("identity::SetAccountLabel");
     registry = registry
         .register_with_id::<domain_link::UnlinkAccountDomain>("identity::UnlinkAccountDomain");
+    registry
+}
+
+fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id::<ram_lfe::RegisterRamLfeProgramPolicy>(
         "identity::RegisterRamLfeProgramPolicy",
     );
@@ -400,6 +420,10 @@ fn with_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id::<nexus::SetLaneRelayEmergencyValidators>(
         "nexus::SetLaneRelayEmergencyValidators",
     );
+    registry
+}
+
+fn with_runtime_upgrade_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id::<runtime_upgrade::ProposeRuntimeUpgrade>(
         runtime_upgrade::ProposeRuntimeUpgrade::WIRE_ID,
     );

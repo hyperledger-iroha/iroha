@@ -1419,7 +1419,10 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
             );
             let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
             let authorities = extract_account_transaction_authorities(&parsed);
-            if !authorities.is_empty() {
+            if authorities
+                .iter()
+                .any(|literal| literal == &account_literal)
+            {
                 break authorities;
             }
             if Instant::now() >= deadline {
@@ -1540,7 +1543,10 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
             );
             let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
             let authorities = extract_account_transaction_authorities(&parsed);
-            if !authorities.is_empty() {
+            if authorities
+                .iter()
+                .any(|literal| literal == &account_literal)
+            {
                 break authorities;
             }
             if Instant::now() >= deadline {

@@ -153,6 +153,57 @@ fn decode_consensus_handshake_meta(
     })
 }
 
+fn build_shared_sorafs_provider_cache(
+    config: &Config,
+) -> Option<Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>> {
+    let discovery = &config.torii.sorafs_discovery;
+    if !discovery.discovery_enabled {
+        return None;
+    }
+
+    let Some(admission_cfg) = discovery.admission.as_ref() else {
+        if config.torii.sorafs_gateway.enforce_admission {
+            iroha_logger::warn!(
+                "torii.sorafs.admission_envelopes_dir not configured; shared SoraFS discovery cache disabled"
+            );
+        }
+        return None;
+    };
+
+    let admission = match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(
+        &admission_cfg.envelopes_dir,
+    ) {
+        Ok(registry) => Arc::new(registry),
+        Err(err) => {
+            iroha_logger::error!(
+                ?err,
+                dir = ?admission_cfg.envelopes_dir,
+                "failed to load shared SoraFS provider admission registry"
+            );
+            return None;
+        }
+    };
+
+    let mut capabilities = Vec::new();
+    for name in &discovery.known_capabilities {
+        match iroha_torii::sorafs::parse_capability_name(name) {
+            Some(capability) => capabilities.push(capability),
+            None => {
+                panic!("unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities");
+            }
+        }
+    }
+
+    assert!(
+        !capabilities.is_empty(),
+        "torii.sorafs.known_capabilities must include at least one capability"
+    );
+
+    Some(Arc::new(tokio::sync::RwLock::new(
+        iroha_torii::sorafs::ProviderAdvertCache::new(capabilities, admission),
+    )))
+}
+
 #[cfg(test)]
 mod handshake_payload_tests {
     use super::*;
@@ -4582,13 +4633,29 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
-        let (soracloud_runtime, child) = SoracloudRuntimeManager::new(
+        let sorafs_node = sorafs_node::NodeHandle::new_with_policies(
+            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage),
+            sorafs_node::config::RepairConfig::from_repair_and_policy(
+                &config.torii.sorafs_repair,
+                &state.gov.sorafs_repair_escalation,
+            ),
+            sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc),
+        );
+        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
+
+        let runtime_manager = SoracloudRuntimeManager::new(
             soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
                 &config.soracloud_runtime,
             ),
             Arc::clone(&state),
         )
-        .start(supervisor.shutdown_signal());
+        .with_sorafs_node(sorafs_node.clone());
+        let runtime_manager = if let Some(cache) = shared_sorafs_cache.clone() {
+            runtime_manager.with_sorafs_provider_cache(cache)
+        } else {
+            runtime_manager
+        };
+        let (soracloud_runtime, child) = runtime_manager.start(supervisor.shutdown_signal());
         state.set_soracloud_runtime(Some(Arc::new(soracloud_runtime.clone())));
         supervisor.monitor(child);
 
@@ -4604,6 +4671,14 @@ impl Iroha {
             );
             key
         });
+        let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
+            .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
+            .with_sorafs_node(sorafs_node);
+        let runtime_deps = if let Some(cache) = shared_sorafs_cache {
+            runtime_deps.with_sorafs_cache(cache)
+        } else {
+            runtime_deps
+        };
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             kiso.clone(),
@@ -4616,8 +4691,7 @@ impl Iroha {
             receipt_signer,
             iroha_torii::OnlinePeersProvider::new(network.online_peers_receiver()),
             Some(sumeragi.clone()),
-            iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
-                .with_soracloud_runtime(Arc::new(soracloud_runtime.clone())),
+            runtime_deps,
         );
         let torii = torii.with_rbc_store_dir(rbc_store_dir.clone());
         let torii = torii.with_p2p(network.clone());

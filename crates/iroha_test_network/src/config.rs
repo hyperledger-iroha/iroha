@@ -33,6 +33,7 @@ use iroha_data_model::{
         system::{confidential_metadata, consensus_metadata},
     },
     peer::PeerId,
+    permission::Permission,
     prelude::{HashOf, Transfer},
     transaction::signed::TransactionResultInner,
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
@@ -517,6 +518,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         InstructionBox::from(Grant::account_permission(
             CanSetParameters,
             genesis_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
+            Permission::new("CanManageSoracloud".into(), Json::new(())),
+            alice_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
             CanRegisterTrigger {
@@ -1937,6 +1942,43 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
         assert_registers_fixture_accounts(topology, vec![entry]);
+    }
+
+    #[test]
+    fn genesis_grants_alice_soracloud_management_permission() {
+        use iroha_data_model::{isi::GrantBox, transaction::Executable};
+
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = genesis(Vec::new(), topology, vec![entry]);
+        let mut saw_permission = false;
+        for tx in block.0.transactions_vec() {
+            let Executable::Instructions(instrs) = tx.instructions() else {
+                continue;
+            };
+            for instr in instrs {
+                let Some(GrantBox::Permission(grant)) = instr.as_any().downcast_ref::<GrantBox>()
+                else {
+                    continue;
+                };
+                if grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud" {
+                    saw_permission = true;
+                    break;
+                }
+            }
+            if saw_permission {
+                break;
+            }
+        }
+        assert!(
+            saw_permission,
+            "default test-network genesis should grant ALICE_ID CanManageSoracloud"
+        );
     }
 
     #[test]

@@ -1018,6 +1018,8 @@ mod tests {
     fn network_parallelism_env_override_applies() {
         let _env_guard = lock_env_guard();
         wait_for_network_permits_to_drain("network_parallelism_env_override_applies");
+        let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
+        let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
         let _override_guard = override_network_parallelism(None, Some(2));
 
         let guard = serial_guard();

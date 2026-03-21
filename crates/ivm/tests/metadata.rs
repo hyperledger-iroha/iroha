@@ -66,6 +66,18 @@ fn parse_rejects_unknown_mode_bits() {
 }
 
 #[test]
+fn parse_accepts_legacy_minor_zero_without_cntr() {
+    let bytes = encode_with(ProgramMetadata::default(), |m| {
+        m.version_minor = 0;
+    });
+    let parsed = ProgramMetadata::parse(&bytes).expect("parse legacy generic header");
+    assert_eq!(parsed.metadata.version_major, 1);
+    assert_eq!(parsed.metadata.version_minor, 0);
+    assert!(parsed.contract_interface.is_none());
+    assert_eq!(parsed.code_offset, parsed.header_len);
+}
+
+#[test]
 fn parse_accepts_vector_len_without_vector_flag() {
     // Vector length is advisory and may be present even if VECTOR bit is off.
     let bytes = encode_with(ProgramMetadata::default(), |m| {
@@ -128,13 +140,7 @@ fn parse_accepts_generic_minor_one_without_cntr() {
 }
 
 #[test]
-fn parse_rejects_legacy_or_unknown_minor_version() {
-    let bytes = encode_with(ProgramMetadata::default(), |m| {
-        m.version_minor = 0;
-    });
-    let err = ProgramMetadata::parse(&bytes).unwrap_err();
-    assert_eq!(err, VMError::InvalidMetadata);
-
+fn parse_rejects_unknown_minor_version() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_minor = 2;
     });

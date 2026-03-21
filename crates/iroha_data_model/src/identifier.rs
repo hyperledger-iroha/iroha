@@ -270,9 +270,9 @@ impl IdentifierResolutionReceipt {
     /// Returns the underlying signature verification error when the signature is invalid.
     pub fn verify(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
         SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(
-            self.signature.clone().ok_or(iroha_crypto::Error::Other(
-                "identifier receipt is missing a signature".to_owned(),
-            ))?,
+            self.signature.clone().ok_or_else(|| {
+                iroha_crypto::Error::Other("identifier receipt is missing a signature".to_owned())
+            })?,
         )
         .verify(public_key, &self.payload)
     }

@@ -2762,65 +2762,36 @@ async fn handler_account_transactions_query(
     >,
 ) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
+    let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut env = env;
     let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    let (resolved_account_id, canonical_account_id) =
-        routing::parse_account_path_segment_with_state(
-            app.state.as_ref(),
-            &account_id,
-            &tel,
-            "/v1/accounts/{account_id}/transactions/query",
-        )?;
-    let account_in_dataspace = app
-        .state
-        .view()
-        .world()
-        .domains_for_subject(&resolved_account_id)
-        .into_iter()
-        .any(|domain| {
-            domain
-                .to_string()
-                .eq_ignore_ascii_case(&viewer.dataspace_id)
-        });
-    let can_view = (viewer.is_mandatory_alias && account_in_dataspace)
-        || viewer
-            .account_ids
-            .iter()
-            .any(|candidate| candidate == &resolved_account_id);
-    if !can_view {
-        return Ok(tx_history_reject(
-            StatusCode::FORBIDDEN,
-            "tx_history_account_forbidden",
-            "requester may only query its own account history unless it is a mandatory alias for the target dataspace",
-        ));
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_account_transactions_with_policy(
+            app.state.clone(),
+            AxPath(account_id),
+            payload,
+            tel.clone(),
+            None,
+        )
+        .await
+        .map(IntoResponse::into_response);
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    let rate_key = format!("tx-history:{}", viewer.subject);
-    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
     routing::handle_v1_account_transactions_with_policy(
         app.state.clone(),
-        AxPath(canonical_account_id),
+        AxPath(key_hint),
         payload,
         tel,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        None,
     )
     .await
     .map(IntoResponse::into_response)
@@ -2944,64 +2915,35 @@ async fn handler_account_transactions_get(
     AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
 ) -> Result<Response, Error> {
     let tel = app.telemetry.clone();
+    let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    let (resolved_account_id, canonical_account_id) =
-        routing::parse_account_path_segment_with_state(
-            app.state.as_ref(),
-            &account_id,
-            &tel,
-            "/v1/accounts/{account_id}/transactions",
-        )?;
-    let account_in_dataspace = app
-        .state
-        .view()
-        .world()
-        .domains_for_subject(&resolved_account_id)
-        .into_iter()
-        .any(|domain| {
-            domain
-                .to_string()
-                .eq_ignore_ascii_case(&viewer.dataspace_id)
-        });
-    let can_view = (viewer.is_mandatory_alias && account_in_dataspace)
-        || viewer
-            .account_ids
-            .iter()
-            .any(|candidate| candidate == &resolved_account_id);
-    if !can_view {
-        return Ok(tx_history_reject(
-            StatusCode::FORBIDDEN,
-            "tx_history_account_forbidden",
-            "requester may only view its own account history unless it is a mandatory alias for the target dataspace",
-        ));
-    }
     let norito_params: AxQuery<crate::routing::AccountTransactionsGetParams> = AxQuery(params);
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_account_transactions_get_with_policy(
+            app.state.clone(),
+            AxPath(account_id),
+            norito_params,
+            tel.clone(),
+            None,
+        )
+        .await
+        .map(IntoResponse::into_response);
+    }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    let rate_key = format!("tx-history:{}", viewer.subject);
-    if !limits::allow_cost_conditionally(&app.rate_limiter, &rate_key, cost.max(1), enforce).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
 
     routing::handle_v1_account_transactions_get_with_policy(
         app.state.clone(),
-        AxPath(canonical_account_id),
+        AxPath(key_hint),
         norito_params,
         tel,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        None,
     )
     .await
     .map(IntoResponse::into_response)
@@ -8121,7 +8063,6 @@ async fn handler_metrics(
     routing::handle_metrics(&app.telemetry, nexus_enabled).await
 }
 
-#[cfg(all(feature = "telemetry", feature = "app_api"))]
 fn soracloud_runtime_status_sections(
     app: &SharedAppState,
 ) -> (
@@ -8266,6 +8207,81 @@ fn soracloud_runtime_status_sections(
     ]);
 
     (service_health, runtime_pressure, runtime_manager)
+}
+
+#[cfg(feature = "telemetry")]
+async fn soracloud_failed_admissions_section(
+    telemetry: &routing::MaybeTelemetry,
+) -> norito::json::Value {
+    if !telemetry.allows_metrics() {
+        return json_object(vec![
+            json_entry("available", false),
+            json_entry("total", 0_u64),
+            json_entry("governance_manifest_rejected", 0_u64),
+            json_entry("sorafs_provider_rejected", 0_u64),
+        ]);
+    }
+
+    let metrics = telemetry.metrics().await;
+    let governance_manifest_rejected: u64 = [
+        "missing_manifest",
+        "non_validator_authority",
+        "quorum_rejected",
+        "protected_namespace_rejected",
+        "runtime_hook_rejected",
+    ]
+    .into_iter()
+    .map(|reason| {
+        metrics
+            .governance_manifest_admission_total
+            .with_label_values(&[reason])
+            .get()
+    })
+    .sum();
+
+    let sorafs_provider_rejected: u64 = [
+        "decode",
+        "stale",
+        "policy_violation",
+        "unsupported_signature",
+        "signature",
+        "unknown_capabilities",
+        "admission_missing",
+        "digest_error",
+        "body_mismatch",
+        "body_digest_mismatch",
+        "advert_key_mismatch",
+        "retention_expired",
+    ]
+    .into_iter()
+    .map(|reason| {
+        metrics
+            .torii_sorafs_admission_total
+            .with_label_values(&["rejected", reason])
+            .get()
+    })
+    .sum();
+    let failed_admission_total =
+        governance_manifest_rejected.saturating_add(sorafs_provider_rejected);
+
+    json_object(vec![
+        json_entry("available", true),
+        json_entry("total", failed_admission_total),
+        json_entry("governance_manifest_rejected", governance_manifest_rejected),
+        json_entry("sorafs_provider_rejected", sorafs_provider_rejected),
+    ])
+}
+
+#[cfg(not(feature = "telemetry"))]
+async fn soracloud_failed_admissions_section(
+    _telemetry: &routing::MaybeTelemetry,
+) -> norito::json::Value {
+    json_object(vec![
+        json_entry("available", false),
+        json_entry("total", 0_u64),
+        json_entry("governance_manifest_rejected", 0_u64),
+        json_entry("sorafs_provider_rejected", 0_u64),
+    ])
 }
 
 #[cfg(feature = "app_api")]
@@ -8429,7 +8445,6 @@ async fn handler_soracloud_public_local_read(
     }
 }
 
-#[cfg(feature = "telemetry")]
 async fn handler_soracloud_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -8462,60 +8477,13 @@ async fn handler_soracloud_status(
         )));
     }
 
-    if !app.telemetry.allows_metrics() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/soracloud/status",
-            &app.telemetry,
-        ));
-    }
-
     let format =
         match crate::utils::negotiate_response_format(accept.as_ref().map(|value| &value.0)) {
             Ok(format) => format,
             Err(response) => return Ok(response),
         };
 
-    let metrics = app.telemetry.metrics().await;
-    let governance_manifest_rejected: u64 = [
-        "missing_manifest",
-        "non_validator_authority",
-        "quorum_rejected",
-        "protected_namespace_rejected",
-        "runtime_hook_rejected",
-    ]
-    .into_iter()
-    .map(|reason| {
-        metrics
-            .governance_manifest_admission_total
-            .with_label_values(&[reason])
-            .get()
-    })
-    .sum();
-
-    let sorafs_provider_rejected: u64 = [
-        "decode",
-        "stale",
-        "policy_violation",
-        "unsupported_signature",
-        "signature",
-        "unknown_capabilities",
-        "admission_missing",
-        "digest_error",
-        "body_mismatch",
-        "body_digest_mismatch",
-        "advert_key_mismatch",
-        "retention_expired",
-    ]
-    .into_iter()
-    .map(|reason| {
-        metrics
-            .torii_sorafs_admission_total
-            .with_label_values(&["rejected", reason])
-            .get()
-    })
-    .sum();
-    let failed_admission_total =
-        governance_manifest_rejected.saturating_add(sorafs_provider_rejected);
+    let failed_admissions = soracloud_failed_admissions_section(&app.telemetry).await;
 
     let backpressure = app.queue.current_backpressure();
     let queue_active = u64::try_from(app.queue.active_len()).unwrap_or(u64::MAX);
@@ -8549,22 +8517,8 @@ async fn handler_soracloud_status(
         ),
     ]);
 
-    #[cfg(feature = "app_api")]
     let (service_health, runtime_pressure, runtime_manager) =
         soracloud_runtime_status_sections(&app);
-
-    #[cfg(not(feature = "app_api"))]
-    let (service_health, runtime_pressure) = (
-        json_object(vec![
-            json_entry("mode", "app_api_disabled"),
-            json_entry("status", "unavailable"),
-            json_entry(
-                "message",
-                "binary compiled without app_api; Soracloud runtime health unavailable",
-            ),
-        ]),
-        json_object(vec![json_entry("enabled", false)]),
-    );
 
     let resource_pressure = json_object(vec![
         json_entry("queue_active", queue_active),
@@ -8575,16 +8529,7 @@ async fn handler_soracloud_status(
         json_entry("high_load", high_load),
         json_entry("runtime", runtime_pressure),
     ]);
-    let failed_admissions = json_object(vec![
-        json_entry("total", failed_admission_total),
-        json_entry("governance_manifest_rejected", governance_manifest_rejected),
-        json_entry("sorafs_provider_rejected", sorafs_provider_rejected),
-    ]);
-
-    #[cfg(feature = "app_api")]
-    let control_plane = soracloud::world_snapshot(&app, None, 10);
-
-    #[cfg(feature = "app_api")]
+    let control_plane = soracloud::control_plane_snapshot(&app, None, 10);
     let payload = json_object(vec![
         json_entry("schema_version", 1_u16),
         json_entry("service_health", service_health),
@@ -8593,15 +8538,6 @@ async fn handler_soracloud_status(
         json_entry("failed_admissions", failed_admissions),
         json_entry("runtime_manager", runtime_manager),
         json_entry("control_plane", json_value(&control_plane)),
-    ]);
-
-    #[cfg(not(feature = "app_api"))]
-    let payload = json_object(vec![
-        json_entry("schema_version", 1_u16),
-        json_entry("service_health", service_health),
-        json_entry("routing", routing),
-        json_entry("resource_pressure", resource_pressure),
-        json_entry("failed_admissions", failed_admissions),
     ]);
 
     Ok(crate::utils::respond_value_with_format(payload, format))
@@ -15595,6 +15531,8 @@ pub struct Torii {
 pub struct ToriiRuntimeDeps {
     telemetry: routing::MaybeTelemetry,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
+    sorafs_node: Option<sorafs_node::NodeHandle>,
+    sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
 }
 
 impl ToriiRuntimeDeps {
@@ -15604,6 +15542,8 @@ impl ToriiRuntimeDeps {
         Self {
             telemetry,
             soracloud_runtime: None,
+            sorafs_node: None,
+            sorafs_cache: None,
         }
     }
 
@@ -15611,6 +15551,23 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntime) -> Self {
         self.soracloud_runtime = Some(runtime);
+        self
+    }
+
+    /// Attach a prebuilt embedded SoraFS node handle.
+    #[must_use]
+    pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
+        self.sorafs_node = Some(sorafs_node);
+        self
+    }
+
+    /// Attach a shared SoraFS provider-discovery cache.
+    #[must_use]
+    pub fn with_sorafs_cache(
+        mut self,
+        sorafs_cache: Arc<RwLock<sorafs::ProviderAdvertCache>>,
+    ) -> Self {
+        self.sorafs_cache = Some(sorafs_cache);
         self
     }
 }
@@ -15681,7 +15638,6 @@ impl Torii {
                     &format!("{}/{{*tail}}", uri::STATUS),
                     get(handler_status_tail),
                 )
-                .route("/v1/soracloud/status", get(handler_soracloud_status))
                 .route(uri::METRICS, get(handler_metrics));
 
             router.merge(operator_router).merge(public_router)
@@ -15711,10 +15667,6 @@ impl Torii {
                 .route(
                     "/v1/assets/{definition_id}/holders/query",
                     post(handler_asset_holders_query),
-                )
-                .route(
-                    "/v1/soracloud/status",
-                    get(routing::telemetry_not_implemented),
                 )
                 .route(uri::METRICS, get(routing::telemetry_not_implemented))
         });
@@ -16676,6 +16628,7 @@ impl Torii {
                 .route("/v1/sns/policies/{suffix_id}", get(sns::handle_get_policy))
                 .route("/v1/sns/governance/cases", post(sns::handle_post_case))
                 .route("/v1/sns/governance/cases", get(sns::handle_get_cases))
+                .route("/v1/soracloud/status", get(handler_soracloud_status))
                 .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
                 .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
                 .route("/v1/soracloud/rollback", post(soracloud::handle_rollback))
@@ -16743,10 +16696,6 @@ impl Torii {
                 .route(
                     "/v1/soracloud/model/artifact/status",
                     get(soracloud::handle_model_artifact_status),
-                )
-                .route(
-                    "/v1/soracloud/registry",
-                    get(soracloud::handle_registry_status),
                 )
                 .route(
                     "/v1/soracloud/agent/deploy",
@@ -17393,6 +17342,8 @@ impl Torii {
         let runtime_deps = runtime_deps.into();
         let telemetry = runtime_deps.telemetry.clone();
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
+        let shared_sorafs_node = runtime_deps.sorafs_node.clone();
+        let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
         routing::debug_match_flag::set_from_config(config.debug_match_filters);
         routing::set_app_query_limits(routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
@@ -17676,16 +17627,19 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_admission = load_sorafs_admission(&config);
         #[cfg(feature = "app_api")]
-        let sorafs_cache = build_sorafs_cache(&config, sorafs_admission.clone());
+        let sorafs_cache =
+            shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()));
         #[cfg(feature = "app_api")]
-        let sorafs_node = sorafs_node::NodeHandle::new_with_policies(
-            sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
-            sorafs_node::config::RepairConfig::from_repair_and_policy(
-                &config.sorafs_repair,
-                &state.gov.sorafs_repair_escalation,
-            ),
-            sorafs_node::config::GcConfig::from(&config.sorafs_gc),
-        );
+        let sorafs_node = shared_sorafs_node.unwrap_or_else(|| {
+            sorafs_node::NodeHandle::new_with_policies(
+                sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
+                sorafs_node::config::RepairConfig::from_repair_and_policy(
+                    &config.sorafs_repair,
+                    &state.gov.sorafs_repair_escalation,
+                ),
+                sorafs_node::config::GcConfig::from(&config.sorafs_gc),
+            )
+        });
         #[cfg(feature = "app_api")]
         let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::from_config(
             &build_sorafs_quota_config(&config.sorafs_quota),
@@ -21954,6 +21908,138 @@ pub(crate) mod tests_runtime_handlers {
         }
     }
 
+    #[derive(Clone)]
+    struct TestSoracloudRuntimeHandle {
+        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
+        state_dir: PathBuf,
+    }
+
+    impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestSoracloudRuntimeHandle {
+        fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+            self.snapshot.clone()
+        }
+
+        fn state_dir(&self) -> PathBuf {
+            self.state_dir.clone()
+        }
+    }
+
+    impl iroha_core::soracloud_runtime::SoracloudRuntime for TestSoracloudRuntimeHandle {
+        fn execute_local_read(
+            &self,
+            _request: SoracloudLocalReadRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test runtime handle does not implement local reads",
+                ),
+            )
+        }
+
+        fn execute_ordered_mailbox(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test runtime handle does not implement mailbox execution",
+                ),
+            )
+        }
+
+        fn execute_apartment(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudApartmentExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test runtime handle does not implement apartment execution",
+                ),
+            )
+        }
+    }
+
+    fn sample_soracloud_runtime_snapshot(
+        health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
+    ) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+        let services = std::collections::BTreeMap::from([(
+            "web_portal".to_string(),
+            std::collections::BTreeMap::from([(
+                "1.0.0".to_string(),
+                iroha_core::soracloud_runtime::SoracloudRuntimeServicePlan {
+                    service_name: "web_portal".to_string(),
+                    service_version: "1.0.0".to_string(),
+                    role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
+                    traffic_percent: 100,
+                    runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
+                    bundle_hash: "hash:bundle".to_string(),
+                    bundle_path: "service.to".to_string(),
+                    entrypoint: "start".to_string(),
+                    bundle_cache_path: "/tmp/soracloud/runtime/web_portal/1.0.0/service.to"
+                        .to_string(),
+                    bundle_available_locally: true,
+                    process_generation: Some(7),
+                    health_status,
+                    load_factor_bps: 2_500,
+                    reported_pending_mailbox_messages: 2,
+                    authoritative_pending_mailbox_messages: 3,
+                    rollout_handle: None,
+                    materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0".to_string(),
+                    mailboxes: vec![],
+                    artifacts: vec![
+                        iroha_core::soracloud_runtime::SoracloudRuntimeArtifactPlan {
+                            kind: iroha_data_model::soracloud::SoraArtifactKindV1::Bundle,
+                            artifact_hash: "hash:artifact".to_string(),
+                            artifact_path: "public/index.html".to_string(),
+                            handler_name: Some("asset".to_string()),
+                            local_cache_path:
+                                "/tmp/soracloud/cache/hash-artifact/public-index.html".to_string(),
+                            available_locally: false,
+                        },
+                    ],
+                },
+            )]),
+        )]);
+        let apartments = std::collections::BTreeMap::from([(
+            "ops_agent".to_string(),
+            iroha_core::soracloud_runtime::SoracloudRuntimeApartmentPlan {
+                apartment_name: "ops_agent".to_string(),
+                manifest_hash: "hash:manifest".to_string(),
+                status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
+                process_generation: 3,
+                lease_expires_sequence: 90,
+                last_active_sequence: 88,
+                materialization_dir: "/tmp/soracloud/runtime/apartments/ops_agent".to_string(),
+                pending_wallet_request_count: 1,
+                pending_mailbox_message_count: 4,
+                autonomy_budget_remaining_units: 120,
+                approved_artifact_count: 2,
+                autonomy_run_count: 5,
+                revoked_policy_capability_count: 1,
+            },
+        )]);
+
+        iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+            schema_version: 1,
+            observed_height: 42,
+            observed_block_hash: Some("hash:block".to_string()),
+            services,
+            apartments,
+        }
+    }
+
     fn seed_public_soracloud_world() -> World {
         let mut world = World::new();
         let service_name: iroha_data_model::name::Name = "web_portal".parse().expect("service");
@@ -22287,147 +22373,17 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(ok.status(), axum::http::StatusCode::OK);
     }
 
-    #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn soracloud_status_handler_returns_snapshot_sections() {
-        #[derive(Clone)]
-        struct TestSoracloudRuntimeHandle {
-            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
-            state_dir: PathBuf,
-        }
-
-        impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestSoracloudRuntimeHandle {
-            fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
-                self.snapshot.clone()
-            }
-
-            fn state_dir(&self) -> PathBuf {
-                self.state_dir.clone()
-            }
-        }
-
-        impl iroha_core::soracloud_runtime::SoracloudRuntime for TestSoracloudRuntimeHandle {
-            fn execute_local_read(
-                &self,
-                _request: SoracloudLocalReadRequest,
-            ) -> Result<
-                iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-            > {
-                Err(
-                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                        SoracloudRuntimeExecutionErrorKind::Unavailable,
-                        "test runtime handle does not implement local reads",
-                    ),
-                )
-            }
-
-            fn execute_ordered_mailbox(
-                &self,
-                _request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
-            ) -> Result<
-                iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-            > {
-                Err(
-                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                        SoracloudRuntimeExecutionErrorKind::Unavailable,
-                        "test runtime handle does not implement mailbox execution",
-                    ),
-                )
-            }
-
-            fn execute_apartment(
-                &self,
-                _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
-            ) -> Result<
-                iroha_core::soracloud_runtime::SoracloudApartmentExecutionResult,
-                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
-            > {
-                Err(
-                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                        SoracloudRuntimeExecutionErrorKind::Unavailable,
-                        "test runtime handle does not implement apartment execution",
-                    ),
-                )
-            }
-        }
-
-        let mut app = mk_app_state_for_tests();
-        {
-            let state = Arc::get_mut(&mut app).expect("unique app state");
-            let mut services = std::collections::BTreeMap::new();
-            services.insert(
-                "web_portal".to_string(),
-                std::collections::BTreeMap::from([(
-                    "1.0.0".to_string(),
-                    iroha_core::soracloud_runtime::SoracloudRuntimeServicePlan {
-                        service_name: "web_portal".to_string(),
-                        service_version: "1.0.0".to_string(),
-                        role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
-                        traffic_percent: 100,
-                        runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
-                        bundle_hash: "hash:bundle".to_string(),
-                        bundle_path: "service.to".to_string(),
-                        entrypoint: "start".to_string(),
-                        bundle_cache_path: "/tmp/soracloud/runtime/web_portal/1.0.0/service.to"
-                            .to_string(),
-                        bundle_available_locally: true,
-                        process_generation: Some(7),
-                        health_status:
-                            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-                        load_factor_bps: 2_500,
-                        reported_pending_mailbox_messages: 2,
-                        authoritative_pending_mailbox_messages: 3,
-                        rollout_handle: None,
-                        materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0".to_string(),
-                        mailboxes: vec![],
-                        artifacts: vec![
-                            iroha_core::soracloud_runtime::SoracloudRuntimeArtifactPlan {
-                                kind: iroha_data_model::soracloud::SoraArtifactKindV1::Bundle,
-                                artifact_hash: "hash:artifact".to_string(),
-                                artifact_path: "public/index.html".to_string(),
-                                handler_name: Some("asset".to_string()),
-                                local_cache_path:
-                                    "/tmp/soracloud/cache/hash-artifact/public-index.html"
-                                        .to_string(),
-                                available_locally: false,
-                            },
-                        ],
-                    },
-                )]),
-            );
-
-            let apartments = std::collections::BTreeMap::from([(
-                "ops_agent".to_string(),
-                iroha_core::soracloud_runtime::SoracloudRuntimeApartmentPlan {
-                    apartment_name: "ops_agent".to_string(),
-                    manifest_hash: "hash:manifest".to_string(),
-                    status: iroha_data_model::soracloud::SoraAgentRuntimeStatusV1::Running,
-                    process_generation: 3,
-                    lease_expires_sequence: 90,
-                    last_active_sequence: 88,
-                    materialization_dir: "/tmp/soracloud/runtime/apartments/ops_agent".to_string(),
-                    pending_wallet_request_count: 1,
-                    pending_mailbox_message_count: 4,
-                    autonomy_budget_remaining_units: 120,
-                    approved_artifact_count: 2,
-                    autonomy_run_count: 5,
-                    revoked_policy_capability_count: 1,
-                },
-            )]);
-
-            state.soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
-                snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
-                    schema_version: 1,
-                    observed_height: 42,
-                    observed_block_hash: Some("hash:block".to_string()),
-                    services,
-                    apartments,
-                },
-                state_dir: PathBuf::from("/tmp/soracloud/runtime"),
-            }));
-        }
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
+            snapshot: sample_soracloud_runtime_snapshot(
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+            ),
+            state_dir: PathBuf::from("/tmp/soracloud/runtime"),
+        }));
 
         let response = super::handler_soracloud_status(State(app), HeaderMap::new(), None)
             .await
@@ -22474,7 +22430,14 @@ pub(crate) mod tests_runtime_handlers {
                 .is_some(),
             "failed_admissions section should be present"
         );
-        #[cfg(feature = "app_api")]
+        assert_eq!(
+            payload
+                .get("failed_admissions")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|value| value.get("available"))
+                .and_then(norito::json::Value::as_bool),
+            Some(cfg!(feature = "telemetry"))
+        );
         assert!(
             payload
                 .get("control_plane")
@@ -22482,7 +22445,6 @@ pub(crate) mod tests_runtime_handlers {
                 .is_some(),
             "control_plane section should be present"
         );
-        #[cfg(feature = "app_api")]
         assert_eq!(
             payload
                 .get("service_health")
@@ -22491,13 +22453,67 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(norito::json::Value::as_str),
             Some("embedded_runtime_manager")
         );
-        #[cfg(feature = "app_api")]
         assert!(
             payload
                 .get("runtime_manager")
                 .and_then(norito::json::Value::as_object)
                 .is_some(),
             "runtime_manager section should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapshots() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
+            snapshot: sample_soracloud_runtime_snapshot(
+                iroha_data_model::soracloud::SoraServiceHealthStatusV1::Hydrating,
+            ),
+            state_dir: PathBuf::from("/tmp/soracloud/runtime"),
+        }));
+
+        let (service_health, _runtime_pressure, runtime_manager) =
+            super::soracloud_runtime_status_sections(&app);
+
+        assert_eq!(
+            service_health
+                .get("status")
+                .and_then(norito::json::Value::as_str),
+            Some("degraded")
+        );
+        assert_eq!(
+            runtime_manager
+                .get("available")
+                .and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_runtime_status_sections_report_unavailable_without_runtime() {
+        let app = mk_app_state_for_tests();
+        let (service_health, runtime_pressure, runtime_manager) =
+            super::soracloud_runtime_status_sections(&app);
+
+        assert_eq!(
+            service_health
+                .get("status")
+                .and_then(norito::json::Value::as_str),
+            Some("unavailable")
+        );
+        assert_eq!(
+            runtime_pressure
+                .get("enabled")
+                .and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            runtime_manager
+                .get("available")
+                .and_then(norito::json::Value::as_bool),
+            Some(false)
         );
     }
 

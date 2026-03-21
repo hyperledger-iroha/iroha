@@ -548,7 +548,7 @@ mod app {
         /// Compute lane simulation helpers
         #[command(subcommand)]
         Compute(crate::compute::Command),
-        /// Soracloud deployment/control-plane simulation helpers
+        /// Soracloud deployment/control-plane helpers
         #[command(subcommand)]
         Soracloud(crate::soracloud::Command),
         /// Social incentive helpers (viral follow rewards and escrows)

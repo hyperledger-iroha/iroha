@@ -1397,16 +1397,14 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
         .get("signature_payload")
         .cloned()
         .or_else(|| object.get("payload").cloned())
-    {
-        if let Ok(payload) =
+        && let Ok(payload) =
             norito::json::from_value::<IdentifierResolutionReceiptPayload>(payload_value)
-        {
-            return Ok(IdentifierResolutionReceipt {
-                payload,
-                signature: Some(signature),
-                proof: None,
-            });
-        }
+    {
+        return Ok(IdentifierResolutionReceipt {
+            payload,
+            signature: Some(signature),
+            proof: None,
+        });
     }
 
     Err(BridgeError::IdentifierReceipt)

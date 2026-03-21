@@ -54,8 +54,13 @@ use iroha_data_model::{
         SoracloudReadCommittedStateResponseV1, SoracloudReadCredentialResponseV1,
         SoracloudReadSecretResponseV1,
     },
+    sorafs::pin_registry::ManifestDigest,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_torii::sorafs::{
+    EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
+    api::StorageManifestResponseDto,
+};
 use ivm::{
     IVM, IVMHost, PointerType, VMError, verify_contract_artifact,
     syscalls::{
@@ -67,7 +72,8 @@ use ivm::{
 };
 use mv::storage::StorageReadOnly;
 use parking_lot::RwLock;
-use tokio::task::JoinHandle;
+use sorafs_node::store::StoredManifest;
+use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 
 /// Runtime-manager configuration derived from the explicit Soracloud runtime settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1028,6 +1034,31 @@ pub(crate) struct SoracloudRuntimeManager {
     config: SoracloudRuntimeManagerConfig,
     state: Arc<State>,
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
+    sorafs_node: Option<sorafs_node::NodeHandle>,
+    sorafs_provider_cache: Option<Arc<AsyncRwLock<ProviderAdvertCache>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteHydrationSource {
+    manifest_digest_hex: String,
+    manifest_cid_hex: String,
+    chunker_handle: Option<String>,
+    provider_ids: Vec<[u8; 32]>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteHydrationPlan {
+    manifest_id_hex: String,
+    chunker_handle: String,
+    content_length: u64,
+    chunks: Vec<RemoteHydrationChunk>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RemoteHydrationChunk {
+    offset: u64,
+    length: u32,
+    digest_hex: String,
 }
 
 impl SoracloudRuntimeManager {
@@ -1038,7 +1069,26 @@ impl SoracloudRuntimeManager {
             config,
             state,
             snapshot: Arc::new(RwLock::new(SoracloudRuntimeSnapshot::default())),
+            sorafs_node: None,
+            sorafs_provider_cache: None,
         }
+    }
+
+    /// Attach the embedded SoraFS storage handle used for authoritative hydration.
+    #[must_use]
+    pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
+        self.sorafs_node = Some(sorafs_node);
+        self
+    }
+
+    /// Attach the shared SoraFS provider-discovery cache used for remote hydration.
+    #[must_use]
+    pub fn with_sorafs_provider_cache(
+        mut self,
+        sorafs_provider_cache: Arc<AsyncRwLock<ProviderAdvertCache>>,
+    ) -> Self {
+        self.sorafs_provider_cache = Some(sorafs_provider_cache);
+        self
     }
 
     /// Start the background reconciliation loop.
@@ -1116,17 +1166,25 @@ impl SoracloudRuntimeManager {
 
         let view = self.state.view();
         let bundle_registry = collect_service_revision_registry(&view);
-        let snapshot = build_runtime_snapshot(
+        let initial_snapshot = build_runtime_snapshot(
             &view,
             &bundle_registry,
             &self.config.state_dir,
             self.artifacts_root(),
         )?;
 
-        self.write_service_materializations(&snapshot, &bundle_registry)?;
-        self.write_apartment_materializations(&snapshot, &view)?;
-        self.prune_stale_service_materializations(&snapshot)?;
-        self.prune_stale_apartment_materializations(&snapshot)?;
+        self.write_service_materializations(&initial_snapshot, &bundle_registry)?;
+        self.write_apartment_materializations(&initial_snapshot, &view)?;
+        self.prune_stale_service_materializations(&initial_snapshot)?;
+        self.prune_stale_apartment_materializations(&initial_snapshot)?;
+        self.hydrate_missing_artifacts(&view, &initial_snapshot)?;
+        self.enforce_cache_budgets(&view, &initial_snapshot)?;
+        let snapshot = build_runtime_snapshot(
+            &view,
+            &bundle_registry,
+            &self.config.state_dir,
+            self.artifacts_root(),
+        )?;
         write_json_atomic(
             &self.config.state_dir.join("runtime_snapshot.json"),
             &snapshot,
@@ -1258,6 +1316,849 @@ impl SoracloudRuntimeManager {
         prune_flat_directory_tree(self.apartments_root().as_path(), &desired)?;
         Ok(())
     }
+
+    fn hydrate_missing_artifacts(
+        &self,
+        view: &StateView<'_>,
+        snapshot: &SoracloudRuntimeSnapshot,
+    ) -> eyre::Result<()> {
+        let stored_manifests = if let Some(sorafs_node) = self.sorafs_node.as_ref() {
+            if sorafs_node.is_enabled() {
+                sorafs_node
+                    .stored_manifests()
+                    .wrap_err("list stored SoraFS manifests for Soracloud hydration")?
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        let remote_sources = collect_remote_hydration_sources(view, &self.state);
+        let mut missing = BTreeMap::<String, (Hash, String)>::new();
+        let mut hydrated_payloads = BTreeMap::<Hash, Option<Vec<u8>>>::new();
+        for versions in snapshot.services.values() {
+            for plan in versions.values() {
+                for artifact in &plan.artifacts {
+                    if artifact.available_locally {
+                        continue;
+                    }
+                    let artifact_hash = Hash::from_str(&artifact.artifact_hash).wrap_err_with(|| {
+                        format!("parse Soracloud artifact hash `{}`", artifact.artifact_hash)
+                    })?;
+                    missing
+                        .entry(artifact.local_cache_path.clone())
+                        .or_insert((artifact_hash, artifact.artifact_path.clone()));
+                }
+            }
+        }
+
+        for (local_cache_path, (artifact_hash, artifact_path)) in missing {
+            let cache_path = PathBuf::from(&local_cache_path);
+            if cache_path.exists() {
+                continue;
+            }
+            let payload = if let Some(cached) = hydrated_payloads.get(&artifact_hash) {
+                cached.clone()
+            } else {
+                let resolved = self.read_committed_sorafs_payload(
+                    view,
+                    &stored_manifests,
+                    &remote_sources,
+                    artifact_hash,
+                )?;
+                hydrated_payloads.insert(artifact_hash, resolved.clone());
+                resolved
+            };
+            let Some(payload) = payload else {
+                continue;
+            };
+            write_bytes_atomic(&cache_path, &payload).wrap_err_with(|| {
+                format!(
+                    "persist hydrated Soracloud artifact `{artifact_path}` at {}",
+                    cache_path.display()
+                )
+            })?;
+        }
+
+        Ok(())
+    }
+
+    fn read_committed_sorafs_payload(
+        &self,
+        view: &StateView<'_>,
+        stored_manifests: &[StoredManifest],
+        remote_sources: &[RemoteHydrationSource],
+        expected_hash: Hash,
+    ) -> eyre::Result<Option<Vec<u8>>> {
+        if let Some(sorafs_node) = self.sorafs_node.as_ref() {
+            for manifest in stored_manifests {
+                if !manifest_is_committed(view, &self.state, manifest.manifest_digest()) {
+                    continue;
+                }
+                let Ok(content_length) = usize::try_from(manifest.content_length()) else {
+                    iroha_logger::warn!(
+                        manifest_id = %manifest.manifest_id(),
+                        content_length = manifest.content_length(),
+                        "skipping Soracloud hydration candidate with oversized SoraFS payload"
+                    );
+                    continue;
+                };
+                let payload =
+                    match sorafs_node.read_payload_range(manifest.manifest_id(), 0, content_length) {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            iroha_logger::warn!(
+                                ?error,
+                                manifest_id = %manifest.manifest_id(),
+                                "failed to read committed SoraFS payload during Soracloud hydration"
+                            );
+                            continue;
+                        }
+                    };
+                if Hash::new(&payload) == expected_hash {
+                    return Ok(Some(payload));
+                }
+            }
+        }
+        if let Some(payload) =
+            self.read_committed_remote_sorafs_payload(remote_sources, expected_hash)?
+        {
+            return Ok(Some(payload));
+        }
+        Ok(None)
+    }
+
+    fn read_committed_remote_sorafs_payload(
+        &self,
+        remote_sources: &[RemoteHydrationSource],
+        expected_hash: Hash,
+    ) -> eyre::Result<Option<Vec<u8>>> {
+        let Some(_cache) = self.sorafs_provider_cache.as_ref() else {
+            return Ok(None);
+        };
+        if remote_sources.is_empty() {
+            return Ok(None);
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .wrap_err("build Soracloud remote hydration HTTP client")?;
+
+        for source in remote_sources {
+            for provider_id in &source.provider_ids {
+                let Some(base_url) = self.remote_provider_base_url(provider_id) else {
+                    continue;
+                };
+                let Some(manifest) =
+                    self.fetch_remote_manifest_metadata(&client, &base_url, source)
+                else {
+                    continue;
+                };
+                if !manifest
+                    .manifest_digest_hex
+                    .eq_ignore_ascii_case(&source.manifest_digest_hex)
+                {
+                    continue;
+                }
+                if let Some(expected_chunker) = source.chunker_handle.as_ref()
+                    && !manifest
+                        .chunk_profile_handle
+                        .eq_ignore_ascii_case(expected_chunker)
+                {
+                    continue;
+                }
+
+                let Some(plan) =
+                    self.fetch_remote_hydration_plan(&client, &base_url, &source.manifest_cid_hex)
+                else {
+                    continue;
+                };
+                if !plan
+                    .chunker_handle
+                    .eq_ignore_ascii_case(&manifest.chunk_profile_handle)
+                {
+                    continue;
+                }
+
+                let client_id = "soracloud-runtime-hydration";
+                let nonce = remote_hydration_nonce(&source.manifest_cid_hex, provider_id, expected_hash);
+                let Some(stream_token) = self.fetch_remote_stream_token(
+                    &client,
+                    &base_url,
+                    &source.manifest_cid_hex,
+                    provider_id,
+                    &plan,
+                    client_id,
+                    &nonce,
+                ) else {
+                    continue;
+                };
+
+                let Ok(capacity) = usize::try_from(plan.content_length) else {
+                    iroha_logger::warn!(
+                        manifest_digest = %source.manifest_digest_hex,
+                        manifest_cid = %source.manifest_cid_hex,
+                        provider_id_hex = %hex::encode(provider_id),
+                        content_length = plan.content_length,
+                        "skipping remote Soracloud hydration candidate with oversized payload"
+                    );
+                    continue;
+                };
+
+                let mut payload = Vec::with_capacity(capacity);
+                let mut cursor = 0_u64;
+                let mut fetch_failed = false;
+                for chunk in &plan.chunks {
+                    if chunk.offset != cursor {
+                        fetch_failed = true;
+                        break;
+                    }
+                    let Some(bytes) = self.fetch_remote_chunk(
+                        &client,
+                        &base_url,
+                        &plan,
+                        chunk,
+                        &stream_token,
+                        client_id,
+                        &nonce,
+                    ) else {
+                        fetch_failed = true;
+                        break;
+                    };
+                    if bytes.len() != usize::try_from(chunk.length).unwrap_or(usize::MAX) {
+                        fetch_failed = true;
+                        break;
+                    }
+                    cursor = cursor.saturating_add(bytes.len() as u64);
+                    payload.extend_from_slice(&bytes);
+                }
+                if fetch_failed || cursor != plan.content_length {
+                    continue;
+                }
+                if Hash::new(&payload) == expected_hash {
+                    return Ok(Some(payload));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn remote_provider_base_url(&self, provider_id: &[u8; 32]) -> Option<reqwest::Url> {
+        let cache = self.sorafs_provider_cache.as_ref()?;
+        let guard = cache.try_read().ok()?;
+        let record = guard.record_by_provider(provider_id)?;
+        let advert = record.advert();
+        let supports_torii_http_range = advert
+            .body
+            .transport_hints
+            .as_ref()
+            .map_or(true, |hints| {
+                hints.iter()
+                    .any(|hint| hint.protocol == TransportProtocol::ToriiHttpRange)
+            });
+        if !supports_torii_http_range {
+            return None;
+        }
+        let endpoint = advert
+            .body
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.kind == EndpointKind::Torii)?;
+        normalize_provider_base_url(&endpoint.host_pattern)
+    }
+
+    fn fetch_remote_manifest_metadata(
+        &self,
+        client: &reqwest::blocking::Client,
+        base_url: &reqwest::Url,
+        source: &RemoteHydrationSource,
+    ) -> Option<StorageManifestResponseDto> {
+        let url = match base_url.join(&format!(
+            "v1/sorafs/storage/manifest/{}",
+            source.manifest_cid_hex
+        )) {
+            Ok(url) => url,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    base_url = %base_url,
+                    manifest_cid = %source.manifest_cid_hex,
+                    "failed to build remote Soracloud hydration manifest URL"
+                );
+                return None;
+            }
+        };
+        let response = match client.get(url.clone()).send() {
+            Ok(response) => response,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "remote Soracloud hydration manifest request failed"
+                );
+                return None;
+            }
+        };
+        if !response.status().is_success() {
+            return None;
+        }
+        let body = match response.bytes() {
+            Ok(body) => body,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to read remote Soracloud hydration manifest body"
+                );
+                return None;
+            }
+        };
+        match norito::json::from_slice::<StorageManifestResponseDto>(&body) {
+            Ok(dto) => Some(dto),
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to decode remote Soracloud hydration manifest response"
+                );
+                None
+            }
+        }
+    }
+
+    fn fetch_remote_hydration_plan(
+        &self,
+        client: &reqwest::blocking::Client,
+        base_url: &reqwest::Url,
+        manifest_id_hex: &str,
+    ) -> Option<RemoteHydrationPlan> {
+        let url = match base_url.join(&format!("v1/sorafs/storage/plan/{manifest_id_hex}")) {
+            Ok(url) => url,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    base_url = %base_url,
+                    manifest_id = %manifest_id_hex,
+                    "failed to build remote Soracloud hydration plan URL"
+                );
+                return None;
+            }
+        };
+        let response = match client.get(url.clone()).send() {
+            Ok(response) => response,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "remote Soracloud hydration plan request failed"
+                );
+                return None;
+            }
+        };
+        if !response.status().is_success() {
+            return None;
+        }
+        let body = match response.bytes() {
+            Ok(body) => body,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to read remote Soracloud hydration plan body"
+                );
+                return None;
+            }
+        };
+        parse_remote_hydration_plan(manifest_id_hex, &body).inspect_err(|error| {
+            iroha_logger::debug!(
+                ?error,
+                url = %url,
+                "failed to decode remote Soracloud hydration plan response"
+            );
+        }).ok()
+    }
+
+    fn fetch_remote_stream_token(
+        &self,
+        client: &reqwest::blocking::Client,
+        base_url: &reqwest::Url,
+        manifest_id_hex: &str,
+        provider_id: &[u8; 32],
+        plan: &RemoteHydrationPlan,
+        client_id: &str,
+        nonce: &str,
+    ) -> Option<String> {
+        let url = match base_url.join("v1/sorafs/storage/token") {
+            Ok(url) => url,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    base_url = %base_url,
+                    "failed to build remote Soracloud hydration token URL"
+                );
+                return None;
+            }
+        };
+        let max_chunk_len = plan
+            .chunks
+            .iter()
+            .map(|chunk| u64::from(chunk.length))
+            .max()
+            .unwrap_or(0);
+        let mut request_body = norito::json::native::Map::new();
+        request_body.insert(
+            "manifest_id_hex".into(),
+            norito::json::Value::from(manifest_id_hex),
+        );
+        request_body.insert(
+            "provider_id_hex".into(),
+            norito::json::Value::from(hex::encode(provider_id)),
+        );
+        request_body.insert("ttl_secs".into(), norito::json::Value::from(60_u64));
+        request_body.insert("max_streams".into(), norito::json::Value::from(1_u16));
+        request_body.insert(
+            "rate_limit_bytes".into(),
+            norito::json::Value::from(max_chunk_len.max(1)),
+        );
+        request_body.insert(
+            "requests_per_minute".into(),
+            norito::json::Value::from(
+                u32::try_from(plan.chunks.len().saturating_add(8)).unwrap_or(u32::MAX),
+            ),
+        );
+        let request_body = norito::json::Value::Object(request_body);
+        let request_body = match norito::json::to_vec(&request_body) {
+            Ok(body) => body,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to encode remote Soracloud hydration token request"
+                );
+                return None;
+            }
+        };
+        let response = match client
+            .post(url.clone())
+            .header("X-SoraFS-Client", client_id)
+            .header("X-SoraFS-Nonce", nonce)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(request_body)
+            .send()
+        {
+            Ok(response) => response,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "remote Soracloud hydration token request failed"
+                );
+                return None;
+            }
+        };
+        if !response.status().is_success() {
+            return None;
+        }
+        let body = match response.bytes() {
+            Ok(body) => body,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to read remote Soracloud hydration token body"
+                );
+                return None;
+            }
+        };
+        let value: norito::json::Value = match norito::json::from_slice(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to decode remote Soracloud hydration token response"
+                );
+                return None;
+            }
+        };
+        value
+            .get("token_base64")
+            .and_then(norito::json::Value::as_str)
+            .map(ToOwned::to_owned)
+    }
+
+    fn fetch_remote_chunk(
+        &self,
+        client: &reqwest::blocking::Client,
+        base_url: &reqwest::Url,
+        plan: &RemoteHydrationPlan,
+        chunk: &RemoteHydrationChunk,
+        stream_token: &str,
+        client_id: &str,
+        nonce: &str,
+    ) -> Option<Vec<u8>> {
+        let url = match base_url.join(&format!(
+            "v1/sorafs/storage/chunk/{}/{}",
+            plan.manifest_id_hex, chunk.digest_hex
+        )) {
+            Ok(url) => url,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    base_url = %base_url,
+                    manifest_id = %plan.manifest_id_hex,
+                    chunk_digest = %chunk.digest_hex,
+                    "failed to build remote Soracloud hydration chunk URL"
+                );
+                return None;
+            }
+        };
+        let response = match client
+            .get(url.clone())
+            .header("X-SoraFS-Stream-Token", stream_token)
+            .header("X-SoraFS-Chunker", &plan.chunker_handle)
+            .header("X-SoraFS-Client", client_id)
+            .header("X-SoraFS-Nonce", nonce)
+            .send()
+        {
+            Ok(response) => response,
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "remote Soracloud hydration chunk request failed"
+                );
+                return None;
+            }
+        };
+        if !response.status().is_success() {
+            return None;
+        }
+        match response.bytes() {
+            Ok(bytes) => Some(bytes.to_vec()),
+            Err(error) => {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to read remote Soracloud hydration chunk body"
+                );
+                None
+            }
+        }
+    }
+
+    fn enforce_cache_budgets(
+        &self,
+        view: &StateView<'_>,
+        snapshot: &SoracloudRuntimeSnapshot,
+    ) -> eyre::Result<()> {
+        let artifact_observations = collect_artifact_cache_observations(view, snapshot);
+        let artifact_candidates =
+            collect_artifact_cache_candidates(self.artifacts_root().as_path(), &artifact_observations)?;
+        let journal_sequences =
+            collect_runtime_receipt_artifact_sequences(view, |receipt| receipt.journal_artifact_hash);
+        let checkpoint_sequences = collect_runtime_receipt_artifact_sequences(view, |receipt| {
+            receipt.checkpoint_artifact_hash
+        });
+
+        prune_cache_bucket(
+            artifact_candidates.bundle,
+            self.config.cache_budgets.bundle_bytes.get(),
+        )?;
+        prune_cache_bucket(
+            artifact_candidates.static_asset,
+            self.config.cache_budgets.static_asset_bytes.get(),
+        )?;
+        let mut journal_candidates = artifact_candidates.journal;
+        journal_candidates.extend(collect_fixed_bucket_candidates(
+            self.journals_root().as_path(),
+            "journals",
+            &journal_sequences,
+        )?);
+        prune_cache_bucket(
+            journal_candidates,
+            self.config.cache_budgets.journal_bytes.get(),
+        )?;
+        let mut checkpoint_candidates = artifact_candidates.checkpoint;
+        checkpoint_candidates.extend(collect_fixed_bucket_candidates(
+            self.checkpoints_root().as_path(),
+            "checkpoints",
+            &checkpoint_sequences,
+        )?);
+        prune_cache_bucket(
+            checkpoint_candidates,
+            self.config.cache_budgets.checkpoint_bytes.get(),
+        )?;
+        prune_cache_bucket(
+            artifact_candidates.model_artifact,
+            self.config.cache_budgets.model_artifact_bytes.get(),
+        )?;
+        prune_cache_bucket(
+            artifact_candidates.model_weight,
+            self.config.cache_budgets.model_weight_bytes.get(),
+        )?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CacheObservationMetadata {
+    bucket: RuntimeCacheBucket,
+    observation_sequence: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RuntimeCacheBucket {
+    Bundle,
+    StaticAsset,
+    Journal,
+    Checkpoint,
+    ModelArtifact,
+    ModelWeight,
+}
+
+impl RuntimeCacheBucket {
+    const fn priority(self) -> u8 {
+        match self {
+            Self::Bundle => 5,
+            Self::ModelWeight => 4,
+            Self::ModelArtifact => 3,
+            Self::Journal => 2,
+            Self::Checkpoint => 2,
+            Self::StaticAsset => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CachePruneCandidate {
+    path: PathBuf,
+    stable_key: String,
+    bytes: u64,
+    observation_sequence: u64,
+}
+
+#[derive(Default)]
+struct ArtifactCacheCandidates {
+    bundle: Vec<CachePruneCandidate>,
+    static_asset: Vec<CachePruneCandidate>,
+    journal: Vec<CachePruneCandidate>,
+    checkpoint: Vec<CachePruneCandidate>,
+    model_artifact: Vec<CachePruneCandidate>,
+    model_weight: Vec<CachePruneCandidate>,
+}
+
+impl ArtifactCacheCandidates {
+    fn bucket_mut(&mut self, bucket: RuntimeCacheBucket) -> &mut Vec<CachePruneCandidate> {
+        match bucket {
+            RuntimeCacheBucket::Bundle => &mut self.bundle,
+            RuntimeCacheBucket::StaticAsset => &mut self.static_asset,
+            RuntimeCacheBucket::Journal => &mut self.journal,
+            RuntimeCacheBucket::Checkpoint => &mut self.checkpoint,
+            RuntimeCacheBucket::ModelArtifact => &mut self.model_artifact,
+            RuntimeCacheBucket::ModelWeight => &mut self.model_weight,
+        }
+    }
+}
+
+fn collect_artifact_cache_observations(
+    view: &StateView<'_>,
+    snapshot: &SoracloudRuntimeSnapshot,
+) -> BTreeMap<String, CacheObservationMetadata> {
+    let world = view.world();
+    let mut observations = BTreeMap::new();
+
+    for (service_name, deployment) in world.soracloud_service_deployments().iter() {
+        let service_name = service_name.to_string();
+        let Some(versions) = snapshot.services.get(&service_name) else {
+            continue;
+        };
+        for (_service_version, plan) in versions {
+            let observation_sequence = match plan.role {
+                SoracloudRuntimeRevisionRole::Active => deployment.process_started_sequence,
+                SoracloudRuntimeRevisionRole::CanaryCandidate => deployment
+                    .active_rollout
+                    .as_ref()
+                    .map_or(deployment.process_started_sequence, |rollout| {
+                        rollout.updated_sequence
+                    }),
+            };
+            for artifact in &plan.artifacts {
+                upsert_cache_observation(
+                    &mut observations,
+                    sanitize_path_component(&artifact.artifact_hash),
+                    runtime_cache_bucket_for_kind(artifact.kind),
+                    observation_sequence,
+                );
+            }
+        }
+    }
+
+    for (_, record) in world.soracloud_model_weight_versions().iter() {
+        upsert_cache_observation(
+            &mut observations,
+            hash_cache_name(record.weight_artifact_hash),
+            RuntimeCacheBucket::ModelWeight,
+            record.promoted_sequence.unwrap_or(record.registered_sequence),
+        );
+    }
+
+    for (_, record) in world.soracloud_model_artifacts().iter() {
+        upsert_cache_observation(
+            &mut observations,
+            hash_cache_name(record.weight_artifact_hash),
+            RuntimeCacheBucket::ModelArtifact,
+            record.registered_sequence,
+        );
+    }
+
+    observations
+}
+
+fn runtime_cache_bucket_for_kind(kind: SoraArtifactKindV1) -> RuntimeCacheBucket {
+    match kind {
+        SoraArtifactKindV1::Bundle => RuntimeCacheBucket::Bundle,
+        SoraArtifactKindV1::StaticAsset => RuntimeCacheBucket::StaticAsset,
+        SoraArtifactKindV1::Journal => RuntimeCacheBucket::Journal,
+        SoraArtifactKindV1::Checkpoint => RuntimeCacheBucket::Checkpoint,
+        SoraArtifactKindV1::ModelArtifact => RuntimeCacheBucket::ModelArtifact,
+        SoraArtifactKindV1::ModelWeights => RuntimeCacheBucket::ModelWeight,
+    }
+}
+
+fn upsert_cache_observation(
+    observations: &mut BTreeMap<String, CacheObservationMetadata>,
+    key: String,
+    bucket: RuntimeCacheBucket,
+    observation_sequence: u64,
+) {
+    match observations.entry(key) {
+        std::collections::btree_map::Entry::Occupied(mut entry) => {
+            let existing = entry.get_mut();
+            existing.observation_sequence =
+                existing.observation_sequence.max(observation_sequence);
+            if bucket.priority() > existing.bucket.priority() {
+                existing.bucket = bucket;
+            }
+        }
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(CacheObservationMetadata {
+                bucket,
+                observation_sequence,
+            });
+        }
+    }
+}
+
+fn collect_artifact_cache_candidates(
+    root: &Path,
+    observations: &BTreeMap<String, CacheObservationMetadata>,
+) -> eyre::Result<ArtifactCacheCandidates> {
+    let mut candidates = ArtifactCacheCandidates::default();
+    if !root.exists() {
+        return Ok(candidates);
+    }
+
+    for entry in fs::read_dir(root).wrap_err_with(|| format!("read {}", root.display()))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let observation = observations
+            .get(&file_name)
+            .copied()
+            .unwrap_or(CacheObservationMetadata {
+                bucket: RuntimeCacheBucket::StaticAsset,
+                observation_sequence: 0,
+            });
+        candidates
+            .bucket_mut(observation.bucket)
+            .push(CachePruneCandidate {
+                path: entry.path(),
+                stable_key: format!("artifacts/{file_name}"),
+                bytes: entry.metadata()?.len(),
+                observation_sequence: observation.observation_sequence,
+            });
+    }
+
+    Ok(candidates)
+}
+
+fn collect_runtime_receipt_artifact_sequences(
+    view: &StateView<'_>,
+    select_hash: impl Fn(&SoraRuntimeReceiptV1) -> Option<Hash>,
+) -> BTreeMap<String, u64> {
+    let mut sequences = BTreeMap::new();
+    for (_, receipt) in view.world().soracloud_runtime_receipts().iter() {
+        let Some(hash) = select_hash(receipt) else {
+            continue;
+        };
+        let key = hash_cache_name(hash);
+        sequences
+            .entry(key)
+            .and_modify(|sequence: &mut u64| {
+                *sequence = (*sequence).max(receipt.emitted_sequence);
+            })
+            .or_insert(receipt.emitted_sequence);
+    }
+    sequences
+}
+
+fn collect_fixed_bucket_candidates(
+    root: &Path,
+    bucket_name: &str,
+    observation_sequences: &BTreeMap<String, u64>,
+) -> eyre::Result<Vec<CachePruneCandidate>> {
+    let mut candidates = Vec::new();
+    if !root.exists() {
+        return Ok(candidates);
+    }
+
+    for entry in fs::read_dir(root).wrap_err_with(|| format!("read {}", root.display()))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        candidates.push(CachePruneCandidate {
+            path: entry.path(),
+            stable_key: format!("{bucket_name}/{file_name}"),
+            bytes: entry.metadata()?.len(),
+            observation_sequence: observation_sequences.get(&file_name).copied().unwrap_or(0),
+        });
+    }
+
+    Ok(candidates)
+}
+
+fn prune_cache_bucket(mut candidates: Vec<CachePruneCandidate>, budget_bytes: u64) -> eyre::Result<()> {
+    let mut retained_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.bytes)
+    });
+    if retained_bytes <= budget_bytes {
+        return Ok(());
+    }
+
+    candidates.sort_by(|left, right| {
+        left.observation_sequence
+            .cmp(&right.observation_sequence)
+            .then_with(|| left.stable_key.cmp(&right.stable_key))
+    });
+
+    for candidate in candidates {
+        if retained_bytes <= budget_bytes {
+            break;
+        }
+        fs::remove_file(&candidate.path)
+            .wrap_err_with(|| format!("prune Soracloud runtime cache {}", candidate.path.display()))?;
+        retained_bytes = retained_bytes.saturating_sub(candidate.bytes);
+    }
+
+    Ok(())
 }
 
 fn execute_asset_local_read(
@@ -1855,6 +2756,11 @@ fn build_runtime_snapshot(
                 .join(sanitize_path_component(&service_name))
                 .join(sanitize_path_component(&service_version));
             let bundle_cache_path = artifacts_root.join(hash_cache_name(bundle.container.bundle_hash));
+            let active_runtime_state = runtime_state
+                .as_ref()
+                .filter(|state| state.active_service_version == service_version);
+            let artifact_plans = build_artifact_plans(bundle, &artifacts_root);
+            let hydration_complete = artifact_plans.iter().all(|artifact| artifact.available_locally);
             let plan = SoracloudRuntimeServicePlan {
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
@@ -1867,17 +2773,15 @@ fn build_runtime_snapshot(
                 bundle_cache_path: bundle_cache_path.display().to_string(),
                 bundle_available_locally: bundle_cache_path.exists(),
                 process_generation: is_runtime_active.then_some(deployment.process_generation),
-                health_status: runtime_state
-                    .as_ref()
-                    .filter(|state| state.active_service_version == service_version)
-                    .map_or(SoraServiceHealthStatusV1::Hydrating, |state| state.health_status),
-                load_factor_bps: runtime_state
-                    .as_ref()
-                    .filter(|state| state.active_service_version == service_version)
-                    .map_or(0, |state| state.load_factor_bps),
-                reported_pending_mailbox_messages: runtime_state
-                    .as_ref()
-                    .filter(|state| state.active_service_version == service_version)
+                health_status: if hydration_complete {
+                    active_runtime_state.map_or(SoraServiceHealthStatusV1::Hydrating, |state| {
+                        state.health_status
+                    })
+                } else {
+                    SoraServiceHealthStatusV1::Hydrating
+                },
+                load_factor_bps: active_runtime_state.map_or(0, |state| state.load_factor_bps),
+                reported_pending_mailbox_messages: active_runtime_state
                     .map_or(0, |state| state.pending_mailbox_message_count),
                 authoritative_pending_mailbox_messages: authoritative_pending
                     .get(&service_name)
@@ -1902,7 +2806,7 @@ fn build_runtime_snapshot(
                         })
                     })
                     .collect(),
-                artifacts: build_artifact_plans(bundle, &artifacts_root),
+                artifacts: artifact_plans,
             };
             version_plans.insert(service_version, plan);
         }
@@ -2354,6 +3258,189 @@ fn hash_cache_name(hash: Hash) -> String {
     sanitize_path_component(&hash.to_string())
 }
 
+fn normalize_provider_base_url(raw: &str) -> Option<reqwest::Url> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains('*') {
+        return None;
+    }
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        format!("https://{trimmed}")
+    };
+    let mut url = reqwest::Url::parse(&with_scheme).ok()?;
+    let normalized_path = match url.path().trim_end_matches('/') {
+        "" => "/".to_owned(),
+        path => format!("{path}/"),
+    };
+    url.set_path(&normalized_path);
+    Some(url)
+}
+
+fn remote_hydration_nonce(
+    manifest_cid_hex: &str,
+    provider_id: &[u8; 32],
+    expected_hash: Hash,
+) -> String {
+    let manifest_prefix = manifest_cid_hex
+        .chars()
+        .take(16)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let provider_prefix = hex::encode(provider_id).chars().take(8).collect::<String>();
+    let hash_prefix = expected_hash
+        .to_string()
+        .chars()
+        .take(8)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    format!("sc-{manifest_prefix}-{provider_prefix}-{hash_prefix}")
+}
+
+fn parse_remote_hydration_plan(
+    manifest_id_hex: &str,
+    body: &[u8],
+) -> eyre::Result<RemoteHydrationPlan> {
+    let value: norito::json::Value =
+        norito::json::from_slice(body).wrap_err("decode remote plan response as JSON")?;
+    let plan = value
+        .get("plan")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| eyre::eyre!("remote plan response missing `plan` object"))?;
+    let chunker_handle = plan
+        .get("chunk_profile_handle")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre::eyre!("remote plan response missing `chunk_profile_handle`"))?
+        .to_owned();
+    let content_length = plan
+        .get("content_length")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| eyre::eyre!("remote plan response missing `content_length`"))?;
+    let chunks_value = plan
+        .get("chunks")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| eyre::eyre!("remote plan response missing `chunks` array"))?;
+    if chunks_value.is_empty() && content_length != 0 {
+        return Err(eyre::eyre!(
+            "remote plan response returned zero chunks for non-empty payload"
+        ));
+    }
+
+    let mut chunks = Vec::with_capacity(chunks_value.len());
+    for (index, chunk) in chunks_value.iter().enumerate() {
+        let chunk = chunk
+            .as_object()
+            .ok_or_else(|| eyre::eyre!("remote plan chunk {index} is not an object"))?;
+        let offset = chunk
+            .get("offset")
+            .and_then(norito::json::Value::as_u64)
+            .ok_or_else(|| eyre::eyre!("remote plan chunk {index} missing `offset`"))?;
+        let length = chunk
+            .get("length")
+            .and_then(norito::json::Value::as_u64)
+            .ok_or_else(|| eyre::eyre!("remote plan chunk {index} missing `length`"))?;
+        let digest_hex = chunk
+            .get("digest_blake3")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre::eyre!("remote plan chunk {index} missing `digest_blake3`"))?
+            .to_ascii_lowercase();
+        let digest_bytes = hex::decode(&digest_hex)
+            .wrap_err_with(|| format!("decode remote plan chunk {index} digest"))?;
+        if digest_bytes.len() != 32 {
+            return Err(eyre::eyre!(
+                "remote plan chunk {index} digest must decode to 32 bytes"
+            ));
+        }
+        let length = u32::try_from(length)
+            .wrap_err_with(|| format!("convert remote plan chunk {index} length to u32"))?;
+        chunks.push(RemoteHydrationChunk {
+            offset,
+            length,
+            digest_hex,
+        });
+    }
+
+    Ok(RemoteHydrationPlan {
+        manifest_id_hex: manifest_id_hex.to_owned(),
+        chunker_handle,
+        content_length,
+        chunks,
+    })
+}
+
+fn collect_remote_hydration_sources(
+    view: &StateView<'_>,
+    state: &State,
+) -> Vec<RemoteHydrationSource> {
+    let mut sources = BTreeMap::<(u8, u64, String, String), RemoteHydrationSource>::new();
+    for (_order_id, record) in view.world().replication_orders().iter() {
+        if !manifest_is_committed(view, state, record.manifest_digest.as_bytes()) {
+            continue;
+        }
+        let order = match norito::decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order) {
+            Ok(order) => order,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    manifest_digest = %hex::encode(record.manifest_digest.as_bytes()),
+                    "failed to decode canonical SoraFS replication order during Soracloud hydration"
+                );
+                continue;
+            }
+        };
+        if order.manifest_cid.is_empty() || order.providers.is_empty() {
+            continue;
+        }
+
+        let manifest_digest_hex = hex::encode(record.manifest_digest.as_bytes());
+        let manifest_cid_hex = hex::encode(&order.manifest_cid);
+        let chunker_handle = view
+            .world()
+            .pin_manifests()
+            .get(&record.manifest_digest)
+            .map(|manifest| manifest.chunker.to_handle());
+        let status_rank = match record.status {
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(_) => 0,
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Pending => 1,
+            iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Expired(_) => 2,
+        };
+        let key = (
+            status_rank,
+            record.issued_epoch,
+            manifest_digest_hex.clone(),
+            manifest_cid_hex.clone(),
+        );
+        let entry = sources.entry(key).or_insert_with(|| RemoteHydrationSource {
+            manifest_digest_hex,
+            manifest_cid_hex,
+            chunker_handle,
+            provider_ids: Vec::new(),
+        });
+        for provider_id in order.providers {
+            if !entry.provider_ids.contains(&provider_id) {
+                entry.provider_ids.push(provider_id);
+            }
+        }
+        entry.provider_ids.sort();
+    }
+
+    sources.into_values().collect()
+}
+
+fn manifest_is_committed(
+    view: &StateView<'_>,
+    state: &State,
+    manifest_digest: &[u8; 32],
+) -> bool {
+    let digest = ManifestDigest::new(*manifest_digest);
+    let has_active_pin = view
+        .world()
+        .pin_manifests()
+        .get(&digest)
+        .is_some_and(|record| record.status.is_active());
+    has_active_pin || state.find_da_commitment_by_manifest(&digest).is_some()
+}
+
 fn sanitize_path_component(raw: &str) -> String {
     raw.chars()
         .map(|ch| match ch {
@@ -2440,6 +3527,17 @@ where
     Ok(())
 }
 
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path must have a parent"))?;
+    fs::create_dir_all(parent)?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
 fn read_json_optional<T>(path: &Path) -> io::Result<Option<T>>
 where
     T: norito::json::JsonDeserialize,
@@ -2462,21 +3560,53 @@ mod tests {
     //! Tests for the embedded Soracloud runtime manager.
 
     use super::*;
-    use std::sync::Arc;
+    use std::{
+        io::{Read as _, Write as _},
+        net::TcpListener,
+        num::NonZeroU64,
+        sync::{Arc, mpsc},
+        thread,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use eyre::Result;
+    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_data_model::{
+        block::BlockHeader,
+        metadata::Metadata,
         smart_contract::manifest::EntryPointKind,
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy,
+            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
+        },
         soracloud::{
             AgentApartmentManifestV1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
             SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+            SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             SORA_SERVICE_RUNTIME_STATE_VERSION_V1, SoraAgentPersistentStateV1,
             SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-            SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
-            SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+            SoraRolloutStageV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
+            SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
+            SoraServiceRuntimeStateV1,
         },
     };
+    use iroha_test_samples::ALICE_ID;
+    use iroha_torii::sorafs::AdmissionRegistry;
+    use sorafs_car::CarBuildPlan;
+    use sorafs_chunker::ChunkProfile;
+    use sorafs_manifest::{
+        BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder,
+        PinPolicy as ManifestPinPolicy, PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+        PROVIDER_ADMISSION_PROPOSAL_VERSION_V1, PROVIDER_ADVERT_VERSION_V1, AdvertEndpoint,
+        AvailabilityTier, CapabilityTlv, CapabilityType, CouncilSignature,
+        EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointMetadata,
+        EndpointMetadataKey, PathDiversityPolicy, ProviderAdmissionEnvelopeV1,
+        ProviderAdmissionProposalV1, ProviderAdvertBodyV1, ProviderAdvertV1,
+        ProviderCapabilityRangeV1, QosHints, RendezvousTopic, SignatureAlgorithm, StakePointer,
+        StreamBudgetV1, TransportHintV1, compute_advert_body_digest, compute_proposal_digest,
+    };
+    use sorafs_node::{NodeHandle, config::StorageConfig};
 
     fn load_deployment_bundle_fixture() -> Result<SoraDeploymentBundleV1> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2660,6 +3790,530 @@ mod tests {
         }
     }
 
+    fn spawn_http_fixture(body: Vec<u8>) -> Result<(String, std::thread::JoinHandle<()>)> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 1024];
+                let _ = std::io::Read::read(&mut stream, &mut request);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                let _ = std::io::Write::write_all(&mut stream, &body);
+            }
+        });
+        Ok((format!("http://{address}/fixture"), handle))
+    }
+
+    #[derive(Clone)]
+    struct RemoteManifestFixture {
+        manifest_digest: ManifestDigest,
+        order_id: ReplicationOrderId,
+        issued_epoch: u64,
+        canonical_order: Vec<u8>,
+        manifest_id_hex: String,
+        manifest_response_body: Vec<u8>,
+        plan_response_body: Vec<u8>,
+        chunk_path: String,
+        payload: Vec<u8>,
+    }
+
+    #[derive(Clone)]
+    struct HttpFixtureResponse {
+        status_code: u16,
+        content_type: &'static str,
+        body: Vec<u8>,
+    }
+
+    impl HttpFixtureResponse {
+        fn json(body: Vec<u8>) -> Self {
+            Self {
+                status_code: 200,
+                content_type: "application/json",
+                body,
+            }
+        }
+
+        fn binary(body: Vec<u8>) -> Self {
+            Self {
+                status_code: 200,
+                content_type: "application/octet-stream",
+                body,
+            }
+        }
+
+        fn not_found() -> Self {
+            Self {
+                status_code: 404,
+                content_type: "text/plain; charset=utf-8",
+                body: b"not found".to_vec(),
+            }
+        }
+    }
+
+    struct HttpRouteFixture {
+        base_url: String,
+        stop_tx: mpsc::Sender<()>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Drop for HttpRouteFixture {
+        fn drop(&mut self) {
+            let _ = self.stop_tx.send(());
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn fixed_chunker_handle() -> ChunkerProfileHandle {
+        ChunkerProfileHandle {
+            profile_id: 1,
+            namespace: "sorafs".to_owned(),
+            name: "sf1".to_owned(),
+            semver: "1.0.0".to_owned(),
+            multihash_code: BLAKE3_256_MULTIHASH_CODE,
+        }
+    }
+
+    fn build_remote_manifest_fixture(
+        payload: &[u8],
+        provider_id: [u8; 32],
+        order_seed: u8,
+    ) -> Result<RemoteManifestFixture> {
+        let (_plan, manifest) = build_sorafs_manifest(payload)?;
+        let manifest_digest = ManifestDigest::from_manifest(&manifest)?;
+        let manifest_id_hex = hex::encode(&manifest.root_cid);
+        let chunk_profile_handle = format!(
+            "{}.{}@{}",
+            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+        );
+        let chunk_digest_hex = hex::encode(blake3::hash(payload).as_bytes());
+        let manifest_response = StorageManifestResponseDto {
+            manifest_id_hex: manifest_id_hex.clone(),
+            manifest_b64: String::new(),
+            manifest_digest_hex: hex::encode(manifest_digest.as_bytes()),
+            payload_digest_hex: chunk_digest_hex.clone(),
+            content_length: payload.len() as u64,
+            chunk_count: 1,
+            chunk_profile_handle: chunk_profile_handle.clone(),
+            stored_at_unix_secs: 1,
+        };
+        let manifest_response_body = norito::json::to_vec(&manifest_response)?;
+        let mut chunk_entry = norito::json::native::Map::new();
+        chunk_entry.insert("chunk_index".into(), norito::json::Value::from(0_u64));
+        chunk_entry.insert("offset".into(), norito::json::Value::from(0_u64));
+        chunk_entry.insert(
+            "length".into(),
+            norito::json::Value::from(payload.len() as u64),
+        );
+        chunk_entry.insert(
+            "digest_blake3".into(),
+            norito::json::Value::from(chunk_digest_hex.clone()),
+        );
+        let mut plan = norito::json::native::Map::new();
+        plan.insert("chunk_count".into(), norito::json::Value::from(1_u64));
+        plan.insert(
+            "content_length".into(),
+            norito::json::Value::from(payload.len() as u64),
+        );
+        plan.insert(
+            "payload_digest_blake3".into(),
+            norito::json::Value::from(chunk_digest_hex.clone()),
+        );
+        plan.insert(
+            "chunk_profile_handle".into(),
+            norito::json::Value::from(chunk_profile_handle),
+        );
+        plan.insert(
+            "chunk_digests_blake3".into(),
+            norito::json::Value::Array(vec![norito::json::Value::from(
+                chunk_digest_hex.clone(),
+            )]),
+        );
+        plan.insert(
+            "chunks".into(),
+            norito::json::Value::Array(vec![norito::json::Value::Object(chunk_entry)]),
+        );
+        let mut plan_response = norito::json::native::Map::new();
+        plan_response.insert(
+            "manifest_id_hex".into(),
+            norito::json::Value::from(manifest_id_hex.clone()),
+        );
+        plan_response.insert("plan".into(), norito::json::Value::Object(plan));
+        let plan_response_body =
+            norito::json::to_vec(&norito::json::Value::Object(plan_response))?;
+        let order_id = ReplicationOrderId::new([order_seed; 32]);
+        let canonical_order = norito::to_bytes(&ReplicationOrderV1 {
+            order_id: *order_id.as_bytes(),
+            manifest_cid: manifest.root_cid.clone(),
+            providers: vec![provider_id],
+            redundancy: 1,
+            deadline: u64::from(order_seed) + 600,
+            policy_hash: [0x91; 32],
+        })?;
+        Ok(RemoteManifestFixture {
+            manifest_digest,
+            order_id,
+            issued_epoch: u64::from(order_seed),
+            canonical_order,
+            manifest_id_hex: manifest_id_hex.clone(),
+            manifest_response_body,
+            plan_response_body,
+            chunk_path: format!(
+                "/v1/sorafs/storage/chunk/{manifest_id_hex}/{chunk_digest_hex}"
+            ),
+            payload: payload.to_vec(),
+        })
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> Result<(String, String)> {
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    buffer.extend_from_slice(&chunk[..read]);
+                    if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let request = String::from_utf8_lossy(&buffer);
+        let request_line = request.lines().next().unwrap_or_default();
+        let mut parts = request_line.split_whitespace();
+        Ok((
+            parts.next().unwrap_or_default().to_owned(),
+            parts.next().unwrap_or_default().to_owned(),
+        ))
+    }
+
+    fn write_http_response(
+        stream: &mut std::net::TcpStream,
+        response: &HttpFixtureResponse,
+    ) -> Result<()> {
+        let reason = match response.status_code {
+            200 => "OK",
+            404 => "Not Found",
+            _ => "Error",
+        };
+        let headers = format!(
+            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+            response.status_code,
+            reason,
+            response.body.len(),
+            response.content_type,
+        );
+        stream.write_all(headers.as_bytes())?;
+        stream.write_all(&response.body)?;
+        Ok(())
+    }
+
+    fn spawn_remote_hydration_fixture(fixtures: &[RemoteManifestFixture]) -> Result<HttpRouteFixture> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        let mut routes = BTreeMap::<(String, String), HttpFixtureResponse>::new();
+        let mut token_response = norito::json::native::Map::new();
+        token_response.insert(
+            "token_base64".into(),
+            norito::json::Value::from("fixture-stream-token"),
+        );
+        routes.insert(
+            ("POST".to_owned(), "/v1/sorafs/storage/token".to_owned()),
+            HttpFixtureResponse::json(norito::json::to_vec(&norito::json::Value::Object(
+                token_response,
+            ))?),
+        );
+        for fixture in fixtures {
+            routes.insert(
+                (
+                    "GET".to_owned(),
+                    format!(
+                        "/v1/sorafs/storage/manifest/{}",
+                        fixture.manifest_id_hex
+                    ),
+                ),
+                HttpFixtureResponse::json(fixture.manifest_response_body.clone()),
+            );
+            routes.insert(
+                (
+                    "GET".to_owned(),
+                    format!("/v1/sorafs/storage/plan/{}", fixture.manifest_id_hex),
+                ),
+                HttpFixtureResponse::json(fixture.plan_response_body.clone()),
+            );
+            routes.insert(
+                ("GET".to_owned(), fixture.chunk_path.clone()),
+                HttpFixtureResponse::binary(fixture.payload.clone()),
+            );
+        }
+
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            loop {
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let response = match read_http_request(&mut stream) {
+                            Ok((method, path)) => routes
+                                .get(&(method, path))
+                                .cloned()
+                                .unwrap_or_else(HttpFixtureResponse::not_found),
+                            Err(_) => HttpFixtureResponse::not_found(),
+                        };
+                        let _ = write_http_response(&mut stream, &response);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok(HttpRouteFixture {
+            base_url,
+            stop_tx,
+            handle: Some(handle),
+        })
+    }
+
+    fn test_provider_cache(
+        base_url: &str,
+        provider_id: [u8; 32],
+    ) -> Result<Arc<AsyncRwLock<ProviderAdvertCache>>> {
+        let advert_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0xA5; 32])?;
+        let advert_public = PublicKey::from(advert_key.clone());
+        let council_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x42; 32])?;
+        let council_public = PublicKey::from(council_key.clone());
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let issued_at = now.saturating_sub(60);
+        let expires_at = issued_at + 600;
+
+        let capabilities = vec![
+            CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            },
+            CapabilityTlv {
+                cap_type: CapabilityType::ChunkRangeFetch,
+                payload: ProviderCapabilityRangeV1 {
+                    max_chunk_span: 32,
+                    min_granularity: 8,
+                    supports_sparse_offsets: true,
+                    requires_alignment: false,
+                    supports_merkle_proof: true,
+                }
+                .to_bytes()?,
+            },
+        ];
+        let stream_budget = Some(StreamBudgetV1 {
+            max_in_flight: 8,
+            max_bytes_per_sec: 8_388_608,
+            burst_bytes: Some(1_048_576),
+        });
+        let transport_hints = Some(vec![TransportHintV1 {
+            protocol: TransportProtocol::ToriiHttpRange,
+            priority: 0,
+        }]);
+        let endpoint = AdvertEndpoint {
+            kind: EndpointKind::Torii,
+            host_pattern: base_url.to_owned(),
+            metadata: vec![EndpointMetadata {
+                key: EndpointMetadataKey::Region,
+                value: b"global".to_vec(),
+            }],
+        };
+        let body = ProviderAdvertBodyV1 {
+            provider_id,
+            profile_id: "sorafs.sf1@1.0.0".to_owned(),
+            profile_aliases: Some(vec![
+                "sorafs.sf1@1.0.0".to_owned(),
+                "sorafs-sf1".to_owned(),
+            ]),
+            stake: StakePointer {
+                pool_id: [0x21; 32],
+                stake_amount: 1_000,
+            },
+            qos: QosHints {
+                availability: AvailabilityTier::Hot,
+                max_retrieval_latency_ms: 1_000,
+                max_concurrent_streams: 8,
+            },
+            capabilities: capabilities.clone(),
+            endpoints: vec![endpoint.clone()],
+            rendezvous_topics: vec![RendezvousTopic {
+                topic: "sorafs.sf1.primary".to_owned(),
+                region: "global".to_owned(),
+            }],
+            path_policy: PathDiversityPolicy {
+                min_guard_weight: 5,
+                max_same_asn_per_path: 1,
+                max_same_pool_per_path: 1,
+            },
+            notes: None,
+            stream_budget: stream_budget.clone(),
+            transport_hints: transport_hints.clone(),
+        };
+        let body_bytes = norito::to_bytes(&body)?;
+        let advert = ProviderAdvertV1 {
+            version: PROVIDER_ADVERT_VERSION_V1,
+            issued_at,
+            expires_at,
+            body: body.clone(),
+            signature: sorafs_manifest::AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: advert_public.to_bytes().1.to_vec(),
+                signature: Signature::new(&advert_key, &body_bytes).payload().to_vec(),
+            },
+            signature_strict: true,
+            allow_unknown_capabilities: false,
+        };
+        let proposal = ProviderAdmissionProposalV1 {
+            version: PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
+            provider_id,
+            profile_id: body.profile_id.clone(),
+            profile_aliases: body.profile_aliases.clone(),
+            stake: body.stake.clone(),
+            capabilities: body.capabilities.clone(),
+            endpoints: vec![EndpointAdmissionV1 {
+                endpoint,
+                attestation: EndpointAttestationV1 {
+                    version: sorafs_manifest::ENDPOINT_ATTESTATION_VERSION_V1,
+                    kind: EndpointAttestationKind::Mtls,
+                    attested_at: issued_at.saturating_sub(10),
+                    expires_at: expires_at + 60,
+                    leaf_certificate: vec![0xAA],
+                    intermediate_certificates: Vec::new(),
+                    alpn_ids: vec!["h2".to_owned()],
+                    report: Vec::new(),
+                },
+            }],
+            advert_key: advert_public
+                .to_bytes()
+                .1
+                .try_into()
+                .expect("ed25519 key is 32 bytes"),
+            jurisdiction_code: "US".to_owned(),
+            contact_uri: Some("mailto:ops@example.test".to_owned()),
+            stream_budget,
+            transport_hints,
+        };
+        let proposal_digest = compute_proposal_digest(&proposal)?;
+        let envelope = ProviderAdmissionEnvelopeV1 {
+            version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            proposal,
+            proposal_digest,
+            advert_body: body.clone(),
+            advert_body_digest: compute_advert_body_digest(&body)?,
+            issued_at,
+            retention_epoch: expires_at + 600,
+            council_signatures: vec![CouncilSignature {
+                signer: council_public
+                    .to_bytes()
+                    .1
+                    .try_into()
+                    .expect("ed25519 key is 32 bytes"),
+                signature: Signature::new(&council_key, &proposal_digest)
+                    .payload()
+                    .to_vec(),
+            }],
+            notes: None,
+        };
+        let admission = AdmissionRegistry::from_envelopes([envelope])?;
+        let mut cache = ProviderAdvertCache::new(
+            vec![
+                CapabilityType::ToriiGateway,
+                CapabilityType::ChunkRangeFetch,
+            ],
+            Arc::new(admission),
+        );
+        cache
+            .ingest(advert, issued_at.saturating_add(1))
+            .map_err(|error| eyre::eyre!(error.to_string()))?;
+        Ok(Arc::new(AsyncRwLock::new(cache)))
+    }
+
+    fn approve_remote_hydration_sources(
+        state: &Arc<State>,
+        fixtures: &[RemoteManifestFixture],
+    ) -> Result<()> {
+        let view = state.view();
+        let next_height = NonZeroU64::new(
+            u64::try_from(view.height())
+                .unwrap_or(u64::MAX.saturating_sub(1))
+                .saturating_add(1),
+        )
+        .expect("nonzero block height");
+        let header = BlockHeader::new(next_height, view.latest_block_hash(), None, None, 0, 0);
+        drop(view);
+
+        let mut block = state.block(header);
+        {
+            let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
+            for fixture in fixtures {
+                let mut record = PinManifestRecord::new(
+                    fixture.manifest_digest,
+                    fixed_chunker_handle(),
+                    [0; 32],
+                    PinPolicy::default(),
+                    (*ALICE_ID).clone(),
+                    fixture.issued_epoch,
+                    None,
+                    None,
+                    Metadata::default(),
+                );
+                record.approve(fixture.issued_epoch, None);
+                pin_manifests.insert(fixture.manifest_digest, record);
+            }
+            pin_manifests.apply();
+        }
+        {
+            let mut replication_orders = block
+                .world
+                .replication_orders_mut_for_testing()
+                .transaction();
+            for fixture in fixtures {
+                replication_orders.insert(
+                    fixture.order_id,
+                    ReplicationOrderRecord {
+                        order_id: fixture.order_id,
+                        manifest_digest: fixture.manifest_digest,
+                        issued_by: (*ALICE_ID).clone(),
+                        issued_epoch: fixture.issued_epoch,
+                        deadline_epoch: fixture.issued_epoch + 600,
+                        canonical_order: fixture.canonical_order.clone(),
+                        status: ReplicationOrderStatus::Completed(fixture.issued_epoch + 1),
+                    },
+                );
+            }
+            replication_orders.apply();
+        }
+        block.commit()?;
+        Ok(())
+    }
+
     fn test_runtime_manager_config(state_dir: PathBuf) -> SoracloudRuntimeManagerConfig {
         let runtime = iroha_config::parameters::actual::SoracloudRuntime {
             state_dir,
@@ -2678,6 +4332,114 @@ mod tests {
             state_dir: Arc::new(manager.config.state_dir.clone()),
             state,
         }
+    }
+
+    fn assign_fixture_artifact_hashes(
+        bundle: &mut SoraDeploymentBundleV1,
+        bundle_bytes: &[u8],
+        label: &str,
+    ) -> Vec<Vec<u8>> {
+        let service_name = bundle.service.service_name.to_string();
+        bundle.container.bundle_hash = Hash::new(bundle_bytes);
+        let mut payloads = Vec::with_capacity(bundle.service.artifacts.len());
+        for (index, artifact) in bundle.service.artifacts.iter_mut().enumerate() {
+            let payload = format!(
+                "{label}:{service_name}:{index}:{}",
+                artifact.artifact_path
+            )
+            .into_bytes();
+            artifact.artifact_hash = Hash::new(&payload);
+            payloads.push(payload);
+        }
+        payloads
+    }
+
+    fn seed_local_artifact_cache(
+        artifacts_root: &Path,
+        bundle_hash: Hash,
+        bundle_bytes: &[u8],
+        artifact_hashes_and_bytes: impl IntoIterator<Item = (Hash, Vec<u8>)>,
+    ) -> Result<()> {
+        fs::create_dir_all(artifacts_root)?;
+        fs::write(artifacts_root.join(hash_cache_name(bundle_hash)), bundle_bytes)?;
+        for (artifact_hash, payload) in artifact_hashes_and_bytes {
+            fs::write(artifacts_root.join(hash_cache_name(artifact_hash)), payload)?;
+        }
+        Ok(())
+    }
+
+    fn test_sorafs_node(temp_dir: &tempfile::TempDir) -> NodeHandle {
+        NodeHandle::new(
+            StorageConfig::builder()
+                .enabled(true)
+                .data_dir(temp_dir.path().join("sorafs-storage"))
+                .build(),
+        )
+    }
+
+    fn build_sorafs_manifest(payload: &[u8]) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1)> {
+        let plan = CarBuildPlan::single_file(payload)?;
+        let digest = blake3::hash(payload);
+        let manifest = ManifestBuilder::new()
+            .root_cid(digest.as_bytes().to_vec())
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .content_length(plan.content_length)
+            .car_digest(digest.into())
+            .car_size(plan.content_length)
+            .pin_policy(ManifestPinPolicy::default())
+            .build()?;
+        Ok((plan, manifest))
+    }
+
+    fn ingest_sorafs_payload(node: &NodeHandle, payload: &[u8]) -> Result<StoredManifest> {
+        let (plan, manifest) = build_sorafs_manifest(payload)?;
+        let mut reader = payload;
+        let manifest_id = node.ingest_manifest(&manifest, &plan, &mut reader)?;
+        node.manifest_metadata(&manifest_id).map_err(Into::into)
+    }
+
+    fn approve_sorafs_manifests(
+        state: &Arc<State>,
+        manifests: &[StoredManifest],
+    ) -> Result<()> {
+        let view = state.view();
+        let next_height = NonZeroU64::new(
+            u64::try_from(view.height())
+                .unwrap_or(u64::MAX.saturating_sub(1))
+                .saturating_add(1),
+        )
+        .expect("nonzero block height");
+        let header = BlockHeader::new(next_height, view.latest_block_hash(), None, None, 0, 0);
+        drop(view);
+
+        let mut block = state.block(header);
+        let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
+        for manifest in manifests {
+            let digest = ManifestDigest::new(*manifest.manifest_digest());
+            let mut record = PinManifestRecord::new(
+                ManifestDigest::new(*manifest.manifest_digest()),
+                ChunkerProfileHandle {
+                    profile_id: 1,
+                    namespace: "sorafs".to_owned(),
+                    name: "sf1".to_owned(),
+                    semver: "1.0.0".to_owned(),
+                    multihash_code: BLAKE3_256_MULTIHASH_CODE,
+                },
+                [0; 32],
+                PinPolicy::default(),
+                (*ALICE_ID).clone(),
+                1,
+                None,
+                None,
+                Metadata::default(),
+            );
+            record.approve(1, None);
+            pin_manifests.insert(digest, record);
+        }
+        pin_manifests.apply();
+        block.commit()?;
+        Ok(())
     }
 
     #[test]
@@ -2727,7 +4489,10 @@ mod tests {
     #[test]
     fn reconcile_once_persists_active_service_and_apartment_materializations() -> Result<()> {
         let mut state = test_state()?;
-        let bundle = load_deployment_bundle_fixture()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update", "private_update"]);
+        let artifact_payloads =
+            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "persist-materialization");
         let deployment = sample_deployment_state(&bundle);
         let runtime = sample_runtime_state(&bundle);
         let apartment = sample_agent_record()?;
@@ -2758,6 +4523,17 @@ mod tests {
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
         );
+        seed_local_artifact_cache(
+            &temp_dir.path().join("artifacts"),
+            bundle.container.bundle_hash,
+            &bundle_bytes,
+            bundle
+                .service
+                .artifacts
+                .iter()
+                .zip(artifact_payloads)
+                .map(|(artifact, payload)| (artifact.artifact_hash, payload)),
+        )?;
         manager.reconcile_once()?;
 
         let snapshot = manager.snapshot.read().clone();
@@ -2808,7 +4584,10 @@ mod tests {
     #[test]
     fn reconcile_once_prunes_stale_materializations_and_reports_missing_bundle_cache() -> Result<()> {
         let mut state = test_state()?;
-        let bundle = load_deployment_bundle_fixture()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
+        let _artifact_payloads =
+            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "missing-bundle");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             world
@@ -2849,6 +4628,7 @@ mod tests {
             .and_then(|versions| versions.get("2026.02.0"))
             .expect("bundle plan present");
         assert!(!bundle_plan.bundle_available_locally);
+        assert_eq!(bundle_plan.health_status, SoraServiceHealthStatusV1::Hydrating);
         assert!(bundle_plan
             .artifacts
             .iter()
@@ -2893,6 +4673,563 @@ mod tests {
             error.to_string().contains("admits only `Ivm`"),
             "unexpected reconcile error: {error:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_prunes_cache_buckets_by_authoritative_sequence_and_refreshes_snapshot(
+    ) -> Result<()> {
+        let mut state = test_state()?;
+        let mut active_bundle = load_deployment_bundle_fixture()?;
+        let mut canary_bundle = active_bundle.clone();
+        canary_bundle.service.service_version = "2026.03.0".to_string();
+        canary_bundle.container.bundle_path = "/bundles/web_portal_canary.to".to_string();
+
+        let active_bundle_bytes = simple_soracloud_contract_artifact(&["entry_active"]);
+        let canary_bundle_bytes = simple_soracloud_contract_artifact(&["entry_canary"]);
+        active_bundle.container.bundle_hash = Hash::new(&active_bundle_bytes);
+        canary_bundle.container.bundle_hash = Hash::new(&canary_bundle_bytes);
+
+        let active_asset_bytes = b"active-asset".to_vec();
+        let canary_asset_bytes = b"canary-asset".to_vec();
+        active_bundle.service.artifacts[0].artifact_hash = Hash::new(&active_asset_bytes);
+        active_bundle.service.artifacts[0].artifact_path = "/public/active.html".to_string();
+        canary_bundle.service.artifacts[0].artifact_hash = Hash::new(&canary_asset_bytes);
+        canary_bundle.service.artifacts[0].artifact_path = "/public/canary.html".to_string();
+
+        let mut deployment = sample_deployment_state(&active_bundle);
+        deployment.revision_count = 2;
+        deployment.active_rollout = Some(SoraServiceRolloutStateV1 {
+            schema_version: SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            rollout_handle: "rollout-2026-03".to_string(),
+            baseline_version: Some(active_bundle.service.service_version.clone()),
+            candidate_version: canary_bundle.service.service_version.clone(),
+            canary_percent: 20,
+            traffic_percent: 20,
+            stage: SoraRolloutStageV1::Canary,
+            health_failures: 0,
+            max_health_failures: 3,
+            health_window_secs: 60,
+            created_sequence: 17,
+            updated_sequence: 29,
+        });
+        deployment.last_rollout = deployment.active_rollout.clone();
+
+        let mut runtime = sample_runtime_state(&active_bundle);
+        runtime.rollout_handle = Some("rollout-2026-03".to_string());
+
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        active_bundle.service.service_name.to_string(),
+                        active_bundle.service.service_version.clone(),
+                    ),
+                    active_bundle.clone(),
+                );
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        canary_bundle.service.service_name.to_string(),
+                        canary_bundle.service.service_version.clone(),
+                    ),
+                    canary_bundle.clone(),
+                );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(active_bundle.service.service_name.clone(), deployment);
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(active_bundle.service.service_name.clone(), runtime);
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(active_bundle.container.bundle_hash)),
+            &active_bundle_bytes,
+        )?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(canary_bundle.container.bundle_hash)),
+            &canary_bundle_bytes,
+        )?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(active_bundle.service.artifacts[0].artifact_hash)),
+            &active_asset_bytes,
+        )?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(canary_bundle.service.artifacts[0].artifact_hash)),
+            &canary_asset_bytes,
+        )?;
+
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.cache_budgets.bundle_bytes =
+            std::num::NonZeroU64::new(
+                u64::try_from(active_bundle_bytes.len().max(canary_bundle_bytes.len()))
+                    .expect("bundle size fits in u64"),
+            )
+            .expect("nonzero bundle budget");
+        config.cache_budgets.static_asset_bytes =
+            std::num::NonZeroU64::new(
+                u64::try_from(active_asset_bytes.len().max(canary_asset_bytes.len()))
+                    .expect("asset size fits in u64"),
+            )
+            .expect("nonzero asset budget");
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+
+        let snapshot = manager.snapshot.read().clone();
+        let active_plan = snapshot
+            .services
+            .get("web_portal")
+            .and_then(|versions| versions.get("2026.02.0"))
+            .expect("active service plan present");
+        let canary_plan = snapshot
+            .services
+            .get("web_portal")
+            .and_then(|versions| versions.get("2026.03.0"))
+            .expect("canary service plan present");
+        let active_asset_plan = active_plan
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == SoraArtifactKindV1::StaticAsset)
+            .expect("active static asset plan");
+        let canary_asset_plan = canary_plan
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.kind == SoraArtifactKindV1::StaticAsset)
+            .expect("canary static asset plan");
+
+        assert!(!active_plan.bundle_available_locally);
+        assert!(canary_plan.bundle_available_locally);
+        assert!(!active_asset_plan.available_locally);
+        assert!(canary_asset_plan.available_locally);
+        assert!(
+            !artifacts_root
+                .join(hash_cache_name(active_bundle.container.bundle_hash))
+                .exists()
+        );
+        assert!(
+            artifacts_root
+                .join(hash_cache_name(canary_bundle.container.bundle_hash))
+                .exists()
+        );
+        assert!(
+            !artifacts_root
+                .join(hash_cache_name(active_bundle.service.artifacts[0].artifact_hash))
+                .exists()
+        );
+        assert!(
+            artifacts_root
+                .join(hash_cache_name(canary_bundle.service.artifacts[0].artifact_hash))
+                .exists()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_prunes_tied_cache_candidates_by_stable_key() -> Result<()> {
+        let state = test_state()?;
+        let temp_dir = tempfile::tempdir()?;
+        let journals_root = temp_dir.path().join("journals");
+        fs::create_dir_all(&journals_root)?;
+
+        let first_hash = Hash::new(b"journal-alpha");
+        let second_hash = Hash::new(b"journal-omega");
+        let payload = b"journal-entry".to_vec();
+        let first_name = hash_cache_name(first_hash);
+        let second_name = hash_cache_name(second_hash);
+        let first_path = journals_root.join(&first_name);
+        let second_path = journals_root.join(&second_name);
+        fs::write(&first_path, &payload)?;
+        fs::write(&second_path, &payload)?;
+
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.cache_budgets.journal_bytes =
+            std::num::NonZeroU64::new(u64::try_from(payload.len()).expect("payload size fits"))
+                .expect("nonzero journal budget");
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+
+        let (removed, retained) = if first_name <= second_name {
+            (first_path, second_path)
+        } else {
+            (second_path, first_path)
+        };
+        assert!(!removed.exists());
+        assert!(retained.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_hydrates_missing_artifacts_from_committed_sorafs_store() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update", "private_update"]);
+        let artifact_payloads =
+            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "hydrated-from-sorafs");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        bundle.service.service_version.clone(),
+                    ),
+                    bundle.clone(),
+                );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let mut committed_manifests = vec![ingest_sorafs_payload(&sorafs_node, &bundle_bytes)?];
+        for payload in &artifact_payloads {
+            committed_manifests.push(ingest_sorafs_payload(&sorafs_node, payload)?);
+        }
+        approve_sorafs_manifests(&state, &committed_manifests)?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        )
+        .with_sorafs_node(sorafs_node);
+        manager.reconcile_once()?;
+
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get("web_portal")
+            .and_then(|versions| versions.get("2026.02.0"))
+            .expect("hydrated service plan");
+        assert!(plan.bundle_available_locally);
+        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Healthy);
+        assert!(plan.artifacts.iter().all(|artifact| artifact.available_locally));
+        assert_eq!(
+            fs::read(temp_dir.path().join("artifacts").join(hash_cache_name(bundle.container.bundle_hash)))?,
+            bundle_bytes
+        );
+        for (artifact, payload) in bundle.service.artifacts.iter().zip(artifact_payloads) {
+            assert_eq!(
+                fs::read(temp_dir.path().join("artifacts").join(hash_cache_name(artifact.artifact_hash)))?,
+                payload
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_hydrates_missing_artifacts_from_committed_remote_sorafs_provider(
+    ) -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.service.artifacts.truncate(1);
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
+        let artifact_payloads =
+            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "remote-provider");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        bundle.service.service_version.clone(),
+                    ),
+                    bundle.clone(),
+                );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+        }
+
+        let provider_id = [0x11; 32];
+        let remote_payloads = std::iter::once(bundle_bytes.clone())
+            .chain(artifact_payloads.iter().cloned())
+            .collect::<Vec<_>>();
+        let remote_fixtures = remote_payloads
+            .iter()
+            .enumerate()
+            .map(|(index, payload)| {
+                build_remote_manifest_fixture(
+                    payload,
+                    provider_id,
+                    u8::try_from(index + 1).expect("fixture index fits in u8"),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        approve_remote_hydration_sources(&state, &remote_fixtures)?;
+
+        let server = spawn_remote_hydration_fixture(&remote_fixtures)?;
+        let provider_cache = test_provider_cache(&server.base_url, provider_id)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        )
+        .with_sorafs_provider_cache(provider_cache);
+        manager.reconcile_once()?;
+
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get("web_portal")
+            .and_then(|versions| versions.get("2026.02.0"))
+            .expect("hydrated service plan");
+        assert!(plan.bundle_available_locally);
+        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Healthy);
+        assert!(plan.artifacts.iter().all(|artifact| artifact.available_locally));
+        assert_eq!(
+            fs::read(
+                temp_dir
+                    .path()
+                    .join("artifacts")
+                    .join(hash_cache_name(bundle.container.bundle_hash))
+            )?,
+            bundle_bytes
+        );
+        for (artifact, payload) in bundle.service.artifacts.iter().zip(artifact_payloads) {
+            assert_eq!(
+                fs::read(
+                    temp_dir
+                        .path()
+                        .join("artifacts")
+                        .join(hash_cache_name(artifact.artifact_hash))
+                )?,
+                payload
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_skips_remote_sorafs_payloads_that_do_not_match_expected_hash() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.service.artifacts.clear();
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
+        bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        bundle.service.service_version.clone(),
+                    ),
+                    bundle.clone(),
+                );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+        }
+
+        let provider_id = [0x11; 32];
+        let remote_fixture =
+            build_remote_manifest_fixture(b"wrong-remote-bundle", provider_id, 1)?;
+        approve_remote_hydration_sources(&state, std::slice::from_ref(&remote_fixture))?;
+
+        let server = spawn_remote_hydration_fixture(std::slice::from_ref(&remote_fixture))?;
+        let provider_cache = test_provider_cache(&server.base_url, provider_id)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        )
+        .with_sorafs_provider_cache(provider_cache);
+        manager.reconcile_once()?;
+
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get("web_portal")
+            .and_then(|versions| versions.get("2026.02.0"))
+            .expect("service plan");
+        assert!(!plan.bundle_available_locally);
+        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Hydrating);
+        assert!(!temp_dir
+            .path()
+            .join("artifacts")
+            .join(hash_cache_name(bundle.container.bundle_hash))
+            .exists());
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_skips_uncommitted_sorafs_artifacts_and_keeps_service_hydrating() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
+        let artifact_payloads =
+            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "uncommitted-sorafs");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        bundle.service.service_version.clone(),
+                    ),
+                    bundle.clone(),
+                );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let _bundle_manifest = ingest_sorafs_payload(&sorafs_node, &bundle_bytes)?;
+        for payload in &artifact_payloads {
+            let _stored = ingest_sorafs_payload(&sorafs_node, payload)?;
+        }
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        )
+        .with_sorafs_node(sorafs_node);
+        manager.reconcile_once()?;
+
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get("web_portal")
+            .and_then(|versions| versions.get("2026.02.0"))
+            .expect("service plan");
+        assert!(!plan.bundle_available_locally);
+        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Hydrating);
+        assert!(plan.artifacts.iter().all(|artifact| !artifact.available_locally));
+        assert!(!temp_dir
+            .path()
+            .join("artifacts")
+            .join(hash_cache_name(bundle.container.bundle_hash))
+            .exists());
+        Ok(())
+    }
+
+    #[test]
+    fn restore_persisted_snapshot_rehydrates_missing_artifacts_from_committed_sorafs_store(
+    ) -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update", "private_update"]);
+        let artifact_payloads =
+            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "restart-rehydrate");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_service_revisions_mut_for_testing()
+                .insert(
+                    (
+                        bundle.service.service_name.to_string(),
+                        bundle.service.service_version.clone(),
+                    ),
+                    bundle.clone(),
+                );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let sorafs_node = test_sorafs_node(&temp_dir);
+        let mut committed_manifests = vec![ingest_sorafs_payload(&sorafs_node, &bundle_bytes)?];
+        for payload in &artifact_payloads {
+            committed_manifests.push(ingest_sorafs_payload(&sorafs_node, payload)?);
+        }
+        approve_sorafs_manifests(&state, &committed_manifests)?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        )
+        .with_sorafs_node(sorafs_node.clone());
+        manager.reconcile_once()?;
+
+        let bundle_cache_path = temp_dir
+            .path()
+            .join("artifacts")
+            .join(hash_cache_name(bundle.container.bundle_hash));
+        let artifact_cache_paths = bundle
+            .service
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                temp_dir
+                    .path()
+                    .join("artifacts")
+                    .join(hash_cache_name(artifact.artifact_hash))
+            })
+            .collect::<Vec<_>>();
+        fs::remove_file(&bundle_cache_path)?;
+        for path in &artifact_cache_paths {
+            fs::remove_file(path)?;
+        }
+
+        let restarted_manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        )
+        .with_sorafs_node(sorafs_node);
+        assert!(restarted_manager.restore_persisted_snapshot()?);
+        restarted_manager.reconcile_once()?;
+
+        let snapshot = restarted_manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get("web_portal")
+            .and_then(|versions| versions.get("2026.02.0"))
+            .expect("restarted service plan");
+        assert!(plan.bundle_available_locally);
+        assert!(plan.artifacts.iter().all(|artifact| artifact.available_locally));
+        assert_eq!(fs::read(bundle_cache_path)?, bundle_bytes);
+        for (path, payload) in artifact_cache_paths.iter().zip(artifact_payloads) {
+            assert_eq!(fs::read(path)?, payload);
+        }
         Ok(())
     }
 
@@ -3240,6 +5577,158 @@ mod tests {
             result.runtime_state.expect("runtime state").health_status,
             SoraServiceHealthStatusV1::Healthy
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ivm_host_private_runtime_reads_secret_and_credential_material() -> Result<()> {
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(Vec::new());
+        let temp_dir = tempfile::tempdir()?;
+        let service_root = temp_dir
+            .path()
+            .join("secrets")
+            .join(bundle.service.service_name.to_string())
+            .join(bundle.service.service_version.clone())
+            .join("db");
+        fs::create_dir_all(&service_root)?;
+        fs::write(service_root.join("password"), b"super-secret")?;
+        let credential_root = temp_dir
+            .path()
+            .join("credentials")
+            .join(bundle.service.service_name.to_string())
+            .join(bundle.service.service_version.clone())
+            .join("vault");
+        fs::create_dir_all(&credential_root)?;
+        fs::write(credential_root.join("token"), br#"{"token":"abc"}"#)?;
+
+        let private_request = sample_ordered_mailbox_request(
+            &bundle,
+            "private_update",
+            sample_mailbox_message(&bundle, "private_update", b"private".to_vec()),
+        );
+        let private_host = SoracloudIvmHost::new(
+            private_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            BTreeMap::new(),
+        );
+        private_host.require_private_runtime(SYSCALL_SORACLOUD_READ_SECRET)?;
+        private_host.require_private_runtime(SYSCALL_SORACLOUD_READ_CREDENTIAL)?;
+        assert_eq!(
+            private_host.read_material("secrets", "db/password")?,
+            Some(b"super-secret".to_vec())
+        );
+        assert_eq!(
+            private_host.read_material("credentials", "vault/token")?,
+            Some(br#"{"token":"abc"}"#.to_vec())
+        );
+
+        let public_request = sample_ordered_mailbox_request(
+            &bundle,
+            "update",
+            sample_mailbox_message(&bundle, "update", b"public".to_vec()),
+        );
+        let public_host = SoracloudIvmHost::new(
+            public_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            BTreeMap::new(),
+        );
+        assert!(matches!(
+            public_host.require_private_runtime(SYSCALL_SORACLOUD_READ_SECRET),
+            Err(VMError::NotImplemented {
+                syscall: SYSCALL_SORACLOUD_READ_SECRET
+            })
+        ));
+        assert!(matches!(
+            public_host.require_private_runtime(SYSCALL_SORACLOUD_READ_CREDENTIAL),
+            Err(VMError::NotImplemented {
+                syscall: SYSCALL_SORACLOUD_READ_CREDENTIAL
+            })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()> {
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec!["127.0.0.1".to_owned()]);
+        let temp_dir = tempfile::tempdir()?;
+        let private_request = sample_ordered_mailbox_request(
+            &bundle,
+            "private_update",
+            sample_mailbox_message(&bundle, "private_update", b"private".to_vec()),
+        );
+        let mut host = SoracloudIvmHost::new(
+            private_request,
+            temp_dir.path().to_path_buf(),
+            iroha_config::parameters::actual::SoracloudRuntimeEgress {
+                default_allow: false,
+                allowed_hosts: vec!["127.0.0.1".to_owned()],
+                rate_per_minute: std::num::NonZeroU32::new(1),
+                max_bytes_per_minute: std::num::NonZeroU64::new(32),
+            },
+            BTreeMap::new(),
+        );
+        let body = b"hello-egress".to_vec();
+        let expected_hash = Hash::new(&body);
+        let (url, server) = spawn_http_fixture(body.clone())?;
+        let response = host.egress_fetch(SoracloudEgressFetchRequestV1 {
+            url: url.clone(),
+            expected_hash: Some(expected_hash),
+            max_bytes: 32,
+        })?;
+        server.join().expect("fixture server should complete");
+        assert_eq!(response.status_code, 200);
+        assert_eq!(response.body, body);
+        assert_eq!(response.body_hash, expected_hash);
+
+        let rate_limited = host
+            .egress_fetch(SoracloudEgressFetchRequestV1 {
+                url,
+                expected_hash: Some(expected_hash),
+                max_bytes: 32,
+            })
+            .expect_err("second request must exceed the per-minute rate limit");
+        assert_eq!(rate_limited, VMError::PermissionDenied);
+
+        let disallowed = host
+            .egress_fetch(SoracloudEgressFetchRequestV1 {
+                url: "http://example.com/blocked".to_owned(),
+                expected_hash: Some(Hash::new(b"blocked")),
+                max_bytes: 32,
+            })
+            .expect_err("disallowed hosts must be rejected before fetch");
+        assert_eq!(disallowed, VMError::PermissionDenied);
+
+        let private_request = sample_ordered_mailbox_request(
+            &bundle,
+            "private_update",
+            sample_mailbox_message(&bundle, "private_update", b"private-2".to_vec()),
+        );
+        let mut byte_limited_host = SoracloudIvmHost::new(
+            private_request,
+            temp_dir.path().to_path_buf(),
+            iroha_config::parameters::actual::SoracloudRuntimeEgress {
+                default_allow: false,
+                allowed_hosts: vec!["127.0.0.1".to_owned()],
+                rate_per_minute: std::num::NonZeroU32::new(5),
+                max_bytes_per_minute: std::num::NonZeroU64::new(4),
+            },
+            BTreeMap::new(),
+        );
+        let (url, server) = spawn_http_fixture(b"too-large".to_vec())?;
+        let byte_limited = byte_limited_host
+            .egress_fetch(SoracloudEgressFetchRequestV1 {
+                url,
+                expected_hash: Some(Hash::new(b"too-large")),
+                max_bytes: 16,
+            })
+            .expect_err("responses above the byte budget must be rejected");
+        server.join().expect("fixture server should complete");
+        assert_eq!(byte_limited, VMError::PermissionDenied);
         Ok(())
     }
 

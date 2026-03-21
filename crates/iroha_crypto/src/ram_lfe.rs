@@ -921,120 +921,198 @@ fn execute_hidden_program(
     state: &mut [BfvCiphertext],
 ) -> Result<Vec<u8>, RamLfeError> {
     validate_hidden_program(program)?;
-    if usize::from(program.memory_lane_count) != state.len() {
-        return Err(invalid_program_error(
-            "state lane count does not match program profile",
-        ));
+    let mut machine =
+        HiddenProgramMachine::new(execution, secret_key, program.register_count, inputs, state)?;
+    for instruction in &program.instructions {
+        machine.execute_instruction(*instruction)?;
+    }
+    machine.finish()
+}
+
+struct HiddenProgramMachine<'a> {
+    execution: &'a ProgramExecutionContext<'a>,
+    secret_key: &'a crate::BfvSecretKey,
+    reference_input: &'a BfvCiphertext,
+    state: &'a mut [BfvCiphertext],
+    inputs: &'a [BfvCiphertext],
+    registers: Vec<BfvCiphertext>,
+    output_registers: Vec<BfvCiphertext>,
+}
+
+impl<'a> HiddenProgramMachine<'a> {
+    fn new(
+        execution: &'a ProgramExecutionContext<'a>,
+        secret_key: &'a crate::BfvSecretKey,
+        register_count: u16,
+        inputs: &'a [BfvCiphertext],
+        state: &'a mut [BfvCiphertext],
+    ) -> Result<Self, RamLfeError> {
+        let reference_input = inputs
+            .first()
+            .ok_or_else(|| invalid_program_error("program requires at least one input"))?;
+        let zero = zero_ciphertext_like(execution.params, reference_input)?;
+        Ok(Self {
+            execution,
+            secret_key,
+            reference_input,
+            state,
+            inputs,
+            registers: vec![zero; usize::from(register_count)],
+            output_registers: Vec::new(),
+        })
     }
 
-    let zero = zero_ciphertext_like(execution.params, &inputs[0])?;
-    let mut registers = vec![zero; usize::from(program.register_count)];
-    let mut output_registers = Vec::new();
-
-    for instruction in &program.instructions {
-        match *instruction {
+    fn execute_instruction(
+        &mut self,
+        instruction: HiddenRamFheInstruction,
+    ) -> Result<(), RamLfeError> {
+        match instruction {
             HiddenRamFheInstruction::LoadInput(dst, input_index) => {
-                let value = inputs
+                let value = self
+                    .inputs
                     .get(usize::from(input_index))
                     .ok_or_else(|| {
                         invalid_program_error(&format!("input slot {input_index} out of bounds"))
                     })?
                     .clone();
-                *program_register_mut(&mut registers, usize::from(dst))? = value;
+                *program_register_mut(&mut self.registers, usize::from(dst))? = value;
             }
             HiddenRamFheInstruction::LoadState(dst, lane) => {
-                let value = state
-                    .get(usize::from(lane))
-                    .ok_or_else(|| invalid_program_error(&format!("lane {lane} out of bounds")))?
-                    .clone();
-                *program_register_mut(&mut registers, usize::from(dst))? = value;
+                let value = self.program_lane(lane)?.clone();
+                *program_register_mut(&mut self.registers, usize::from(dst))? = value;
             }
             HiddenRamFheInstruction::StoreState(lane, src) => {
-                let value = program_register(&registers, usize::from(src))?.clone();
-                *state.get_mut(usize::from(lane)).ok_or_else(|| {
-                    invalid_program_error(&format!("lane {lane} out of bounds"))
-                })? = value;
+                let value = program_register(&self.registers, usize::from(src))?.clone();
+                *self.program_lane_mut(lane)? = value;
             }
             HiddenRamFheInstruction::LoadConst(dst, value) => {
-                let constant = add_plain_scalar(execution.params, &inputs[0], value)
-                    .map_err(|err| map_bfv_error(&err))?;
-                let zeroed = multiply_plain_scalar(execution.params, &constant, 0)
-                    .map_err(|err| map_bfv_error(&err))?;
-                let ciphertext = add_plain_scalar(execution.params, &zeroed, value)
-                    .map_err(|err| map_bfv_error(&err))?;
-                *program_register_mut(&mut registers, usize::from(dst))? = ciphertext;
+                *program_register_mut(&mut self.registers, usize::from(dst))? =
+                    self.load_constant(value)?;
             }
             HiddenRamFheInstruction::Add(dst, lhs, rhs) => {
-                let value = add_ciphertexts(
-                    execution.params,
-                    program_register(&registers, usize::from(lhs))?,
-                    program_register(&registers, usize::from(rhs))?,
-                )
-                .map_err(|err| map_bfv_error(&err))?;
-                *program_register_mut(&mut registers, usize::from(dst))? = value;
+                *program_register_mut(&mut self.registers, usize::from(dst))? =
+                    self.add_registers(lhs, rhs)?;
             }
             HiddenRamFheInstruction::AddPlain(dst, src, value) => {
-                let updated = add_plain_scalar(
-                    execution.params,
-                    program_register(&registers, usize::from(src))?,
-                    value,
-                )
-                .map_err(|err| map_bfv_error(&err))?;
-                *program_register_mut(&mut registers, usize::from(dst))? = updated;
+                *program_register_mut(&mut self.registers, usize::from(dst))? =
+                    self.add_plain(src, value)?;
             }
             HiddenRamFheInstruction::SubPlain(dst, src, value) => {
-                let scalar = (execution
-                    .params
-                    .plaintext_modulus
-                    .saturating_sub(value % execution.params.plaintext_modulus))
-                    % execution.params.plaintext_modulus;
-                let updated = add_plain_scalar(
-                    execution.params,
-                    program_register(&registers, usize::from(src))?,
-                    scalar,
-                )
-                .map_err(|err| map_bfv_error(&err))?;
-                *program_register_mut(&mut registers, usize::from(dst))? = updated;
+                *program_register_mut(&mut self.registers, usize::from(dst))? =
+                    self.sub_plain(src, value)?;
             }
             HiddenRamFheInstruction::MulPlain(dst, src, value) => {
-                let updated = multiply_plain_scalar(
-                    execution.params,
-                    program_register(&registers, usize::from(src))?,
-                    value,
-                )
-                .map_err(|err| map_bfv_error(&err))?;
-                *program_register_mut(&mut registers, usize::from(dst))? = updated;
+                *program_register_mut(&mut self.registers, usize::from(dst))? =
+                    self.mul_plain(src, value)?;
             }
             HiddenRamFheInstruction::Mul(dst, lhs, rhs) => {
-                let value = multiply_ciphertexts(
-                    execution.params,
-                    execution.relinearization_key,
-                    program_register(&registers, usize::from(lhs))?,
-                    program_register(&registers, usize::from(rhs))?,
-                )
-                .map_err(|err| map_bfv_error(&err))?;
-                *program_register_mut(&mut registers, usize::from(dst))? = value;
+                *program_register_mut(&mut self.registers, usize::from(dst))? =
+                    self.mul_registers(lhs, rhs)?;
             }
             HiddenRamFheInstruction::SelectEqZero(dst, condition, if_zero, if_non_zero) => {
-                let selected = if decrypt_ciphertext_scalar(
-                    execution.params,
-                    secret_key,
-                    program_register(&registers, usize::from(condition))?,
-                )? == 0
-                {
-                    program_register(&registers, usize::from(if_zero))?.clone()
-                } else {
-                    program_register(&registers, usize::from(if_non_zero))?.clone()
-                };
-                *program_register_mut(&mut registers, usize::from(dst))? = selected;
+                *program_register_mut(&mut self.registers, usize::from(dst))? =
+                    self.select_eq_zero(condition, if_zero, if_non_zero)?;
             }
             HiddenRamFheInstruction::Output(src) => {
-                output_registers.push(program_register(&registers, usize::from(src))?.clone());
+                self.output_registers
+                    .push(program_register(&self.registers, usize::from(src))?.clone());
             }
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Result<Vec<u8>, RamLfeError> {
+        decrypt_program_outputs_from_registers(
+            self.execution.params,
+            self.secret_key,
+            &self.output_registers,
+        )
+    }
+
+    fn load_constant(&self, value: u64) -> Result<BfvCiphertext, RamLfeError> {
+        let constant = add_plain_scalar(self.execution.params, self.reference_input, value)
+            .map_err(|err| map_bfv_error(&err))?;
+        let zeroed = multiply_plain_scalar(self.execution.params, &constant, 0)
+            .map_err(|err| map_bfv_error(&err))?;
+        add_plain_scalar(self.execution.params, &zeroed, value).map_err(|err| map_bfv_error(&err))
+    }
+
+    fn add_registers(&self, lhs: u16, rhs: u16) -> Result<BfvCiphertext, RamLfeError> {
+        add_ciphertexts(
+            self.execution.params,
+            program_register(&self.registers, usize::from(lhs))?,
+            program_register(&self.registers, usize::from(rhs))?,
+        )
+        .map_err(|err| map_bfv_error(&err))
+    }
+
+    fn add_plain(&self, src: u16, value: u64) -> Result<BfvCiphertext, RamLfeError> {
+        add_plain_scalar(
+            self.execution.params,
+            program_register(&self.registers, usize::from(src))?,
+            value,
+        )
+        .map_err(|err| map_bfv_error(&err))
+    }
+
+    fn sub_plain(&self, src: u16, value: u64) -> Result<BfvCiphertext, RamLfeError> {
+        let scalar = (self
+            .execution
+            .params
+            .plaintext_modulus
+            .saturating_sub(value % self.execution.params.plaintext_modulus))
+            % self.execution.params.plaintext_modulus;
+        self.add_plain(src, scalar)
+    }
+
+    fn mul_plain(&self, src: u16, value: u64) -> Result<BfvCiphertext, RamLfeError> {
+        multiply_plain_scalar(
+            self.execution.params,
+            program_register(&self.registers, usize::from(src))?,
+            value,
+        )
+        .map_err(|err| map_bfv_error(&err))
+    }
+
+    fn mul_registers(&self, lhs: u16, rhs: u16) -> Result<BfvCiphertext, RamLfeError> {
+        multiply_ciphertexts(
+            self.execution.params,
+            self.execution.relinearization_key,
+            program_register(&self.registers, usize::from(lhs))?,
+            program_register(&self.registers, usize::from(rhs))?,
+        )
+        .map_err(|err| map_bfv_error(&err))
+    }
+
+    fn select_eq_zero(
+        &self,
+        condition: u16,
+        if_zero: u16,
+        if_non_zero: u16,
+    ) -> Result<BfvCiphertext, RamLfeError> {
+        if decrypt_ciphertext_scalar(
+            self.execution.params,
+            self.secret_key,
+            program_register(&self.registers, usize::from(condition))?,
+        )? == 0
+        {
+            Ok(program_register(&self.registers, usize::from(if_zero))?.clone())
+        } else {
+            Ok(program_register(&self.registers, usize::from(if_non_zero))?.clone())
         }
     }
 
-    decrypt_program_outputs_from_registers(execution.params, secret_key, &output_registers)
+    fn program_lane(&self, lane: u16) -> Result<&BfvCiphertext, RamLfeError> {
+        self.state
+            .get(usize::from(lane))
+            .ok_or_else(|| invalid_program_error(&format!("lane {lane} out of bounds")))
+    }
+
+    fn program_lane_mut(&mut self, lane: u16) -> Result<&mut BfvCiphertext, RamLfeError> {
+        self.state
+            .get_mut(usize::from(lane))
+            .ok_or_else(|| invalid_program_error(&format!("lane {lane} out of bounds")))
+    }
 }
 
 fn validate_hidden_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeError> {

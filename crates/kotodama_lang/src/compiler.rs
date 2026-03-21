@@ -2471,8 +2471,8 @@ impl Compiler {
         let typed_functions: Vec<&semantic::TypedFunction> = typed
             .items
             .iter()
-            .filter_map(|item| match item {
-                semantic::TypedItem::Function(func) => Some(func),
+            .map(|item| match item {
+                semantic::TypedItem::Function(func) => func,
             })
             .collect();
         let preferred_entry = typed

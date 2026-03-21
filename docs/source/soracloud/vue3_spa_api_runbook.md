@@ -34,7 +34,6 @@ Each output directory includes:
 
 - `container_manifest.json`
 - `service_manifest.json`
-- `registry.json` (local deterministic simulation)
 - template source files under `site/` or `webapp/`
 
 ## 2. Build application artifacts

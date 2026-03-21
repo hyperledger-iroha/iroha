@@ -13494,6 +13494,7 @@ impl SoracloudRuntime {
 
 /// User-level cache budget settings for hydrated Soracloud artifacts.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[allow(clippy::struct_field_names)]
 pub struct SoracloudRuntimeCacheBudgets {
     /// Cache budget for executable service bundles.
     #[config(default = "defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES")]
@@ -14360,7 +14361,7 @@ impl Torii {
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
-            tx_history: self.tx_history.and_then(ToriiTxHistory::parse),
+            tx_history: self.tx_history.map(ToriiTxHistory::parse),
             app_api: actual::AppApi {
                 default_list_limit,
                 max_list_limit,
@@ -14405,17 +14406,17 @@ pub struct ToriiTxHistory {
 }
 
 impl ToriiTxHistory {
-    fn parse(self) -> Option<actual::ToriiTxHistory> {
+    fn parse(self) -> actual::ToriiTxHistory {
         let allowed_asset_definition_id = self.allowed_asset_definition_id.map(|value| {
             value.parse::<AssetDefinitionId>().unwrap_or_else(|err| {
                 panic!("invalid torii.tx_history.allowed_asset_definition_id `{value}`: {err}")
             })
         });
-        Some(actual::ToriiTxHistory {
+        actual::ToriiTxHistory {
             mandatory_aliases_path: self.mandatory_aliases_path,
             allowed_asset_definition_id,
-            jwt: self.jwt.and_then(ToriiTxHistoryJwt::parse),
-        })
+            jwt: self.jwt.map(ToriiTxHistoryJwt::parse),
+        }
     }
 }
 
@@ -14435,7 +14436,7 @@ pub struct ToriiTxHistoryJwt {
 }
 
 impl ToriiTxHistoryJwt {
-    fn parse(self) -> Option<actual::ToriiTxHistoryJwt> {
+    fn parse(self) -> actual::ToriiTxHistoryJwt {
         let algorithm = self.algorithm.trim().to_ascii_uppercase();
         if algorithm.is_empty() {
             panic!("torii.tx_history.jwt.algorithm must not be empty");
@@ -14446,13 +14447,13 @@ impl ToriiTxHistoryJwt {
                 if secret.is_none() {
                     panic!("torii.tx_history.jwt.secret must be set for HMAC JWT algorithms");
                 }
-                Some(actual::ToriiTxHistoryJwt {
+                actual::ToriiTxHistoryJwt {
                     algorithm,
                     secret,
                     public_key_pem: None,
                     issuer: self.issuer.filter(|value| !value.trim().is_empty()),
                     audience: self.audience.filter(|value| !value.trim().is_empty()),
-                })
+                }
             }
             "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" | "ES256" | "ES384"
             | "EDDSA" => {
@@ -14462,13 +14463,13 @@ impl ToriiTxHistoryJwt {
                         "torii.tx_history.jwt.public_key_pem must be set for asymmetric JWT algorithms"
                     );
                 }
-                Some(actual::ToriiTxHistoryJwt {
+                actual::ToriiTxHistoryJwt {
                     algorithm,
                     secret: None,
                     public_key_pem,
                     issuer: self.issuer.filter(|value| !value.trim().is_empty()),
                     audience: self.audience.filter(|value| !value.trim().is_empty()),
-                })
+                }
             }
             other => panic!(
                 "invalid torii.tx_history.jwt.algorithm `{other}`; expected HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA"

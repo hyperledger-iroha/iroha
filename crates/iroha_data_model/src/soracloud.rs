@@ -3481,6 +3481,13 @@ impl SoraTrainingJobRecordV1 {
     /// identifiers are empty, or the recorded step/budget state is
     /// inconsistent.
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        self.validate_identity_fields()?;
+        self.validate_progress_fields()?;
+        self.validate_storage_fields()?;
+        self.validate_sequence_fields()
+    }
+
+    fn validate_identity_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != SORA_TRAINING_JOB_RECORD_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
                 manifest: "sora training job record",
@@ -3506,6 +3513,10 @@ impl SoraTrainingJobRecordV1 {
                 field: "job_id",
             });
         }
+        Ok(())
+    }
+
+    fn validate_progress_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self.worker_group_size == 0 {
             return Err(SoraCloudManifestError::InvalidField {
                 manifest: "sora training job record",
@@ -3562,6 +3573,19 @@ impl SoraTrainingJobRecordV1 {
                 reason: "must not exceed compute_budget_units".to_string(),
             });
         }
+        if let Some(last_checkpoint_step) = self.last_checkpoint_step
+            && (last_checkpoint_step == 0 || last_checkpoint_step > self.completed_steps)
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora training job record",
+                field: "last_checkpoint_step",
+                reason: "must be within 1..=completed_steps".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_storage_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self.storage_budget_bytes == 0 {
             return Err(SoraCloudManifestError::InvalidField {
                 manifest: "sora training job record",
@@ -3576,15 +3600,10 @@ impl SoraTrainingJobRecordV1 {
                 reason: "must not exceed storage_budget_bytes".to_string(),
             });
         }
-        if let Some(last_checkpoint_step) = self.last_checkpoint_step {
-            if last_checkpoint_step == 0 || last_checkpoint_step > self.completed_steps {
-                return Err(SoraCloudManifestError::InvalidField {
-                    manifest: "sora training job record",
-                    field: "last_checkpoint_step",
-                    reason: "must be within 1..=completed_steps".to_string(),
-                });
-            }
-        }
+        Ok(())
+    }
+
+    fn validate_sequence_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self.created_sequence == 0 || self.updated_sequence == 0 {
             return Err(SoraCloudManifestError::InvalidField {
                 manifest: "sora training job record",
@@ -4373,6 +4392,13 @@ impl SoraAgentApartmentRecordV1 {
     /// embedded manifest is invalid, or the recorded lifecycle/accounting
     /// state is inconsistent.
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        self.validate_required_fields()?;
+        self.validate_restart_fields()?;
+        self.validate_budget_fields()?;
+        self.validate_collection_fields()
+    }
+
+    fn validate_required_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != SORA_AGENT_APARTMENT_RECORD_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
                 manifest: "sora agent apartment record",
@@ -4412,6 +4438,10 @@ impl SoraAgentApartmentRecordV1 {
                 reason: "must be >= lease_started_sequence".to_string(),
             });
         }
+        Ok(())
+    }
+
+    fn validate_restart_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self
             .last_restart_reason
             .as_ref()
@@ -4441,6 +4471,10 @@ impl SoraAgentApartmentRecordV1 {
                 reason: "must be greater than zero when provided".to_string(),
             });
         }
+        Ok(())
+    }
+
+    fn validate_budget_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self.autonomy_budget_ceiling_units == 0 {
             return Err(SoraCloudManifestError::InvalidField {
                 manifest: "sora agent apartment record",
@@ -4455,6 +4489,10 @@ impl SoraAgentApartmentRecordV1 {
                 reason: "must not exceed autonomy_budget_ceiling_units".to_string(),
             });
         }
+        Ok(())
+    }
+
+    fn validate_collection_fields(&self) -> Result<(), SoraCloudManifestError> {
         for revoked in &self.revoked_policy_capabilities {
             if revoked.trim().is_empty() {
                 return Err(SoraCloudManifestError::InvalidField {
@@ -4465,75 +4503,114 @@ impl SoraAgentApartmentRecordV1 {
             }
         }
         for (request_id, request) in &self.pending_wallet_requests {
-            if request_id != &request.request_id
-                || request.request_id.trim().is_empty()
-                || request.asset_definition.trim().is_empty()
-                || request.created_sequence == 0
-            {
-                return Err(SoraCloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
-                    field: "pending_wallet_requests",
-                    reason: "wallet request entries must use non-empty matching request ids and valid metadata".to_string(),
-                });
-            }
+            Self::validate_pending_wallet_request(request_id, request)?;
         }
         for (key, entry) in &self.wallet_daily_spend {
-            if entry.asset_definition.trim().is_empty() || key.trim().is_empty() {
-                return Err(SoraCloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
-                    field: "wallet_daily_spend",
-                    reason:
-                        "wallet daily spend entries must use non-empty keys and asset definitions"
-                            .to_string(),
-                });
-            }
+            Self::validate_wallet_daily_spend_entry(key, entry)?;
         }
         for message in &self.mailbox_queue {
-            if message.message_id.trim().is_empty()
-                || message.from_apartment.trim().is_empty()
-                || message.channel.trim().is_empty()
-                || message.enqueued_sequence == 0
-            {
-                return Err(SoraCloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
-                    field: "mailbox_queue",
-                    reason: "mailbox messages must use non-empty ids/origins/channels and valid sequences".to_string(),
-                });
-            }
+            Self::validate_mailbox_message(message)?;
         }
         for (artifact_hash, rule) in &self.artifact_allowlist {
-            if artifact_hash != &rule.artifact_hash
-                || rule.artifact_hash.trim().is_empty()
-                || rule
-                    .provenance_hash
-                    .as_ref()
-                    .is_some_and(|hash| hash.trim().is_empty())
-                || rule.added_sequence == 0
-            {
-                return Err(SoraCloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
-                    field: "artifact_allowlist",
-                    reason: "allowlist entries must use non-empty matching artifact hashes and valid metadata".to_string(),
-                });
-            }
+            Self::validate_artifact_allowlist_rule(artifact_hash, rule)?;
         }
         for run in &self.autonomy_run_history {
-            if run.run_id.trim().is_empty()
-                || run.artifact_hash.trim().is_empty()
-                || run.run_label.trim().is_empty()
-                || run.budget_units == 0
-                || run.approved_sequence == 0
-                || run
-                    .provenance_hash
-                    .as_ref()
-                    .is_some_and(|hash| hash.trim().is_empty())
-            {
-                return Err(SoraCloudManifestError::InvalidField {
-                    manifest: "sora agent apartment record",
-                    field: "autonomy_run_history",
-                    reason: "autonomy run entries must use non-empty ids/hash/label plus positive budgets and sequences".to_string(),
-                });
-            }
+            Self::validate_autonomy_run(run)?;
+        }
+        Ok(())
+    }
+
+    fn validate_pending_wallet_request(
+        request_id: &str,
+        request: &SoraAgentWalletSpendRequestV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        if request_id != request.request_id
+            || request.request_id.trim().is_empty()
+            || request.asset_definition.trim().is_empty()
+            || request.created_sequence == 0
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora agent apartment record",
+                field: "pending_wallet_requests",
+                reason: "wallet request entries must use non-empty matching request ids and valid metadata".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_wallet_daily_spend_entry(
+        key: &str,
+        entry: &SoraAgentWalletDailySpendEntryV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        if entry.asset_definition.trim().is_empty() || key.trim().is_empty() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora agent apartment record",
+                field: "wallet_daily_spend",
+                reason: "wallet daily spend entries must use non-empty keys and asset definitions"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_mailbox_message(
+        message: &SoraAgentMailboxMessageV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        if message.message_id.trim().is_empty()
+            || message.from_apartment.trim().is_empty()
+            || message.channel.trim().is_empty()
+            || message.enqueued_sequence == 0
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora agent apartment record",
+                field: "mailbox_queue",
+                reason:
+                    "mailbox messages must use non-empty ids/origins/channels and valid sequences"
+                        .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_artifact_allowlist_rule(
+        artifact_hash: &str,
+        rule: &SoraAgentArtifactAllowRuleV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        if artifact_hash != rule.artifact_hash
+            || rule.artifact_hash.trim().is_empty()
+            || rule
+                .provenance_hash
+                .as_ref()
+                .is_some_and(|hash| hash.trim().is_empty())
+            || rule.added_sequence == 0
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora agent apartment record",
+                field: "artifact_allowlist",
+                reason: "allowlist entries must use non-empty matching artifact hashes and valid metadata".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_autonomy_run(
+        run: &SoraAgentAutonomyRunRecordV1,
+    ) -> Result<(), SoraCloudManifestError> {
+        if run.run_id.trim().is_empty()
+            || run.artifact_hash.trim().is_empty()
+            || run.run_label.trim().is_empty()
+            || run.budget_units == 0
+            || run.approved_sequence == 0
+            || run
+                .provenance_hash
+                .as_ref()
+                .is_some_and(|hash| hash.trim().is_empty())
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora agent apartment record",
+                field: "autonomy_run_history",
+                reason: "autonomy run entries must use non-empty ids/hash/label plus positive budgets and sequences".to_string(),
+            });
         }
         Ok(())
     }
@@ -4733,6 +4810,12 @@ impl SoraServiceAuditEventV1 {
     /// Returns [`SoraCloudManifestError`] when event sequencing or version
     /// fields are malformed.
     pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        self.validate_required_fields()?;
+        self.validate_optional_fields()?;
+        self.validate_break_glass_fields()
+    }
+
+    fn validate_required_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self.schema_version != SORA_SERVICE_AUDIT_EVENT_VERSION_V1 {
             return Err(SoraCloudManifestError::UnsupportedVersion {
                 manifest: "sora service audit event",
@@ -4767,7 +4850,10 @@ impl SoraServiceAuditEventV1 {
                 field: "to_version",
             });
         }
+        Ok(())
+    }
 
+    fn validate_optional_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self
             .rollout_handle
             .as_ref()
@@ -4813,6 +4899,10 @@ impl SoraServiceAuditEventV1 {
                 reason: "must not be empty when provided".to_string(),
             });
         }
+        Ok(())
+    }
+
+    fn validate_break_glass_fields(&self) -> Result<(), SoraCloudManifestError> {
         if self
             .break_glass_reason
             .as_ref()
@@ -4838,7 +4928,6 @@ impl SoraServiceAuditEventV1 {
                 reason: "must be provided when break_glass=true".to_string(),
             });
         }
-
         Ok(())
     }
 }

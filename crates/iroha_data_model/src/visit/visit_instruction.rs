@@ -5,7 +5,7 @@ use iroha_primitives::numeric::Numeric;
 use super::Visit;
 use crate::{
     isi::{
-        ActivateIdentifierPolicy, ClaimIdentifier, Instruction, Log, RegisterIdentifierPolicy,
+        ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
         nexus::SetLaneRelayEmergencyValidators,
         soracloud::{
@@ -30,6 +30,17 @@ use crate::{
 
 /// Dispatch a boxed instruction to the corresponding visitor hook.
 pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) {
+    if !(visit_core_instruction(visitor, isi)
+        || visit_staking_and_identifier_instruction(visitor, isi)
+        || visit_soracloud_service_instruction(visitor, isi)
+        || visit_soracloud_agent_instruction(visitor, isi)
+        || visit_soracloud_training_instruction(visitor, isi))
+    {
+        unreachable!("Unknown instruction type");
+    }
+}
+
+fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<SetParameter>() {
         visitor.visit_set_parameter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExecuteTrigger>() {
@@ -72,7 +83,17 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         visitor.visit_send_to_twitter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<CancelTwitterEscrow>() {
         visitor.visit_cancel_twitter_escrow(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
         visitor.visit_register_public_lane_validator(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ActivatePublicLaneValidator>() {
         visitor.visit_activate_public_lane_validator(v);
@@ -91,7 +112,17 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         visitor.visit_claim_identifier(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RevokeIdentifier>() {
         visitor.visit_revoke_identifier(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudService>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudService>() {
         visitor.visit_deploy_soracloud_service(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<UpgradeSoracloudService>() {
         visitor.visit_upgrade_soracloud_service(v);
@@ -106,7 +137,17 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         .downcast_ref::<RecordSoracloudDecryptionRequest>()
     {
         visitor.visit_record_soracloud_decryption_request(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudAgentApartment>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_soracloud_agent_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudAgentApartment>() {
         visitor.visit_deploy_soracloud_agent_apartment(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RenewSoracloudAgentLease>() {
         visitor.visit_renew_soracloud_agent_lease(v);
@@ -141,7 +182,17 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         visitor.visit_allow_soracloud_agent_autonomy_artifact(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudAgentAutonomy>() {
         visitor.visit_run_soracloud_agent_autonomy(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<StartSoracloudTrainingJob>() {
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<StartSoracloudTrainingJob>() {
         visitor.visit_start_soracloud_training_job(v);
     } else if let Some(v) = isi
         .as_any()
@@ -170,8 +221,9 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
     } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudRuntimeReceipt>() {
         visitor.visit_record_soracloud_runtime_receipt(v);
     } else {
-        unreachable!("Unknown instruction type");
+        return false;
     }
+    true
 }
 
 /// Dispatch register variants like peers, domains, and triggers.

@@ -615,6 +615,10 @@ pub fn generate_default(
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());
     let grant_permission_to_register_domains =
         Grant::account_permission(CanRegisterDomain, ALICE_ID.clone());
+    let grant_permission_to_manage_soracloud = Grant::account_permission(
+        Permission::new("CanManageSoracloud".into(), Json::new(())),
+        ALICE_ID.clone(),
+    );
     let grant_permission_to_register_accounts =
         Grant::account_permission(register_account_permission, ALICE_ID.clone());
     let transfer_rose_ownership = Transfer::asset_definition(
@@ -670,6 +674,7 @@ pub fn generate_default(
         .append_instruction(transfer_rose_ownership)
         .append_instruction(grant_permission_to_set_parameters)
         .append_instruction(grant_permission_to_register_domains)
+        .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
 
     let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
@@ -1404,6 +1409,11 @@ fn apply_da_rbc_policy_for_line(params: &mut Parameters, line: BuildLine) {
 
 #[cfg(test)]
 mod tests {
+    use std::io::BufWriter;
+
+    use iroha_data_model::isi::GrantBox;
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+
     use super::*;
 
     #[test]
@@ -1434,5 +1444,41 @@ mod tests {
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
         assert_eq!(nexus.collectors_k, 5);
         assert_eq!(nexus.collectors_redundant_send_r, 3);
+    }
+
+    #[test]
+    fn generated_genesis_grants_alice_soracloud_management_permission() {
+        let mut output = BufWriter::new(Vec::new());
+        Args {
+            profile: Some(GenesisProfile::Iroha3Dev),
+            chain_id: None,
+            vrf_seed_hex: None,
+            executor: None,
+            ivm_dir: PathBuf::from("."),
+            genesis_public_key: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            mode: None,
+            ivm_gas_limit_per_block: None,
+            consensus_mode: Some(ConsensusModeArg::Permissioned),
+            next_consensus_mode: None,
+            mode_activation_height: None,
+            crypto: CryptoArgs::default(),
+        }
+        .run(&mut output)
+        .expect("genesis generation should succeed");
+        output.flush().expect("flush generated manifest");
+        let manifest: RawGenesisTransaction =
+            norito::json::from_slice(&output.into_inner().expect("manifest bytes"))
+                .expect("generated manifest should parse");
+        let saw_permission = manifest.instructions().any(|instruction| {
+            let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>()
+            else {
+                return false;
+            };
+            grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud"
+        });
+        assert!(
+            saw_permission,
+            "generated genesis should grant ALICE_ID CanManageSoracloud"
+        );
     }
 }

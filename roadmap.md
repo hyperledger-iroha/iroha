@@ -2,6 +2,240 @@
 
 Last updated: 2026-03-21
 
+Latest sync (2026-03-21 Soracloud complete; workspace blocker was unrelated IVM metadata drift):
+`crates/ivm_abi/src/metadata.rs`,
+`crates/ivm/tests/metadata.rs`,
+and `crates/iroha_core/tests/ivm_event_ordering.rs`
+now resolve the only deterministic red uncovered while finishing the Soracloud
+cutover:
+
+- Generic repository sample/prebuilt `.to` programs still use `IVM 1.0`
+  headers, and runtime admission/cache policy already accepts generic `1.x`
+  headers, but `ProgramMetadata::parse()` had drifted to reject every minor
+  version except `1.1`.
+- The parser now accepts generic `1.0` and `1.1` headers again, while
+  self-describing `CNTR` contract artifacts remain `1.1`-only through the
+  separate contract-artifact verification path.
+- This restores the non-Soracloud smart-contract query fixture path and
+  removes the last deterministic blocker found during the Soracloud validation
+  sweep. The Soracloud slice itself is complete on the patched tree.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p ivm --test metadata -- --nocapture`
+- `cargo test -p iroha_core --test ivm_event_ordering encode_prog_syscall_uses_valid_metadata_header -- --nocapture`
+- `cargo test -p integration_tests --test mod queries::smart_contract::smart_contract_query_scenarios -- --nocapture`
+- `cargo test -p integration_tests --test mod sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+
+Open work for this slice now remains:
+- rerun `cargo test --workspace` from a fresh post-patch session when the full
+  multi-hour validation budget is available.
+
+Latest sync (2026-03-21 Soracloud authoritative mutation responses + SCR admission):
+`crates/iroha_torii/src/soracloud.rs`,
+`crates/iroha_test_network/src/config.rs`,
+and `crates/iroha_kagami/src/genesis/generate.rs`
+now close the remaining Soracloud mutation/runtime validation gap:
+
+- Torii Soracloud mutation endpoints no longer return queue-admission receipts;
+  they wait for authoritative transaction completion and respond with the
+  existing post-apply Soracloud JSON built from committed world state and
+  audit snapshots.
+- Rejected mutations now surface the nested validation / instruction-execution
+  cause chain so operators see precise SCR-host admission failures instead of a
+  generic `Validation failed`.
+- Deploy/upgrade once again enforce Torii SCR-host admission caps and
+  capability guardrails before any Soracloud transaction is submitted.
+- Fresh dev/test genesis builders now grant the fixture operator account
+  `CanManageSoracloud`, which keeps the live Soracloud CLI integration flows
+  working without extra manual permission bootstrapping.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii admit_scr_host_bundle_rejects_over_cap_cpu --lib -- --nocapture`
+- `cargo test -p iroha_torii error_chain_message_includes_nested_validation_details --lib -- --nocapture`
+- `cargo test -p iroha_torii soracloud_ -- --nocapture`
+- `cargo test -p iroha_test_network genesis_grants_alice_soracloud_management_permission -- --nocapture`
+- `cargo test -p iroha_kagami generated_genesis_grants_alice_soracloud_management_permission -- --nocapture`
+- `cargo test -p iroha_cli soracloud -- --nocapture`
+- `cargo test -p integration_tests --test iroha_cli soracloud_ -- --nocapture`
+- `cargo build --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+
+Open work for this slice now remains:
+- finish `cargo test --workspace` if the long validation sweep stays green.
+
+Latest sync (2026-03-21 Soracloud status-only cutover, no registry route):
+`crates/iroha_torii/src/{lib.rs,soracloud.rs}`,
+`crates/iroha_cli/src/soracloud.rs`,
+and `docs/source/soracloud/cli_local_control_plane.md`
+now complete the Soracloud public status cutover:
+
+- `GET /v1/soracloud/status` moved out of the telemetry-only route path and is
+  now served anywhere the Soracloud app API routes are exposed, including
+  non-telemetry builds.
+- The status envelope remains `schema_version = 1` with the same top-level
+  structure, but its sections are now sourced authoritatively from the
+  embedded runtime-manager snapshot, in-process queue/Nexus state, and the
+  authoritative world-state control-plane snapshot.
+- Telemetry now affects only the `failed_admissions` counters; when metrics are
+  unavailable the route still returns `200 OK` with `available = false` and
+  deterministic zero counts.
+- `/v1/soracloud/registry` has been removed entirely for v1, and the remaining
+  internal `Registry*` Soracloud status DTO/helper names have been renamed to
+  control-plane/status-oriented names without changing the public
+  `/v1/soracloud/status` payload fields.
+- Soracloud docs now describe `/v1/soracloud/status` as the only v1 status
+  endpoint.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii soracloud_ -- --nocapture`
+- `cargo test -p iroha_torii soracloud_status_handler_returns_snapshot_sections --features telemetry -- --nocapture`
+- `cargo test -p iroha_cli soracloud -- --nocapture`
+- `cargo build --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+
+Open work for this slice now remains:
+- run `cargo test --workspace` when the multi-hour validation budget is
+  available.
+
+Latest sync (2026-03-21 full-workspace clippy clean on the integrated Soracloud branch):
+The post-integration validation backlog is now reduced to the long workspace
+test sweep.
+
+- `cargo clippy --workspace --all-targets -- -D warnings` now passes after
+  cleaning the remaining strict-lint blockers across
+  `crates/iroha_crypto/src/ram_lfe.rs`,
+  `crates/iroha_data_model/src/{account/rekey.rs,consensus.rs,identifier.rs,isi/registry.rs,soracloud.rs,visit/visit_instruction.rs}`,
+  `crates/kotodama_lang/src/compiler.rs`,
+  `crates/iroha_config/src/parameters/user.rs`,
+  `crates/ivm/src/{core_host.rs,host.rs}`,
+  and `crates/connect_norito_bridge/src/lib.rs`.
+- Focused follow-up tests for the touched Soracloud/data-model paths now pass:
+  `cargo test -p iroha_data_model default_registry -- --nocapture`,
+  `cargo test -p iroha_data_model validation_accepts_consistent_state -- --nocapture`,
+  and
+  `cargo test -p iroha_data_model service_audit_event_validate_requires_break_glass_reason_when_enabled -- --nocapture`.
+
+Open work for this slice now remains:
+- run `cargo test --workspace` when the multi-hour validation budget is
+  available.
+
+Latest sync (2026-03-21 Soracloud remote-provider hydration catch-up + Torii warning cleanup):
+`crates/irohad/src/{main.rs,soracloud_runtime.rs}`,
+`crates/iroha_torii/src/{lib.rs,sorafs/mod.rs,routing.rs}`,
+and `crates/iroha_core/src/state.rs`
+now close the remaining Soracloud runtime-manager hydration gap that was still
+limited to the local embedded SoraFS store:
+
+- `irohad` now builds and shares Torii’s live SoraFS provider advert cache, so
+  the runtime manager can resolve admitted remote providers through the same
+  authoritative discovery state that the public SoraFS gateway surfaces use.
+- Missing Soracloud bundles/artifacts are now hydrated by decoding committed
+  `ReplicationOrderV1` records, verifying the targeted manifest digest against
+  authoritative pin-registry/DA state, fetching manifest/plan/token/chunk data
+  from the admitted provider’s Torii SoraFS endpoints, and only materializing
+  payload bytes whose final Soracloud artifact hash matches the committed
+  expected hash.
+- Focused runtime-manager coverage now proves both the successful remote
+  hydration path and the fail-closed mismatch path, and the stale
+  `iroha_torii --tests` unused-variable warning has been removed.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo check -p irohad`
+- `cargo test -p irohad reconcile_once_hydrates_missing_artifacts_from_committed_remote_sorafs_provider -- --nocapture`
+- `cargo test -p irohad reconcile_once_skips_remote_sorafs_payloads_that_do_not_match_expected_hash -- --nocapture`
+- `cargo test -p irohad soracloud_runtime::tests:: -- --nocapture`
+- `cargo check -p iroha_torii --tests`
+- `git diff --check`
+
+Open work for this slice now remains:
+- run the broader workspace build/clippy/test sweep against the integrated
+  Soracloud branch,
+- keep auditing Soracloud host-side capability enforcement as additional host
+  operations or apartment/runtime execution paths are wired through the
+  authoritative runtime.
+
+Latest sync (2026-03-21 Soracloud v1 IVM ABI + real ordered-mailbox execution + live-only CLI/Torii public cutover):
+`crates/iroha_data_model/src/soracloud.rs`,
+`crates/ivm_abi/src/{syscalls.rs,pointer_abi.rs}`,
+`crates/ivm/docs/{syscalls.md,pointer_abi.md}`,
+`crates/ivm/tests/*`,
+`crates/irohad/src/soracloud_runtime.rs`,
+`crates/iroha_torii/src/soracloud.rs`,
+`crates/iroha_cli/src/soracloud.rs`,
+`crates/iroha_cli/CommandLineHelp.md`,
+`integration_tests/tests/iroha_cli.rs`,
+and
+`docs/source/soracloud/{cli_local_control_plane.md,vue3_spa_api_runbook.md}`
+now close the ABI and public-CLI half of the Soracloud runtime cutover:
+
+- ABI v1 now exposes the dedicated Soracloud host syscall block plus
+  Soracloud request/response pointer types, and the golden syscall/hash/pointer
+  tests have been refreshed accordingly.
+- Ordered mailbox execution in the embedded runtime manager now loads the
+  admitted IVM bundle for the active revision and executes the authoritative
+  `update` / `private_update` entrypoint rather than returning the previous
+  synthetic placeholder result.
+- The Soracloud runtime host now stages deterministic state mutations,
+  outbound mailbox writes, journal/checkpoint artifacts, and private
+  secret/credential/egress operations directly from VM execution, while
+  deterministic failure paths return degraded receipts without partial writes.
+- Soracloud CLI `init` remains offline scaffold generation only; the deploy,
+  status, upgrade, rollback, rollout, and agent lifecycle/mailbox/autonomy
+  commands are now Torii-backed only and no longer depend on
+  `.soracloud/registry.json`.
+- The live Torii Soracloud registry persistence path has been removed from the
+  production build; `registry_state.to` is no longer part of the live server
+  contract, and the last in-tree Torii/CLI registry simulator scaffolding has
+  now been deleted from the source tree.
+- Soracloud CLI `status` now reads `/v1/soracloud/status` rather than the old
+  registry snapshot route, while preserving `--service-name` by filtering the
+  embedded authoritative `control_plane.services` payload client-side.
+- The embedded runtime manager now enforces deterministic
+  `soracloud_runtime.cache_budgets` pruning across hydrated artifact,
+  journal, and checkpoint roots, and rebuilds the persisted runtime snapshot
+  after eviction so post-prune availability is reflected authoritatively.
+- The embedded runtime manager now shares the local SoraFS node handle with
+  Torii and rehydrates missing bundle/artifact cache files from committed
+  SoraFS manifests only, verifying content-addressed bytes before materializing
+  them under the runtime state directory, restoring persisted runtime
+  snapshots before reconcile, and reporting `Hydrating` until the authoritative
+  cache is complete.
+- The Soracloud CLI/control-plane documentation now describes only the
+  authoritative live runtime path and the IVM-only v1 scope, and the
+  integration test slice now asserts that removed local-mode commands fail
+  clearly without `--torii-url`.
+
+Validation completed so far:
+- `cargo run -p ivm --bin gen_syscalls_doc -- --write`
+- `cargo test -p ivm --test abi_hash_versions --test abi_policy --test abi_syscall_list_golden --test pointer_type_ids_golden --test pointer_type_policy --test pointer_types_markdown --test syscalls_policy`
+- `cargo check -p irohad`
+- `cargo test -p irohad execute_ordered_mailbox_ -- --nocapture`
+- `cargo test -p irohad soracloud_runtime::tests:: -- --nocapture`
+- `cargo check -p iroha_cli`
+- `cargo test -p iroha_cli deploy_requires_torii_url_after_local_simulator_removal -- --nocapture`
+- `cargo test -p iroha_cli init_site_template_scaffolds_vue_and_sorafs_workflow -- --nocapture`
+- `cargo run -p iroha_cli --bin iroha -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md`
+- `cargo check -p iroha_torii`
+- `cargo test -p integration_tests --test iroha_cli require_torii_url -- --nocapture`
+- `cargo test -p iroha_cli fetch_torii_status_rejects_invalid_url -- --nocapture`
+- `cargo test -p iroha_cli filter_soracloud_status_payload_filters_embedded_control_plane_snapshot -- --nocapture`
+- `cargo check -p iroha_cli --tests`
+- `cargo check -p iroha_torii --tests`
+- `cargo test -p iroha_torii world_snapshot_uses_authoritative_soracloud_state --lib -- --nocapture`
+
+Open work for this slice now remains:
+- broaden restart recovery coverage so runtime materialization is rebuilt
+  deterministically from the persisted snapshot plus committed world state,
+- finish the remaining private-runtime host policy work that is still only
+  partially implemented (for example full quota enforcement and the rest of the
+  capability gating surface),
+- run the broader targeted crate sweep, strict workspace clippy pass, and
+  multi-hour full workspace test pass.
+
 Latest sync (2026-03-21 Soracloud authoritative local reads + apartment execution):
 `crates/iroha_core/src/soracloud_runtime.rs`,
 `crates/irohad/src/soracloud_runtime.rs`,

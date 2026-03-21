@@ -51,6 +51,10 @@ pub(crate) use registry::{
 };
 #[cfg(feature = "app_api")]
 pub use repair::RepairWorkerRuntime;
+pub use sorafs_manifest::{
+    pin_registry::ReplicationOrderV1,
+    provider_advert::{EndpointKind, TransportProtocol},
+};
 pub use token::{
     StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, TokenOverrides,
     decode_token_base64, encode_token_base64,

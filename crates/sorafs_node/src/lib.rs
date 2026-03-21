@@ -2129,6 +2129,18 @@ impl NodeHandle {
         })
     }
 
+    /// Return stored manifest metadata ordered deterministically by manifest digest then identifier.
+    pub fn stored_manifests(&self) -> Result<Vec<StoredManifest>, NodeStorageError> {
+        let storage = self.storage_backend()?;
+        let mut manifests = storage.manifests();
+        manifests.sort_by(|left, right| {
+            left.manifest_digest()
+                .cmp(right.manifest_digest())
+                .then_with(|| left.manifest_id().cmp(right.manifest_id()))
+        });
+        Ok(manifests)
+    }
+
     fn derive_layout_and_roles(
         plan: &CarBuildPlan,
     ) -> Option<(DaStripeLayout, Vec<ChunkRoleMetadata>)> {

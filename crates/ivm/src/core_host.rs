@@ -703,13 +703,13 @@ impl CoreHost {
         let limit = vm.pc() as usize;
         let prefix = vm.memory.load_region(0, limit as u64).ok()?;
         let mut literal_start = 0usize;
-        if vm.metadata().version_minor == 1 {
-            if limit >= 8 && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC {
-                let contract_payload_len =
-                    u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
-                let contract_section_len = 8usize.checked_add(contract_payload_len)?;
-                literal_start = contract_section_len;
-            }
+        if vm.metadata().version_minor == 1
+            && limit >= 8
+            && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC
+        {
+            let contract_payload_len = u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
+            let contract_section_len = 8usize.checked_add(contract_payload_len)?;
+            literal_start = contract_section_len;
         }
         if literal_start + 4 > limit
             || prefix[literal_start..literal_start + 4] != LITERAL_SECTION_MAGIC
@@ -1741,10 +1741,7 @@ impl IVMHost for CoreHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let ptr = Self::resolve_code_tlv_addr(vm, original);
-                let tlv = match vm.memory.validate_tlv(ptr) {
-                    Ok(tlv) => tlv,
-                    Err(err) => return Err(err),
-                };
+                let tlv = vm.memory.validate_tlv(ptr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {

@@ -4201,7 +4201,7 @@ App API helpers and product tooling
 * `endorsement` — Domain endorsement helpers (committees, policies, submissions)
 * `jurisdiction` — Jurisdiction Data Guardian helpers (attestations and SDN registries)
 * `compute` — Compute lane simulation helpers
-* `soracloud` — Soracloud deployment/control-plane simulation helpers
+* `soracloud` — Soracloud deployment/control-plane helpers
 * `social` — Social incentive helpers (viral follow rewards and escrows)
 * `space-directory` — Space Directory helpers (UAID capability manifests)
 * `kaigi` — Kaigi session helpers
@@ -4766,7 +4766,7 @@ Contract manifest helpers
 ###### **Subcommands:**
 
 * `get` — Fetch on-chain contract manifest by code hash and either print or save (if --out is provided)
-* `build` — Build a manifest for compiled bytecode (with optional signing)
+* `build` — Inspect the manifest embedded in compiled bytecode (with optional signing)
 
 
 
@@ -4785,7 +4785,7 @@ Fetch on-chain contract manifest by code hash and either print or save (if --out
 
 ## `iroha app contracts manifest build`
 
-Build a manifest for compiled bytecode (with optional signing)
+Inspect the manifest embedded in compiled bytecode (with optional signing)
 
 **Usage:** `iroha app contracts manifest build [OPTIONS]`
 
@@ -6785,22 +6785,22 @@ Invoke a running compute gateway using the shared fixtures
 
 ## `iroha app soracloud`
 
-Soracloud deployment/control-plane simulation helpers
+Soracloud deployment/control-plane helpers
 
 **Usage:** `iroha app soracloud <COMMAND>`
 
 ###### **Subcommands:**
 
-* `init` — Scaffold baseline container/service manifests and initialize registry state
+* `init` — Scaffold baseline container/service manifests
 * `deploy` — Validate manifests and register a new service deployment
-* `status` — Show current registry state (all services or one service)
+* `status` — Show authoritative Soracloud service state (all services or one service)
 * `upgrade` — Validate manifests and upgrade an existing deployed service
 * `rollback` — Roll back a deployed service to a previous (or specified) version
 * `rollout` — Advance or fail a rollout step using health-gated canary controls
-* `agent-deploy` — Register a persistent AI apartment manifest into local scheduler state
-* `agent-lease-renew` — Renew an apartment lease in local scheduler state
-* `agent-restart` — Request deterministic apartment restart in local scheduler state
-* `agent-status` — Show local apartment scheduler status
+* `agent-deploy` — Register a persistent AI apartment manifest in the live control plane
+* `agent-lease-renew` — Renew an apartment lease in the live control plane
+* `agent-restart` — Request deterministic apartment restart in the live control plane
+* `agent-status` — Show authoritative apartment runtime status
 * `agent-wallet-spend` — Submit an apartment wallet spend request under policy guardrails
 * `agent-wallet-approve` — Approve a pending apartment wallet spend request
 * `agent-policy-revoke` — Revoke an apartment policy capability
@@ -6825,13 +6825,13 @@ Soracloud deployment/control-plane simulation helpers
 
 ## `iroha app soracloud init`
 
-Scaffold baseline container/service manifests and initialize registry state
+Scaffold baseline container/service manifests
 
 **Usage:** `iroha app soracloud init [OPTIONS]`
 
 ###### **Options:**
 
-* `--output-dir <DIR>` — Directory where manifests and registry state will be created
+* `--output-dir <DIR>` — Directory where manifests and template artifacts will be created
 
   Default value: `.soracloud`
 * `--service-name <NAME>` — Logical service name used in the scaffolded service manifest
@@ -6872,10 +6872,7 @@ Validate manifests and register a new service deployment
 * `--service <PATH>` — Path to a `SoraServiceManifestV1` JSON document
 
   Default value: `fixtures/soracloud/sora_service_manifest_v1.json`
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
-* `--torii-url <URL>` — Optional Torii base URL to execute deploy against live control-plane APIs
+* `--torii-url <URL>` — Torii base URL to execute deploy against authoritative control-plane APIs
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
 
@@ -6885,17 +6882,14 @@ Validate manifests and register a new service deployment
 
 ## `iroha app soracloud status`
 
-Show current registry state (all services or one service)
+Show authoritative Soracloud service state (all services or one service)
 
 **Usage:** `iroha app soracloud status [OPTIONS]`
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--service-name <NAME>` — Optional service name filter
-* `--torii-url <URL>` — Optional Torii base URL (for example `http://127.0.0.1:8080/`) to query `/v1/soracloud/status` from a live control plane
+* `--torii-url <URL>` — Torii base URL (for example `http://127.0.0.1:8080/`) to query `/v1/soracloud/status` from the authoritative control plane
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying Torii
 * `--timeout-secs <SECS>` — HTTP timeout for Torii status requests
 
@@ -6917,10 +6911,7 @@ Validate manifests and upgrade an existing deployed service
 * `--service <PATH>` — Path to a `SoraServiceManifestV1` JSON document
 
   Default value: `fixtures/soracloud/sora_service_manifest_v1.json`
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
-* `--torii-url <URL>` — Optional Torii base URL to execute upgrade against live control-plane APIs
+* `--torii-url <URL>` — Torii base URL to execute upgrade against authoritative control-plane APIs
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
 
@@ -6936,12 +6927,9 @@ Roll back a deployed service to a previous (or specified) version
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--service-name <NAME>` — Service name to roll back
 * `--target-version <VERSION>` — Optional target version. When omitted, rolls back to the previous version
-* `--torii-url <URL>` — Optional Torii base URL to execute rollback against live control-plane APIs
+* `--torii-url <URL>` — Torii base URL to execute rollback against authoritative control-plane APIs
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
 
@@ -6957,9 +6945,6 @@ Advance or fail a rollout step using health-gated canary controls
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--service-name <NAME>` — Service name with an active rollout
 * `--rollout-handle <HANDLE>` — Rollout handle emitted by `upgrade` output (`rollout_handle`)
 * `--health <HEALTH>` — Health signal for this rollout step
@@ -6970,7 +6955,7 @@ Advance or fail a rollout step using health-gated canary controls
 
 * `--promote-to-percent <PERCENT>` — Optional target traffic percentage for healthy promotions
 * `--governance-tx-hash <HASH>` — Governance transaction hash linked to this rollout action
-* `--torii-url <URL>` — Optional Torii base URL to execute rollout against live control-plane APIs
+* `--torii-url <URL>` — Torii base URL to execute rollout against authoritative control-plane APIs
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
 
@@ -6980,7 +6965,7 @@ Advance or fail a rollout step using health-gated canary controls
 
 ## `iroha app soracloud agent-deploy`
 
-Register a persistent AI apartment manifest into local scheduler state
+Register a persistent AI apartment manifest in the live control plane
 
 **Usage:** `iroha app soracloud agent-deploy [OPTIONS]`
 
@@ -6989,16 +6974,13 @@ Register a persistent AI apartment manifest into local scheduler state
 * `--manifest <PATH>` — Path to an `AgentApartmentManifestV1` JSON document
 
   Default value: `fixtures/soracloud/agent_apartment_manifest_v1.json`
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--lease-ticks <TICKS>` — Lease length, measured in deterministic control-plane sequence ticks
 
   Default value: `120`
 * `--autonomy-budget-units <UNITS>` — Initial autonomy execution budget units
 
   Default value: `10000`
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/deploy` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/deploy`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7008,20 +6990,17 @@ Register a persistent AI apartment manifest into local scheduler state
 
 ## `iroha app soracloud agent-lease-renew`
 
-Renew an apartment lease in local scheduler state
+Renew an apartment lease in the live control plane
 
 **Usage:** `iroha app soracloud agent-lease-renew [OPTIONS] --apartment-name <NAME>`
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name to renew
 * `--lease-ticks <TICKS>` — Lease extension ticks
 
   Default value: `120`
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/lease/renew` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/lease/renew`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7031,18 +7010,15 @@ Renew an apartment lease in local scheduler state
 
 ## `iroha app soracloud agent-restart`
 
-Request deterministic apartment restart in local scheduler state
+Request deterministic apartment restart in the live control plane
 
 **Usage:** `iroha app soracloud agent-restart [OPTIONS] --apartment-name <NAME> --reason <TEXT>`
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name to restart
 * `--reason <TEXT>` — Human-readable reason captured in scheduler events
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/restart` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/restart`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7052,17 +7028,14 @@ Request deterministic apartment restart in local scheduler state
 
 ## `iroha app soracloud agent-status`
 
-Show local apartment scheduler status
+Show authoritative apartment runtime status
 
 **Usage:** `iroha app soracloud agent-status [OPTIONS]`
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Optional apartment name filter
-* `--torii-url <URL>` — Optional Torii base URL; when provided, queries live `agent/status` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/status`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane status query
 
@@ -7078,13 +7051,10 @@ Submit an apartment wallet spend request under policy guardrails
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name issuing the spend request
 * `--asset-definition <ASSET>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
 * `--amount-nanos <NANOS>` — Spend amount in nanos
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/wallet/spend` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/wallet/spend`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7100,12 +7070,9 @@ Approve a pending apartment wallet spend request
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name owning the request
 * `--request-id <REQUEST>` — Wallet request identifier emitted by `agent-wallet-spend`
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/wallet/approve` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/wallet/approve`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7121,13 +7088,10 @@ Revoke an apartment policy capability
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name whose policy should be updated
 * `--capability <CAPABILITY>` — Capability identifier to revoke (for example `wallet.sign`)
 * `--reason <TEXT>` — Optional reason included in audit events
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/policy/revoke` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/policy/revoke`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7143,16 +7107,13 @@ Send a deterministic mailbox message between apartments
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--from-apartment <NAME>` — Sender apartment name
 * `--to-apartment <NAME>` — Recipient apartment name
 * `--channel <CHANNEL>` — Logical mailbox channel
 
   Default value: `default`
 * `--payload <TEXT>` — Message payload (UTF-8 text)
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/message/send` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/message/send`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7168,12 +7129,9 @@ Acknowledge (consume) a mailbox message from an apartment queue
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name consuming the message
 * `--message-id <MESSAGE>` — Message identifier emitted by `agent-message-send`
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/message/ack` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/message/ack`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7189,11 +7147,8 @@ Inspect mailbox queue state for an apartment
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name to inspect
-* `--torii-url <URL>` — Optional Torii base URL; when provided, queries live `agent/mailbox/status` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/mailbox/status`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane status query
 
@@ -7209,13 +7164,10 @@ Add an artifact hash (and optional provenance hash) to autonomy allowlist
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name whose allowlist should be updated
 * `--artifact-hash <HASH>` — Artifact hash identifier
 * `--provenance-hash <HASH>` — Optional provenance hash required for this artifact
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/autonomy/allow` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/autonomy/allow`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7231,15 +7183,12 @@ Approve an autonomous run under allowlist/provenance/budget guardrails
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name requesting autonomous execution
 * `--artifact-hash <HASH>` — Artifact hash identifier
 * `--provenance-hash <HASH>` — Optional provenance hash for this run request
 * `--budget-units <UNITS>` — Budget units requested for this run
 * `--run-label <LABEL>` — Human-readable run label
-* `--torii-url <URL>` — Optional Torii base URL; when provided, calls live `agent/autonomy/run` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/autonomy/run`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
 
@@ -7255,11 +7204,8 @@ Show autonomous-run policy state for an apartment
 
 ###### **Options:**
 
-* `--registry <PATH>` — Registry state JSON path
-
-  Default value: `.soracloud/registry.json`
 * `--apartment-name <NAME>` — Apartment name to inspect
-* `--torii-url <URL>` — Optional Torii base URL; when provided, queries live `agent/autonomy/status` instead of local registry simulation
+* `--torii-url <URL>` — Torii base URL for authoritative `agent/autonomy/status`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying Torii
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
 
@@ -9806,7 +9752,7 @@ Convert account addresses between supported textual encodings
 
 ###### **Arguments:**
 
-* `<ADDRESS>` — Address literal to parse (canonical I105 encoded)
+* `<ADDRESS>` — Address literal to parse (canonical I105 or public key)
 
 ###### **Options:**
 

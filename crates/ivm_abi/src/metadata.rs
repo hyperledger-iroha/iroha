@@ -162,7 +162,9 @@ impl ProgramMetadata {
         let max_cycles = u64::from_le_bytes(max_cycles_bytes);
 
         // Validate header fields according to the current implementation policy.
-        // - Accept only version 1.1 headers.
+        // - Accept generic version 1.0 and 1.1 headers.
+        // - Self-describing contract artifacts remain a 1.1-only concept and are
+        //   validated by higher-level artifact verification.
         // - Mode must not contain unknown bits (only ZK, VECTOR, HTM).
         // - `vector_length` is advisory and may be set regardless of the VECTOR bit.
         // - ABI version is carried as-is; admission enforces allowed values.
@@ -170,7 +172,7 @@ impl ProgramMetadata {
         if version_major != 1 {
             return Err(VMError::InvalidMetadata);
         }
-        if version_minor != 1 {
+        if !matches!(version_minor, 0 | 1) {
             return Err(VMError::InvalidMetadata);
         }
         if mode & !KNOWN_MODE_BITS != 0 {

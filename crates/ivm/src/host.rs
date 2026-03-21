@@ -407,13 +407,13 @@ impl DefaultHost {
         let limit = vm.pc() as usize;
         let prefix = vm.memory.load_region(0, limit as u64).ok()?;
         let mut literal_start = 0usize;
-        if vm.metadata().version_minor == 1 {
-            if limit >= 8 && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC {
-                let contract_payload_len =
-                    u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
-                let contract_section_len = 8usize.checked_add(contract_payload_len)?;
-                literal_start = contract_section_len;
-            }
+        if vm.metadata().version_minor == 1
+            && limit >= 8
+            && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC
+        {
+            let contract_payload_len = u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
+            let contract_section_len = 8usize.checked_add(contract_payload_len)?;
+            literal_start = contract_section_len;
         }
         if literal_start + 16 > limit
             || prefix[literal_start..literal_start + 4] != LITERAL_SECTION_MAGIC

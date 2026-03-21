@@ -3,15 +3,15 @@
 //! This module provides a deterministic control-plane surface for
 //! `deploy`/`upgrade`/`rollback` workflows plus SCR host-admission snapshots.
 //! Requests must carry signed payloads so admission can verify manifest
-//! provenance before mutating registry state.
+//! provenance before mutating authoritative control-plane state.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
     num::NonZeroU64,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
+#[cfg(test)]
+use std::{fs, path::PathBuf};
 
 use axum::{
     extract::State,
@@ -20,7 +20,7 @@ use axum::{
 };
 use iroha_core::soracloud_runtime::SoracloudLocalReadKind;
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     Encode,
     account::AccountId,
@@ -34,15 +34,17 @@ use iroha_data_model::{
         CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
         CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
         FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobSpecV1, FheParamSetV1,
-        SoraAgentApartmentActionV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
-        SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraModelArtifactRecordV1,
-        SoraModelRegistryV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
+        SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
+        SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
+        SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
+        SoraDeploymentBundleV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelRegistryV1, SoraModelWeightActionV1,
+        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
         SoraRolloutStageV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
         SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraStateBindingV1,
         SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
-        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
-        encode_agent_artifact_allow_provenance_payload,
+        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraTrainingJobStatusV1, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -58,18 +60,16 @@ use iroha_data_model::{
         encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     },
-    transaction::{
-        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
-        signed::TransactionBuilder,
-    },
+    transaction::{SignedTransaction, signed::TransactionBuilder},
 };
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+#[cfg(test)]
 use tokio::sync::RwLock;
 
 use crate::{JsonBody, NoritoJson, NoritoQuery, SharedAppState};
 
-const REGISTRY_SCHEMA_VERSION: u16 = 1;
+const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_AUDIT_LIMIT: usize = 20;
 const MAX_AUDIT_LIMIT: usize = 500;
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 1_000;
@@ -78,7 +78,6 @@ const AGENT_MAILBOX_MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
 const AGENT_AUTONOMY_MAX_LABEL_BYTES: usize = 128;
 const AGENT_AUTONOMY_RECENT_RUN_LIMIT: usize = 20;
-const REGISTRY_PERSISTENCE_VERSION_V1: u8 = 1;
 const CIPHERTEXT_QUERY_PROOF_SCHEME_V1: &str = "soracloud.audit_anchor.v1";
 const HEALTH_COMPLIANCE_REPORT_VERSION_V1: u16 = 1;
 const DEFAULT_HEALTH_COMPLIANCE_LIMIT: usize = 50;
@@ -99,6 +98,8 @@ const SCR_HOST_MAX_OPEN_FILES: u32 = 131_072;
 const SCR_HOST_MAX_TASKS: u16 = 16_384;
 const SCR_HOST_MAX_START_GRACE_SECS: u32 = 600;
 const SCR_HOST_MAX_STOP_GRACE_SECS: u32 = 600;
+const SORACLOUD_MUTATION_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
+const SORACLOUD_MUTATION_CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(
     Clone,
@@ -953,14 +954,6 @@ pub(crate) struct ModelArtifactStatusEntry {
 }
 
 #[derive(Clone, Debug, Default, JsonDeserialize)]
-pub(crate) struct RegistryStatusQuery {
-    #[norito(default)]
-    pub service_name: Option<String>,
-    #[norito(default)]
-    pub audit_limit: Option<u32>,
-}
-
-#[derive(Clone, Debug, Default, JsonDeserialize)]
 pub(crate) struct HealthComplianceReportQuery {
     #[norito(default)]
     pub service_name: Option<String>,
@@ -1030,14 +1023,14 @@ pub(crate) struct MutationResponse {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-pub(crate) struct RegistrySnapshot {
+pub(crate) struct ControlPlaneSnapshot {
     pub schema_version: u16,
     pub service_count: u32,
     pub audit_event_count: u32,
     #[norito(default)]
-    pub services: Vec<ServiceStatusSnapshot>,
+    pub services: Vec<ControlPlaneServiceSnapshot>,
     #[norito(default)]
-    pub recent_audit_events: Vec<RegistryAuditEvent>,
+    pub recent_audit_events: Vec<ControlPlaneAuditEvent>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1121,73 +1114,18 @@ pub(crate) struct HealthPolicyDiffEntry {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
-pub(crate) struct ServiceStatusSnapshot {
+pub(crate) struct ControlPlaneServiceSnapshot {
     pub service_name: String,
     pub current_version: String,
     pub revision_count: u32,
     #[norito(default)]
-    pub latest_revision: Option<RegistryServiceRevision>,
+    pub latest_revision: Option<ControlPlaneServiceRevision>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub active_rollout: Option<RolloutRuntimeState>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_rollout: Option<RolloutRuntimeState>,
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct RegistryState {
-    schema_version: u16,
-    next_sequence: u64,
-    #[norito(default)]
-    services: BTreeMap<String, RegistryServiceEntry>,
-    #[norito(default)]
-    audit_log: Vec<RegistryAuditEvent>,
-    #[norito(default)]
-    apartments: BTreeMap<String, AgentApartmentRuntimeState>,
-    #[norito(default)]
-    apartment_audit_log: Vec<AgentApartmentAuditEvent>,
-    #[norito(default)]
-    training_audit_log: Vec<TrainingJobAuditEvent>,
-    #[norito(default)]
-    model_weight_audit_log: Vec<ModelWeightAuditEvent>,
-    #[norito(default)]
-    model_artifact_audit_log: Vec<ModelArtifactAuditEvent>,
-}
-
-impl Default for RegistryState {
-    fn default() -> Self {
-        Self {
-            schema_version: REGISTRY_SCHEMA_VERSION,
-            next_sequence: 1,
-            services: BTreeMap::new(),
-            audit_log: Vec::new(),
-            apartments: BTreeMap::new(),
-            apartment_audit_log: Vec::new(),
-            training_audit_log: Vec::new(),
-            model_weight_audit_log: Vec::new(),
-            model_artifact_audit_log: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-struct RegistryServiceEntry {
-    current_version: String,
-    #[norito(default)]
-    revisions: Vec<RegistryServiceRevision>,
-    #[norito(default)]
-    binding_states: BTreeMap<String, BindingRuntimeState>,
-    #[norito(default)]
-    training_jobs: BTreeMap<String, TrainingJobRuntimeState>,
-    #[norito(default)]
-    model_weights: BTreeMap<String, ModelWeightRegistryState>,
-    #[norito(default)]
-    model_artifacts: BTreeMap<String, ModelArtifactState>,
-    #[norito(default)]
-    active_rollout: Option<RolloutRuntimeState>,
-    #[norito(default)]
-    last_rollout: Option<RolloutRuntimeState>,
 }
 
 #[derive(Clone, Debug)]
@@ -1209,7 +1147,7 @@ struct ScrHostAdmission {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct RegistryServiceRevision {
+pub(crate) struct ControlPlaneServiceRevision {
     pub sequence: u64,
     pub action: SoracloudAction,
     pub service_version: String,
@@ -1263,7 +1201,7 @@ pub(crate) struct RegistryServiceRevision {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
-pub(crate) struct RegistryAuditEvent {
+pub(crate) struct ControlPlaneAuditEvent {
     pub sequence: u64,
     pub action: SoracloudAction,
     pub service_name: String,
@@ -1407,6 +1345,7 @@ struct ModelWeightVersionState {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[cfg(test)]
 struct ModelWeightRegistryState {
     model_name: String,
     #[norito(default)]
@@ -1925,4071 +1864,6 @@ pub(crate) struct AgentAutonomyRunRecord {
     pub approved_sequence: u64,
 }
 
-#[derive(Clone, Debug, NoritoDeserialize, NoritoSerialize)]
-struct RegistryPersistenceSnapshot {
-    version: u8,
-    state: RegistryState,
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for RegistryPersistenceSnapshot {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::Error> {
-        norito::core::decode_field_canonical::<RegistryPersistenceSnapshot>(bytes)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct RegistryPersistence {
-    path: PathBuf,
-    temp_path: PathBuf,
-}
-
-impl RegistryPersistence {
-    fn new(path: PathBuf) -> Self {
-        let temp_path = path.with_added_extension("tmp");
-        Self { path, temp_path }
-    }
-
-    fn load(&self) -> Result<RegistryState, SoracloudError> {
-        let candidate = if self.path.exists() {
-            Some(self.path.clone())
-        } else if self.temp_path.exists() {
-            Some(self.temp_path.clone())
-        } else {
-            None
-        };
-
-        let Some(path) = candidate else {
-            return Ok(RegistryState::default());
-        };
-        let bytes = fs::read(&path).map_err(|err| {
-            SoracloudError::internal(format!(
-                "failed to read Soracloud registry snapshot `{}`: {err}",
-                path.display()
-            ))
-        })?;
-        if bytes.is_empty() {
-            return Ok(RegistryState::default());
-        }
-
-        let snapshot: RegistryPersistenceSnapshot =
-            norito::decode_from_bytes(&bytes).map_err(|err| {
-                SoracloudError::internal(format!(
-                    "failed to decode Soracloud registry snapshot `{}`: {err}",
-                    path.display()
-                ))
-            })?;
-        if snapshot.version != REGISTRY_PERSISTENCE_VERSION_V1 {
-            return Err(SoracloudError::internal(format!(
-                "unsupported Soracloud registry snapshot version {} (expected {REGISTRY_PERSISTENCE_VERSION_V1})",
-                snapshot.version
-            )));
-        }
-        let mut state = snapshot.state;
-        ensure_registry_schema(&state)?;
-        normalize_registry_runtime_defaults(&mut state);
-        Ok(state)
-    }
-
-    fn store(&self, state: &RegistryState) -> Result<(), SoracloudError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                SoracloudError::internal(format!(
-                    "failed to prepare Soracloud registry persistence directory `{}`: {err}",
-                    parent.display()
-                ))
-            })?;
-        }
-
-        let snapshot = RegistryPersistenceSnapshot {
-            version: REGISTRY_PERSISTENCE_VERSION_V1,
-            state: state.clone(),
-        };
-        let bytes = norito::to_bytes(&snapshot).map_err(|err| {
-            SoracloudError::internal(format!(
-                "failed to encode Soracloud registry persistence snapshot: {err}"
-            ))
-        })?;
-        fs::write(&self.temp_path, &bytes).map_err(|err| {
-            SoracloudError::internal(format!(
-                "failed to write Soracloud registry temp snapshot `{}`: {err}",
-                self.temp_path.display()
-            ))
-        })?;
-        fs::rename(&self.temp_path, &self.path).map_err(|err| {
-            SoracloudError::internal(format!(
-                "failed to persist Soracloud registry snapshot `{}`: {err}",
-                self.path.display()
-            ))
-        })?;
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Registry {
-    state: RwLock<RegistryState>,
-    persistence: Option<RegistryPersistence>,
-}
-
-impl Default for Registry {
-    fn default() -> Self {
-        Self::in_memory()
-    }
-}
-
-impl Registry {
-    pub(crate) fn in_memory() -> Self {
-        Self {
-            state: RwLock::new(RegistryState::default()),
-            persistence: None,
-        }
-    }
-
-    pub(crate) fn with_default_persistence() -> Self {
-        Self::with_persistence(Self::default_persistence_path())
-    }
-
-    pub(crate) fn with_persistence(path: PathBuf) -> Self {
-        let persistence = RegistryPersistence::new(path.clone());
-        let state = match persistence.load() {
-            Ok(state) => state,
-            Err(err) => {
-                iroha_logger::warn!(
-                    path = %path.display(),
-                    ?err,
-                    "failed to restore Soracloud registry snapshot; using empty in-memory registry"
-                );
-                RegistryState::default()
-            }
-        };
-
-        Self {
-            state: RwLock::new(state),
-            persistence: Some(persistence),
-        }
-    }
-
-    fn default_persistence_path() -> PathBuf {
-        crate::data_dir::base_dir()
-            .join("soracloud")
-            .join("registry_state.to")
-    }
-
-    fn persist_state_or_rollback(
-        &self,
-        state: &mut RegistryState,
-        previous_state: RegistryState,
-    ) -> Result<(), SoracloudError> {
-        let Some(persistence) = &self.persistence else {
-            return Ok(());
-        };
-        if let Err(err) = persistence.store(state) {
-            *state = previous_state;
-            return Err(err);
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn snapshot(
-        &self,
-        service_name: Option<&str>,
-        audit_limit: usize,
-    ) -> RegistrySnapshot {
-        let state = self.state.read().await;
-        let mut services = Vec::new();
-        for (name, entry) in &state.services {
-            if service_name.is_some_and(|filter| filter != name) {
-                continue;
-            }
-            services.push(ServiceStatusSnapshot {
-                service_name: name.clone(),
-                current_version: entry.current_version.clone(),
-                revision_count: u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX),
-                latest_revision: entry.revisions.last().cloned(),
-                active_rollout: entry.active_rollout.clone(),
-                last_rollout: entry.last_rollout.clone(),
-            });
-        }
-
-        let limit = audit_limit.max(1).min(MAX_AUDIT_LIMIT);
-        let recent_audit_events = state
-            .audit_log
-            .iter()
-            .rev()
-            .filter(|event| service_name.is_none_or(|filter| filter == event.service_name.as_str()))
-            .take(limit)
-            .cloned()
-            .collect::<Vec<_>>();
-
-        RegistrySnapshot {
-            schema_version: state.schema_version,
-            service_count: u32::try_from(services.len()).unwrap_or(u32::MAX),
-            audit_event_count: u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX),
-            services,
-            recent_audit_events,
-        }
-    }
-
-    pub(crate) async fn health_compliance_report(
-        &self,
-        service_name: Option<&str>,
-        jurisdiction_tag: Option<&str>,
-        limit: usize,
-    ) -> Result<HealthComplianceReportResponse, SoracloudError> {
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-
-        let limit = limit.max(1).min(MAX_HEALTH_COMPLIANCE_LIMIT);
-        let generated_at_sequence = state.next_sequence.saturating_sub(1);
-
-        let access_events = state
-            .audit_log
-            .iter()
-            .filter(|event| event.action == SoracloudAction::DecryptionRequest)
-            .filter(|event| service_name.is_none_or(|filter| filter == event.service_name.as_str()))
-            .filter(|event| {
-                jurisdiction_tag
-                    .is_none_or(|filter| event.jurisdiction_tag.as_deref() == Some(filter))
-            })
-            .collect::<Vec<_>>();
-
-        let total_access_events = u32::try_from(access_events.len()).unwrap_or(u32::MAX);
-        let break_glass_events = u32::try_from(
-            access_events
-                .iter()
-                .filter(|event| event.break_glass.unwrap_or(false))
-                .count(),
-        )
-        .unwrap_or(u32::MAX);
-        let non_break_glass_events = total_access_events.saturating_sub(break_glass_events);
-        let consent_evidence_present_events = u32::try_from(
-            access_events
-                .iter()
-                .filter(|event| event.consent_evidence_hash.is_some())
-                .count(),
-        )
-        .unwrap_or(u32::MAX);
-        let consent_evidence_coverage_bps = if total_access_events == 0 {
-            0
-        } else {
-            let numerator = u128::from(consent_evidence_present_events).saturating_mul(10_000);
-            let denominator = u128::from(total_access_events);
-            u16::try_from(numerator / denominator).unwrap_or(u16::MAX)
-        };
-
-        let recent_access_events = access_events
-            .iter()
-            .rev()
-            .take(limit)
-            .map(|event| HealthAccessAuditEntry {
-                sequence: event.sequence,
-                service_name: event.service_name.clone(),
-                binding_name: event.binding_name.clone().unwrap_or_default(),
-                state_key: event.state_key.clone().unwrap_or_default(),
-                policy_name: event.policy_name.clone().unwrap_or_default(),
-                jurisdiction_tag: event.jurisdiction_tag.clone().unwrap_or_default(),
-                consent_evidence_hash: event.consent_evidence_hash,
-                break_glass: event.break_glass.unwrap_or(false),
-                break_glass_reason: event.break_glass_reason.clone(),
-                governance_tx_hash: event.governance_tx_hash.unwrap_or_else(|| {
-                    Hash::new(Encode::encode(&(
-                        "soracloud.health_compliance.synthetic_governance_hash.v1",
-                        event.sequence,
-                        event.service_name.as_str(),
-                    )))
-                }),
-                signed_by: event.signed_by.clone(),
-            })
-            .collect::<Vec<_>>();
-
-        let mut jurisdiction_stats_acc: BTreeMap<String, (u32, u32)> = BTreeMap::new();
-        for event in &access_events {
-            let tag = event.jurisdiction_tag.clone().unwrap_or_default();
-            let entry = jurisdiction_stats_acc.entry(tag).or_insert((0, 0));
-            entry.0 = entry.0.saturating_add(1);
-            if event.break_glass.unwrap_or(false) {
-                entry.1 = entry.1.saturating_add(1);
-            }
-        }
-        let jurisdiction_stats = jurisdiction_stats_acc
-            .into_iter()
-            .map(
-                |(jurisdiction_tag, (access_event_count, break_glass_event_count))| {
-                    HealthJurisdictionStat {
-                        jurisdiction_tag,
-                        access_event_count,
-                        break_glass_event_count,
-                    }
-                },
-            )
-            .collect::<Vec<_>>();
-
-        let mut policy_history_acc: BTreeMap<(String, String, String), HealthPolicyDiffEntry> =
-            BTreeMap::new();
-        for event in &access_events {
-            let Some(policy_name) = event.policy_name.clone() else {
-                continue;
-            };
-            let Some(policy_snapshot_hash) = event.policy_snapshot_hash else {
-                continue;
-            };
-            let jurisdiction = event.jurisdiction_tag.clone().unwrap_or_default();
-            let key = (
-                policy_name.clone(),
-                jurisdiction.clone(),
-                policy_snapshot_hash.to_string(),
-            );
-            let entry = policy_history_acc
-                .entry(key)
-                .or_insert(HealthPolicyDiffEntry {
-                    policy_name,
-                    jurisdiction_tag: jurisdiction,
-                    policy_snapshot_hash,
-                    first_seen_sequence: event.sequence,
-                    last_seen_sequence: event.sequence,
-                    event_count: 0,
-                });
-            entry.first_seen_sequence = entry.first_seen_sequence.min(event.sequence);
-            entry.last_seen_sequence = entry.last_seen_sequence.max(event.sequence);
-            entry.event_count = entry.event_count.saturating_add(1);
-        }
-        let mut policy_diff_history = policy_history_acc.into_values().collect::<Vec<_>>();
-        policy_diff_history.sort_by(|left, right| {
-            right
-                .last_seen_sequence
-                .cmp(&left.last_seen_sequence)
-                .then_with(|| left.policy_name.cmp(&right.policy_name))
-                .then_with(|| left.jurisdiction_tag.cmp(&right.jurisdiction_tag))
-        });
-        if policy_diff_history.len() > limit {
-            policy_diff_history.truncate(limit);
-        }
-
-        let mut data_flow_services = BTreeSet::new();
-        if let Some(service_name) = service_name {
-            data_flow_services.insert(service_name.to_string());
-        } else {
-            for event in &access_events {
-                data_flow_services.insert(event.service_name.clone());
-            }
-        }
-        let mut data_flow_attestations = Vec::new();
-        for service_name in data_flow_services {
-            let Some(entry) = state.services.get(&service_name) else {
-                continue;
-            };
-            let Some(revision) = entry.revisions.last() else {
-                continue;
-            };
-            for binding in &revision.state_bindings {
-                if binding.encryption == SoraStateEncryptionV1::Plaintext {
-                    continue;
-                }
-                data_flow_attestations.push(HealthDataFlowAttestation {
-                    service_name: service_name.clone(),
-                    current_version: entry.current_version.clone(),
-                    binding_name: binding.binding_name.to_string(),
-                    key_prefix: binding.key_prefix.clone(),
-                    encryption: binding.encryption,
-                    mutability: binding.mutability,
-                });
-            }
-        }
-
-        Ok(HealthComplianceReportResponse {
-            schema_version: HEALTH_COMPLIANCE_REPORT_VERSION_V1,
-            service_name: service_name.map(ToOwned::to_owned),
-            jurisdiction_tag: jurisdiction_tag.map(ToOwned::to_owned),
-            generated_at_sequence,
-            total_access_events,
-            break_glass_events,
-            non_break_glass_events,
-            consent_evidence_present_events,
-            consent_evidence_coverage_bps,
-            recent_access_events,
-            jurisdiction_stats,
-            data_flow_attestations,
-            policy_diff_history,
-        })
-    }
-
-    pub(crate) async fn apply_deploy(
-        &self,
-        request: SignedBundleRequest,
-    ) -> Result<MutationResponse, SoracloudError> {
-        self.apply_bundle_mutation(MutationMode::Deploy, request)
-            .await
-    }
-
-    pub(crate) async fn apply_upgrade(
-        &self,
-        request: SignedBundleRequest,
-    ) -> Result<MutationResponse, SoracloudError> {
-        self.apply_bundle_mutation(MutationMode::Upgrade, request)
-            .await
-    }
-
-    pub(crate) async fn apply_rollback(
-        &self,
-        request: SignedRollbackRequest,
-    ) -> Result<MutationResponse, SoracloudError> {
-        verify_rollback_signature(&request)?;
-
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-
-        let sequence = state.next_sequence;
-        let signer = request.provenance.signer.to_string();
-        let target_version = request.payload.target_version.clone();
-        let (previous_version, target, revision_count) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let previous_version = Some(entry.current_version.clone());
-            let target = if let Some(target_version) = target_version.as_deref() {
-                entry
-                    .revisions
-                    .iter()
-                    .rev()
-                    .find(|revision| revision.service_version == target_version)
-                    .cloned()
-                    .ok_or_else(|| {
-                        SoracloudError::not_found(format!(
-                            "service `{service_name}` has no deployed revision for version `{target_version}`"
-                        ))
-                    })?
-            } else {
-                entry
-                    .revisions
-                    .iter()
-                    .rev()
-                    .find(|revision| revision.service_version != entry.current_version)
-                    .cloned()
-                    .ok_or_else(|| {
-                        SoracloudError::conflict(format!(
-                            "service `{service_name}` has no previous revision to roll back to"
-                        ))
-                    })?
-            };
-
-            let process_generation = entry
-                .revisions
-                .last()
-                .map_or(1, |revision| revision.process_generation.saturating_add(1));
-            let revision = RegistryServiceRevision {
-                sequence,
-                action: SoracloudAction::Rollback,
-                service_version: target.service_version.clone(),
-                service_manifest_hash: target.service_manifest_hash,
-                container_manifest_hash: target.container_manifest_hash,
-                replicas: target.replicas,
-                route_host: target.route_host.clone(),
-                route_path_prefix: target.route_path_prefix.clone(),
-                state_binding_count: target.state_binding_count,
-                state_bindings: target.state_bindings.clone(),
-                allow_model_training: target.allow_model_training,
-                runtime: target.runtime,
-                allow_wallet_signing: target.allow_wallet_signing,
-                allow_state_writes: target.allow_state_writes,
-                network: target.network.clone(),
-                cpu_millis: target.cpu_millis,
-                memory_bytes: target.memory_bytes,
-                ephemeral_storage_bytes: target.ephemeral_storage_bytes,
-                max_open_files: target.max_open_files,
-                max_tasks: target.max_tasks,
-                start_grace_secs: target.start_grace_secs,
-                stop_grace_secs: target.stop_grace_secs,
-                healthcheck_path: target.healthcheck_path.clone(),
-                sandbox_profile_hash: target.sandbox_profile_hash,
-                process_generation,
-                process_started_sequence: sequence,
-                signed_by: signer.clone(),
-            };
-
-            entry.current_version = target.service_version.clone();
-            sync_binding_states(entry, &target.state_bindings);
-            entry.revisions.push(revision);
-            entry.active_rollout = None;
-            entry.last_rollout = None;
-            let revision_count = u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX);
-            (previous_version, target, revision_count)
-        };
-
-        state.audit_log.push(RegistryAuditEvent {
-            sequence,
-            action: SoracloudAction::Rollback,
-            service_name: service_name.clone(),
-            from_version: previous_version.clone(),
-            to_version: target.service_version.clone(),
-            service_manifest_hash: target.service_manifest_hash,
-            container_manifest_hash: target.container_manifest_hash,
-            binding_name: None,
-            state_key: None,
-            governance_tx_hash: None,
-            rollout_handle: None,
-            policy_name: None,
-            policy_snapshot_hash: None,
-            jurisdiction_tag: None,
-            consent_evidence_hash: None,
-            break_glass: None,
-            break_glass_reason: None,
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(MutationResponse {
-            action: SoracloudAction::Rollback,
-            service_name,
-            previous_version,
-            current_version: target.service_version,
-            sequence,
-            service_manifest_hash: target.service_manifest_hash,
-            container_manifest_hash: target.container_manifest_hash,
-            revision_count,
-            audit_event_count,
-            signed_by: signer,
-            rollout_handle: None,
-            rollout_stage: None,
-            rollout_percent: None,
-        })
-    }
-
-    pub(crate) async fn apply_state_mutation(
-        &self,
-        request: SignedStateMutationRequest,
-    ) -> Result<StateMutationResponse, SoracloudError> {
-        verify_state_mutation_signature(&request)?;
-
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let binding_name: Name =
-            request.payload.binding_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid binding_name: {err}"))
-            })?;
-        if request.payload.key.trim().is_empty() {
-            return Err(SoracloudError::bad_request(
-                "state mutation key must not be empty",
-            ));
-        }
-
-        let service_name = service_name.to_string();
-        let binding_name = binding_name.to_string();
-        let signer = request.provenance.signer.to_string();
-        let operation = request.payload.operation;
-        let key = request.payload.key.clone();
-        let governance_tx_hash = request.payload.governance_tx_hash;
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-
-        let sequence = state.next_sequence;
-        let (
-            current_version,
-            service_manifest_hash,
-            container_manifest_hash,
-            binding_total_bytes,
-            binding_key_count,
-        ) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-
-            let binding = current_revision
-                .state_bindings
-                .iter()
-                .find(|binding| binding.binding_name.as_ref() == binding_name.as_str())
-                .cloned()
-                .ok_or_else(|| {
-                    SoracloudError::not_found(format!(
-                        "binding `{binding_name}` is not declared for service `{service_name}`"
-                    ))
-                })?;
-
-            if request.payload.encryption != binding.encryption {
-                return Err(SoracloudError::conflict(format!(
-                    "binding `{binding_name}` requires {:?} encryption",
-                    binding.encryption
-                )));
-            }
-            if !key.starts_with(&binding.key_prefix) {
-                return Err(SoracloudError::conflict(format!(
-                    "key `{key}` is outside binding prefix `{}`",
-                    binding.key_prefix
-                )));
-            }
-
-            let runtime_state = entry
-                .binding_states
-                .entry(binding_name.clone())
-                .or_insert_with(BindingRuntimeState::default);
-            match operation {
-                StateMutationOperation::Upsert => {
-                    if binding.mutability == SoraStateMutabilityV1::ReadOnly {
-                        return Err(SoracloudError::conflict(format!(
-                            "binding `{binding_name}` is read-only"
-                        )));
-                    }
-                    let value_size = request.payload.value_size_bytes.ok_or_else(|| {
-                        SoracloudError::bad_request(
-                            "value_size_bytes is required for upsert mutations",
-                        )
-                    })?;
-                    if value_size > binding.max_item_bytes.get() {
-                        return Err(SoracloudError::conflict(format!(
-                            "value_size_bytes {value_size} exceeds binding max_item_bytes {}",
-                            binding.max_item_bytes
-                        )));
-                    }
-
-                    let existing_size = runtime_state.key_sizes.get(&key).copied().unwrap_or(0);
-                    if binding.mutability == SoraStateMutabilityV1::AppendOnly && existing_size > 0
-                    {
-                        return Err(SoracloudError::conflict(format!(
-                            "binding `{binding_name}` is append-only; key `{key}` already exists"
-                        )));
-                    }
-                    let tentative_total = runtime_state
-                        .total_bytes
-                        .saturating_sub(existing_size)
-                        .saturating_add(value_size);
-                    if tentative_total > binding.max_total_bytes.get() {
-                        return Err(SoracloudError::conflict(format!(
-                            "binding `{binding_name}` max_total_bytes {} would be exceeded",
-                            binding.max_total_bytes
-                        )));
-                    }
-
-                    runtime_state.total_bytes = tentative_total;
-                    runtime_state.key_sizes.insert(key.clone(), value_size);
-                    if binding.encryption != SoraStateEncryptionV1::Plaintext {
-                        let commitment = derive_ciphertext_commitment_for_state_mutation(
-                            &service_name,
-                            &binding_name,
-                            &key,
-                            value_size,
-                            binding.encryption,
-                            governance_tx_hash,
-                        );
-                        runtime_state.ciphertext_records.insert(
-                            key.clone(),
-                            CiphertextRuntimeRecord {
-                                encryption: binding.encryption,
-                                payload_bytes: value_size,
-                                commitment,
-                                last_update_sequence: sequence,
-                                governance_tx_hash,
-                                source_action: SoracloudAction::StateMutation,
-                            },
-                        );
-                    }
-                }
-                StateMutationOperation::Delete => {
-                    if binding.mutability != SoraStateMutabilityV1::ReadWrite {
-                        return Err(SoracloudError::conflict(format!(
-                            "binding `{binding_name}` does not allow deletes"
-                        )));
-                    }
-                    if let Some(existing_size) = runtime_state.key_sizes.remove(&key) {
-                        runtime_state.total_bytes =
-                            runtime_state.total_bytes.saturating_sub(existing_size);
-                    }
-                    runtime_state.ciphertext_records.remove(&key);
-                }
-            }
-
-            (
-                entry.current_version.clone(),
-                current_revision.service_manifest_hash,
-                current_revision.container_manifest_hash,
-                runtime_state.total_bytes,
-                u32::try_from(runtime_state.key_sizes.len()).unwrap_or(u32::MAX),
-            )
-        };
-
-        state.audit_log.push(RegistryAuditEvent {
-            sequence,
-            action: SoracloudAction::StateMutation,
-            service_name: service_name.clone(),
-            from_version: None,
-            to_version: current_version.clone(),
-            service_manifest_hash,
-            container_manifest_hash,
-            binding_name: Some(binding_name.clone()),
-            state_key: Some(key.clone()),
-            governance_tx_hash: Some(governance_tx_hash),
-            rollout_handle: None,
-            policy_name: None,
-            policy_snapshot_hash: None,
-            jurisdiction_tag: None,
-            consent_evidence_hash: None,
-            break_glass: None,
-            break_glass_reason: None,
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(StateMutationResponse {
-            action: SoracloudAction::StateMutation,
-            service_name,
-            binding_name,
-            key,
-            operation,
-            sequence,
-            governance_tx_hash,
-            current_version,
-            binding_total_bytes,
-            binding_key_count,
-            audit_event_count,
-            signed_by: signer,
-        })
-    }
-
-    pub(crate) async fn apply_fhe_job_run(
-        &self,
-        request: SignedFheJobRunRequest,
-    ) -> Result<FheJobRunResponse, SoracloudError> {
-        verify_fhe_job_run_signature(&request)?;
-        request.payload.param_set.validate().map_err(|err| {
-            SoracloudError::bad_request(format!("fhe parameter set failed validation: {err}"))
-        })?;
-        request
-            .payload
-            .policy
-            .validate_for_param_set(&request.payload.param_set)
-            .map_err(|err| {
-                SoracloudError::bad_request(format!(
-                    "fhe execution policy failed validation: {err}"
-                ))
-            })?;
-        request
-            .payload
-            .job
-            .validate_for_execution(&request.payload.policy, &request.payload.param_set)
-            .map_err(|err| {
-                SoracloudError::bad_request(format!("fhe job failed validation: {err}"))
-            })?;
-
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let binding_name: Name =
-            request.payload.binding_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid binding_name: {err}"))
-            })?;
-
-        let service_name = service_name.to_string();
-        let binding_name = binding_name.to_string();
-        let signer = request.provenance.signer.to_string();
-        let governance_tx_hash = request.payload.governance_tx_hash;
-        let output_state_key = request.payload.job.output_state_key.clone();
-        let output_payload_bytes = request.payload.job.deterministic_output_payload_bytes();
-        let output_commitment = request.payload.job.deterministic_output_commitment();
-        let operation = request.payload.job.operation;
-        let job_id = request.payload.job.job_id.clone();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let (
-            current_version,
-            service_manifest_hash,
-            container_manifest_hash,
-            binding_total_bytes,
-            binding_key_count,
-        ) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            let binding = current_revision
-                .state_bindings
-                .iter()
-                .find(|binding| binding.binding_name.as_ref() == binding_name.as_str())
-                .cloned()
-                .ok_or_else(|| {
-                    SoracloudError::not_found(format!(
-                        "binding `{binding_name}` is not declared for service `{service_name}`"
-                    ))
-                })?;
-            if binding.encryption != SoraStateEncryptionV1::FheCiphertext {
-                return Err(SoracloudError::conflict(format!(
-                    "binding `{binding_name}` is not configured for FHE ciphertexts"
-                )));
-            }
-            if binding.mutability == SoraStateMutabilityV1::ReadOnly {
-                return Err(SoracloudError::conflict(format!(
-                    "binding `{binding_name}` is read-only"
-                )));
-            }
-            if !output_state_key.starts_with(&binding.key_prefix) {
-                return Err(SoracloudError::conflict(format!(
-                    "fhe output key `{output_state_key}` is outside binding prefix `{}`",
-                    binding.key_prefix
-                )));
-            }
-            if output_payload_bytes > binding.max_item_bytes.get() {
-                return Err(SoracloudError::conflict(format!(
-                    "fhe output size {output_payload_bytes} exceeds binding max_item_bytes {}",
-                    binding.max_item_bytes
-                )));
-            }
-
-            let runtime_state = entry
-                .binding_states
-                .entry(binding_name.clone())
-                .or_insert_with(BindingRuntimeState::default);
-            let existing_size = runtime_state
-                .key_sizes
-                .get(&output_state_key)
-                .copied()
-                .unwrap_or(0);
-            if binding.mutability == SoraStateMutabilityV1::AppendOnly && existing_size > 0 {
-                return Err(SoracloudError::conflict(format!(
-                    "binding `{binding_name}` is append-only; key `{output_state_key}` already exists"
-                )));
-            }
-            let tentative_total = runtime_state
-                .total_bytes
-                .saturating_sub(existing_size)
-                .saturating_add(output_payload_bytes);
-            if tentative_total > binding.max_total_bytes.get() {
-                return Err(SoracloudError::conflict(format!(
-                    "binding `{binding_name}` max_total_bytes {} would be exceeded",
-                    binding.max_total_bytes
-                )));
-            }
-            runtime_state.total_bytes = tentative_total;
-            runtime_state
-                .key_sizes
-                .insert(output_state_key.clone(), output_payload_bytes);
-            runtime_state.ciphertext_records.insert(
-                output_state_key.clone(),
-                CiphertextRuntimeRecord {
-                    encryption: SoraStateEncryptionV1::FheCiphertext,
-                    payload_bytes: output_payload_bytes,
-                    commitment: output_commitment,
-                    last_update_sequence: sequence,
-                    governance_tx_hash,
-                    source_action: SoracloudAction::FheJobRun,
-                },
-            );
-
-            (
-                entry.current_version.clone(),
-                current_revision.service_manifest_hash,
-                current_revision.container_manifest_hash,
-                runtime_state.total_bytes,
-                u32::try_from(runtime_state.key_sizes.len()).unwrap_or(u32::MAX),
-            )
-        };
-
-        state.audit_log.push(RegistryAuditEvent {
-            sequence,
-            action: SoracloudAction::FheJobRun,
-            service_name: service_name.clone(),
-            from_version: None,
-            to_version: current_version.clone(),
-            service_manifest_hash,
-            container_manifest_hash,
-            binding_name: Some(binding_name.clone()),
-            state_key: Some(output_state_key.clone()),
-            governance_tx_hash: Some(governance_tx_hash),
-            rollout_handle: None,
-            policy_name: None,
-            policy_snapshot_hash: None,
-            jurisdiction_tag: None,
-            consent_evidence_hash: None,
-            break_glass: None,
-            break_glass_reason: None,
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(FheJobRunResponse {
-            action: SoracloudAction::FheJobRun,
-            service_name,
-            binding_name,
-            job_id,
-            operation,
-            sequence,
-            governance_tx_hash,
-            output_state_key,
-            output_payload_bytes,
-            output_commitment,
-            current_version,
-            binding_total_bytes,
-            binding_key_count,
-            audit_event_count,
-            signed_by: signer,
-        })
-    }
-
-    pub(crate) async fn apply_decryption_request(
-        &self,
-        request: SignedDecryptionRequest,
-    ) -> Result<DecryptionRequestResponse, SoracloudError> {
-        verify_decryption_request_signature(&request)?;
-        request.payload.policy.validate().map_err(|err| {
-            SoracloudError::bad_request(format!(
-                "decryption authority policy failed validation: {err}"
-            ))
-        })?;
-        request
-            .payload
-            .request
-            .validate_for_policy(&request.payload.policy)
-            .map_err(|err| {
-                SoracloudError::bad_request(format!("decryption request failed validation: {err}"))
-            })?;
-
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let signer = request.provenance.signer.to_string();
-        let governance_tx_hash = request.payload.request.governance_tx_hash;
-        let state_key = request.payload.request.state_key.clone();
-        let binding_name = request.payload.request.binding_name.clone();
-        let request_id = request.payload.request.request_id.clone();
-        let policy_name = request.payload.request.policy_name.clone();
-        let jurisdiction_tag = request.payload.request.jurisdiction_tag.clone();
-        let policy_snapshot_hash = Hash::new(Encode::encode(&request.payload.policy));
-        let consent_evidence_hash = request.payload.request.consent_evidence_hash;
-        let break_glass = request.payload.request.break_glass;
-        let break_glass_reason = request.payload.request.break_glass_reason.clone();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let (current_version, service_manifest_hash, container_manifest_hash) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            let binding = current_revision
-                .state_bindings
-                .iter()
-                .find(|binding| binding.binding_name == binding_name)
-                .ok_or_else(|| {
-                    SoracloudError::not_found(format!(
-                        "binding `{binding_name}` is not declared for service `{service_name}`"
-                    ))
-                })?;
-            if binding.encryption == SoraStateEncryptionV1::Plaintext {
-                return Err(SoracloudError::conflict(format!(
-                    "binding `{binding_name}` is plaintext; decryption authority policy is not applicable"
-                )));
-            }
-            if !state_key.starts_with(&binding.key_prefix) {
-                return Err(SoracloudError::conflict(format!(
-                    "decryption request key `{state_key}` is outside binding prefix `{}`",
-                    binding.key_prefix
-                )));
-            }
-
-            (
-                entry.current_version.clone(),
-                current_revision.service_manifest_hash,
-                current_revision.container_manifest_hash,
-            )
-        };
-
-        state.audit_log.push(RegistryAuditEvent {
-            sequence,
-            action: SoracloudAction::DecryptionRequest,
-            service_name: service_name.clone(),
-            from_version: None,
-            to_version: current_version.clone(),
-            service_manifest_hash,
-            container_manifest_hash,
-            binding_name: Some(binding_name.to_string()),
-            state_key: Some(state_key.clone()),
-            governance_tx_hash: Some(governance_tx_hash),
-            rollout_handle: None,
-            policy_name: Some(policy_name.to_string()),
-            policy_snapshot_hash: Some(policy_snapshot_hash),
-            jurisdiction_tag: Some(jurisdiction_tag.clone()),
-            consent_evidence_hash,
-            break_glass: Some(break_glass),
-            break_glass_reason: break_glass_reason.clone(),
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(DecryptionRequestResponse {
-            action: SoracloudAction::DecryptionRequest,
-            service_name,
-            policy_name,
-            request_id,
-            binding_name,
-            state_key,
-            jurisdiction_tag,
-            policy_snapshot_hash,
-            consent_evidence_hash,
-            break_glass,
-            break_glass_reason,
-            sequence,
-            governance_tx_hash,
-            current_version,
-            audit_event_count,
-            signed_by: signer,
-        })
-    }
-
-    pub(crate) async fn apply_ciphertext_query(
-        &self,
-        request: SignedCiphertextQueryRequest,
-    ) -> Result<CiphertextQueryResponse, SoracloudError> {
-        verify_ciphertext_query_signature(&request)?;
-        request.query.validate().map_err(|err| {
-            SoracloudError::bad_request(format!("ciphertext query failed validation: {err}"))
-        })?;
-
-        let service_name = request.query.service_name.to_string();
-        let binding_name = request.query.binding_name.to_string();
-        let signer = request.provenance.signer.to_string();
-        let query_hash = Hash::new(Encode::encode(&request.query));
-        let limit = usize::from(request.query.max_results.get());
-
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-
-        let entry = state.services.get(&service_name).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "service `{service_name}` not found in control-plane registry"
-            ))
-        })?;
-        let current_revision = entry.revisions.last().ok_or_else(|| {
-            SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-        })?;
-        let binding = current_revision
-            .state_bindings
-            .iter()
-            .find(|binding| binding.binding_name.as_ref() == binding_name.as_str())
-            .ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "binding `{binding_name}` is not declared for service `{service_name}`"
-                ))
-            })?;
-        if binding.encryption == SoraStateEncryptionV1::Plaintext {
-            return Err(SoracloudError::conflict(format!(
-                "binding `{binding_name}` is plaintext; ciphertext query interface is not applicable"
-            )));
-        }
-        if !request
-            .query
-            .state_key_prefix
-            .starts_with(&binding.key_prefix)
-        {
-            return Err(SoracloudError::conflict(format!(
-                "query prefix `{}` is outside binding prefix `{}`",
-                request.query.state_key_prefix, binding.key_prefix
-            )));
-        }
-
-        let mut rows = Vec::new();
-        let runtime_state = entry
-            .binding_states
-            .get(&binding_name)
-            .cloned()
-            .unwrap_or_default();
-        let served_sequence = state.next_sequence.saturating_sub(1);
-        let anchor_hash = audit_anchor_hash(&state.audit_log, served_sequence);
-        let mut truncated = false;
-
-        for (state_key, record) in runtime_state.ciphertext_records {
-            if !state_key.starts_with(&request.query.state_key_prefix) {
-                continue;
-            }
-            if rows.len() >= limit {
-                truncated = true;
-                break;
-            }
-
-            let Some(payload_bytes) = NonZeroU64::new(record.payload_bytes) else {
-                continue;
-            };
-            let state_key_digest =
-                derive_state_key_digest(&service_name, &binding_name, &state_key);
-            let proof = if request.query.include_proof {
-                Some(build_ciphertext_inclusion_proof(
-                    &state.audit_log,
-                    &service_name,
-                    &binding_name,
-                    &state_key,
-                    &record,
-                    served_sequence,
-                    anchor_hash,
-                ))
-            } else {
-                None
-            };
-
-            let state_key = match request.query.metadata_level {
-                CiphertextQueryMetadataLevelV1::Minimal => None,
-                CiphertextQueryMetadataLevelV1::Standard => Some(state_key.clone()),
-            };
-            rows.push(CiphertextQueryResultItemV1 {
-                binding_name: request.query.binding_name.clone(),
-                state_key,
-                state_key_digest,
-                payload_bytes,
-                ciphertext_commitment: record.commitment,
-                encryption: record.encryption,
-                last_update_sequence: record.last_update_sequence,
-                governance_tx_hash: record.governance_tx_hash,
-                proof,
-            });
-        }
-
-        let response = CiphertextQueryResponseV1 {
-            schema_version: CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
-            query_hash,
-            service_name: request.query.service_name.clone(),
-            binding_name: request.query.binding_name.clone(),
-            metadata_level: request.query.metadata_level,
-            served_sequence,
-            result_count: u16::try_from(rows.len()).unwrap_or(u16::MAX),
-            truncated,
-            results: rows,
-        };
-        response.validate().map_err(|err| {
-            SoracloudError::internal(format!(
-                "ciphertext query response validation failed unexpectedly: {err}"
-            ))
-        })?;
-
-        Ok(CiphertextQueryResponse {
-            action: SoracloudAction::CiphertextQuery,
-            response,
-            signed_by: signer,
-        })
-    }
-
-    pub(crate) async fn apply_rollout(
-        &self,
-        request: SignedRolloutAdvanceRequest,
-    ) -> Result<RolloutResponse, SoracloudError> {
-        verify_rollout_signature(&request)?;
-
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        if request.payload.rollout_handle.trim().is_empty() {
-            return Err(SoracloudError::bad_request(
-                "rollout_handle must not be empty",
-            ));
-        }
-        if request
-            .payload
-            .promote_to_percent
-            .is_some_and(|value| value > 100)
-        {
-            return Err(SoracloudError::bad_request(
-                "promote_to_percent must be within 0..=100",
-            ));
-        }
-
-        let service_name = service_name.to_string();
-        let signer = request.provenance.signer.to_string();
-        let rollout_handle = request.payload.rollout_handle.clone();
-        let governance_tx_hash = request.payload.governance_tx_hash;
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let (mut response, audit_event) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-
-            let mut rollout = entry.active_rollout.clone().ok_or_else(|| {
-                SoracloudError::conflict(format!(
-                    "service `{service_name}` has no active rollout to advance"
-                ))
-            })?;
-            if rollout.rollout_handle != rollout_handle {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active rollout handle mismatch (expected `{}`)",
-                    rollout.rollout_handle
-                )));
-            }
-
-            if request.payload.healthy {
-                let promote_to = request.payload.promote_to_percent.unwrap_or(100);
-                if promote_to < rollout.traffic_percent {
-                    return Err(SoracloudError::conflict(format!(
-                        "rollout traffic cannot decrease from {} to {promote_to}",
-                        rollout.traffic_percent
-                    )));
-                }
-                if promote_to < rollout.canary_percent {
-                    return Err(SoracloudError::conflict(format!(
-                        "rollout traffic cannot be below canary_percent {}",
-                        rollout.canary_percent
-                    )));
-                }
-                rollout.traffic_percent = promote_to;
-                rollout.stage = if promote_to >= 100 {
-                    RolloutStage::Promoted
-                } else {
-                    RolloutStage::Canary
-                };
-                rollout.health_failures = 0;
-                rollout.updated_sequence = sequence;
-
-                if rollout.stage == RolloutStage::Promoted {
-                    entry.active_rollout = None;
-                } else {
-                    entry.active_rollout = Some(rollout.clone());
-                }
-                entry.last_rollout = Some(rollout.clone());
-
-                let current_version = entry.current_version.clone();
-                let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
-                    SoracloudError::conflict(format!(
-                        "service `{service_name}` has no active revision"
-                    ))
-                })?;
-                let audit_event = RegistryAuditEvent {
-                    sequence,
-                    action: SoracloudAction::Rollout,
-                    service_name: service_name.clone(),
-                    from_version: Some(current_version.clone()),
-                    to_version: current_version.clone(),
-                    service_manifest_hash: current_revision.service_manifest_hash,
-                    container_manifest_hash: current_revision.container_manifest_hash,
-                    binding_name: None,
-                    state_key: None,
-                    governance_tx_hash: Some(governance_tx_hash),
-                    rollout_handle: Some(rollout_handle.clone()),
-                    policy_name: None,
-                    policy_snapshot_hash: None,
-                    jurisdiction_tag: None,
-                    consent_evidence_hash: None,
-                    break_glass: None,
-                    break_glass_reason: None,
-                    signed_by: signer.clone(),
-                };
-                let response = RolloutResponse {
-                    action: SoracloudAction::Rollout,
-                    service_name: service_name.clone(),
-                    rollout_handle: rollout_handle.clone(),
-                    stage: rollout.stage,
-                    current_version,
-                    traffic_percent: rollout.traffic_percent,
-                    health_failures: rollout.health_failures,
-                    max_health_failures: rollout.max_health_failures,
-                    sequence,
-                    governance_tx_hash,
-                    audit_event_count: 0,
-                    signed_by: signer.clone(),
-                };
-                (response, audit_event)
-            } else {
-                rollout.health_failures = rollout.health_failures.saturating_add(1);
-                rollout.updated_sequence = sequence;
-
-                if rollout.health_failures >= rollout.max_health_failures {
-                    let baseline_version = rollout.baseline_version.clone().ok_or_else(|| {
-                        SoracloudError::conflict(format!(
-                            "service `{service_name}` has no baseline version for auto rollback"
-                        ))
-                    })?;
-                    let previous_version = entry.current_version.clone();
-                    let target = entry
-                        .revisions
-                        .iter()
-                        .rev()
-                        .find(|revision| revision.service_version == baseline_version)
-                        .cloned()
-                        .ok_or_else(|| {
-                            SoracloudError::not_found(format!(
-                                "service `{service_name}` missing baseline revision `{baseline_version}`"
-                            ))
-                        })?;
-                    let process_generation = entry
-                        .revisions
-                        .last()
-                        .map_or(1, |revision| revision.process_generation.saturating_add(1));
-
-                    let rollback_revision = RegistryServiceRevision {
-                        sequence,
-                        action: SoracloudAction::Rollback,
-                        service_version: target.service_version.clone(),
-                        service_manifest_hash: target.service_manifest_hash,
-                        container_manifest_hash: target.container_manifest_hash,
-                        replicas: target.replicas,
-                        route_host: target.route_host.clone(),
-                        route_path_prefix: target.route_path_prefix.clone(),
-                        state_binding_count: target.state_binding_count,
-                        state_bindings: target.state_bindings.clone(),
-                        allow_model_training: target.allow_model_training,
-                        runtime: target.runtime,
-                        allow_wallet_signing: target.allow_wallet_signing,
-                        allow_state_writes: target.allow_state_writes,
-                        network: target.network.clone(),
-                        cpu_millis: target.cpu_millis,
-                        memory_bytes: target.memory_bytes,
-                        ephemeral_storage_bytes: target.ephemeral_storage_bytes,
-                        max_open_files: target.max_open_files,
-                        max_tasks: target.max_tasks,
-                        start_grace_secs: target.start_grace_secs,
-                        stop_grace_secs: target.stop_grace_secs,
-                        healthcheck_path: target.healthcheck_path.clone(),
-                        sandbox_profile_hash: target.sandbox_profile_hash,
-                        process_generation,
-                        process_started_sequence: sequence,
-                        signed_by: signer.clone(),
-                    };
-                    entry.current_version = target.service_version.clone();
-                    sync_binding_states(entry, &target.state_bindings);
-                    entry.revisions.push(rollback_revision);
-
-                    rollout.stage = RolloutStage::RolledBack;
-                    rollout.traffic_percent = 0;
-                    entry.active_rollout = None;
-                    entry.last_rollout = Some(rollout.clone());
-
-                    let audit_event = RegistryAuditEvent {
-                        sequence,
-                        action: SoracloudAction::Rollback,
-                        service_name: service_name.clone(),
-                        from_version: Some(previous_version),
-                        to_version: target.service_version.clone(),
-                        service_manifest_hash: target.service_manifest_hash,
-                        container_manifest_hash: target.container_manifest_hash,
-                        binding_name: None,
-                        state_key: None,
-                        governance_tx_hash: Some(governance_tx_hash),
-                        rollout_handle: Some(rollout_handle.clone()),
-                        policy_name: None,
-                        policy_snapshot_hash: None,
-                        jurisdiction_tag: None,
-                        consent_evidence_hash: None,
-                        break_glass: None,
-                        break_glass_reason: None,
-                        signed_by: signer.clone(),
-                    };
-                    let response = RolloutResponse {
-                        action: SoracloudAction::Rollback,
-                        service_name: service_name.clone(),
-                        rollout_handle: rollout_handle.clone(),
-                        stage: rollout.stage,
-                        current_version: target.service_version,
-                        traffic_percent: rollout.traffic_percent,
-                        health_failures: rollout.health_failures,
-                        max_health_failures: rollout.max_health_failures,
-                        sequence,
-                        governance_tx_hash,
-                        audit_event_count: 0,
-                        signed_by: signer.clone(),
-                    };
-                    (response, audit_event)
-                } else {
-                    entry.active_rollout = Some(rollout.clone());
-                    entry.last_rollout = Some(rollout.clone());
-                    let current_version = entry.current_version.clone();
-                    let current_revision = entry.revisions.last().cloned().ok_or_else(|| {
-                        SoracloudError::conflict(format!(
-                            "service `{service_name}` has no active revision"
-                        ))
-                    })?;
-                    let audit_event = RegistryAuditEvent {
-                        sequence,
-                        action: SoracloudAction::Rollout,
-                        service_name: service_name.clone(),
-                        from_version: Some(current_version.clone()),
-                        to_version: current_version.clone(),
-                        service_manifest_hash: current_revision.service_manifest_hash,
-                        container_manifest_hash: current_revision.container_manifest_hash,
-                        binding_name: None,
-                        state_key: None,
-                        governance_tx_hash: Some(governance_tx_hash),
-                        rollout_handle: Some(rollout_handle.clone()),
-                        policy_name: None,
-                        policy_snapshot_hash: None,
-                        jurisdiction_tag: None,
-                        consent_evidence_hash: None,
-                        break_glass: None,
-                        break_glass_reason: None,
-                        signed_by: signer.clone(),
-                    };
-                    let response = RolloutResponse {
-                        action: SoracloudAction::Rollout,
-                        service_name: service_name.clone(),
-                        rollout_handle: rollout_handle.clone(),
-                        stage: rollout.stage,
-                        current_version,
-                        traffic_percent: rollout.traffic_percent,
-                        health_failures: rollout.health_failures,
-                        max_health_failures: rollout.max_health_failures,
-                        sequence,
-                        governance_tx_hash,
-                        audit_event_count: 0,
-                        signed_by: signer.clone(),
-                    };
-                    (response, audit_event)
-                }
-            }
-        };
-
-        state.audit_log.push(audit_event);
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        response.audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-        Ok(response)
-    }
-
-    pub(crate) async fn apply_training_job_start(
-        &self,
-        request: SignedTrainingJobStartRequest,
-    ) -> Result<TrainingJobMutationResponse, SoracloudError> {
-        verify_training_job_start_signature(&request)?;
-
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let model_name = parse_training_model_name(&request.payload.model_name)?;
-        let job_id = parse_training_job_id(&request.payload.job_id)?;
-        if request.payload.worker_group_size == 0
-            || request.payload.worker_group_size > TRAINING_MAX_WORKER_GROUP_SIZE
-        {
-            return Err(SoracloudError::bad_request(format!(
-                "worker_group_size must be within 1..={TRAINING_MAX_WORKER_GROUP_SIZE}"
-            )));
-        }
-        if request.payload.target_steps == 0 {
-            return Err(SoracloudError::bad_request(
-                "target_steps must be greater than zero",
-            ));
-        }
-        if request.payload.checkpoint_interval_steps == 0 {
-            return Err(SoracloudError::bad_request(
-                "checkpoint_interval_steps must be greater than zero",
-            ));
-        }
-        if request.payload.checkpoint_interval_steps > request.payload.target_steps {
-            return Err(SoracloudError::bad_request(
-                "checkpoint_interval_steps must not exceed target_steps",
-            ));
-        }
-        if request.payload.max_retries > TRAINING_MAX_RETRIES {
-            return Err(SoracloudError::bad_request(format!(
-                "max_retries must be within 0..={TRAINING_MAX_RETRIES}"
-            )));
-        }
-        if request.payload.step_compute_units == 0 {
-            return Err(SoracloudError::bad_request(
-                "step_compute_units must be greater than zero",
-            ));
-        }
-        if request.payload.compute_budget_units == 0 {
-            return Err(SoracloudError::bad_request(
-                "compute_budget_units must be greater than zero",
-            ));
-        }
-        if request.payload.storage_budget_bytes == 0 {
-            return Err(SoracloudError::bad_request(
-                "storage_budget_bytes must be greater than zero",
-            ));
-        }
-        let minimum_step_units = request
-            .payload
-            .step_compute_units
-            .checked_mul(u64::from(request.payload.worker_group_size))
-            .ok_or_else(|| {
-                SoracloudError::bad_request("step_compute_units * worker_group_size overflows u64")
-            })?;
-        if request.payload.compute_budget_units < minimum_step_units {
-            return Err(SoracloudError::bad_request(format!(
-                "compute_budget_units must cover at least one worker-group step ({minimum_step_units})"
-            )));
-        }
-
-        let service_name = service_name.to_string();
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let runtime_state = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            if !current_revision.allow_model_training {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active revision does not allow model training"
-                )));
-            }
-            if entry.training_jobs.contains_key(&job_id) {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{job_id}` already exists for service `{service_name}`"
-                )));
-            }
-
-            let runtime_state = TrainingJobRuntimeState {
-                model_name: model_name.clone(),
-                job_id: job_id.clone(),
-                status: TrainingJobStatus::Running,
-                worker_group_size: request.payload.worker_group_size,
-                target_steps: request.payload.target_steps,
-                completed_steps: 0,
-                checkpoint_interval_steps: request.payload.checkpoint_interval_steps,
-                last_checkpoint_step: None,
-                checkpoint_count: 0,
-                retry_count: 0,
-                max_retries: request.payload.max_retries,
-                step_compute_units: request.payload.step_compute_units,
-                compute_budget_units: request.payload.compute_budget_units,
-                compute_consumed_units: 0,
-                storage_budget_bytes: request.payload.storage_budget_bytes,
-                storage_consumed_bytes: 0,
-                latest_metrics_hash: None,
-                last_failure_reason: None,
-                created_sequence: sequence,
-                updated_sequence: sequence,
-            };
-            entry
-                .training_jobs
-                .insert(job_id.clone(), runtime_state.clone());
-            runtime_state
-        };
-
-        state.training_audit_log.push(TrainingJobAuditEvent {
-            sequence,
-            action: TrainingJobAction::Start,
-            service_name: service_name.clone(),
-            model_name: model_name.clone(),
-            job_id: job_id.clone(),
-            status: runtime_state.status,
-            completed_steps: runtime_state.completed_steps,
-            checkpoint_count: runtime_state.checkpoint_count,
-            retry_count: runtime_state.retry_count,
-            compute_consumed_units: runtime_state.compute_consumed_units,
-            storage_consumed_bytes: runtime_state.storage_consumed_bytes,
-            last_checkpoint_step: runtime_state.last_checkpoint_step,
-            latest_metrics_hash: runtime_state.latest_metrics_hash,
-            last_failure_reason: runtime_state.last_failure_reason.clone(),
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let training_event_count =
-            u32::try_from(state.training_audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(training_job_mutation_response(
-            TrainingJobAction::Start,
-            &service_name,
-            &runtime_state,
-            sequence,
-            training_event_count,
-            signer,
-        ))
-    }
-
-    pub(crate) async fn apply_training_job_checkpoint(
-        &self,
-        request: SignedTrainingJobCheckpointRequest,
-    ) -> Result<TrainingJobMutationResponse, SoracloudError> {
-        verify_training_job_checkpoint_signature(&request)?;
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let job_id = parse_training_job_id(&request.payload.job_id)?;
-        if request.payload.completed_step == 0 {
-            return Err(SoracloudError::bad_request(
-                "completed_step must be greater than zero",
-            ));
-        }
-        if request.payload.checkpoint_size_bytes == 0 {
-            return Err(SoracloudError::bad_request(
-                "checkpoint_size_bytes must be greater than zero",
-            ));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let runtime_state = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            if !current_revision.allow_model_training {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active revision does not allow model training"
-                )));
-            }
-            let job = entry.training_jobs.get_mut(&job_id).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "training job `{job_id}` not found for service `{service_name}`"
-                ))
-            })?;
-            if matches!(
-                job.status,
-                TrainingJobStatus::Completed | TrainingJobStatus::Exhausted
-            ) {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{job_id}` is not accepting checkpoints in {:?} status",
-                    job.status
-                )));
-            }
-            if request.payload.completed_step <= job.completed_steps {
-                return Err(SoracloudError::conflict(format!(
-                    "completed_step {} must be greater than current completed_steps {}",
-                    request.payload.completed_step, job.completed_steps
-                )));
-            }
-            if request.payload.completed_step > job.target_steps {
-                return Err(SoracloudError::conflict(format!(
-                    "completed_step {} exceeds target_steps {}",
-                    request.payload.completed_step, job.target_steps
-                )));
-            }
-            if request.payload.completed_step != job.target_steps
-                && request.payload.completed_step % job.checkpoint_interval_steps != 0
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "completed_step {} must align with checkpoint_interval_steps {} (or equal target_steps {})",
-                    request.payload.completed_step, job.checkpoint_interval_steps, job.target_steps
-                )));
-            }
-
-            let delta_steps = request.payload.completed_step - job.completed_steps;
-            let checkpoint_compute_units = u64::from(delta_steps)
-                .checked_mul(job.step_compute_units)
-                .and_then(|value| value.checked_mul(u64::from(job.worker_group_size)))
-                .ok_or_else(|| {
-                    SoracloudError::conflict(
-                        "training checkpoint compute-cost calculation overflowed u64",
-                    )
-                })?;
-            let next_compute_total = job
-                .compute_consumed_units
-                .checked_add(checkpoint_compute_units)
-                .ok_or_else(|| {
-                    SoracloudError::conflict("training compute consumption overflowed u64")
-                })?;
-            if next_compute_total > job.compute_budget_units {
-                return Err(SoracloudError::conflict(format!(
-                    "training checkpoint would exceed compute budget {}",
-                    job.compute_budget_units
-                )));
-            }
-            let next_storage_total = job
-                .storage_consumed_bytes
-                .checked_add(request.payload.checkpoint_size_bytes)
-                .ok_or_else(|| {
-                    SoracloudError::conflict("training storage consumption overflowed u64")
-                })?;
-            if next_storage_total > job.storage_budget_bytes {
-                return Err(SoracloudError::conflict(format!(
-                    "training checkpoint would exceed storage budget {}",
-                    job.storage_budget_bytes
-                )));
-            }
-
-            job.compute_consumed_units = next_compute_total;
-            job.storage_consumed_bytes = next_storage_total;
-            job.completed_steps = request.payload.completed_step;
-            job.checkpoint_count = job.checkpoint_count.saturating_add(1);
-            job.last_checkpoint_step = Some(request.payload.completed_step);
-            job.latest_metrics_hash = Some(request.payload.metrics_hash);
-            job.last_failure_reason = None;
-            job.status = if job.completed_steps >= job.target_steps {
-                TrainingJobStatus::Completed
-            } else {
-                TrainingJobStatus::Running
-            };
-            job.updated_sequence = sequence;
-            job.clone()
-        };
-
-        state.training_audit_log.push(TrainingJobAuditEvent {
-            sequence,
-            action: TrainingJobAction::Checkpoint,
-            service_name: service_name.clone(),
-            model_name: runtime_state.model_name.clone(),
-            job_id: job_id.clone(),
-            status: runtime_state.status,
-            completed_steps: runtime_state.completed_steps,
-            checkpoint_count: runtime_state.checkpoint_count,
-            retry_count: runtime_state.retry_count,
-            compute_consumed_units: runtime_state.compute_consumed_units,
-            storage_consumed_bytes: runtime_state.storage_consumed_bytes,
-            last_checkpoint_step: runtime_state.last_checkpoint_step,
-            latest_metrics_hash: runtime_state.latest_metrics_hash,
-            last_failure_reason: runtime_state.last_failure_reason.clone(),
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let training_event_count =
-            u32::try_from(state.training_audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(training_job_mutation_response(
-            TrainingJobAction::Checkpoint,
-            &service_name,
-            &runtime_state,
-            sequence,
-            training_event_count,
-            signer,
-        ))
-    }
-
-    pub(crate) async fn apply_training_job_retry(
-        &self,
-        request: SignedTrainingJobRetryRequest,
-    ) -> Result<TrainingJobMutationResponse, SoracloudError> {
-        verify_training_job_retry_signature(&request)?;
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let job_id = parse_training_job_id(&request.payload.job_id)?;
-        let reason = request.payload.reason.trim();
-        if reason.is_empty() {
-            return Err(SoracloudError::bad_request("reason must not be empty"));
-        }
-        if reason.len() > TRAINING_MAX_REASON_BYTES {
-            return Err(SoracloudError::bad_request(format!(
-                "reason exceeds max bytes ({TRAINING_MAX_REASON_BYTES})"
-            )));
-        }
-        if reason.chars().any(char::is_control) {
-            return Err(SoracloudError::bad_request(
-                "reason must not contain control characters",
-            ));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-        let runtime_state = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            if !current_revision.allow_model_training {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active revision does not allow model training"
-                )));
-            }
-            let job = entry.training_jobs.get_mut(&job_id).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "training job `{job_id}` not found for service `{service_name}`"
-                ))
-            })?;
-            if job.status == TrainingJobStatus::Completed {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{job_id}` is already completed"
-                )));
-            }
-            if job.status == TrainingJobStatus::Exhausted {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{job_id}` retry budget is exhausted"
-                )));
-            }
-            if job.retry_count >= job.max_retries {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{job_id}` cannot retry because retry_count {} reached max_retries {}",
-                    job.retry_count, job.max_retries
-                )));
-            }
-
-            job.retry_count = job.retry_count.saturating_add(1);
-            job.status = TrainingJobStatus::RetryPending;
-            job.last_failure_reason = Some(reason.to_string());
-            job.updated_sequence = sequence;
-            job.clone()
-        };
-
-        state.training_audit_log.push(TrainingJobAuditEvent {
-            sequence,
-            action: TrainingJobAction::Retry,
-            service_name: service_name.clone(),
-            model_name: runtime_state.model_name.clone(),
-            job_id: job_id.clone(),
-            status: runtime_state.status,
-            completed_steps: runtime_state.completed_steps,
-            checkpoint_count: runtime_state.checkpoint_count,
-            retry_count: runtime_state.retry_count,
-            compute_consumed_units: runtime_state.compute_consumed_units,
-            storage_consumed_bytes: runtime_state.storage_consumed_bytes,
-            last_checkpoint_step: runtime_state.last_checkpoint_step,
-            latest_metrics_hash: runtime_state.latest_metrics_hash,
-            last_failure_reason: runtime_state.last_failure_reason.clone(),
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let training_event_count =
-            u32::try_from(state.training_audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(training_job_mutation_response(
-            TrainingJobAction::Retry,
-            &service_name,
-            &runtime_state,
-            sequence,
-            training_event_count,
-            signer,
-        ))
-    }
-
-    pub(crate) async fn training_job_status(
-        &self,
-        service_name: &str,
-        job_id: &str,
-    ) -> Result<TrainingJobStatusResponse, SoracloudError> {
-        let service_name: Name = service_name
-            .parse()
-            .map_err(|err| SoracloudError::bad_request(format!("invalid service_name: {err}")))?;
-        let service_name = service_name.to_string();
-        let job_id = parse_training_job_id(job_id)?;
-
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-        let entry = state.services.get(&service_name).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "service `{service_name}` not found in control-plane registry"
-            ))
-        })?;
-        let job = entry.training_jobs.get(&job_id).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "training job `{job_id}` not found for service `{service_name}`"
-            ))
-        })?;
-        Ok(TrainingJobStatusResponse {
-            schema_version: TRAINING_JOB_STATUS_SCHEMA_VERSION_V1,
-            job: training_job_status_entry(&service_name, job),
-        })
-    }
-
-    pub(crate) async fn apply_model_artifact_register(
-        &self,
-        request: SignedModelArtifactRegisterRequest,
-    ) -> Result<ModelArtifactMutationResponse, SoracloudError> {
-        verify_model_artifact_register_signature(&request)?;
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let model_name = parse_training_model_name(&request.payload.model_name)?;
-        let training_job_id = parse_training_job_id(&request.payload.training_job_id)?;
-        let dataset_ref = parse_model_weight_dataset_ref(&request.payload.dataset_ref)?;
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let model_artifact_count = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            if !current_revision.allow_model_training {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active revision does not allow model training"
-                )));
-            }
-            let training_job = entry.training_jobs.get(&training_job_id).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "training job `{training_job_id}` not found for service `{service_name}`"
-                ))
-            })?;
-            if training_job.model_name != model_name {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{training_job_id}` model `{}` does not match requested model `{model_name}`",
-                    training_job.model_name
-                )));
-            }
-            if training_job.status != TrainingJobStatus::Completed {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{training_job_id}` is not completed"
-                )));
-            }
-            if entry.model_artifacts.contains_key(&training_job_id) {
-                return Err(SoracloudError::conflict(format!(
-                    "artifact metadata for training job `{training_job_id}` already registered for service `{service_name}`"
-                )));
-            }
-
-            entry.model_artifacts.insert(
-                training_job_id.clone(),
-                ModelArtifactState {
-                    model_name: model_name.clone(),
-                    training_job_id: training_job_id.clone(),
-                    weight_artifact_hash: request.payload.weight_artifact_hash,
-                    dataset_ref,
-                    training_config_hash: request.payload.training_config_hash,
-                    reproducibility_hash: request.payload.reproducibility_hash,
-                    provenance_attestation_hash: request.payload.provenance_attestation_hash,
-                    registered_sequence: sequence,
-                    consumed_by_version: None,
-                },
-            );
-
-            u32::try_from(entry.model_artifacts.len()).unwrap_or(u32::MAX)
-        };
-
-        state
-            .model_artifact_audit_log
-            .push(ModelArtifactAuditEvent {
-                sequence,
-                action: ModelArtifactAction::Register,
-                service_name: service_name.clone(),
-                model_name: model_name.clone(),
-                training_job_id: training_job_id.clone(),
-                consumed_by_version: None,
-                signed_by: signer.clone(),
-            });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(ModelArtifactMutationResponse {
-            action: ModelArtifactAction::Register,
-            service_name,
-            model_name,
-            training_job_id,
-            sequence,
-            model_artifact_count,
-            signed_by: signer,
-        })
-    }
-
-    pub(crate) async fn model_artifact_status(
-        &self,
-        service_name: &str,
-        training_job_id: &str,
-    ) -> Result<ModelArtifactStatusResponse, SoracloudError> {
-        let service_name: Name = service_name
-            .parse()
-            .map_err(|err| SoracloudError::bad_request(format!("invalid service_name: {err}")))?;
-        let service_name = service_name.to_string();
-        let training_job_id = parse_training_job_id(training_job_id)?;
-
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-        let entry = state.services.get(&service_name).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "service `{service_name}` not found in control-plane registry"
-            ))
-        })?;
-        let artifact = entry.model_artifacts.get(&training_job_id).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "artifact metadata for training job `{training_job_id}` not found for service `{service_name}`"
-            ))
-        })?;
-
-        Ok(ModelArtifactStatusResponse {
-            schema_version: MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1,
-            artifact: model_artifact_status_entry(&service_name, artifact),
-        })
-    }
-
-    pub(crate) async fn apply_model_weight_register(
-        &self,
-        request: SignedModelWeightRegisterRequest,
-    ) -> Result<ModelWeightMutationResponse, SoracloudError> {
-        verify_model_weight_register_signature(&request)?;
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let model_name = parse_training_model_name(&request.payload.model_name)?;
-        let weight_version = parse_model_weight_version(&request.payload.weight_version)?;
-        let training_job_id = parse_training_job_id(&request.payload.training_job_id)?;
-        let parent_version = request
-            .payload
-            .parent_version
-            .as_deref()
-            .map(parse_model_weight_version)
-            .transpose()?;
-        let dataset_ref = parse_model_weight_dataset_ref(&request.payload.dataset_ref)?;
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let (current_version, lineage_parent, version_count) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            if !current_revision.allow_model_training {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active revision does not allow model training"
-                )));
-            }
-            let training_job = entry.training_jobs.get(&training_job_id).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "training job `{training_job_id}` not found for service `{service_name}`"
-                ))
-            })?;
-            if training_job.model_name != model_name {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{training_job_id}` model `{}` does not match requested model `{model_name}`",
-                    training_job.model_name
-                )));
-            }
-            if training_job.status != TrainingJobStatus::Completed {
-                return Err(SoracloudError::conflict(format!(
-                    "training job `{training_job_id}` is not completed"
-                )));
-            }
-            let artifact = entry.model_artifacts.get_mut(&training_job_id).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "artifact metadata for training job `{training_job_id}` not found for service `{service_name}`"
-                ))
-            })?;
-            if artifact.model_name != model_name {
-                return Err(SoracloudError::conflict(format!(
-                    "artifact metadata for training job `{training_job_id}` model `{}` does not match requested model `{model_name}`",
-                    artifact.model_name
-                )));
-            }
-            if artifact.consumed_by_version.is_some() {
-                return Err(SoracloudError::conflict(format!(
-                    "artifact metadata for training job `{training_job_id}` was already consumed by another model weight version"
-                )));
-            }
-            if artifact.weight_artifact_hash != request.payload.weight_artifact_hash {
-                return Err(SoracloudError::conflict(format!(
-                    "weight_artifact_hash mismatch for training job `{training_job_id}`"
-                )));
-            }
-            if artifact.dataset_ref != dataset_ref {
-                return Err(SoracloudError::conflict(format!(
-                    "dataset_ref mismatch for training job `{training_job_id}`"
-                )));
-            }
-            if artifact.training_config_hash != request.payload.training_config_hash {
-                return Err(SoracloudError::conflict(format!(
-                    "training_config_hash mismatch for training job `{training_job_id}`"
-                )));
-            }
-            if artifact.reproducibility_hash != request.payload.reproducibility_hash {
-                return Err(SoracloudError::conflict(format!(
-                    "reproducibility_hash mismatch for training job `{training_job_id}`"
-                )));
-            }
-            if artifact.provenance_attestation_hash != request.payload.provenance_attestation_hash {
-                return Err(SoracloudError::conflict(format!(
-                    "provenance_attestation_hash mismatch for training job `{training_job_id}`"
-                )));
-            }
-
-            let model_registry = entry
-                .model_weights
-                .entry(model_name.clone())
-                .or_insert_with(|| ModelWeightRegistryState {
-                    model_name: model_name.clone(),
-                    current_version: None,
-                    versions: BTreeMap::new(),
-                });
-            if model_registry.versions.contains_key(&weight_version) {
-                return Err(SoracloudError::conflict(format!(
-                    "model `{model_name}` weight version `{weight_version}` already exists for service `{service_name}`"
-                )));
-            }
-            let lineage_parent = match (model_registry.versions.is_empty(), parent_version.clone())
-            {
-                (true, None) => None,
-                (true, Some(_)) => {
-                    return Err(SoracloudError::conflict(
-                        "parent_version must be omitted for the first model weight version",
-                    ));
-                }
-                (false, None) => {
-                    return Err(SoracloudError::conflict(
-                        "parent_version is required when registering subsequent weight versions",
-                    ));
-                }
-                (false, Some(parent)) => {
-                    if !model_registry.versions.contains_key(&parent) {
-                        return Err(SoracloudError::not_found(format!(
-                            "parent_version `{parent}` not found for model `{model_name}`"
-                        )));
-                    }
-                    Some(parent)
-                }
-            };
-
-            model_registry.versions.insert(
-                weight_version.clone(),
-                ModelWeightVersionState {
-                    weight_version: weight_version.clone(),
-                    parent_version: lineage_parent.clone(),
-                    training_job_id: training_job_id.clone(),
-                    weight_artifact_hash: request.payload.weight_artifact_hash,
-                    dataset_ref,
-                    training_config_hash: request.payload.training_config_hash,
-                    reproducibility_hash: request.payload.reproducibility_hash,
-                    provenance_attestation_hash: request.payload.provenance_attestation_hash,
-                    registered_sequence: sequence,
-                    promoted_sequence: None,
-                    gate_report_hash: None,
-                    promoted_by: None,
-                },
-            );
-            artifact.consumed_by_version = Some(weight_version.clone());
-
-            (
-                model_registry.current_version.clone(),
-                lineage_parent,
-                u32::try_from(model_registry.versions.len()).unwrap_or(u32::MAX),
-            )
-        };
-
-        state.model_weight_audit_log.push(ModelWeightAuditEvent {
-            sequence,
-            action: ModelWeightAction::Register,
-            service_name: service_name.clone(),
-            model_name: model_name.clone(),
-            target_version: weight_version.clone(),
-            current_version: current_version.clone(),
-            parent_version: lineage_parent.clone(),
-            gate_approved: None,
-            rollback_reason: None,
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let model_event_count =
-            u32::try_from(state.model_weight_audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(model_weight_mutation_response(
-            ModelWeightAction::Register,
-            &service_name,
-            &model_name,
-            &weight_version,
-            current_version,
-            lineage_parent,
-            sequence,
-            version_count,
-            model_event_count,
-            signer,
-        ))
-    }
-
-    pub(crate) async fn apply_model_weight_promote(
-        &self,
-        request: SignedModelWeightPromoteRequest,
-    ) -> Result<ModelWeightMutationResponse, SoracloudError> {
-        verify_model_weight_promote_signature(&request)?;
-        if !request.payload.gate_approved {
-            return Err(SoracloudError::conflict(
-                "model promotion gate is not approved",
-            ));
-        }
-
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let model_name = parse_training_model_name(&request.payload.model_name)?;
-        let weight_version = parse_model_weight_version(&request.payload.weight_version)?;
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let (current_version, parent_version, version_count) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            if !current_revision.allow_model_training {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active revision does not allow model training"
-                )));
-            }
-
-            let model_registry = entry.model_weights.get_mut(&model_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "model `{model_name}` is not registered for service `{service_name}`"
-                ))
-            })?;
-            if model_registry.current_version.as_deref() == Some(weight_version.as_str()) {
-                return Err(SoracloudError::conflict(format!(
-                    "model `{model_name}` weight version `{weight_version}` is already promoted"
-                )));
-            }
-            let weight = model_registry
-                .versions
-                .get_mut(&weight_version)
-                .ok_or_else(|| {
-                    SoracloudError::not_found(format!(
-                        "weight version `{weight_version}` not found for model `{model_name}`"
-                    ))
-                })?;
-            weight.promoted_sequence = Some(sequence);
-            weight.gate_report_hash = Some(request.payload.gate_report_hash);
-            weight.promoted_by = Some(signer.clone());
-            let parent_version = weight.parent_version.clone();
-
-            model_registry.current_version = Some(weight_version.clone());
-            (
-                model_registry.current_version.clone(),
-                parent_version,
-                u32::try_from(model_registry.versions.len()).unwrap_or(u32::MAX),
-            )
-        };
-
-        state.model_weight_audit_log.push(ModelWeightAuditEvent {
-            sequence,
-            action: ModelWeightAction::Promote,
-            service_name: service_name.clone(),
-            model_name: model_name.clone(),
-            target_version: weight_version.clone(),
-            current_version: current_version.clone(),
-            parent_version: parent_version.clone(),
-            gate_approved: Some(true),
-            rollback_reason: None,
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let model_event_count =
-            u32::try_from(state.model_weight_audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(model_weight_mutation_response(
-            ModelWeightAction::Promote,
-            &service_name,
-            &model_name,
-            &weight_version,
-            current_version,
-            parent_version,
-            sequence,
-            version_count,
-            model_event_count,
-            signer,
-        ))
-    }
-
-    pub(crate) async fn apply_model_weight_rollback(
-        &self,
-        request: SignedModelWeightRollbackRequest,
-    ) -> Result<ModelWeightMutationResponse, SoracloudError> {
-        verify_model_weight_rollback_signature(&request)?;
-        let service_name: Name =
-            request.payload.service_name.parse().map_err(|err| {
-                SoracloudError::bad_request(format!("invalid service_name: {err}"))
-            })?;
-        let service_name = service_name.to_string();
-        let model_name = parse_training_model_name(&request.payload.model_name)?;
-        let target_version = parse_model_weight_version(&request.payload.target_version)?;
-        let reason = normalize_model_weight_reason(&request.payload.reason)?;
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let (current_version, parent_version, version_count) = {
-            let entry = state.services.get_mut(&service_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "service `{service_name}` not found in control-plane registry"
-                ))
-            })?;
-            let current_revision = entry.revisions.last().ok_or_else(|| {
-                SoracloudError::conflict(format!("service `{service_name}` has no active revision"))
-            })?;
-            if !current_revision.allow_model_training {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` active revision does not allow model training"
-                )));
-            }
-
-            let model_registry = entry.model_weights.get_mut(&model_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "model `{model_name}` is not registered for service `{service_name}`"
-                ))
-            })?;
-            if !model_registry.versions.contains_key(&target_version) {
-                return Err(SoracloudError::not_found(format!(
-                    "weight version `{target_version}` not found for model `{model_name}`"
-                )));
-            }
-            if model_registry.current_version.as_deref() == Some(target_version.as_str()) {
-                return Err(SoracloudError::conflict(format!(
-                    "model `{model_name}` is already at weight version `{target_version}`"
-                )));
-            }
-            let parent_version = model_registry
-                .versions
-                .get(&target_version)
-                .and_then(|version| version.parent_version.clone());
-            model_registry.current_version = Some(target_version.clone());
-            (
-                model_registry.current_version.clone(),
-                parent_version,
-                u32::try_from(model_registry.versions.len()).unwrap_or(u32::MAX),
-            )
-        };
-
-        state.model_weight_audit_log.push(ModelWeightAuditEvent {
-            sequence,
-            action: ModelWeightAction::Rollback,
-            service_name: service_name.clone(),
-            model_name: model_name.clone(),
-            target_version: target_version.clone(),
-            current_version: current_version.clone(),
-            parent_version: parent_version.clone(),
-            gate_approved: None,
-            rollback_reason: Some(reason),
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let model_event_count =
-            u32::try_from(state.model_weight_audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(model_weight_mutation_response(
-            ModelWeightAction::Rollback,
-            &service_name,
-            &model_name,
-            &target_version,
-            current_version,
-            parent_version,
-            sequence,
-            version_count,
-            model_event_count,
-            signer,
-        ))
-    }
-
-    pub(crate) async fn model_weight_status(
-        &self,
-        service_name: &str,
-        model_name: &str,
-    ) -> Result<ModelWeightStatusResponse, SoracloudError> {
-        let service_name: Name = service_name
-            .parse()
-            .map_err(|err| SoracloudError::bad_request(format!("invalid service_name: {err}")))?;
-        let service_name = service_name.to_string();
-        let model_name = parse_training_model_name(model_name)?;
-
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-        let entry = state.services.get(&service_name).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "service `{service_name}` not found in control-plane registry"
-            ))
-        })?;
-        let model_registry = entry.model_weights.get(&model_name).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "model `{model_name}` is not registered for service `{service_name}`"
-            ))
-        })?;
-
-        Ok(ModelWeightStatusResponse {
-            schema_version: MODEL_WEIGHT_STATUS_SCHEMA_VERSION_V1,
-            model: model_weight_status_entry(&service_name, model_registry),
-        })
-    }
-
-    pub(crate) async fn apply_agent_deploy(
-        &self,
-        request: SignedAgentDeployRequest,
-    ) -> Result<AgentMutationResponse, SoracloudError> {
-        verify_agent_deploy_signature(&request)?;
-        request.payload.manifest.validate().map_err(|err| {
-            SoracloudError::bad_request(format!(
-                "agent apartment manifest failed validation: {err}"
-            ))
-        })?;
-        if request.payload.lease_ticks == 0 {
-            return Err(SoracloudError::bad_request(
-                "lease_ticks must be greater than zero",
-            ));
-        }
-
-        let autonomy_budget_units = request
-            .payload
-            .autonomy_budget_units
-            .unwrap_or(AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS);
-        if autonomy_budget_units == 0 {
-            return Err(SoracloudError::bad_request(
-                "autonomy_budget_units must be greater than zero",
-            ));
-        }
-
-        let apartment_name = request.payload.manifest.apartment_name.to_string();
-        let signer = request.provenance.signer.to_string();
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        if state.apartments.contains_key(&apartment_name) {
-            return Err(SoracloudError::conflict(format!(
-                "apartment `{apartment_name}` already exists in control-plane runtime"
-            )));
-        }
-
-        let sequence = state.next_sequence;
-        let manifest_hash =
-            Hash::new(norito::to_bytes(&request.payload.manifest).map_err(|err| {
-                SoracloudError::internal(format!("failed to encode agent manifest payload: {err}"))
-            })?);
-        let runtime_state = AgentApartmentRuntimeState {
-            manifest: request.payload.manifest,
-            manifest_hash,
-            status: AgentRuntimeStatus::Running,
-            deployed_sequence: sequence,
-            lease_started_sequence: sequence,
-            lease_expires_sequence: sequence.saturating_add(request.payload.lease_ticks),
-            last_renewed_sequence: sequence,
-            restart_count: 0,
-            last_restart_sequence: None,
-            last_restart_reason: None,
-            process_generation: 1,
-            process_started_sequence: sequence,
-            last_active_sequence: sequence,
-            last_checkpoint_sequence: None,
-            checkpoint_count: 0,
-            persistent_state: BindingRuntimeState::default(),
-            revoked_policy_capabilities: BTreeSet::new(),
-            pending_wallet_requests: BTreeMap::new(),
-            wallet_daily_spend: BTreeMap::new(),
-            mailbox_queue: Vec::new(),
-            autonomy_budget_ceiling_units: autonomy_budget_units,
-            autonomy_budget_remaining_units: autonomy_budget_units,
-            artifact_allowlist: BTreeMap::new(),
-            autonomy_run_history: Vec::new(),
-        };
-        let response = AgentMutationResponse {
-            action: AgentApartmentAction::Deploy,
-            apartment_name: apartment_name.clone(),
-            sequence,
-            status: agent_runtime_status_for_sequence(&runtime_state, sequence.saturating_add(1)),
-            lease_expires_sequence: runtime_state.lease_expires_sequence,
-            lease_remaining_ticks: agent_lease_remaining_ticks(
-                &runtime_state,
-                sequence.saturating_add(1),
-            ),
-            manifest_hash,
-            restart_count: 0,
-            pending_wallet_request_count: 0,
-            revoked_policy_capability_count: 0,
-            budget_remaining_units: runtime_state.autonomy_budget_remaining_units,
-            allowlist_count: 0,
-            run_count: 0,
-            process_generation: runtime_state.process_generation,
-            process_started_sequence: runtime_state.process_started_sequence,
-            last_active_sequence: runtime_state.last_active_sequence,
-            last_checkpoint_sequence: runtime_state.last_checkpoint_sequence,
-            checkpoint_count: runtime_state.checkpoint_count,
-            persistent_state_total_bytes: runtime_state.persistent_state.total_bytes,
-            persistent_state_key_count: 0,
-            audit_event_count: 0,
-            signed_by: signer.clone(),
-            capability: None,
-            reason: None,
-            last_restart_sequence: None,
-            last_restart_reason: None,
-        };
-
-        state
-            .apartments
-            .insert(apartment_name.clone(), runtime_state);
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::Deploy,
-            apartment_name,
-            status: response.status,
-            lease_expires_sequence: response.lease_expires_sequence,
-            manifest_hash,
-            restart_count: response.restart_count,
-            signed_by: signer,
-            request_id: None,
-            asset_definition: None,
-            amount_nanos: None,
-            capability: None,
-            reason: None,
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn apply_agent_lease_renew(
-        &self,
-        request: SignedAgentLeaseRenewRequest,
-    ) -> Result<AgentMutationResponse, SoracloudError> {
-        verify_agent_lease_renew_signature(&request)?;
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        if request.payload.lease_ticks == 0 {
-            return Err(SoracloudError::bad_request(
-                "lease_ticks must be greater than zero",
-            ));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-        let response = {
-            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            let base = runtime.lease_expires_sequence.max(sequence);
-            runtime.lease_expires_sequence = base.saturating_add(request.payload.lease_ticks);
-            runtime.last_renewed_sequence = sequence;
-            runtime.status = AgentRuntimeStatus::Running;
-            touch_agent_runtime_activity(runtime, sequence);
-
-            AgentMutationResponse {
-                action: AgentApartmentAction::LeaseRenew,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
-                lease_expires_sequence: runtime.lease_expires_sequence,
-                lease_remaining_ticks: agent_lease_remaining_ticks(
-                    runtime,
-                    sequence.saturating_add(1),
-                ),
-                manifest_hash: runtime.manifest_hash,
-                restart_count: runtime.restart_count,
-                pending_wallet_request_count: agent_pending_wallet_request_count(runtime),
-                revoked_policy_capability_count: agent_revoked_capability_count(runtime),
-                budget_remaining_units: runtime.autonomy_budget_remaining_units,
-                allowlist_count: agent_allowlist_count(runtime),
-                run_count: agent_run_count(runtime),
-                process_generation: runtime.process_generation,
-                process_started_sequence: runtime.process_started_sequence,
-                last_active_sequence: runtime.last_active_sequence,
-                last_checkpoint_sequence: runtime.last_checkpoint_sequence,
-                checkpoint_count: runtime.checkpoint_count,
-                persistent_state_total_bytes: runtime.persistent_state.total_bytes,
-                persistent_state_key_count: agent_persistent_state_key_count(runtime),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-                capability: None,
-                reason: None,
-                last_restart_sequence: runtime.last_restart_sequence,
-                last_restart_reason: runtime.last_restart_reason.clone(),
-            }
-        };
-
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::LeaseRenew,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence: response.lease_expires_sequence,
-            manifest_hash: response.manifest_hash,
-            restart_count: response.restart_count,
-            signed_by: signer,
-            request_id: None,
-            asset_definition: None,
-            amount_nanos: None,
-            capability: None,
-            reason: None,
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn apply_agent_restart(
-        &self,
-        request: SignedAgentRestartRequest,
-    ) -> Result<AgentMutationResponse, SoracloudError> {
-        verify_agent_restart_signature(&request)?;
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        let reason = request.payload.reason.trim();
-        if reason.is_empty() {
-            return Err(SoracloudError::bad_request("reason must not be empty"));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-        let response = {
-            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            if agent_runtime_status_for_sequence(runtime, sequence)
-                == AgentRuntimeStatus::LeaseExpired
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before restart",
-                    runtime.lease_expires_sequence
-                )));
-            }
-
-            runtime.status = AgentRuntimeStatus::Running;
-            runtime.restart_count = runtime.restart_count.saturating_add(1);
-            runtime.last_restart_sequence = Some(sequence);
-            runtime.last_restart_reason = Some(reason.to_owned());
-            runtime.process_generation = runtime.process_generation.saturating_add(1).max(1);
-            runtime.process_started_sequence = sequence;
-            touch_agent_runtime_activity(runtime, sequence);
-
-            AgentMutationResponse {
-                action: AgentApartmentAction::Restart,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
-                lease_expires_sequence: runtime.lease_expires_sequence,
-                lease_remaining_ticks: agent_lease_remaining_ticks(
-                    runtime,
-                    sequence.saturating_add(1),
-                ),
-                manifest_hash: runtime.manifest_hash,
-                restart_count: runtime.restart_count,
-                pending_wallet_request_count: agent_pending_wallet_request_count(runtime),
-                revoked_policy_capability_count: agent_revoked_capability_count(runtime),
-                budget_remaining_units: runtime.autonomy_budget_remaining_units,
-                allowlist_count: agent_allowlist_count(runtime),
-                run_count: agent_run_count(runtime),
-                process_generation: runtime.process_generation,
-                process_started_sequence: runtime.process_started_sequence,
-                last_active_sequence: runtime.last_active_sequence,
-                last_checkpoint_sequence: runtime.last_checkpoint_sequence,
-                checkpoint_count: runtime.checkpoint_count,
-                persistent_state_total_bytes: runtime.persistent_state.total_bytes,
-                persistent_state_key_count: agent_persistent_state_key_count(runtime),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-                capability: None,
-                reason: Some(reason.to_owned()),
-                last_restart_sequence: runtime.last_restart_sequence,
-                last_restart_reason: runtime.last_restart_reason.clone(),
-            }
-        };
-
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::Restart,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence: response.lease_expires_sequence,
-            manifest_hash: response.manifest_hash,
-            restart_count: response.restart_count,
-            signed_by: signer,
-            request_id: None,
-            asset_definition: None,
-            amount_nanos: None,
-            capability: None,
-            reason: response.reason.clone(),
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn agent_status(
-        &self,
-        apartment_name: Option<&str>,
-    ) -> Result<AgentStatusResponse, SoracloudError> {
-        let apartment_filter = apartment_name.map(parse_agent_apartment_name).transpose()?;
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-        let sequence = state.next_sequence;
-
-        let mut apartments = Vec::new();
-        for (name, runtime) in &state.apartments {
-            if apartment_filter
-                .as_ref()
-                .is_some_and(|filter| filter.as_str() != name.as_str())
-            {
-                continue;
-            }
-            apartments.push(AgentApartmentStatusEntry::from_state(
-                name, runtime, sequence,
-            ));
-        }
-
-        Ok(AgentStatusResponse {
-            schema_version: state.schema_version,
-            apartment_count: u32::try_from(apartments.len()).unwrap_or(u32::MAX),
-            event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            apartments,
-        })
-    }
-
-    pub(crate) async fn apply_agent_policy_revoke(
-        &self,
-        request: SignedAgentPolicyRevokeRequest,
-    ) -> Result<AgentMutationResponse, SoracloudError> {
-        verify_agent_policy_revoke_signature(&request)?;
-
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        let capability = parse_agent_capability_name(&request.payload.capability)?;
-        let reason = request
-            .payload
-            .reason
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let response = {
-            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            let capability_declared = runtime
-                .manifest
-                .policy_capabilities
-                .iter()
-                .any(|candidate| candidate.as_ref() == capability.as_str());
-            if !capability_declared {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` does not declare policy capability `{capability}`"
-                )));
-            }
-            if runtime
-                .revoked_policy_capabilities
-                .contains(capability.as_str())
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "policy capability `{capability}` already revoked for apartment `{apartment_name}`"
-                )));
-            }
-            runtime
-                .revoked_policy_capabilities
-                .insert(capability.clone());
-            touch_agent_runtime_activity(runtime, sequence);
-
-            AgentMutationResponse {
-                action: AgentApartmentAction::PolicyRevoked,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
-                lease_expires_sequence: runtime.lease_expires_sequence,
-                lease_remaining_ticks: agent_lease_remaining_ticks(
-                    runtime,
-                    sequence.saturating_add(1),
-                ),
-                manifest_hash: runtime.manifest_hash,
-                restart_count: runtime.restart_count,
-                pending_wallet_request_count: agent_pending_wallet_request_count(runtime),
-                revoked_policy_capability_count: agent_revoked_capability_count(runtime),
-                budget_remaining_units: runtime.autonomy_budget_remaining_units,
-                allowlist_count: agent_allowlist_count(runtime),
-                run_count: agent_run_count(runtime),
-                process_generation: runtime.process_generation,
-                process_started_sequence: runtime.process_started_sequence,
-                last_active_sequence: runtime.last_active_sequence,
-                last_checkpoint_sequence: runtime.last_checkpoint_sequence,
-                checkpoint_count: runtime.checkpoint_count,
-                persistent_state_total_bytes: runtime.persistent_state.total_bytes,
-                persistent_state_key_count: agent_persistent_state_key_count(runtime),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-                capability: Some(capability.clone()),
-                reason: reason.clone(),
-                last_restart_sequence: runtime.last_restart_sequence,
-                last_restart_reason: runtime.last_restart_reason.clone(),
-            }
-        };
-
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::PolicyRevoked,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence: response.lease_expires_sequence,
-            manifest_hash: response.manifest_hash,
-            restart_count: response.restart_count,
-            signed_by: signer,
-            request_id: None,
-            asset_definition: None,
-            amount_nanos: None,
-            capability: Some(capability),
-            reason: reason.clone(),
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn apply_agent_wallet_spend(
-        &self,
-        request: SignedAgentWalletSpendRequest,
-    ) -> Result<AgentWalletMutationResponse, SoracloudError> {
-        verify_agent_wallet_spend_signature(&request)?;
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        let asset_definition = request.payload.asset_definition.trim();
-        if asset_definition.is_empty() {
-            return Err(SoracloudError::bad_request(
-                "asset_definition must not be empty",
-            ));
-        }
-        if request.payload.amount_nanos == 0 {
-            return Err(SoracloudError::bad_request(
-                "amount_nanos must be greater than zero",
-            ));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-        let response = {
-            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            if agent_runtime_status_for_sequence(runtime, sequence)
-                == AgentRuntimeStatus::LeaseExpired
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
-                    runtime.lease_expires_sequence
-                )));
-            }
-            if !agent_policy_capability_active(runtime, "wallet.sign") {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` does not have active `wallet.sign` capability"
-                )));
-            }
-            let spend_limit = runtime
-                .manifest
-                .spend_limits
-                .iter()
-                .find(|limit| limit.asset_definition == asset_definition)
-                .ok_or_else(|| {
-                    SoracloudError::conflict(format!(
-                        "apartment `{apartment_name}` has no spend limit configured for asset `{asset_definition}`"
-                    ))
-                })?;
-            if request.payload.amount_nanos > spend_limit.max_per_tx_nanos.get() {
-                return Err(SoracloudError::conflict(format!(
-                    "requested amount {} exceeds max_per_tx_nanos {} for asset `{asset_definition}`",
-                    request.payload.amount_nanos,
-                    spend_limit.max_per_tx_nanos.get()
-                )));
-            }
-
-            let day_bucket = wallet_day_bucket(sequence);
-            let current_day_spent = wallet_day_spent(runtime, asset_definition, day_bucket);
-            let projected_day_spent = current_day_spent
-                .checked_add(request.payload.amount_nanos)
-                .ok_or_else(|| {
-                    SoracloudError::internal(format!(
-                        "wallet daily spend overflow for apartment `{apartment_name}`"
-                    ))
-                })?;
-            if projected_day_spent > spend_limit.max_per_day_nanos.get() {
-                return Err(SoracloudError::conflict(format!(
-                    "projected daily spend {} exceeds max_per_day_nanos {} for asset `{asset_definition}`",
-                    projected_day_spent,
-                    spend_limit.max_per_day_nanos.get()
-                )));
-            }
-
-            let request_id = format!("{apartment_name}:wallet:{sequence}");
-            let action = if agent_policy_capability_active(runtime, "wallet.auto_approve") {
-                wallet_record_spend(runtime, asset_definition, day_bucket, projected_day_spent);
-                AgentApartmentAction::WalletSpendApproved
-            } else {
-                runtime.pending_wallet_requests.insert(
-                    request_id.clone(),
-                    AgentWalletSpendRequest {
-                        request_id: request_id.clone(),
-                        asset_definition: asset_definition.to_owned(),
-                        amount_nanos: request.payload.amount_nanos,
-                        created_sequence: sequence,
-                    },
-                );
-                AgentApartmentAction::WalletSpendRequested
-            };
-            touch_agent_runtime_activity(runtime, sequence);
-
-            let day_spent_nanos = wallet_day_spent(runtime, asset_definition, day_bucket);
-            AgentWalletMutationResponse {
-                action,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                manifest_hash: runtime.manifest_hash,
-                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
-                request_id: Some(request_id),
-                asset_definition: Some(asset_definition.to_owned()),
-                amount_nanos: Some(request.payload.amount_nanos),
-                day_bucket: Some(day_bucket),
-                day_spent_nanos: Some(day_spent_nanos),
-                capability: None,
-                reason: None,
-                pending_request_count: agent_pending_wallet_request_count(runtime),
-                revoked_policy_capability_count: agent_revoked_capability_count(runtime),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-            }
-        };
-
-        let (lease_expires_sequence, restart_count) = state
-            .apartments
-            .get(&apartment_name)
-            .map(|runtime| (runtime.lease_expires_sequence, runtime.restart_count))
-            .unwrap_or((sequence, 0));
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: response.action,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence,
-            manifest_hash: response.manifest_hash,
-            restart_count,
-            signed_by: signer,
-            request_id: response.request_id.clone(),
-            asset_definition: response.asset_definition.clone(),
-            amount_nanos: response.amount_nanos,
-            capability: None,
-            reason: None,
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentWalletMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn apply_agent_wallet_approve(
-        &self,
-        request: SignedAgentWalletApproveRequest,
-    ) -> Result<AgentWalletMutationResponse, SoracloudError> {
-        verify_agent_wallet_approve_signature(&request)?;
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        let request_id = request.payload.request_id.trim();
-        if request_id.is_empty() {
-            return Err(SoracloudError::bad_request("request_id must not be empty"));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-        let response = {
-            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            if agent_runtime_status_for_sequence(runtime, sequence)
-                == AgentRuntimeStatus::LeaseExpired
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before wallet actions",
-                    runtime.lease_expires_sequence
-                )));
-            }
-            if !agent_policy_capability_active(runtime, "wallet.sign") {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` does not have active `wallet.sign` capability"
-                )));
-            }
-
-            let pending = runtime
-                .pending_wallet_requests
-                .remove(request_id)
-                .ok_or_else(|| {
-                    SoracloudError::not_found(format!(
-                        "wallet request `{request_id}` not found for apartment `{apartment_name}`"
-                    ))
-                })?;
-            let spend_limit = runtime
-                .manifest
-                .spend_limits
-                .iter()
-                .find(|limit| limit.asset_definition == pending.asset_definition)
-                .ok_or_else(|| {
-                    SoracloudError::conflict(format!(
-                        "apartment `{apartment_name}` has no spend limit configured for asset `{}`",
-                        pending.asset_definition
-                    ))
-                })?;
-
-            let day_bucket = wallet_day_bucket(sequence);
-            let current_day_spent =
-                wallet_day_spent(runtime, &pending.asset_definition, day_bucket);
-            let projected_day_spent = current_day_spent
-                .checked_add(pending.amount_nanos)
-                .ok_or_else(|| {
-                    SoracloudError::internal(format!(
-                        "wallet daily spend overflow for apartment `{apartment_name}`"
-                    ))
-                })?;
-            if projected_day_spent > spend_limit.max_per_day_nanos.get() {
-                return Err(SoracloudError::conflict(format!(
-                    "projected daily spend {} exceeds max_per_day_nanos {} for asset `{}`",
-                    projected_day_spent,
-                    spend_limit.max_per_day_nanos.get(),
-                    pending.asset_definition
-                )));
-            }
-            wallet_record_spend(
-                runtime,
-                &pending.asset_definition,
-                day_bucket,
-                projected_day_spent,
-            );
-            touch_agent_runtime_activity(runtime, sequence);
-
-            AgentWalletMutationResponse {
-                action: AgentApartmentAction::WalletSpendApproved,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                manifest_hash: runtime.manifest_hash,
-                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
-                request_id: Some(pending.request_id),
-                asset_definition: Some(pending.asset_definition),
-                amount_nanos: Some(pending.amount_nanos),
-                day_bucket: Some(day_bucket),
-                day_spent_nanos: Some(projected_day_spent),
-                capability: None,
-                reason: None,
-                pending_request_count: agent_pending_wallet_request_count(runtime),
-                revoked_policy_capability_count: agent_revoked_capability_count(runtime),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-            }
-        };
-
-        let (lease_expires_sequence, restart_count) = state
-            .apartments
-            .get(&apartment_name)
-            .map(|runtime| (runtime.lease_expires_sequence, runtime.restart_count))
-            .unwrap_or((sequence, 0));
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::WalletSpendApproved,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence,
-            manifest_hash: response.manifest_hash,
-            restart_count,
-            signed_by: signer,
-            request_id: response.request_id.clone(),
-            asset_definition: response.asset_definition.clone(),
-            amount_nanos: response.amount_nanos,
-            capability: None,
-            reason: None,
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentWalletMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn apply_agent_message_send(
-        &self,
-        request: SignedAgentMessageSendRequest,
-    ) -> Result<AgentMailboxMutationResponse, SoracloudError> {
-        verify_agent_message_send_signature(&request)?;
-        let from_apartment = parse_agent_apartment_name(&request.payload.from_apartment)?;
-        let to_apartment = parse_agent_apartment_name(&request.payload.to_apartment)?;
-        let channel = request.payload.channel.trim();
-        if channel.is_empty() {
-            return Err(SoracloudError::bad_request("channel must not be empty"));
-        }
-        let payload = request.payload.payload.trim();
-        if payload.is_empty() {
-            return Err(SoracloudError::bad_request("payload must not be empty"));
-        }
-        if payload.len() > AGENT_MAILBOX_MAX_PAYLOAD_BYTES {
-            return Err(SoracloudError::bad_request(format!(
-                "payload exceeds max mailbox payload bytes ({AGENT_MAILBOX_MAX_PAYLOAD_BYTES})"
-            )));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let sender = state.apartments.get(&from_apartment).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "apartment `{from_apartment}` not found in control-plane runtime"
-            ))
-        })?;
-        if agent_runtime_status_for_sequence(sender, sequence) == AgentRuntimeStatus::LeaseExpired {
-            return Err(SoracloudError::conflict(format!(
-                "sender apartment `{from_apartment}` lease expired at sequence {}; renew before messaging",
-                sender.lease_expires_sequence
-            )));
-        }
-        if !agent_policy_capability_active(sender, "agent.mailbox.send") {
-            return Err(SoracloudError::conflict(format!(
-                "apartment `{from_apartment}` does not have active `agent.mailbox.send` capability"
-            )));
-        }
-
-        let recipient_snapshot = state.apartments.get(&to_apartment).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "apartment `{to_apartment}` not found in control-plane runtime"
-            ))
-        })?;
-        if agent_runtime_status_for_sequence(recipient_snapshot, sequence)
-            == AgentRuntimeStatus::LeaseExpired
-        {
-            return Err(SoracloudError::conflict(format!(
-                "recipient apartment `{to_apartment}` lease expired at sequence {}; renew before messaging",
-                recipient_snapshot.lease_expires_sequence
-            )));
-        }
-        if !agent_policy_capability_active(recipient_snapshot, "agent.mailbox.receive") {
-            return Err(SoracloudError::conflict(format!(
-                "apartment `{to_apartment}` does not have active `agent.mailbox.receive` capability"
-            )));
-        }
-
-        let message_id = format!("{to_apartment}:mail:{sequence}");
-        let payload_hash = Hash::new(payload.as_bytes());
-        let response = {
-            let recipient = state.apartments.get_mut(&to_apartment).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{to_apartment}` not found in control-plane runtime"
-                ))
-            })?;
-            recipient.mailbox_queue.push(AgentMailboxMessage {
-                message_id: message_id.clone(),
-                from_apartment: from_apartment.clone(),
-                channel: channel.to_owned(),
-                payload: payload.to_owned(),
-                payload_hash,
-                enqueued_sequence: sequence,
-            });
-            touch_agent_runtime_activity(recipient, sequence);
-
-            AgentMailboxMutationResponse {
-                action: AgentApartmentAction::MessageEnqueued,
-                apartment_name: to_apartment.clone(),
-                sequence,
-                message_id: message_id.clone(),
-                from_apartment: Some(from_apartment.clone()),
-                to_apartment: Some(to_apartment.clone()),
-                channel: channel.to_owned(),
-                payload_hash,
-                status: agent_runtime_status_for_sequence(recipient, sequence.saturating_add(1)),
-                pending_message_count: agent_pending_mailbox_message_count(recipient),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-            }
-        };
-        if let Some(sender_runtime) = state.apartments.get_mut(&from_apartment) {
-            touch_agent_runtime_activity(sender_runtime, sequence);
-        }
-
-        let (lease_expires_sequence, manifest_hash, restart_count) = state
-            .apartments
-            .get(&to_apartment)
-            .map(|runtime| {
-                (
-                    runtime.lease_expires_sequence,
-                    runtime.manifest_hash,
-                    runtime.restart_count,
-                )
-            })
-            .unwrap_or((sequence, payload_hash, 0));
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::MessageEnqueued,
-            apartment_name: to_apartment.clone(),
-            status: response.status,
-            lease_expires_sequence,
-            manifest_hash,
-            restart_count,
-            signed_by: signer,
-            request_id: Some(message_id),
-            asset_definition: None,
-            amount_nanos: None,
-            capability: None,
-            reason: None,
-            from_apartment: Some(from_apartment),
-            to_apartment: Some(to_apartment),
-            channel: Some(channel.to_owned()),
-            payload_hash: Some(payload_hash),
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentMailboxMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn apply_agent_message_ack(
-        &self,
-        request: SignedAgentMessageAckRequest,
-    ) -> Result<AgentMailboxMutationResponse, SoracloudError> {
-        verify_agent_message_ack_signature(&request)?;
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        let message_id = request.payload.message_id.trim();
-        if message_id.is_empty() {
-            return Err(SoracloudError::bad_request("message_id must not be empty"));
-        }
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-        let response = {
-            let recipient = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            if agent_runtime_status_for_sequence(recipient, sequence)
-                == AgentRuntimeStatus::LeaseExpired
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before mailbox actions",
-                    recipient.lease_expires_sequence
-                )));
-            }
-            if !agent_policy_capability_active(recipient, "agent.mailbox.receive") {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` does not have active `agent.mailbox.receive` capability"
-                )));
-            }
-            let message_index = recipient
-                .mailbox_queue
-                .iter()
-                .position(|message| message.message_id == message_id)
-                .ok_or_else(|| {
-                    SoracloudError::not_found(format!(
-                        "mailbox message `{message_id}` not found for apartment `{apartment_name}`"
-                    ))
-                })?;
-            let message = recipient.mailbox_queue.remove(message_index);
-            touch_agent_runtime_activity(recipient, sequence);
-
-            AgentMailboxMutationResponse {
-                action: AgentApartmentAction::MessageAcknowledged,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                message_id: message.message_id,
-                from_apartment: Some(message.from_apartment),
-                to_apartment: Some(apartment_name.clone()),
-                channel: message.channel,
-                payload_hash: message.payload_hash,
-                status: agent_runtime_status_for_sequence(recipient, sequence.saturating_add(1)),
-                pending_message_count: agent_pending_mailbox_message_count(recipient),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-            }
-        };
-
-        let (lease_expires_sequence, manifest_hash, restart_count) = state
-            .apartments
-            .get(&apartment_name)
-            .map(|runtime| {
-                (
-                    runtime.lease_expires_sequence,
-                    runtime.manifest_hash,
-                    runtime.restart_count,
-                )
-            })
-            .unwrap_or((sequence, response.payload_hash, 0));
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::MessageAcknowledged,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence,
-            manifest_hash,
-            restart_count,
-            signed_by: signer,
-            request_id: Some(response.message_id.clone()),
-            asset_definition: None,
-            amount_nanos: None,
-            capability: None,
-            reason: None,
-            from_apartment: response.from_apartment.clone(),
-            to_apartment: Some(apartment_name),
-            channel: Some(response.channel.clone()),
-            payload_hash: Some(response.payload_hash),
-            artifact_hash: None,
-            provenance_hash: None,
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentMailboxMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn agent_mailbox_status(
-        &self,
-        apartment_name: &str,
-    ) -> Result<AgentMailboxStatusResponse, SoracloudError> {
-        let apartment_name = parse_agent_apartment_name(apartment_name)?;
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-        let sequence = state.next_sequence;
-        let runtime = state.apartments.get(&apartment_name).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "apartment `{apartment_name}` not found in control-plane runtime"
-            ))
-        })?;
-        let messages = runtime
-            .mailbox_queue
-            .iter()
-            .map(AgentMailboxMessageEntry::from_message)
-            .collect::<Vec<_>>();
-        Ok(AgentMailboxStatusResponse {
-            schema_version: state.schema_version,
-            apartment_name,
-            status: agent_runtime_status_for_sequence(runtime, sequence),
-            pending_message_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
-            event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            messages,
-        })
-    }
-
-    pub(crate) async fn apply_agent_artifact_allow(
-        &self,
-        request: SignedAgentArtifactAllowRequest,
-    ) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
-        verify_agent_artifact_allow_signature(&request)?;
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        let artifact_hash =
-            normalize_agent_hash_like("--artifact-hash", &request.payload.artifact_hash)?;
-        let provenance_hash = normalize_optional_agent_hash_like(
-            "--provenance-hash",
-            request.payload.provenance_hash.as_deref(),
-        )?;
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let response = {
-            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            if agent_runtime_status_for_sequence(runtime, sequence)
-                == AgentRuntimeStatus::LeaseExpired
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
-                    runtime.lease_expires_sequence
-                )));
-            }
-            if !(agent_policy_capability_active(runtime, "governance.audit")
-                || agent_policy_capability_active(runtime, "agent.autonomy.allow"))
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` does not have active `governance.audit` or `agent.autonomy.allow` capability"
-                )));
-            }
-            if runtime
-                .artifact_allowlist
-                .get(&artifact_hash)
-                .is_some_and(|rule| rule.provenance_hash == provenance_hash)
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "artifact `{artifact_hash}` already allowlisted for apartment `{apartment_name}` with the same provenance rule"
-                )));
-            }
-            runtime.artifact_allowlist.insert(
-                artifact_hash.clone(),
-                AgentArtifactAllowRule {
-                    artifact_hash: artifact_hash.clone(),
-                    provenance_hash: provenance_hash.clone(),
-                    added_sequence: sequence,
-                },
-            );
-            touch_agent_runtime_activity(runtime, sequence);
-
-            AgentAutonomyMutationResponse {
-                action: AgentApartmentAction::ArtifactAllowed,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
-                lease_expires_sequence: runtime.lease_expires_sequence,
-                lease_remaining_ticks: agent_lease_remaining_ticks(
-                    runtime,
-                    sequence.saturating_add(1),
-                ),
-                manifest_hash: runtime.manifest_hash,
-                artifact_hash: artifact_hash.clone(),
-                provenance_hash: provenance_hash.clone(),
-                run_id: None,
-                run_label: None,
-                budget_units: None,
-                budget_remaining_units: runtime.autonomy_budget_remaining_units,
-                allowlist_count: agent_allowlist_count(runtime),
-                run_count: agent_run_count(runtime),
-                process_generation: runtime.process_generation,
-                process_started_sequence: runtime.process_started_sequence,
-                last_active_sequence: runtime.last_active_sequence,
-                last_checkpoint_sequence: runtime.last_checkpoint_sequence,
-                checkpoint_count: runtime.checkpoint_count,
-                persistent_state_total_bytes: runtime.persistent_state.total_bytes,
-                persistent_state_key_count: agent_persistent_state_key_count(runtime),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-            }
-        };
-
-        let restart_count = state
-            .apartments
-            .get(&apartment_name)
-            .map(|runtime| runtime.restart_count)
-            .unwrap_or(0);
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::ArtifactAllowed,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence: response.lease_expires_sequence,
-            manifest_hash: response.manifest_hash,
-            restart_count,
-            signed_by: signer,
-            request_id: None,
-            asset_definition: None,
-            amount_nanos: None,
-            capability: None,
-            reason: None,
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: Some(response.artifact_hash.clone()),
-            provenance_hash: response.provenance_hash.clone(),
-            run_id: None,
-            run_label: None,
-            budget_units: None,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentAutonomyMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn apply_agent_autonomy_run(
-        &self,
-        request: SignedAgentAutonomyRunRequest,
-    ) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
-        verify_agent_autonomy_run_signature(&request)?;
-        let apartment_name = parse_agent_apartment_name(&request.payload.apartment_name)?;
-        let artifact_hash =
-            normalize_agent_hash_like("--artifact-hash", &request.payload.artifact_hash)?;
-        let provenance_hash = normalize_optional_agent_hash_like(
-            "--provenance-hash",
-            request.payload.provenance_hash.as_deref(),
-        )?;
-        if request.payload.budget_units == 0 {
-            return Err(SoracloudError::bad_request(
-                "budget_units must be greater than zero",
-            ));
-        }
-        let run_label = normalize_run_label(&request.payload.run_label)?;
-        let signer = request.provenance.signer.to_string();
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-        let sequence = state.next_sequence;
-
-        let response = {
-            let runtime = state.apartments.get_mut(&apartment_name).ok_or_else(|| {
-                SoracloudError::not_found(format!(
-                    "apartment `{apartment_name}` not found in control-plane runtime"
-                ))
-            })?;
-            if agent_runtime_status_for_sequence(runtime, sequence)
-                == AgentRuntimeStatus::LeaseExpired
-            {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` lease expired at sequence {}; renew before autonomy actions",
-                    runtime.lease_expires_sequence
-                )));
-            }
-            if !agent_policy_capability_active(runtime, "agent.autonomy.run") {
-                return Err(SoracloudError::conflict(format!(
-                    "apartment `{apartment_name}` does not have active `agent.autonomy.run` capability"
-                )));
-            }
-            let allow_rule = runtime.artifact_allowlist.get(&artifact_hash).ok_or_else(|| {
-                SoracloudError::conflict(format!(
-                    "artifact `{artifact_hash}` is not allowlisted for apartment `{apartment_name}`"
-                ))
-            })?;
-            if let Some(expected_provenance) = allow_rule.provenance_hash.as_deref() {
-                let provided_provenance = provenance_hash.as_deref().ok_or_else(|| {
-                    SoracloudError::conflict(format!(
-                        "artifact `{artifact_hash}` requires provenance_hash `{expected_provenance}`"
-                    ))
-                })?;
-                if provided_provenance != expected_provenance {
-                    return Err(SoracloudError::conflict(format!(
-                        "artifact `{artifact_hash}` provenance mismatch: expected `{expected_provenance}`, got `{provided_provenance}`"
-                    )));
-                }
-            }
-            if request.payload.budget_units > runtime.autonomy_budget_remaining_units {
-                return Err(SoracloudError::conflict(format!(
-                    "requested budget {} exceeds remaining autonomy budget {} for apartment `{apartment_name}`",
-                    request.payload.budget_units, runtime.autonomy_budget_remaining_units
-                )));
-            }
-            let run_id = format!("{apartment_name}:autonomy:{sequence}");
-            let checkpoint_key = autonomy_checkpoint_key(&apartment_name, &run_id);
-            let checkpoint_value_size = autonomy_checkpoint_value_size(
-                &artifact_hash,
-                provenance_hash.as_deref(),
-                &run_label,
-                request.payload.budget_units,
-            );
-            let projected_persistent_total = projected_persistent_state_total_bytes(
-                runtime,
-                &checkpoint_key,
-                checkpoint_value_size,
-            )?;
-            if projected_persistent_total > runtime.manifest.state_quota_bytes.get() {
-                return Err(SoracloudError::conflict(format!(
-                    "autonomy checkpoint would exceed apartment `{apartment_name}` state_quota_bytes {}",
-                    runtime.manifest.state_quota_bytes
-                )));
-            }
-
-            runtime.autonomy_budget_remaining_units = runtime
-                .autonomy_budget_remaining_units
-                .saturating_sub(request.payload.budget_units);
-            runtime.autonomy_run_history.push(AgentAutonomyRunRecord {
-                run_id: run_id.clone(),
-                artifact_hash: artifact_hash.clone(),
-                provenance_hash: provenance_hash.clone(),
-                budget_units: request.payload.budget_units,
-                run_label: run_label.clone(),
-                approved_sequence: sequence,
-            });
-            runtime.persistent_state.total_bytes = projected_persistent_total;
-            runtime
-                .persistent_state
-                .key_sizes
-                .insert(checkpoint_key, checkpoint_value_size);
-            runtime.last_checkpoint_sequence = Some(sequence);
-            runtime.checkpoint_count = runtime.checkpoint_count.saturating_add(1);
-            touch_agent_runtime_activity(runtime, sequence);
-
-            AgentAutonomyMutationResponse {
-                action: AgentApartmentAction::AutonomyRunApproved,
-                apartment_name: apartment_name.clone(),
-                sequence,
-                status: agent_runtime_status_for_sequence(runtime, sequence.saturating_add(1)),
-                lease_expires_sequence: runtime.lease_expires_sequence,
-                lease_remaining_ticks: agent_lease_remaining_ticks(
-                    runtime,
-                    sequence.saturating_add(1),
-                ),
-                manifest_hash: runtime.manifest_hash,
-                artifact_hash: artifact_hash.clone(),
-                provenance_hash: provenance_hash.clone(),
-                run_id: Some(run_id),
-                run_label: Some(run_label.clone()),
-                budget_units: Some(request.payload.budget_units),
-                budget_remaining_units: runtime.autonomy_budget_remaining_units,
-                allowlist_count: agent_allowlist_count(runtime),
-                run_count: agent_run_count(runtime),
-                process_generation: runtime.process_generation,
-                process_started_sequence: runtime.process_started_sequence,
-                last_active_sequence: runtime.last_active_sequence,
-                last_checkpoint_sequence: runtime.last_checkpoint_sequence,
-                checkpoint_count: runtime.checkpoint_count,
-                persistent_state_total_bytes: runtime.persistent_state.total_bytes,
-                persistent_state_key_count: agent_persistent_state_key_count(runtime),
-                audit_event_count: 0,
-                signed_by: signer.clone(),
-            }
-        };
-
-        let restart_count = state
-            .apartments
-            .get(&apartment_name)
-            .map(|runtime| runtime.restart_count)
-            .unwrap_or(0);
-        state.apartment_audit_log.push(AgentApartmentAuditEvent {
-            sequence,
-            action: AgentApartmentAction::AutonomyRunApproved,
-            apartment_name: apartment_name.clone(),
-            status: response.status,
-            lease_expires_sequence: response.lease_expires_sequence,
-            manifest_hash: response.manifest_hash,
-            restart_count,
-            signed_by: signer,
-            request_id: response.run_id.clone(),
-            asset_definition: None,
-            amount_nanos: None,
-            capability: None,
-            reason: None,
-            from_apartment: None,
-            to_apartment: None,
-            channel: None,
-            payload_hash: None,
-            artifact_hash: Some(response.artifact_hash.clone()),
-            provenance_hash: response.provenance_hash.clone(),
-            run_id: response.run_id.clone(),
-            run_label: response.run_label.clone(),
-            budget_units: response.budget_units,
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(AgentAutonomyMutationResponse {
-            audit_event_count: u32::try_from(state.apartment_audit_log.len()).unwrap_or(u32::MAX),
-            ..response
-        })
-    }
-
-    pub(crate) async fn agent_autonomy_status(
-        &self,
-        apartment_name: &str,
-    ) -> Result<AgentAutonomyStatusResponse, SoracloudError> {
-        let apartment_name = parse_agent_apartment_name(apartment_name)?;
-        let state = self.state.read().await;
-        ensure_registry_schema(&state)?;
-        let sequence = state.next_sequence;
-        let runtime = state.apartments.get(&apartment_name).ok_or_else(|| {
-            SoracloudError::not_found(format!(
-                "apartment `{apartment_name}` not found in control-plane runtime"
-            ))
-        })?;
-
-        let recent_runs = runtime
-            .autonomy_run_history
-            .iter()
-            .rev()
-            .take(AGENT_AUTONOMY_RECENT_RUN_LIMIT)
-            .cloned()
-            .collect::<Vec<_>>();
-        let allowlist = runtime
-            .artifact_allowlist
-            .values()
-            .map(AgentAutonomyAllowlistEntry::from_rule)
-            .collect::<Vec<_>>();
-
-        Ok(AgentAutonomyStatusResponse {
-            apartment_name,
-            sequence,
-            status: agent_runtime_status_for_sequence(runtime, sequence),
-            lease_expires_sequence: runtime.lease_expires_sequence,
-            lease_remaining_ticks: agent_lease_remaining_ticks(runtime, sequence),
-            manifest_hash: runtime.manifest_hash,
-            revoked_policy_capability_count: agent_revoked_capability_count(runtime),
-            budget_ceiling_units: runtime.autonomy_budget_ceiling_units,
-            budget_remaining_units: runtime.autonomy_budget_remaining_units,
-            allowlist_count: agent_allowlist_count(runtime),
-            run_count: agent_run_count(runtime),
-            process_generation: runtime.process_generation,
-            process_started_sequence: runtime.process_started_sequence,
-            last_active_sequence: runtime.last_active_sequence,
-            last_checkpoint_sequence: runtime.last_checkpoint_sequence,
-            checkpoint_count: runtime.checkpoint_count,
-            persistent_state_total_bytes: runtime.persistent_state.total_bytes,
-            persistent_state_key_count: agent_persistent_state_key_count(runtime),
-            allowlist,
-            recent_runs,
-        })
-    }
-
-    async fn apply_bundle_mutation(
-        &self,
-        mode: MutationMode,
-        request: SignedBundleRequest,
-    ) -> Result<MutationResponse, SoracloudError> {
-        verify_bundle_signature(&request)?;
-        request.bundle.validate_for_admission().map_err(|err| {
-            SoracloudError::bad_request(format!("deployment bundle failed admission checks: {err}"))
-        })?;
-        let host_admission = admit_scr_host_bundle(&request.bundle)?;
-
-        let mut state = self.state.write().await;
-        ensure_registry_schema(&state)?;
-        let previous_state = state.clone();
-
-        let service_name = request.bundle.service.service_name.to_string();
-        let service_version = request.bundle.service.service_version.clone();
-        let sequence = state.next_sequence;
-        let signer = request.provenance.signer.to_string();
-        let previous_version = state
-            .services
-            .get(&service_name)
-            .map(|entry| entry.current_version.clone());
-        let action = match (mode, previous_version.is_some()) {
-            (MutationMode::Deploy, false) => SoracloudAction::Deploy,
-            (MutationMode::Deploy, true) => {
-                return Err(SoracloudError::conflict(format!(
-                    "service `{service_name}` already deployed; use upgrade instead"
-                )));
-            }
-            (MutationMode::Upgrade, false) => {
-                return Err(SoracloudError::not_found(format!(
-                    "service `{service_name}` not found; deploy it before upgrading"
-                )));
-            }
-            (MutationMode::Upgrade, true) => SoracloudAction::Upgrade,
-        };
-
-        if let Some(existing) = state.services.get(&service_name)
-            && existing.current_version == service_version
-        {
-            return Err(SoracloudError::conflict(format!(
-                "service `{service_name}` is already at version `{service_version}`"
-            )));
-        }
-
-        let container_manifest_hash = request.bundle.container_manifest_hash();
-        let service_manifest_hash = request.bundle.service_manifest_hash();
-
-        let mut response_rollout_handle = None;
-        let mut response_rollout_stage = None;
-        let mut response_rollout_percent = None;
-        let revision_count = {
-            let entry = state
-                .services
-                .entry(service_name.clone())
-                .or_insert_with(|| RegistryServiceEntry {
-                    current_version: service_version.clone(),
-                    revisions: Vec::new(),
-                    binding_states: BTreeMap::new(),
-                    training_jobs: BTreeMap::new(),
-                    model_weights: BTreeMap::new(),
-                    model_artifacts: BTreeMap::new(),
-                    active_rollout: None,
-                    last_rollout: None,
-                });
-            entry.current_version = service_version.clone();
-            sync_binding_states(entry, &request.bundle.service.state_bindings);
-            let process_generation = entry
-                .revisions
-                .last()
-                .map_or(1, |revision| revision.process_generation.saturating_add(1));
-            let revision = RegistryServiceRevision {
-                sequence,
-                action,
-                service_version: service_version.clone(),
-                service_manifest_hash,
-                container_manifest_hash,
-                replicas: request.bundle.service.replicas.get(),
-                route_host: request
-                    .bundle
-                    .service
-                    .route
-                    .as_ref()
-                    .map(|route| route.host.clone()),
-                route_path_prefix: request
-                    .bundle
-                    .service
-                    .route
-                    .as_ref()
-                    .map(|route| route.path_prefix.clone()),
-                state_binding_count: u32::try_from(request.bundle.service.state_bindings.len())
-                    .unwrap_or(u32::MAX),
-                state_bindings: request.bundle.service.state_bindings.clone(),
-                allow_model_training: host_admission.allow_model_training,
-                runtime: host_admission.runtime,
-                allow_wallet_signing: host_admission.allow_wallet_signing,
-                allow_state_writes: host_admission.allow_state_writes,
-                network: host_admission.network.clone(),
-                cpu_millis: host_admission.cpu_millis,
-                memory_bytes: host_admission.memory_bytes,
-                ephemeral_storage_bytes: host_admission.ephemeral_storage_bytes,
-                max_open_files: host_admission.max_open_files,
-                max_tasks: host_admission.max_tasks,
-                start_grace_secs: host_admission.start_grace_secs,
-                stop_grace_secs: host_admission.stop_grace_secs,
-                healthcheck_path: host_admission.healthcheck_path.clone(),
-                sandbox_profile_hash: host_admission.sandbox_profile_hash,
-                process_generation,
-                process_started_sequence: sequence,
-                signed_by: signer.clone(),
-            };
-            entry.revisions.push(revision);
-
-            if action == SoracloudAction::Upgrade {
-                let canary_percent = request.bundle.service.rollout.canary_percent.min(100);
-                let traffic_percent = if canary_percent == 0 {
-                    100
-                } else {
-                    canary_percent
-                };
-                let rollout_state = RolloutRuntimeState {
-                    rollout_handle: rollout_handle(&service_name, sequence),
-                    baseline_version: previous_version.clone(),
-                    candidate_version: service_version.clone(),
-                    canary_percent,
-                    traffic_percent,
-                    stage: if traffic_percent >= 100 {
-                        RolloutStage::Promoted
-                    } else {
-                        RolloutStage::Canary
-                    },
-                    health_failures: 0,
-                    max_health_failures: request
-                        .bundle
-                        .service
-                        .rollout
-                        .automatic_rollback_failures
-                        .get(),
-                    health_window_secs: request.bundle.service.rollout.health_window_secs.get(),
-                    created_sequence: sequence,
-                    updated_sequence: sequence,
-                };
-                response_rollout_handle = Some(rollout_state.rollout_handle.clone());
-                response_rollout_stage = Some(rollout_state.stage);
-                response_rollout_percent = Some(rollout_state.traffic_percent);
-                if rollout_state.stage == RolloutStage::Promoted {
-                    entry.active_rollout = None;
-                } else {
-                    entry.active_rollout = Some(rollout_state.clone());
-                }
-                entry.last_rollout = Some(rollout_state);
-            } else {
-                entry.active_rollout = None;
-                entry.last_rollout = None;
-            }
-            u32::try_from(entry.revisions.len()).unwrap_or(u32::MAX)
-        };
-
-        state.audit_log.push(RegistryAuditEvent {
-            sequence,
-            action,
-            service_name: service_name.clone(),
-            from_version: previous_version.clone(),
-            to_version: service_version.clone(),
-            service_manifest_hash,
-            container_manifest_hash,
-            binding_name: None,
-            state_key: None,
-            governance_tx_hash: None,
-            rollout_handle: response_rollout_handle.clone(),
-            policy_name: None,
-            policy_snapshot_hash: None,
-            jurisdiction_tag: None,
-            consent_evidence_hash: None,
-            break_glass: None,
-            break_glass_reason: None,
-            signed_by: signer.clone(),
-        });
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        let audit_event_count = u32::try_from(state.audit_log.len()).unwrap_or(u32::MAX);
-        self.persist_state_or_rollback(&mut state, previous_state)?;
-
-        Ok(MutationResponse {
-            action,
-            service_name,
-            previous_version,
-            current_version: service_version,
-            sequence,
-            service_manifest_hash,
-            container_manifest_hash,
-            revision_count,
-            audit_event_count,
-            signed_by: signer,
-            rollout_handle: response_rollout_handle,
-            rollout_stage: response_rollout_stage,
-            rollout_percent: response_rollout_percent,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SoracloudErrorKind {
     BadRequest,
@@ -6077,29 +1951,6 @@ impl IntoResponse for SoracloudError {
         };
         (status, JsonBody(body)).into_response()
     }
-}
-
-fn sync_binding_states(entry: &mut RegistryServiceEntry, bindings: &[SoraStateBindingV1]) {
-    let active_bindings = bindings
-        .iter()
-        .map(|binding| binding.binding_name.to_string())
-        .collect::<BTreeSet<_>>();
-    entry
-        .binding_states
-        .retain(|name, _| active_bindings.contains(name));
-    for name in active_bindings {
-        entry.binding_states.entry(name).or_default();
-    }
-}
-
-fn ensure_registry_schema(state: &RegistryState) -> Result<(), SoracloudError> {
-    if state.schema_version != REGISTRY_SCHEMA_VERSION {
-        return Err(SoracloudError::internal(format!(
-            "unsupported registry schema {} (expected {REGISTRY_SCHEMA_VERSION})",
-            state.schema_version
-        )));
-    }
-    Ok(())
 }
 
 fn admit_scr_host_bundle(
@@ -6228,12 +2079,6 @@ fn admit_scr_host_bundle(
         healthcheck_path,
         sandbox_profile_hash,
     })
-}
-
-fn normalize_registry_runtime_defaults(state: &mut RegistryState) {
-    for runtime in state.apartments.values_mut() {
-        normalize_agent_runtime_defaults(runtime);
-    }
 }
 
 fn normalize_agent_runtime_defaults(runtime: &mut AgentApartmentRuntimeState) {
@@ -6476,6 +2321,7 @@ fn model_weight_mutation_response(
     }
 }
 
+#[cfg(test)]
 fn model_weight_status_entry(
     service_name: &str,
     model_registry: &ModelWeightRegistryState,
@@ -6859,7 +2705,7 @@ fn soracloud_action_label(action: SoracloudAction) -> &'static str {
     }
 }
 
-fn audit_event_leaf_hash(event: &RegistryAuditEvent) -> Hash {
+fn audit_event_leaf_hash(event: &ControlPlaneAuditEvent) -> Hash {
     Hash::new(Encode::encode(&(
         "soracloud.audit.leaf.v1",
         event.sequence,
@@ -6887,7 +2733,7 @@ fn audit_event_leaf_hash(event: &RegistryAuditEvent) -> Hash {
     )))
 }
 
-fn audit_anchor_hash(audit_log: &[RegistryAuditEvent], anchor_sequence: u64) -> Hash {
+fn audit_anchor_hash(audit_log: &[ControlPlaneAuditEvent], anchor_sequence: u64) -> Hash {
     let mut accumulator = Hash::new(Encode::encode(&"soracloud.audit.anchor.seed.v1"));
     for event in audit_log
         .iter()
@@ -6905,7 +2751,7 @@ fn audit_anchor_hash(audit_log: &[RegistryAuditEvent], anchor_sequence: u64) -> 
 }
 
 fn build_ciphertext_inclusion_proof(
-    audit_log: &[RegistryAuditEvent],
+    audit_log: &[ControlPlaneAuditEvent],
     service_name: &str,
     binding_name: &str,
     state_key: &str,
@@ -7666,6 +3512,49 @@ struct SoracloudMutationSigner {
     private_key: ExposedPrivateKey,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SoracloudAuditBaseline {
+    service_max: u64,
+    training_job_max: u64,
+    model_weight_max: u64,
+    model_artifact_max: u64,
+    agent_apartment_max: u64,
+}
+
+#[derive(Clone, Debug)]
+struct SoracloudSubmittedTx {
+    tx_hash: HashOf<SignedTransaction>,
+    routing_decision: iroha_core::queue::RoutingDecision,
+    audit_baseline: SoracloudAuditBaseline,
+}
+
+#[derive(Debug)]
+enum SoracloudMutationError {
+    Torii(crate::Error),
+    Soracloud(SoracloudError),
+}
+
+impl From<crate::Error> for SoracloudMutationError {
+    fn from(err: crate::Error) -> Self {
+        Self::Torii(err)
+    }
+}
+
+impl From<SoracloudError> for SoracloudMutationError {
+    fn from(err: SoracloudError) -> Self {
+        Self::Soracloud(err)
+    }
+}
+
+impl IntoResponse for SoracloudMutationError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Torii(err) => err.into_response(),
+            Self::Soracloud(err) => err.into_response(),
+        }
+    }
+}
+
 fn require_soracloud_mutation_signer(
     authority: Option<AccountId>,
     private_key: Option<ExposedPrivateKey>,
@@ -7686,41 +3575,47 @@ fn require_soracloud_mutation_signer(
     })
 }
 
-async fn submit_soracloud_instruction(
-    app: &SharedAppState,
-    signer: SoracloudMutationSigner,
-    instruction: InstructionBox,
-    endpoint: &'static str,
-) -> Result<Response, crate::Error> {
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), signer.authority)
-        .with_instructions([instruction])
-        .sign(&signer.private_key.0);
-    let tx_hash = tx.hash();
-    let routing_decision = crate::routing::handle_transaction_with_metrics(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        tx,
-        app.telemetry.clone(),
-        endpoint,
-    )
-    .await?;
+fn soracloud_audit_baseline(app: &SharedAppState) -> SoracloudAuditBaseline {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    SoracloudAuditBaseline {
+        service_max: world
+            .soracloud_service_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        training_job_max: world
+            .soracloud_training_job_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        model_weight_max: world
+            .soracloud_model_weight_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        model_artifact_max: world
+            .soracloud_model_artifact_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        agent_apartment_max: world
+            .soracloud_agent_apartment_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+    }
+}
 
-    let submitted_at_height = u64::try_from(app.state.committed_height()).unwrap_or(0);
-    let submitted_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0);
-    let receipt = TransactionSubmissionReceipt::sign(
-        TransactionSubmissionReceiptPayload {
-            tx_hash,
-            submitted_at_ms,
-            submitted_at_height,
-            signer: app.da_receipt_signer.public_key().clone(),
-        },
-        &app.da_receipt_signer,
-    );
-    let mut response = (StatusCode::ACCEPTED, JsonBody(receipt)).into_response();
+fn attach_routing_headers(
+    response: &mut Response,
+    routing_decision: iroha_core::queue::RoutingDecision,
+) {
     if let Ok(lane_header) =
         axum::http::HeaderValue::from_str(&routing_decision.lane_id.as_u32().to_string())
     {
@@ -7737,10 +3632,289 @@ async fn submit_soracloud_instruction(
             dataspace_header,
         );
     }
-    Ok(response)
 }
 
-fn audit_action_to_registry_action(action: SoraServiceLifecycleActionV1) -> SoracloudAction {
+fn response_with_routing_headers<T>(
+    routing_decision: iroha_core::queue::RoutingDecision,
+    body: T,
+) -> Response
+where
+    T: norito::json::JsonSerialize + Send,
+{
+    let mut response = JsonBody(body).into_response();
+    attach_routing_headers(&mut response, routing_decision);
+    response
+}
+
+fn latest_service_audit_event_after<'a, P>(
+    world: &'a impl WorldReadOnly,
+    after_sequence: u64,
+    predicate: P,
+) -> Option<&'a SoraServiceAuditEventV1>
+where
+    P: Fn(&SoraServiceAuditEventV1) -> bool,
+{
+    world
+        .soracloud_service_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
+        .map(|(_sequence, event)| event)
+        .max_by_key(|event| event.sequence)
+}
+
+fn latest_training_job_audit_event_after<'a, P>(
+    world: &'a impl WorldReadOnly,
+    after_sequence: u64,
+    predicate: P,
+) -> Option<&'a SoraTrainingJobAuditEventV1>
+where
+    P: Fn(&SoraTrainingJobAuditEventV1) -> bool,
+{
+    world
+        .soracloud_training_job_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
+        .map(|(_sequence, event)| event)
+        .max_by_key(|event| event.sequence)
+}
+
+fn latest_model_weight_audit_event_after<'a, P>(
+    world: &'a impl WorldReadOnly,
+    after_sequence: u64,
+    predicate: P,
+) -> Option<&'a SoraModelWeightAuditEventV1>
+where
+    P: Fn(&SoraModelWeightAuditEventV1) -> bool,
+{
+    world
+        .soracloud_model_weight_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
+        .map(|(_sequence, event)| event)
+        .max_by_key(|event| event.sequence)
+}
+
+fn latest_model_artifact_audit_event_after<'a, P>(
+    world: &'a impl WorldReadOnly,
+    after_sequence: u64,
+    predicate: P,
+) -> Option<&'a SoraModelArtifactAuditEventV1>
+where
+    P: Fn(&SoraModelArtifactAuditEventV1) -> bool,
+{
+    world
+        .soracloud_model_artifact_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
+        .map(|(_sequence, event)| event)
+        .max_by_key(|event| event.sequence)
+}
+
+fn latest_agent_apartment_audit_event_after<'a, P>(
+    world: &'a impl WorldReadOnly,
+    after_sequence: u64,
+    predicate: P,
+) -> Option<&'a SoraAgentApartmentAuditEventV1>
+where
+    P: Fn(&SoraAgentApartmentAuditEventV1) -> bool,
+{
+    world
+        .soracloud_agent_apartment_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
+        .map(|(_sequence, event)| event)
+        .max_by_key(|event| event.sequence)
+}
+
+async fn submit_soracloud_instruction(
+    app: &SharedAppState,
+    signer: SoracloudMutationSigner,
+    instruction: InstructionBox,
+    endpoint: &'static str,
+) -> Result<SoracloudSubmittedTx, crate::Error> {
+    let audit_baseline = soracloud_audit_baseline(app);
+    let tx = TransactionBuilder::new((*app.chain_id).clone(), signer.authority)
+        .with_instructions([instruction])
+        .sign(&signer.private_key.0);
+    let tx_hash = tx.hash();
+    let routing_decision = crate::routing::handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        app.telemetry.clone(),
+        endpoint,
+    )
+    .await?;
+    Ok(SoracloudSubmittedTx {
+        tx_hash,
+        routing_decision,
+        audit_baseline,
+    })
+}
+
+fn soracloud_mutation_pipeline_status(
+    app: &SharedAppState,
+    tx_hash: &HashOf<SignedTransaction>,
+) -> Option<crate::PipelineStatusEntry> {
+    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(tx_hash)
+        && matches!(
+            entry.kind,
+            crate::PipelineStatusKind::Applied
+                | crate::PipelineStatusKind::Rejected
+                | crate::PipelineStatusKind::Expired
+        )
+    {
+        return Some(entry);
+    }
+
+    if let Some(entry) = crate::pipeline_status_from_state(app, tx_hash) {
+        app.pipeline_status_cache
+            .record_entry(tx_hash.clone(), entry.clone());
+        return Some(entry);
+    }
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(tx_hash) {
+        return Some(entry);
+    }
+
+    if app.queue.contains_pending_hash(tx_hash.clone(), &app.state) {
+        let entry =
+            crate::PipelineStatusEntry::fresh(crate::PipelineStatusKind::Queued, None, None);
+        app.pipeline_status_cache
+            .record_entry(tx_hash.clone(), entry.clone());
+        return Some(entry);
+    }
+
+    None
+}
+
+fn error_chain_message(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = Vec::new();
+    let mut current = Some(error);
+    while let Some(err) = current {
+        let message = err.to_string();
+        if !message.is_empty() && parts.last() != Some(&message) {
+            parts.push(message);
+        }
+        current = err.source();
+    }
+    parts.join(": ")
+}
+
+fn join_nested_message(primary: String, nested: String) -> String {
+    if nested.is_empty() || nested == primary {
+        primary
+    } else if nested.starts_with(&primary) {
+        nested
+    } else {
+        format!("{primary}: {nested}")
+    }
+}
+
+fn instruction_execution_message(
+    error: &iroha_data_model::isi::error::InstructionExecutionError,
+) -> String {
+    use iroha_data_model::isi::error::InstructionExecutionError;
+
+    match error {
+        InstructionExecutionError::InvalidParameter(inner) => {
+            join_nested_message(error.to_string(), inner.to_string())
+        }
+        _ => error_chain_message(error),
+    }
+}
+
+fn validation_fail_message(validation: &iroha_data_model::ValidationFail) -> String {
+    match validation {
+        iroha_data_model::ValidationFail::InstructionFailed(error) => {
+            join_nested_message(validation.to_string(), instruction_execution_message(error))
+        }
+        _ => error_chain_message(validation),
+    }
+}
+
+fn transaction_rejection_message(
+    reason: &iroha_data_model::transaction::error::TransactionRejectionReason,
+) -> String {
+    use iroha_data_model::transaction::error::TransactionRejectionReason;
+
+    match reason {
+        TransactionRejectionReason::Validation(validation) => {
+            join_nested_message(reason.to_string(), validation_fail_message(validation))
+        }
+        TransactionRejectionReason::InstructionExecution(error) => {
+            join_nested_message(reason.to_string(), error.to_string())
+        }
+        _ => error_chain_message(reason),
+    }
+}
+
+async fn wait_for_soracloud_transaction(
+    app: &SharedAppState,
+    tx_hash: &HashOf<SignedTransaction>,
+) -> Result<(), SoracloudError> {
+    let deadline = tokio::time::Instant::now() + SORACLOUD_MUTATION_CONFIRMATION_TIMEOUT;
+    loop {
+        if let Some(entry) = soracloud_mutation_pipeline_status(app, tx_hash) {
+            match entry.kind {
+                crate::PipelineStatusKind::Applied => return Ok(()),
+                crate::PipelineStatusKind::Rejected => {
+                    let message = entry.rejection.as_ref().map_or_else(
+                        || format!("Soracloud transaction `{tx_hash}` was rejected"),
+                        |reason| {
+                            format!(
+                                "Soracloud transaction `{tx_hash}` was rejected: {}",
+                                transaction_rejection_message(reason)
+                            )
+                        },
+                    );
+                    return Err(SoracloudError::bad_request(message));
+                }
+                crate::PipelineStatusKind::Expired => {
+                    return Err(SoracloudError::conflict(format!(
+                        "Soracloud transaction `{tx_hash}` expired before reaching authoritative state"
+                    )));
+                }
+                crate::PipelineStatusKind::Queued
+                | crate::PipelineStatusKind::Approved
+                | crate::PipelineStatusKind::Committed => {}
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(SoracloudError::conflict(format!(
+                "timed out waiting for Soracloud transaction `{tx_hash}` to reach authoritative state"
+            )));
+        }
+
+        tokio::time::sleep(SORACLOUD_MUTATION_CONFIRMATION_POLL_INTERVAL).await;
+    }
+}
+
+async fn submit_confirm_and_respond<T, F>(
+    app: &SharedAppState,
+    signer: SoracloudMutationSigner,
+    instruction: InstructionBox,
+    endpoint: &'static str,
+    build_response: F,
+) -> Result<Response, SoracloudMutationError>
+where
+    T: norito::json::JsonSerialize + Send,
+    F: FnOnce(&SharedAppState, &SoracloudAuditBaseline) -> Result<T, SoracloudError>,
+{
+    let submitted = submit_soracloud_instruction(app, signer, instruction, endpoint).await?;
+    wait_for_soracloud_transaction(app, &submitted.tx_hash).await?;
+    let payload = build_response(app, &submitted.audit_baseline)?;
+    Ok(response_with_routing_headers(
+        submitted.routing_decision,
+        payload,
+    ))
+}
+
+fn audit_action_to_control_plane_action(action: SoraServiceLifecycleActionV1) -> SoracloudAction {
     match action {
         SoraServiceLifecycleActionV1::Deploy => SoracloudAction::Deploy,
         SoraServiceLifecycleActionV1::Upgrade => SoracloudAction::Upgrade,
@@ -7753,7 +3927,7 @@ fn audit_action_to_registry_action(action: SoraServiceLifecycleActionV1) -> Sora
     }
 }
 
-fn rollout_stage_to_registry_stage(stage: SoraRolloutStageV1) -> RolloutStage {
+fn rollout_stage_to_control_plane_stage(stage: SoraRolloutStageV1) -> RolloutStage {
     match stage {
         SoraRolloutStageV1::Canary => RolloutStage::Canary,
         SoraRolloutStageV1::Promoted => RolloutStage::Promoted,
@@ -7768,7 +3942,7 @@ fn rollout_state_to_runtime_state(state: &SoraServiceRolloutStateV1) -> RolloutR
         candidate_version: state.candidate_version.clone(),
         canary_percent: state.canary_percent,
         traffic_percent: state.traffic_percent,
-        stage: rollout_stage_to_registry_stage(state.stage),
+        stage: rollout_stage_to_control_plane_stage(state.stage),
         health_failures: state.health_failures,
         max_health_failures: state.max_health_failures,
         health_window_secs: state.health_window_secs,
@@ -7777,10 +3951,12 @@ fn rollout_state_to_runtime_state(state: &SoraServiceRolloutStateV1) -> RolloutR
     }
 }
 
-fn audit_event_to_registry_audit_event(event: &SoraServiceAuditEventV1) -> RegistryAuditEvent {
-    RegistryAuditEvent {
+fn audit_event_to_control_plane_audit_event(
+    event: &SoraServiceAuditEventV1,
+) -> ControlPlaneAuditEvent {
+    ControlPlaneAuditEvent {
         sequence: event.sequence,
-        action: audit_action_to_registry_action(event.action),
+        action: audit_action_to_control_plane_action(event.action),
         service_name: event.service_name.to_string(),
         from_version: event.from_version.clone(),
         to_version: event.to_version.clone(),
@@ -7809,13 +3985,13 @@ fn state_mutation_operation_to_model(
     }
 }
 
-fn authoritative_audit_log(app: &SharedAppState) -> Vec<RegistryAuditEvent> {
+fn authoritative_audit_log(app: &SharedAppState) -> Vec<ControlPlaneAuditEvent> {
     let state_view = app.state.view();
     let world = state_view.world();
     let mut audit_log = world
         .soracloud_service_audit_events()
         .iter()
-        .map(|(_sequence, event)| audit_event_to_registry_audit_event(event))
+        .map(|(_sequence, event)| audit_event_to_control_plane_audit_event(event))
         .collect::<Vec<_>>();
     audit_log.sort_by_key(|event| event.sequence);
     audit_log
@@ -7914,6 +4090,1256 @@ fn authoritative_model_artifact_status_response(
         schema_version: MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1,
         artifact: authoritative_model_artifact_status_entry(&service_name, &artifact),
     })
+}
+
+fn authoritative_training_job_action(action: SoraTrainingJobActionV1) -> TrainingJobAction {
+    match action {
+        SoraTrainingJobActionV1::Start => TrainingJobAction::Start,
+        SoraTrainingJobActionV1::Checkpoint => TrainingJobAction::Checkpoint,
+        SoraTrainingJobActionV1::Retry => TrainingJobAction::Retry,
+    }
+}
+
+fn authoritative_model_weight_action(action: SoraModelWeightActionV1) -> ModelWeightAction {
+    match action {
+        SoraModelWeightActionV1::Register => ModelWeightAction::Register,
+        SoraModelWeightActionV1::Promote => ModelWeightAction::Promote,
+        SoraModelWeightActionV1::Rollback => ModelWeightAction::Rollback,
+    }
+}
+
+fn authoritative_model_artifact_action(action: SoraModelArtifactActionV1) -> ModelArtifactAction {
+    match action {
+        SoraModelArtifactActionV1::Register => ModelArtifactAction::Register,
+    }
+}
+
+fn authoritative_agent_action(action: SoraAgentApartmentActionV1) -> AgentApartmentAction {
+    match action {
+        SoraAgentApartmentActionV1::Deploy => AgentApartmentAction::Deploy,
+        SoraAgentApartmentActionV1::LeaseRenew => AgentApartmentAction::LeaseRenew,
+        SoraAgentApartmentActionV1::Restart => AgentApartmentAction::Restart,
+        SoraAgentApartmentActionV1::WalletSpendRequested => {
+            AgentApartmentAction::WalletSpendRequested
+        }
+        SoraAgentApartmentActionV1::WalletSpendApproved => {
+            AgentApartmentAction::WalletSpendApproved
+        }
+        SoraAgentApartmentActionV1::PolicyRevoked => AgentApartmentAction::PolicyRevoked,
+        SoraAgentApartmentActionV1::MessageEnqueued => AgentApartmentAction::MessageEnqueued,
+        SoraAgentApartmentActionV1::MessageAcknowledged => {
+            AgentApartmentAction::MessageAcknowledged
+        }
+        SoraAgentApartmentActionV1::ArtifactAllowed => AgentApartmentAction::ArtifactAllowed,
+        SoraAgentApartmentActionV1::AutonomyRunApproved => {
+            AgentApartmentAction::AutonomyRunApproved
+        }
+    }
+}
+
+fn authoritative_service_deployment_bundle(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), SoracloudError> {
+    let service_id: Name = service_name
+        .parse()
+        .map_err(|err| SoracloudError::bad_request(format!("invalid service_name: {err}")))?;
+    let deployment = world
+        .soracloud_service_deployments()
+        .get(&service_id)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "service `{service_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let bundle = world
+        .soracloud_service_revisions()
+        .get(&(
+            deployment.service_name.to_string(),
+            deployment.current_service_version.clone(),
+        ))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "service `{service_name}` active revision `{}` is missing from authoritative state",
+                deployment.current_service_version
+            ))
+        })?;
+    Ok((deployment, bundle))
+}
+
+fn authoritative_binding_runtime_summary(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    binding_name: &str,
+) -> (u64, u32) {
+    let (total_bytes, key_count) = world
+        .soracloud_service_state_entries()
+        .iter()
+        .filter(|((stored_service, stored_binding, _state_key), _entry)| {
+            stored_service == service_name && stored_binding == binding_name
+        })
+        .fold((0_u64, 0_u32), |(bytes, count), (_key, entry)| {
+            (
+                bytes.saturating_add(entry.payload_bytes.get()),
+                count.saturating_add(1),
+            )
+        });
+    (total_bytes, key_count)
+}
+
+fn authoritative_service_event_count(world: &impl WorldReadOnly, service_name: &str) -> u32 {
+    u32::try_from(
+        world
+            .soracloud_service_audit_events()
+            .iter()
+            .filter(|(_sequence, event)| event.service_name.as_ref() == service_name)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+fn authoritative_training_job_event_count(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    job_id: &str,
+) -> u32 {
+    u32::try_from(
+        world
+            .soracloud_training_job_audit_events()
+            .iter()
+            .filter(|(_sequence, event)| {
+                event.service_name.as_ref() == service_name && event.job_id == job_id
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+fn authoritative_model_event_count(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    model_name: &str,
+) -> u32 {
+    u32::try_from(
+        world
+            .soracloud_model_weight_audit_events()
+            .iter()
+            .filter(|(_sequence, event)| {
+                event.service_name.as_ref() == service_name && event.model_name == model_name
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+fn authoritative_model_version_count(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    model_name: &str,
+) -> u32 {
+    u32::try_from(
+        world
+            .soracloud_model_weight_versions()
+            .iter()
+            .filter(|((stored_service, stored_model, _version), _record)| {
+                stored_service == service_name && stored_model == model_name
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+fn authoritative_model_artifact_count(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    model_name: &str,
+) -> u32 {
+    u32::try_from(
+        world
+            .soracloud_model_artifacts()
+            .iter()
+            .filter(|((_stored_service, _job_id), record)| {
+                record.service_name.as_ref() == service_name && record.model_name == model_name
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+fn authoritative_agent_event_count(world: &impl WorldReadOnly, apartment_name: &str) -> u32 {
+    u32::try_from(
+        world
+            .soracloud_agent_apartment_audit_events()
+            .iter()
+            .filter(|(_sequence, event)| event.apartment_name.as_ref() == apartment_name)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+fn authoritative_agent_current_sequence(app: &SharedAppState) -> u64 {
+    authoritative_soracloud_sequence(app)
+}
+
+fn authoritative_agent_mutation_response(
+    app: &SharedAppState,
+    record: &SoraAgentApartmentRecordV1,
+    event: &SoraAgentApartmentAuditEventV1,
+) -> AgentMutationResponse {
+    let current_sequence = authoritative_agent_current_sequence(app);
+    AgentMutationResponse {
+        action: authoritative_agent_action(event.action),
+        apartment_name: record.manifest.apartment_name.to_string(),
+        sequence: event.sequence,
+        status: authoritative_agent_runtime_status_for_sequence(record, current_sequence),
+        lease_expires_sequence: record.lease_expires_sequence,
+        lease_remaining_ticks: record
+            .lease_expires_sequence
+            .saturating_sub(current_sequence),
+        manifest_hash: record.manifest_hash,
+        restart_count: record.restart_count,
+        pending_wallet_request_count: u32::try_from(record.pending_wallet_requests.len())
+            .unwrap_or(u32::MAX),
+        revoked_policy_capability_count: u32::try_from(record.revoked_policy_capabilities.len())
+            .unwrap_or(u32::MAX),
+        budget_remaining_units: record.autonomy_budget_remaining_units,
+        allowlist_count: u32::try_from(record.artifact_allowlist.len()).unwrap_or(u32::MAX),
+        run_count: u32::try_from(record.autonomy_run_history.len()).unwrap_or(u32::MAX),
+        process_generation: record.process_generation,
+        process_started_sequence: record.process_started_sequence,
+        last_active_sequence: record.last_active_sequence,
+        last_checkpoint_sequence: record.last_checkpoint_sequence,
+        checkpoint_count: record.checkpoint_count,
+        persistent_state_total_bytes: record.persistent_state.total_bytes,
+        persistent_state_key_count: u32::try_from(record.persistent_state.key_sizes.len())
+            .unwrap_or(u32::MAX),
+        audit_event_count: 0,
+        signed_by: event.signer.to_string(),
+        capability: event.capability.clone(),
+        reason: event.reason.clone(),
+        last_restart_sequence: record.last_restart_sequence,
+        last_restart_reason: record.last_restart_reason.clone(),
+    }
+}
+
+fn authoritative_agent_wallet_mutation_response(
+    app: &SharedAppState,
+    record: &SoraAgentApartmentRecordV1,
+    event: &SoraAgentApartmentAuditEventV1,
+) -> AgentWalletMutationResponse {
+    let current_sequence = authoritative_agent_current_sequence(app);
+    let day_bucket = matches!(
+        event.action,
+        SoraAgentApartmentActionV1::WalletSpendApproved
+    )
+    .then(|| wallet_day_bucket(event.sequence));
+    let day_spent_nanos = match (day_bucket, event.asset_definition.as_deref()) {
+        (Some(bucket), Some(asset_definition)) => record
+            .wallet_daily_spend
+            .get(&format!("{asset_definition}:{bucket}"))
+            .map(|entry| entry.spent_nanos),
+        _ => None,
+    };
+    AgentWalletMutationResponse {
+        action: authoritative_agent_action(event.action),
+        apartment_name: record.manifest.apartment_name.to_string(),
+        sequence: event.sequence,
+        manifest_hash: record.manifest_hash,
+        status: authoritative_agent_runtime_status_for_sequence(record, current_sequence),
+        request_id: event.request_id.clone(),
+        asset_definition: event.asset_definition.clone(),
+        amount_nanos: event.amount_nanos,
+        day_bucket,
+        day_spent_nanos,
+        capability: event.capability.clone(),
+        reason: event.reason.clone(),
+        pending_request_count: u32::try_from(record.pending_wallet_requests.len())
+            .unwrap_or(u32::MAX),
+        revoked_policy_capability_count: u32::try_from(record.revoked_policy_capabilities.len())
+            .unwrap_or(u32::MAX),
+        audit_event_count: 0,
+        signed_by: event.signer.to_string(),
+    }
+}
+
+fn authoritative_agent_mailbox_mutation_response(
+    app: &SharedAppState,
+    apartment_name: &str,
+    record: &SoraAgentApartmentRecordV1,
+    event: &SoraAgentApartmentAuditEventV1,
+) -> Result<AgentMailboxMutationResponse, SoracloudError> {
+    let current_sequence = authoritative_agent_current_sequence(app);
+    let message_id = event.request_id.clone().ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "agent mailbox audit event for apartment `{apartment_name}` is missing message_id"
+        ))
+    })?;
+    let channel = event.channel.clone().ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "agent mailbox audit event for apartment `{apartment_name}` is missing channel"
+        ))
+    })?;
+    let payload_hash = event.payload_hash.ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "agent mailbox audit event for apartment `{apartment_name}` is missing payload hash"
+        ))
+    })?;
+    Ok(AgentMailboxMutationResponse {
+        action: authoritative_agent_action(event.action),
+        apartment_name: apartment_name.to_owned(),
+        sequence: event.sequence,
+        message_id,
+        from_apartment: event.from_apartment.clone(),
+        to_apartment: event.to_apartment.clone(),
+        channel,
+        payload_hash,
+        status: authoritative_agent_runtime_status_for_sequence(record, current_sequence),
+        pending_message_count: u32::try_from(record.mailbox_queue.len()).unwrap_or(u32::MAX),
+        audit_event_count: 0,
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_agent_autonomy_mutation_response(
+    app: &SharedAppState,
+    record: &SoraAgentApartmentRecordV1,
+    event: &SoraAgentApartmentAuditEventV1,
+) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
+    let current_sequence = authoritative_agent_current_sequence(app);
+    let artifact_hash = event.artifact_hash.clone().ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "agent autonomy audit event for apartment `{}` is missing artifact hash",
+            record.manifest.apartment_name
+        ))
+    })?;
+    Ok(AgentAutonomyMutationResponse {
+        action: authoritative_agent_action(event.action),
+        apartment_name: record.manifest.apartment_name.to_string(),
+        sequence: event.sequence,
+        status: authoritative_agent_runtime_status_for_sequence(record, current_sequence),
+        lease_expires_sequence: record.lease_expires_sequence,
+        lease_remaining_ticks: record
+            .lease_expires_sequence
+            .saturating_sub(current_sequence),
+        manifest_hash: record.manifest_hash,
+        artifact_hash,
+        provenance_hash: event.provenance_hash.clone(),
+        run_id: event.run_id.clone(),
+        run_label: event.run_label.clone(),
+        budget_units: event.budget_units,
+        budget_remaining_units: record.autonomy_budget_remaining_units,
+        allowlist_count: u32::try_from(record.artifact_allowlist.len()).unwrap_or(u32::MAX),
+        run_count: u32::try_from(record.autonomy_run_history.len()).unwrap_or(u32::MAX),
+        process_generation: record.process_generation,
+        process_started_sequence: record.process_started_sequence,
+        last_active_sequence: record.last_active_sequence,
+        last_checkpoint_sequence: record.last_checkpoint_sequence,
+        checkpoint_count: record.checkpoint_count,
+        persistent_state_total_bytes: record.persistent_state.total_bytes,
+        persistent_state_key_count: u32::try_from(record.persistent_state.key_sizes.len())
+            .unwrap_or(u32::MAX),
+        audit_event_count: 0,
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_service_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    expected_action: SoraServiceLifecycleActionV1,
+) -> Result<MutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let event = world
+        .soracloud_service_audit_events()
+        .get(&deployment.process_started_sequence)
+        .cloned()
+        .filter(|event| {
+            event.sequence > baseline.service_max
+                && event.action == expected_action
+                && event.service_name == deployment.service_name
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "authoritative Soracloud audit event for service `{service_name}` was not observed after mutation"
+            ))
+        })?;
+    let rollout = deployment
+        .active_rollout
+        .as_ref()
+        .or(deployment.last_rollout.as_ref());
+    Ok(MutationResponse {
+        action: audit_action_to_control_plane_action(event.action),
+        service_name: deployment.service_name.to_string(),
+        previous_version: event.from_version,
+        current_version: deployment.current_service_version.clone(),
+        sequence: event.sequence,
+        service_manifest_hash: deployment.current_service_manifest_hash,
+        container_manifest_hash: deployment.current_container_manifest_hash,
+        revision_count: deployment.revision_count,
+        audit_event_count: authoritative_service_event_count(world, service_name),
+        signed_by: event.signer.to_string(),
+        rollout_handle: rollout.map(|state| state.rollout_handle.clone()),
+        rollout_stage: rollout.map(|state| rollout_stage_to_control_plane_stage(state.stage)),
+        rollout_percent: rollout.map(|state| state.traffic_percent),
+    })
+}
+
+fn authoritative_rollout_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    requested_rollout_handle: &str,
+    governance_tx_hash: Hash,
+) -> Result<RolloutResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let rollout = deployment
+        .active_rollout
+        .as_ref()
+        .or(deployment.last_rollout.as_ref())
+        .filter(|state| state.rollout_handle == requested_rollout_handle)
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "rollout `{requested_rollout_handle}` not found for service `{service_name}` in authoritative Soracloud state"
+            ))
+        })?;
+    let event = world
+        .soracloud_service_audit_events()
+        .get(&rollout.updated_sequence)
+        .cloned()
+        .filter(|event| {
+            event.sequence > baseline.service_max
+                && event.action == SoraServiceLifecycleActionV1::Rollout
+                && event.service_name == deployment.service_name
+                && event.rollout_handle.as_deref() == Some(requested_rollout_handle)
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "authoritative rollout audit event for service `{service_name}` was not observed after mutation"
+            ))
+        })?;
+    Ok(RolloutResponse {
+        action: audit_action_to_control_plane_action(event.action),
+        service_name: deployment.service_name.to_string(),
+        rollout_handle: rollout.rollout_handle.clone(),
+        stage: rollout_stage_to_control_plane_stage(rollout.stage),
+        current_version: deployment.current_service_version.clone(),
+        traffic_percent: rollout.traffic_percent,
+        health_failures: rollout.health_failures,
+        max_health_failures: rollout.max_health_failures,
+        sequence: event.sequence,
+        governance_tx_hash: event.governance_tx_hash.unwrap_or(governance_tx_hash),
+        audit_event_count: authoritative_service_event_count(world, service_name),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_state_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    binding_name: &str,
+    key: &str,
+    operation: StateMutationOperation,
+) -> Result<StateMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let event = latest_service_audit_event_after(world, baseline.service_max, |event| {
+        event.service_name.as_ref() == service_name
+            && event.action == SoraServiceLifecycleActionV1::StateMutation
+            && event.binding_name.as_ref().is_some_and(|name| name.as_ref() == binding_name)
+            && event.state_key.as_deref() == Some(key)
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative Soracloud state mutation event for `{service_name}`/`{binding_name}`/`{key}` was not observed after mutation"
+        ))
+    })?;
+    let (binding_total_bytes, binding_key_count) =
+        authoritative_binding_runtime_summary(world, service_name, binding_name);
+    Ok(StateMutationResponse {
+        action: audit_action_to_control_plane_action(event.action),
+        service_name: service_name.to_owned(),
+        binding_name: binding_name.to_owned(),
+        key: key.to_owned(),
+        operation,
+        sequence: event.sequence,
+        governance_tx_hash: event.governance_tx_hash.ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "state mutation audit event for `{service_name}`/`{binding_name}`/`{key}` is missing governance_tx_hash"
+            ))
+        })?,
+        current_version: deployment.current_service_version,
+        binding_total_bytes,
+        binding_key_count,
+        audit_event_count: authoritative_service_event_count(world, service_name),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_fhe_job_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    binding_name: &str,
+    job: &FheJobSpecV1,
+    governance_tx_hash: Hash,
+) -> Result<FheJobRunResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let event = latest_service_audit_event_after(world, baseline.service_max, |event| {
+        event.service_name.as_ref() == service_name
+            && event.action == SoraServiceLifecycleActionV1::FheJobRun
+            && event.binding_name.as_ref().is_some_and(|name| name.as_ref() == binding_name)
+            && event.state_key.as_deref() == Some(job.output_state_key.as_str())
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative FHE audit event for service `{service_name}` job `{}` was not observed after mutation",
+            job.job_id
+        ))
+    })?;
+    let entry = world
+        .soracloud_service_state_entries()
+        .get(&(
+            service_name.to_owned(),
+            binding_name.to_owned(),
+            job.output_state_key.clone(),
+        ))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "authoritative ciphertext state for service `{service_name}` output `{}` is missing after FHE job application",
+                job.output_state_key
+            ))
+        })?;
+    let (binding_total_bytes, binding_key_count) =
+        authoritative_binding_runtime_summary(world, service_name, binding_name);
+    Ok(FheJobRunResponse {
+        action: audit_action_to_control_plane_action(event.action),
+        service_name: service_name.to_owned(),
+        binding_name: binding_name.to_owned(),
+        job_id: job.job_id.clone(),
+        operation: job.operation,
+        sequence: event.sequence,
+        governance_tx_hash: event.governance_tx_hash.unwrap_or(governance_tx_hash),
+        output_state_key: job.output_state_key.clone(),
+        output_payload_bytes: entry.payload_bytes.get(),
+        output_commitment: entry.payload_commitment,
+        current_version: deployment.current_service_version,
+        binding_total_bytes,
+        binding_key_count,
+        audit_event_count: authoritative_service_event_count(world, service_name),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_decryption_request_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    request_id: &str,
+) -> Result<DecryptionRequestResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_decryption_request_records()
+        .get(&(service_name.to_owned(), request_id.to_owned()))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "decryption request `{request_id}` not found for service `{service_name}` in authoritative Soracloud state"
+            ))
+        })?;
+    if record.sequence <= baseline.service_max {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative decryption request `{request_id}` for service `{service_name}` was not observed after mutation"
+        )));
+    }
+    let event = world
+        .soracloud_service_audit_events()
+        .get(&record.sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraServiceLifecycleActionV1::DecryptionRequest
+                && event.service_name.as_ref() == service_name
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "decryption request audit event `{}` for service `{service_name}` is missing from authoritative state",
+                record.sequence
+            ))
+        })?;
+    Ok(DecryptionRequestResponse {
+        action: audit_action_to_control_plane_action(event.action),
+        service_name: service_name.to_owned(),
+        policy_name: record.request.policy_name.clone(),
+        request_id: record.request.request_id.clone(),
+        binding_name: record.request.binding_name.clone(),
+        state_key: record.request.state_key.clone(),
+        jurisdiction_tag: record.request.jurisdiction_tag.clone(),
+        policy_snapshot_hash: record.policy_snapshot_hash(),
+        consent_evidence_hash: record.request.consent_evidence_hash,
+        break_glass: record.request.break_glass,
+        break_glass_reason: record.request.break_glass_reason.clone(),
+        sequence: record.sequence,
+        governance_tx_hash: record.request.governance_tx_hash,
+        current_version: record.service_version.clone(),
+        audit_event_count: authoritative_service_event_count(world, service_name),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_training_job_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    job_id: &str,
+    expected_action: SoraTrainingJobActionV1,
+) -> Result<TrainingJobMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_training_jobs()
+        .get(&(service_name.to_owned(), job_id.to_owned()))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "training job `{job_id}` not found for service `{service_name}` in authoritative Soracloud state"
+            ))
+        })?;
+    if record.updated_sequence <= baseline.training_job_max {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative training job `{job_id}` for service `{service_name}` was not updated by the submitted mutation"
+        )));
+    }
+    let event = world
+        .soracloud_training_job_audit_events()
+        .get(&record.updated_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == expected_action
+                && event.service_name.as_ref() == service_name
+                && event.job_id == job_id
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "training job audit event `{}` for service `{service_name}` job `{job_id}` is missing from authoritative state",
+                record.updated_sequence
+            ))
+        })?;
+    Ok(TrainingJobMutationResponse {
+        action: authoritative_training_job_action(event.action),
+        service_name: service_name.to_owned(),
+        model_name: record.model_name.clone(),
+        job_id: record.job_id.clone(),
+        sequence: event.sequence,
+        status: authoritative_training_job_status(record.status),
+        worker_group_size: record.worker_group_size,
+        target_steps: record.target_steps,
+        completed_steps: record.completed_steps,
+        checkpoint_interval_steps: record.checkpoint_interval_steps,
+        last_checkpoint_step: record.last_checkpoint_step,
+        checkpoint_count: record.checkpoint_count,
+        retry_count: record.retry_count,
+        max_retries: record.max_retries,
+        step_compute_units: record.step_compute_units,
+        compute_budget_units: record.compute_budget_units,
+        compute_consumed_units: record.compute_consumed_units,
+        compute_remaining_units: record
+            .compute_budget_units
+            .saturating_sub(record.compute_consumed_units),
+        storage_budget_bytes: record.storage_budget_bytes,
+        storage_consumed_bytes: record.storage_consumed_bytes,
+        storage_remaining_bytes: record
+            .storage_budget_bytes
+            .saturating_sub(record.storage_consumed_bytes),
+        latest_metrics_hash: record.latest_metrics_hash,
+        last_failure_reason: record.last_failure_reason.clone(),
+        training_event_count: authoritative_training_job_event_count(world, service_name, job_id),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_model_weight_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    model_name: &str,
+    target_version: &str,
+    expected_action: SoraModelWeightActionV1,
+) -> Result<ModelWeightMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let registry = world
+        .soracloud_model_registries()
+        .get(&(service_name.to_owned(), model_name.to_owned()))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "model `{model_name}` is not registered for service `{service_name}` in authoritative Soracloud state"
+            ))
+        })?;
+    let weight_record = world
+        .soracloud_model_weight_versions()
+        .get(&(
+            service_name.to_owned(),
+            model_name.to_owned(),
+            target_version.to_owned(),
+        ))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "weight version `{target_version}` not found for model `{model_name}` in authoritative Soracloud state"
+            ))
+        })?;
+    let event_sequence = match expected_action {
+        SoraModelWeightActionV1::Register => weight_record.registered_sequence,
+        SoraModelWeightActionV1::Promote => weight_record.promoted_sequence.ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "weight version `{target_version}` for model `{model_name}` has not been promoted in authoritative Soracloud state"
+            ))
+        })?,
+        SoraModelWeightActionV1::Rollback => registry.updated_sequence,
+    };
+    if event_sequence <= baseline.model_weight_max {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative model-weight event for service `{service_name}` model `{model_name}` target `{target_version}` was not observed after mutation"
+        )));
+    }
+    let event = world
+        .soracloud_model_weight_audit_events()
+        .get(&event_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == expected_action
+                && event.service_name.as_ref() == service_name
+                && event.model_name == model_name
+                && event.target_version == target_version
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "model-weight audit event `{event_sequence}` for service `{service_name}` model `{model_name}` target `{target_version}` is missing from authoritative state"
+            ))
+        })?;
+    Ok(ModelWeightMutationResponse {
+        action: authoritative_model_weight_action(event.action),
+        service_name: service_name.to_owned(),
+        model_name: model_name.to_owned(),
+        target_version: target_version.to_owned(),
+        current_version: registry.current_version.clone(),
+        parent_version: weight_record.parent_version.clone(),
+        sequence: event.sequence,
+        version_count: authoritative_model_version_count(world, service_name, model_name),
+        model_event_count: authoritative_model_event_count(world, service_name, model_name),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_model_artifact_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    training_job_id: &str,
+) -> Result<ModelArtifactMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let artifact = world
+        .soracloud_model_artifacts()
+        .get(&(service_name.to_owned(), training_job_id.to_owned()))
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "artifact metadata for training job `{training_job_id}` not found for service `{service_name}` in authoritative Soracloud state"
+            ))
+        })?;
+    if artifact.registered_sequence <= baseline.model_artifact_max {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative model-artifact event for service `{service_name}` training job `{training_job_id}` was not observed after mutation"
+        )));
+    }
+    let event = world
+        .soracloud_model_artifact_audit_events()
+        .get(&artifact.registered_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraModelArtifactActionV1::Register
+                && event.service_name.as_ref() == service_name
+                && event.training_job_id == training_job_id
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "model-artifact audit event `{}` for service `{service_name}` training job `{training_job_id}` is missing from authoritative state",
+                artifact.registered_sequence
+            ))
+        })?;
+    Ok(ModelArtifactMutationResponse {
+        action: authoritative_model_artifact_action(event.action),
+        service_name: service_name.to_owned(),
+        model_name: artifact.model_name.clone(),
+        training_job_id: training_job_id.to_owned(),
+        sequence: artifact.registered_sequence,
+        model_artifact_count: authoritative_model_artifact_count(
+            world,
+            service_name,
+            &artifact.model_name,
+        ),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_agent_deploy_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+) -> Result<AgentMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    if record.deployed_sequence <= baseline.agent_apartment_max {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative agent deploy event for apartment `{apartment_name}` was not observed after mutation"
+        )));
+    }
+    let event = world
+        .soracloud_agent_apartment_audit_events()
+        .get(&record.deployed_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraAgentApartmentActionV1::Deploy
+                && event.apartment_name.as_ref() == apartment_name
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "agent deploy audit event `{}` for apartment `{apartment_name}` is missing from authoritative state",
+                record.deployed_sequence
+            ))
+        })?;
+    let mut response = authoritative_agent_mutation_response(app, &record, &event);
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_lease_renew_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+) -> Result<AgentMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    if record.last_renewed_sequence <= baseline.agent_apartment_max {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative lease-renew event for apartment `{apartment_name}` was not observed after mutation"
+        )));
+    }
+    let event = world
+        .soracloud_agent_apartment_audit_events()
+        .get(&record.last_renewed_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraAgentApartmentActionV1::LeaseRenew
+                && event.apartment_name.as_ref() == apartment_name
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "lease-renew audit event `{}` for apartment `{apartment_name}` is missing from authoritative state",
+                record.last_renewed_sequence
+            ))
+        })?;
+    let mut response = authoritative_agent_mutation_response(app, &record, &event);
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_restart_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+) -> Result<AgentMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let restart_sequence = record.last_restart_sequence.ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "apartment `{apartment_name}` does not have an authoritative restart sequence after mutation"
+        ))
+    })?;
+    if restart_sequence <= baseline.agent_apartment_max {
+        return Err(SoracloudError::conflict(format!(
+            "authoritative restart event for apartment `{apartment_name}` was not observed after mutation"
+        )));
+    }
+    let event = world
+        .soracloud_agent_apartment_audit_events()
+        .get(&restart_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraAgentApartmentActionV1::Restart
+                && event.apartment_name.as_ref() == apartment_name
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "restart audit event `{restart_sequence}` for apartment `{apartment_name}` is missing from authoritative state"
+            ))
+        })?;
+    let mut response = authoritative_agent_mutation_response(app, &record, &event);
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_policy_revoke_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+    capability: &str,
+) -> Result<AgentMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let event = latest_agent_apartment_audit_event_after(world, baseline.agent_apartment_max, |event| {
+        event.apartment_name.as_ref() == apartment_name
+            && event.action == SoraAgentApartmentActionV1::PolicyRevoked
+            && event.capability.as_deref() == Some(capability)
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative policy-revoke event for apartment `{apartment_name}` capability `{capability}` was not observed after mutation"
+        ))
+    })?;
+    let mut response = authoritative_agent_mutation_response(app, &record, &event);
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_wallet_request_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+    asset_definition: &str,
+    amount_nanos: u64,
+) -> Result<AgentWalletMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let pending_sequence = record
+        .pending_wallet_requests
+        .values()
+        .find(|request| {
+            request.created_sequence > baseline.agent_apartment_max
+                && request.asset_definition == asset_definition
+                && request.amount_nanos == amount_nanos
+        })
+        .map(|request| request.created_sequence);
+    let event = match pending_sequence {
+        Some(sequence) => world
+            .soracloud_agent_apartment_audit_events()
+            .get(&sequence)
+            .cloned()
+            .filter(|event| {
+                event.action == SoraAgentApartmentActionV1::WalletSpendRequested
+                    && event.apartment_name.as_ref() == apartment_name
+                    && event.asset_definition.as_deref() == Some(asset_definition)
+                    && event.amount_nanos == Some(amount_nanos)
+            }),
+        None => latest_agent_apartment_audit_event_after(world, baseline.agent_apartment_max, |event| {
+            event.apartment_name.as_ref() == apartment_name
+                && matches!(
+                    event.action,
+                    SoraAgentApartmentActionV1::WalletSpendRequested
+                        | SoraAgentApartmentActionV1::WalletSpendApproved
+                )
+                && event.asset_definition.as_deref() == Some(asset_definition)
+                && event.amount_nanos == Some(amount_nanos)
+        })
+        .cloned(),
+    }
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative wallet-spend event for apartment `{apartment_name}` asset `{asset_definition}` amount `{amount_nanos}` was not observed after mutation"
+        ))
+    })?;
+    let mut response = authoritative_agent_wallet_mutation_response(app, &record, &event);
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_wallet_approve_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+    request_id: &str,
+) -> Result<AgentWalletMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let event = latest_agent_apartment_audit_event_after(world, baseline.agent_apartment_max, |event| {
+        event.apartment_name.as_ref() == apartment_name
+            && event.action == SoraAgentApartmentActionV1::WalletSpendApproved
+            && event.request_id.as_deref() == Some(request_id)
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative wallet-approve event for apartment `{apartment_name}` request `{request_id}` was not observed after mutation"
+        ))
+    })?;
+    let mut response = authoritative_agent_wallet_mutation_response(app, &record, &event);
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_message_send_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    from_apartment: &str,
+    to_apartment: &str,
+    channel: &str,
+    payload: &str,
+) -> Result<AgentMailboxMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let recipient = world
+        .soracloud_agent_apartments()
+        .get(to_apartment)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{to_apartment}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let normalized_channel = channel.trim();
+    let payload_hash = Hash::new(payload.trim().as_bytes());
+    let message = recipient
+        .mailbox_queue
+        .iter()
+        .find(|message| {
+            message.enqueued_sequence > baseline.agent_apartment_max
+                && message.from_apartment == from_apartment
+                && message.channel == normalized_channel
+                && message.payload_hash == payload_hash
+        })
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "authoritative mailbox message for `{from_apartment}` -> `{to_apartment}` on channel `{normalized_channel}` was not observed after mutation"
+            ))
+        })?;
+    let event = world
+        .soracloud_agent_apartment_audit_events()
+        .get(&message.enqueued_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraAgentApartmentActionV1::MessageEnqueued
+                && event.apartment_name.as_ref() == to_apartment
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "mailbox enqueue audit event `{}` for apartment `{to_apartment}` is missing from authoritative state",
+                message.enqueued_sequence
+            ))
+        })?;
+    let mut response =
+        authoritative_agent_mailbox_mutation_response(app, to_apartment, &recipient, &event)?;
+    response.audit_event_count = authoritative_agent_event_count(world, to_apartment);
+    Ok(response)
+}
+
+fn authoritative_agent_message_ack_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+    message_id: &str,
+) -> Result<AgentMailboxMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let event = latest_agent_apartment_audit_event_after(world, baseline.agent_apartment_max, |event| {
+        event.apartment_name.as_ref() == apartment_name
+            && event.action == SoraAgentApartmentActionV1::MessageAcknowledged
+            && event.request_id.as_deref() == Some(message_id)
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative mailbox-ack event for apartment `{apartment_name}` message `{message_id}` was not observed after mutation"
+        ))
+    })?;
+    let mut response =
+        authoritative_agent_mailbox_mutation_response(app, apartment_name, &record, &event)?;
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_artifact_allow_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let rule = record
+        .artifact_allowlist
+        .get(artifact_hash)
+        .cloned()
+        .filter(|rule| {
+            rule.added_sequence > baseline.agent_apartment_max
+                && rule.provenance_hash.as_deref() == provenance_hash
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "authoritative artifact-allow event for apartment `{apartment_name}` artifact `{artifact_hash}` was not observed after mutation"
+            ))
+        })?;
+    let event = world
+        .soracloud_agent_apartment_audit_events()
+        .get(&rule.added_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraAgentApartmentActionV1::ArtifactAllowed
+                && event.apartment_name.as_ref() == apartment_name
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "artifact-allow audit event `{}` for apartment `{apartment_name}` is missing from authoritative state",
+                rule.added_sequence
+            ))
+        })?;
+    let mut response = authoritative_agent_autonomy_mutation_response(app, &record, &event)?;
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
+}
+
+fn authoritative_agent_autonomy_run_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    apartment_name: &str,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+    run_label: &str,
+) -> Result<AgentAutonomyMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let record = world
+        .soracloud_agent_apartments()
+        .get(apartment_name)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "apartment `{apartment_name}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let run = record
+        .autonomy_run_history
+        .iter()
+        .rev()
+        .find(|run| {
+            run.approved_sequence > baseline.agent_apartment_max
+                && run.artifact_hash == artifact_hash
+                && run.provenance_hash.as_deref() == provenance_hash
+                && run.run_label == run_label
+        })
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "authoritative autonomy-run event for apartment `{apartment_name}` artifact `{artifact_hash}` label `{run_label}` was not observed after mutation"
+            ))
+        })?;
+    let event = world
+        .soracloud_agent_apartment_audit_events()
+        .get(&run.approved_sequence)
+        .cloned()
+        .filter(|event| {
+            event.action == SoraAgentApartmentActionV1::AutonomyRunApproved
+                && event.apartment_name.as_ref() == apartment_name
+        })
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "autonomy-run audit event `{}` for apartment `{apartment_name}` is missing from authoritative state",
+                run.approved_sequence
+            ))
+        })?;
+    let mut response = authoritative_agent_autonomy_mutation_response(app, &record, &event)?;
+    response.audit_event_count = authoritative_agent_event_count(world, apartment_name);
+    Ok(response)
 }
 
 fn authoritative_soracloud_sequence(app: &SharedAppState) -> u64 {
@@ -8077,7 +5503,7 @@ fn authoritative_agent_status_response(
     apartments.sort_by(|left, right| left.apartment_name.cmp(&right.apartment_name));
 
     Ok(AgentStatusResponse {
-        schema_version: REGISTRY_SCHEMA_VERSION,
+        schema_version: CONTROL_PLANE_SCHEMA_VERSION,
         apartment_count: u32::try_from(apartments.len()).unwrap_or(u32::MAX),
         event_count: u32::try_from(
             world
@@ -8114,7 +5540,7 @@ fn authoritative_agent_mailbox_status_response(
         .collect::<Vec<_>>();
 
     Ok(AgentMailboxStatusResponse {
-        schema_version: REGISTRY_SCHEMA_VERSION,
+        schema_version: CONTROL_PLANE_SCHEMA_VERSION,
         apartment_name,
         status: authoritative_agent_runtime_status_for_sequence(&record, sequence),
         pending_message_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
@@ -8281,7 +5707,7 @@ fn authoritative_ciphertext_query_response(
             commitment: entry.payload_commitment,
             last_update_sequence: entry.last_update_sequence,
             governance_tx_hash: entry.governance_tx_hash,
-            source_action: audit_action_to_registry_action(entry.source_action),
+            source_action: audit_action_to_control_plane_action(entry.source_action),
         };
         let proof = if request.query.include_proof {
             Some(build_ciphertext_inclusion_proof(
@@ -8543,11 +5969,11 @@ fn authoritative_health_compliance_report(
     })
 }
 
-fn deployment_bundle_to_registry_revision(
+fn deployment_bundle_to_control_plane_revision(
     deployment: &SoraServiceDeploymentStateV1,
     bundle: &SoraDeploymentBundleV1,
     latest_audit: Option<&SoraServiceAuditEventV1>,
-) -> RegistryServiceRevision {
+) -> ControlPlaneServiceRevision {
     let host_admission = admit_scr_host_bundle(bundle).ok();
     let route = bundle.service.route.as_ref();
     let network = host_admission
@@ -8559,10 +5985,10 @@ fn deployment_bundle_to_registry_revision(
         .map(|admission| admission.sandbox_profile_hash)
         .unwrap_or_else(|| bundle.container_manifest_hash());
 
-    RegistryServiceRevision {
+    ControlPlaneServiceRevision {
         sequence: latest_audit.map_or(deployment.process_started_sequence, |event| event.sequence),
         action: latest_audit
-            .map(|event| audit_action_to_registry_action(event.action))
+            .map(|event| audit_action_to_control_plane_action(event.action))
             .unwrap_or(SoracloudAction::Deploy),
         service_version: bundle.service.service_version.clone(),
         service_manifest_hash: bundle.service_manifest_hash(),
@@ -8718,11 +6144,11 @@ fn split_public_handler_path(request_path: &str, full_route: &str) -> Option<Str
     None
 }
 
-pub(crate) fn world_snapshot(
+pub(crate) fn control_plane_snapshot(
     app: &SharedAppState,
     service_name: Option<&str>,
     audit_limit: usize,
-) -> RegistrySnapshot {
+) -> ControlPlaneSnapshot {
     let state_view = app.state.view();
     let world = state_view.world();
     let mut services = Vec::new();
@@ -8757,12 +6183,12 @@ pub(crate) fn world_snapshot(
             .map(|(_sequence, event)| event)
             .max_by_key(|event| event.sequence);
 
-        services.push(ServiceStatusSnapshot {
+        services.push(ControlPlaneServiceSnapshot {
             service_name: service_label,
             current_version: deployment.current_service_version.clone(),
             revision_count: deployment.revision_count,
             latest_revision: current_bundle.as_ref().map(|bundle| {
-                deployment_bundle_to_registry_revision(deployment, bundle, latest_audit)
+                deployment_bundle_to_control_plane_revision(deployment, bundle, latest_audit)
             }),
             active_rollout: deployment
                 .active_rollout
@@ -8782,13 +6208,13 @@ pub(crate) fn world_snapshot(
         .filter(|(_sequence, event)| {
             service_name.is_none_or(|filter| filter == event.service_name.as_ref())
         })
-        .map(|(_sequence, event)| audit_event_to_registry_audit_event(event))
+        .map(|(_sequence, event)| audit_event_to_control_plane_audit_event(event))
         .collect::<Vec<_>>();
     recent_audit_events.sort_by_key(|event| std::cmp::Reverse(event.sequence));
     recent_audit_events.truncate(limit);
 
-    RegistrySnapshot {
-        schema_version: REGISTRY_SCHEMA_VERSION,
+    ControlPlaneSnapshot {
+        schema_version: CONTROL_PLANE_SCHEMA_VERSION,
         service_count: u32::try_from(services.len()).unwrap_or(u32::MAX),
         audit_event_count: u32::try_from(world.soracloud_service_audit_events().iter().count())
             .unwrap_or(u32::MAX),
@@ -8809,12 +6235,15 @@ pub(crate) async fn handle_deploy(
     if let Err(err) = verify_bundle_signature(&request) {
         return err.into_response();
     }
+    if let Err(err) = admit_scr_host_bundle(&request.bundle) {
+        return err.into_response();
+    }
     let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
-
-    match submit_soracloud_instruction(
+    let service_name = request.bundle.service.service_name.to_string();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::DeploySoracloudService {
@@ -8822,6 +6251,14 @@ pub(crate) async fn handle_deploy(
             provenance: request.provenance,
         }),
         "/v1/soracloud/deploy",
+        move |app, baseline| {
+            authoritative_service_mutation_response(
+                app,
+                baseline,
+                &service_name,
+                SoraServiceLifecycleActionV1::Deploy,
+            )
+        },
     )
     .await
     {
@@ -8842,12 +6279,15 @@ pub(crate) async fn handle_upgrade(
     if let Err(err) = verify_bundle_signature(&request) {
         return err.into_response();
     }
+    if let Err(err) = admit_scr_host_bundle(&request.bundle) {
+        return err.into_response();
+    }
     let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
-
-    match submit_soracloud_instruction(
+    let service_name = request.bundle.service.service_name.to_string();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::UpgradeSoracloudService {
@@ -8855,6 +6295,14 @@ pub(crate) async fn handle_upgrade(
             provenance: request.provenance,
         }),
         "/v1/soracloud/upgrade",
+        move |app, baseline| {
+            authoritative_service_mutation_response(
+                app,
+                baseline,
+                &service_name,
+                SoraServiceLifecycleActionV1::Upgrade,
+            )
+        },
     )
     .await
     {
@@ -8887,7 +6335,8 @@ pub(crate) async fn handle_rollback(
                 .into_response();
         }
     };
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RollbackSoracloudService {
@@ -8896,6 +6345,14 @@ pub(crate) async fn handle_rollback(
             provenance: request.provenance,
         }),
         "/v1/soracloud/rollback",
+        move |app, baseline| {
+            authoritative_service_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                SoraServiceLifecycleActionV1::Rollback,
+            )
+        },
     )
     .await
     {
@@ -8928,7 +6385,10 @@ pub(crate) async fn handle_rollout(
                 .into_response();
         }
     };
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let rollout_handle = request.payload.rollout_handle.clone();
+    let governance_tx_hash = request.payload.governance_tx_hash;
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::AdvanceSoracloudRollout {
@@ -8940,6 +6400,15 @@ pub(crate) async fn handle_rollout(
             provenance: request.provenance,
         }),
         "/v1/soracloud/rollout",
+        move |app, baseline| {
+            authoritative_rollout_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &rollout_handle,
+                governance_tx_hash,
+            )
+        },
     )
     .await
     {
@@ -8978,8 +6447,11 @@ pub(crate) async fn handle_state_mutation(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let binding_label = binding_name.to_string();
+    let state_key = request.payload.key.clone();
+    let operation = request.payload.operation;
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::MutateSoracloudState {
@@ -8993,6 +6465,16 @@ pub(crate) async fn handle_state_mutation(
             provenance: request.provenance,
         }),
         "/v1/soracloud/state/mutate",
+        move |app, baseline| {
+            authoritative_state_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &binding_label,
+                &state_key,
+                operation,
+            )
+        },
     )
     .await
     {
@@ -9031,8 +6513,11 @@ pub(crate) async fn handle_fhe_job_run(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let binding_label = binding_name.to_string();
+    let job = request.payload.job.clone();
+    let governance_tx_hash = request.payload.governance_tx_hash;
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RunSoracloudFheJob {
@@ -9045,6 +6530,16 @@ pub(crate) async fn handle_fhe_job_run(
             provenance: request.provenance,
         }),
         "/v1/soracloud/fhe/job/run",
+        move |app, baseline| {
+            authoritative_fhe_job_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &binding_label,
+                &job,
+                governance_tx_hash,
+            )
+        },
     )
     .await
     {
@@ -9078,8 +6573,9 @@ pub(crate) async fn handle_decryption_request(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let request_id = request.payload.request.request_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RecordSoracloudDecryptionRequest {
@@ -9089,6 +6585,14 @@ pub(crate) async fn handle_decryption_request(
             provenance: request.provenance,
         }),
         "/v1/soracloud/decrypt/request",
+        move |app, baseline| {
+            authoritative_decryption_request_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &request_id,
+            )
+        },
     )
     .await
     {
@@ -9122,8 +6626,9 @@ pub(crate) async fn handle_health_access_request(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let request_id = request.payload.request.request_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RecordSoracloudDecryptionRequest {
@@ -9133,6 +6638,14 @@ pub(crate) async fn handle_health_access_request(
             provenance: request.provenance,
         }),
         "/v1/soracloud/health/access/request",
+        move |app, baseline| {
+            authoritative_decryption_request_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &request_id,
+            )
+        },
     )
     .await
     {
@@ -9183,8 +6696,9 @@ pub(crate) async fn handle_training_job_start(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let job_id = request.payload.job_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::StartSoracloudTrainingJob {
@@ -9201,6 +6715,15 @@ pub(crate) async fn handle_training_job_start(
             provenance: request.provenance,
         }),
         "/v1/soracloud/training/job/start",
+        move |app, baseline| {
+            authoritative_training_job_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &job_id,
+                SoraTrainingJobActionV1::Start,
+            )
+        },
     )
     .await
     {
@@ -9234,8 +6757,9 @@ pub(crate) async fn handle_training_job_checkpoint(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let job_id = request.payload.job_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::CheckpointSoracloudTrainingJob {
@@ -9247,6 +6771,15 @@ pub(crate) async fn handle_training_job_checkpoint(
             provenance: request.provenance,
         }),
         "/v1/soracloud/training/job/checkpoint",
+        move |app, baseline| {
+            authoritative_training_job_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &job_id,
+                SoraTrainingJobActionV1::Checkpoint,
+            )
+        },
     )
     .await
     {
@@ -9280,8 +6813,9 @@ pub(crate) async fn handle_training_job_retry(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let job_id = request.payload.job_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RetrySoracloudTrainingJob {
@@ -9291,6 +6825,15 @@ pub(crate) async fn handle_training_job_retry(
             provenance: request.provenance,
         }),
         "/v1/soracloud/training/job/retry",
+        move |app, baseline| {
+            authoritative_training_job_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &job_id,
+                SoraTrainingJobActionV1::Retry,
+            )
+        },
     )
     .await
     {
@@ -9341,8 +6884,10 @@ pub(crate) async fn handle_model_weight_register(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let model_name = request.payload.model_name.clone();
+    let target_version = request.payload.weight_version.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RegisterSoracloudModelWeight {
@@ -9359,6 +6904,16 @@ pub(crate) async fn handle_model_weight_register(
             provenance: request.provenance,
         }),
         "/v1/soracloud/model/weight/register",
+        move |app, baseline| {
+            authoritative_model_weight_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &model_name,
+                &target_version,
+                SoraModelWeightActionV1::Register,
+            )
+        },
     )
     .await
     {
@@ -9392,8 +6947,10 @@ pub(crate) async fn handle_model_weight_promote(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let model_name = request.payload.model_name.clone();
+    let target_version = request.payload.weight_version.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::PromoteSoracloudModelWeight {
@@ -9405,6 +6962,16 @@ pub(crate) async fn handle_model_weight_promote(
             provenance: request.provenance,
         }),
         "/v1/soracloud/model/weight/promote",
+        move |app, baseline| {
+            authoritative_model_weight_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &model_name,
+                &target_version,
+                SoraModelWeightActionV1::Promote,
+            )
+        },
     )
     .await
     {
@@ -9438,8 +7005,10 @@ pub(crate) async fn handle_model_weight_rollback(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let model_name = request.payload.model_name.clone();
+    let target_version = request.payload.target_version.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RollbackSoracloudModelWeight {
@@ -9450,6 +7019,16 @@ pub(crate) async fn handle_model_weight_rollback(
             provenance: request.provenance,
         }),
         "/v1/soracloud/model/weight/rollback",
+        move |app, baseline| {
+            authoritative_model_weight_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &model_name,
+                &target_version,
+                SoraModelWeightActionV1::Rollback,
+            )
+        },
     )
     .await
     {
@@ -9500,8 +7079,9 @@ pub(crate) async fn handle_model_artifact_register(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let service_label = service_name.to_string();
+    let training_job_id = request.payload.training_job_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RegisterSoracloudModelArtifact {
@@ -9516,6 +7096,14 @@ pub(crate) async fn handle_model_artifact_register(
             provenance: request.provenance,
         }),
         "/v1/soracloud/model/artifact/register",
+        move |app, baseline| {
+            authoritative_model_artifact_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &training_job_id,
+            )
+        },
     )
     .await
     {
@@ -9565,8 +7153,8 @@ pub(crate) async fn handle_agent_deploy(
         .payload
         .autonomy_budget_units
         .unwrap_or(AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS);
-
-    match submit_soracloud_instruction(
+    let apartment_name = request.payload.manifest.apartment_name.to_string();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::DeploySoracloudAgentApartment {
@@ -9576,6 +7164,9 @@ pub(crate) async fn handle_agent_deploy(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/deploy",
+        move |app, baseline| {
+            authoritative_agent_deploy_mutation_response(app, baseline, &apartment_name)
+        },
     )
     .await
     {
@@ -9609,8 +7200,8 @@ pub(crate) async fn handle_agent_lease_renew(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RenewSoracloudAgentLease {
@@ -9619,6 +7210,9 @@ pub(crate) async fn handle_agent_lease_renew(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/lease/renew",
+        move |app, baseline| {
+            authoritative_agent_lease_renew_mutation_response(app, baseline, &apartment_label)
+        },
     )
     .await
     {
@@ -9651,8 +7245,8 @@ pub(crate) async fn handle_agent_restart(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RestartSoracloudAgentApartment {
@@ -9661,6 +7255,9 @@ pub(crate) async fn handle_agent_restart(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/restart",
+        move |app, baseline| {
+            authoritative_agent_restart_mutation_response(app, baseline, &apartment_label)
+        },
     )
     .await
     {
@@ -9709,8 +7306,10 @@ pub(crate) async fn handle_agent_wallet_spend(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    let asset_definition = request.payload.asset_definition.clone();
+    let amount_nanos = request.payload.amount_nanos;
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RequestSoracloudAgentWalletSpend {
@@ -9720,6 +7319,15 @@ pub(crate) async fn handle_agent_wallet_spend(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/wallet/spend",
+        move |app, baseline| {
+            authoritative_agent_wallet_request_mutation_response(
+                app,
+                baseline,
+                &apartment_label,
+                &asset_definition,
+                amount_nanos,
+            )
+        },
     )
     .await
     {
@@ -9753,8 +7361,9 @@ pub(crate) async fn handle_agent_wallet_approve(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    let request_id = request.payload.request_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::ApproveSoracloudAgentWalletSpend {
@@ -9763,6 +7372,14 @@ pub(crate) async fn handle_agent_wallet_approve(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/wallet/approve",
+        move |app, baseline| {
+            authoritative_agent_wallet_approve_mutation_response(
+                app,
+                baseline,
+                &apartment_label,
+                &request_id,
+            )
+        },
     )
     .await
     {
@@ -9796,8 +7413,9 @@ pub(crate) async fn handle_agent_policy_revoke(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    let capability = request.payload.capability.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RevokeSoracloudAgentPolicy {
@@ -9807,6 +7425,14 @@ pub(crate) async fn handle_agent_policy_revoke(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/policy/revoke",
+        move |app, baseline| {
+            authoritative_agent_policy_revoke_mutation_response(
+                app,
+                baseline,
+                &apartment_label,
+                &capability,
+            )
+        },
     )
     .await
     {
@@ -9847,8 +7473,11 @@ pub(crate) async fn handle_agent_message_send(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let from_apartment_label = from_apartment.to_string();
+    let to_apartment_label = to_apartment.to_string();
+    let channel = request.payload.channel.clone();
+    let payload = request.payload.payload.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::EnqueueSoracloudAgentMessage {
@@ -9859,6 +7488,16 @@ pub(crate) async fn handle_agent_message_send(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/message/send",
+        move |app, baseline| {
+            authoritative_agent_message_send_mutation_response(
+                app,
+                baseline,
+                &from_apartment_label,
+                &to_apartment_label,
+                &channel,
+                &payload,
+            )
+        },
     )
     .await
     {
@@ -9892,8 +7531,9 @@ pub(crate) async fn handle_agent_message_ack(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    let message_id = request.payload.message_id.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::AcknowledgeSoracloudAgentMessage {
@@ -9902,6 +7542,14 @@ pub(crate) async fn handle_agent_message_ack(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/message/ack",
+        move |app, baseline| {
+            authoritative_agent_message_ack_mutation_response(
+                app,
+                baseline,
+                &apartment_label,
+                &message_id,
+            )
+        },
     )
     .await
     {
@@ -9952,8 +7600,10 @@ pub(crate) async fn handle_agent_autonomy_allow(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    let artifact_hash = request.payload.artifact_hash.clone();
+    let provenance_hash = request.payload.provenance_hash.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::AllowSoracloudAgentAutonomyArtifact {
@@ -9963,6 +7613,15 @@ pub(crate) async fn handle_agent_autonomy_allow(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/autonomy/allow",
+        move |app, baseline| {
+            authoritative_agent_artifact_allow_mutation_response(
+                app,
+                baseline,
+                &apartment_label,
+                &artifact_hash,
+                provenance_hash.as_deref(),
+            )
+        },
     )
     .await
     {
@@ -9996,8 +7655,11 @@ pub(crate) async fn handle_agent_autonomy_run(
                 .into_response();
         }
     };
-
-    match submit_soracloud_instruction(
+    let apartment_label = apartment_name.to_string();
+    let artifact_hash = request.payload.artifact_hash.clone();
+    let provenance_hash = request.payload.provenance_hash.clone();
+    let run_label = request.payload.run_label.clone();
+    match submit_confirm_and_respond(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RunSoracloudAgentAutonomy {
@@ -10009,6 +7671,16 @@ pub(crate) async fn handle_agent_autonomy_run(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/autonomy/run",
+        move |app, baseline| {
+            authoritative_agent_autonomy_run_mutation_response(
+                app,
+                baseline,
+                &apartment_label,
+                &artifact_hash,
+                provenance_hash.as_deref(),
+                &run_label,
+            )
+        },
     )
     .await
     {
@@ -10032,24 +7704,6 @@ pub(crate) async fn handle_agent_autonomy_status(
         Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
-}
-
-pub(crate) async fn handle_registry_status(
-    State(app): State<SharedAppState>,
-    headers: HeaderMap,
-    NoritoQuery(query): NoritoQuery<RegistryStatusQuery>,
-) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/registry").await {
-        return err.into_response();
-    }
-
-    let audit_limit = query
-        .audit_limit
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(DEFAULT_AUDIT_LIMIT)
-        .max(1);
-    let snapshot = world_snapshot(&app, query.service_name.as_deref(), audit_limit);
-    JsonBody(snapshot).into_response()
 }
 
 pub(crate) async fn handle_health_compliance_report(
@@ -10090,7 +7744,7 @@ mod tests {
 
     use std::{
         fs,
-        num::NonZeroU64,
+        num::{NonZeroU32, NonZeroU64},
         path::{Path, PathBuf},
     };
 
@@ -10233,7 +7887,7 @@ mod tests {
     }
 
     #[test]
-    fn world_snapshot_uses_authoritative_soracloud_state() -> Result<(), eyre::Report> {
+    fn control_plane_snapshot_uses_authoritative_soracloud_state() -> Result<(), eyre::Report> {
         use iroha_core::{smartcontracts::Execute, state::World};
         use iroha_data_model::block::BlockHeader;
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -10285,7 +7939,7 @@ mod tests {
             stx.apply();
             state_block.commit()?;
 
-            let snapshot = world_snapshot(&app, Some("web_portal"), 10);
+            let snapshot = control_plane_snapshot(&app, Some("web_portal"), 10);
             assert_eq!(snapshot.service_count, 1);
             assert_eq!(snapshot.audit_event_count, 1);
             assert_eq!(snapshot.services[0].current_version, "1.0.0");
@@ -10300,6 +7954,37 @@ mod tests {
             assert_eq!(snapshot.recent_audit_events.len(), 1);
             Ok(())
         })
+    }
+
+    #[test]
+    fn error_chain_message_includes_nested_validation_details() {
+        let error = iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            iroha_data_model::ValidationFail::InstructionFailed(
+                iroha_data_model::isi::error::InstructionExecutionError::InvalidParameter(
+                    iroha_data_model::isi::error::InvalidParameterError::SmartContract(
+                        "resources.cpu_millis exceeds SCR cap".to_owned(),
+                    ),
+                ),
+            ),
+        );
+        let message = transaction_rejection_message(&error);
+        assert!(message.contains("Validation failed"));
+        assert!(message.contains("Instruction execution failed"));
+        assert!(message.contains("Invalid instruction parameter"));
+        assert!(message.contains("resources.cpu_millis exceeds SCR cap"));
+    }
+
+    #[test]
+    fn admit_scr_host_bundle_rejects_over_cap_cpu() {
+        let mut bundle = fixture_bundle("1.0.0");
+        bundle.container.resources.cpu_millis = NonZeroU32::new(64_001).expect("non-zero cpu");
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        let error = admit_scr_host_bundle(&bundle).expect_err("SCR over-cap cpu should fail");
+        assert!(
+            error
+                .message
+                .contains("container.resources.cpu_millis exceeds SCR cap")
+        );
     }
 
     #[test]
@@ -11771,3190 +9456,5 @@ mod tests {
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
-    }
-
-    #[tokio::test]
-    async fn state_mutation_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_state_mutation_request(
-            StateMutationRequest {
-                service_name: "web_portal".to_owned(),
-                binding_name: "session_store".to_owned(),
-                key: "/state/session/user-1".to_owned(),
-                operation: StateMutationOperation::Upsert,
-                value_size_bytes: Some(128),
-                encryption: SoraStateEncryptionV1::ClientCiphertext,
-                governance_tx_hash: Hash::new(b"legacy-state-mutation"),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_state_mutation(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn fhe_job_run_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_fhe_job_run_request(
-            FheJobRunPayload {
-                service_name: "web_portal".to_owned(),
-                binding_name: "patient_records".to_owned(),
-                job: fixture_fhe_job_spec(),
-                policy: fixture_fhe_execution_policy(),
-                param_set: fixture_fhe_param_set(),
-                governance_tx_hash: Hash::new(b"legacy-fhe-job"),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_fhe_job_run(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn decryption_request_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_decryption_request(
-            DecryptionRequestPayload {
-                service_name: "web_portal".to_owned(),
-                policy: fixture_decryption_authority_policy(),
-                request: fixture_decryption_request(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_decryption_request(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn training_job_start_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_training_job_start_request(
-            TrainingJobStartPayload {
-                service_name: "web_portal".to_owned(),
-                model_name: "model-1".to_owned(),
-                job_id: "job-1".to_owned(),
-                worker_group_size: 4,
-                target_steps: 100,
-                checkpoint_interval_steps: 20,
-                max_retries: 3,
-                step_compute_units: 500,
-                compute_budget_units: 50_000,
-                storage_budget_bytes: 4_096,
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_training_job_start(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn training_job_checkpoint_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_training_job_checkpoint_request(
-            TrainingJobCheckpointPayload {
-                service_name: "web_portal".to_owned(),
-                job_id: "job-1".to_owned(),
-                completed_step: 20,
-                checkpoint_size_bytes: 1_024,
-                metrics_hash: Hash::new(b"legacy-training-checkpoint"),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_training_job_checkpoint(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn training_job_retry_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_training_job_retry_request(
-            TrainingJobRetryPayload {
-                service_name: "web_portal".to_owned(),
-                job_id: "job-1".to_owned(),
-                reason: "worker unavailable".to_owned(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_training_job_retry(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn model_artifact_register_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_model_artifact_register_request(
-            ModelArtifactRegisterPayload {
-                service_name: "web_portal".to_owned(),
-                model_name: "model-1".to_owned(),
-                training_job_id: "job-1".to_owned(),
-                weight_artifact_hash: Hash::new(b"legacy-weight-artifact"),
-                dataset_ref: "dataset://synthetic/v2".to_owned(),
-                training_config_hash: Hash::new(b"legacy-training-config"),
-                reproducibility_hash: Hash::new(b"legacy-repro"),
-                provenance_attestation_hash: Hash::new(b"legacy-attestation"),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_model_artifact_register(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn model_weight_register_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_model_weight_register_request(
-            ModelWeightRegisterPayload {
-                service_name: "web_portal".to_owned(),
-                model_name: "model-1".to_owned(),
-                weight_version: "1.0.0".to_owned(),
-                training_job_id: "job-1".to_owned(),
-                parent_version: Some("0.9.0".to_owned()),
-                weight_artifact_hash: Hash::new(b"legacy-model-weight-artifact"),
-                dataset_ref: "dataset://synthetic/v2".to_owned(),
-                training_config_hash: Hash::new(b"legacy-model-training-config"),
-                reproducibility_hash: Hash::new(b"legacy-model-repro"),
-                provenance_attestation_hash: Hash::new(b"legacy-model-attestation"),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_model_weight_register(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn model_weight_promote_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_model_weight_promote_request(
-            ModelWeightPromotePayload {
-                service_name: "web_portal".to_owned(),
-                model_name: "model-1".to_owned(),
-                weight_version: "1.0.0".to_owned(),
-                gate_approved: true,
-                gate_report_hash: Hash::new(b"legacy-gate-report"),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_model_weight_promote(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn model_weight_rollback_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_model_weight_rollback_request(
-            ModelWeightRollbackPayload {
-                service_name: "web_portal".to_owned(),
-                model_name: "model-1".to_owned(),
-                target_version: "0.9.0".to_owned(),
-                reason: "gate regression".to_owned(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_model_weight_rollback(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn rollback_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_rollback_request("web_portal", Some("1.0.0"), &key_pair);
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_rollback(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn rollout_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_rollout_request(
-            "web_portal",
-            "web_portal:rollout:2",
-            true,
-            Some(100),
-            b"legacy-rollout",
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_rollout(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_deploy_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_deploy_request(
-            AgentDeployPayload {
-                manifest: fixture_agent_manifest(),
-                lease_ticks: 120,
-                autonomy_budget_units: Some(500),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_deploy(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_lease_renew_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_lease_renew_request(
-            AgentLeaseRenewPayload {
-                apartment_name: "ops_agent".to_owned(),
-                lease_ticks: 120,
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_lease_renew(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_restart_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_restart_request(
-            AgentRestartPayload {
-                apartment_name: "ops_agent".to_owned(),
-                reason: "manual-restart".to_owned(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_restart(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_policy_revoke_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_policy_revoke_request(
-            AgentPolicyRevokePayload {
-                apartment_name: "ops_agent".to_owned(),
-                capability: "agent.autonomy.run".to_owned(),
-                reason: Some("manual-review".to_owned()),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_policy_revoke(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_wallet_spend_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_wallet_spend_request(
-            AgentWalletSpendPayload {
-                apartment_name: "ops_agent".to_owned(),
-                asset_definition: "xor#sora".to_owned(),
-                amount_nanos: 1_000_000,
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_wallet_spend(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_wallet_approve_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_wallet_approve_request(
-            AgentWalletApprovePayload {
-                apartment_name: "ops_agent".to_owned(),
-                request_id: "ops_agent:wallet:7".to_owned(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_wallet_approve(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_message_send_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_message_send_request(
-            AgentMessageSendPayload {
-                from_apartment: "ops_agent".to_owned(),
-                to_apartment: "worker_agent".to_owned(),
-                channel: "ops.sync".to_owned(),
-                payload: "rotate-key-42".to_owned(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_message_send(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_message_ack_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_message_ack_request(
-            AgentMessageAckPayload {
-                apartment_name: "worker_agent".to_owned(),
-                message_id: "worker_agent:mail:3".to_owned(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_message_ack(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_artifact_allow_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_artifact_allow_request(
-            AgentArtifactAllowPayload {
-                apartment_name: "ops_agent".to_owned(),
-                artifact_hash: "hash:ABCD0123#01".to_owned(),
-                provenance_hash: Some("hash:PROV0001#01".to_owned()),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_artifact_allow(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn agent_autonomy_run_rejects_legacy_struct_layout_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut request = signed_agent_autonomy_run_request(
-            AgentAutonomyRunPayload {
-                apartment_name: "ops_agent".to_owned(),
-                artifact_hash: "hash:ABCD0123#01".to_owned(),
-                provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                budget_units: 120,
-                run_label: "nightly-train-step-1".to_owned(),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = legacy_struct_layout_signature(&request.payload, &key_pair);
-
-        let err = registry
-            .apply_agent_autonomy_run(request)
-            .await
-            .expect_err("legacy struct-layout signature must be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn deploy_upgrade_rollback_workflow_updates_registry_and_audit_log() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-
-        let deployed = registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-        assert_eq!(deployed.action, SoracloudAction::Deploy);
-        assert_eq!(deployed.current_version, "1.0.0");
-        assert_eq!(deployed.audit_event_count, 1);
-
-        let upgraded = registry
-            .apply_upgrade(signed_bundle_request(fixture_bundle("1.1.0"), &key_pair))
-            .await
-            .expect("upgrade");
-        assert_eq!(upgraded.action, SoracloudAction::Upgrade);
-        assert_eq!(upgraded.previous_version.as_deref(), Some("1.0.0"));
-        assert_eq!(upgraded.current_version, "1.1.0");
-        assert_eq!(upgraded.audit_event_count, 2);
-
-        let rolled_back = registry
-            .apply_rollback(signed_rollback_request("web_portal", None, &key_pair))
-            .await
-            .expect("rollback");
-        assert_eq!(rolled_back.action, SoracloudAction::Rollback);
-        assert_eq!(rolled_back.current_version, "1.0.0");
-        assert_eq!(rolled_back.audit_event_count, 3);
-
-        let snapshot = registry.snapshot(Some("web_portal"), 10).await;
-        assert_eq!(snapshot.service_count, 1);
-        assert_eq!(snapshot.audit_event_count, 3);
-        assert_eq!(snapshot.services[0].current_version, "1.0.0");
-        assert_eq!(snapshot.recent_audit_events.len(), 3);
-
-        let state = registry.state.read().await;
-        let service = state
-            .services
-            .get("web_portal")
-            .expect("service should remain in registry");
-        let generations = service
-            .revisions
-            .iter()
-            .map(|revision| revision.process_generation)
-            .collect::<Vec<_>>();
-        assert_eq!(generations, vec![1, 2, 3]);
-        let started_sequences = service
-            .revisions
-            .iter()
-            .map(|revision| revision.process_started_sequence)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            started_sequences,
-            vec![deployed.sequence, upgraded.sequence, rolled_back.sequence]
-        );
-        let first_hash = service.revisions[0].sandbox_profile_hash;
-        assert_eq!(service.revisions[1].sandbox_profile_hash, first_hash);
-        assert_eq!(service.revisions[2].sandbox_profile_hash, first_hash);
-    }
-
-    #[tokio::test]
-    async fn deploy_rejects_invalid_bundle_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let other = KeyPair::random();
-        let mut request = signed_bundle_request(fixture_bundle("1.0.0"), &key_pair);
-        request.provenance.signature = Signature::new(other.private_key(), b"tampered-payload");
-
-        let err = registry
-            .apply_deploy(request)
-            .await
-            .expect_err("invalid signature must fail");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn deploy_rejects_state_write_capability_mismatch_for_mutable_bindings() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut bundle = fixture_bundle("1.0.0");
-        bundle.container.capabilities.allow_state_writes = false;
-        let first_binding = bundle
-            .service
-            .state_bindings
-            .first_mut()
-            .expect("fixture includes at least one binding");
-        first_binding.mutability = SoraStateMutabilityV1::ReadWrite;
-        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-
-        let err = registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect_err("deploy must reject mutable bindings when state writes are disabled");
-        assert_eq!(err.kind, SoracloudErrorKind::BadRequest);
-        assert!(
-            err.message.contains("allow_state_writes"),
-            "unexpected admission error: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn deploy_rejects_resources_above_scr_caps() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut bundle = fixture_bundle("1.0.0");
-        bundle.container.resources.cpu_millis =
-            std::num::NonZeroU32::new(SCR_HOST_MAX_CPU_MILLIS.saturating_add(1))
-                .expect("non-zero CPU");
-        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-
-        let err = registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect_err("deploy must reject resources beyond SCR caps");
-        assert_eq!(err.kind, SoracloudErrorKind::BadRequest);
-        assert!(
-            err.message.contains("resources.cpu_millis exceeds SCR cap"),
-            "unexpected resource-admission error: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn state_mutation_tracks_binding_usage_for_current_revision() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let first = signed_state_mutation_request(
-            StateMutationRequest {
-                service_name: "web_portal".to_string(),
-                binding_name: "session_store".to_string(),
-                key: "/state/session/user-1".to_string(),
-                operation: StateMutationOperation::Upsert,
-                value_size_bytes: Some(128),
-                encryption: SoraStateEncryptionV1::ClientCiphertext,
-                governance_tx_hash: Hash::new(b"governance-tx-1"),
-            },
-            &key_pair,
-        );
-        let first_result = registry
-            .apply_state_mutation(first)
-            .await
-            .expect("first upsert");
-        assert_eq!(first_result.binding_total_bytes, 128);
-        assert_eq!(first_result.binding_key_count, 1);
-        assert_eq!(first_result.audit_event_count, 2);
-
-        let second = signed_state_mutation_request(
-            StateMutationRequest {
-                service_name: "web_portal".to_string(),
-                binding_name: "session_store".to_string(),
-                key: "/state/session/user-1".to_string(),
-                operation: StateMutationOperation::Upsert,
-                value_size_bytes: Some(64),
-                encryption: SoraStateEncryptionV1::ClientCiphertext,
-                governance_tx_hash: Hash::new(b"governance-tx-2"),
-            },
-            &key_pair,
-        );
-        let second_result = registry
-            .apply_state_mutation(second)
-            .await
-            .expect("overwrite upsert");
-        assert_eq!(second_result.binding_total_bytes, 64);
-        assert_eq!(second_result.binding_key_count, 1);
-        assert_eq!(second_result.audit_event_count, 3);
-    }
-
-    #[tokio::test]
-    async fn state_mutation_enforces_append_only_and_prefix_rules() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let first = signed_state_mutation_request(
-            StateMutationRequest {
-                service_name: "web_portal".to_string(),
-                binding_name: "patient_records".to_string(),
-                key: "/state/health/patient-1".to_string(),
-                operation: StateMutationOperation::Upsert,
-                value_size_bytes: Some(256),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash: Hash::new(b"governance-tx-3"),
-            },
-            &key_pair,
-        );
-        registry
-            .apply_state_mutation(first)
-            .await
-            .expect("append-only first write");
-
-        let overwrite = signed_state_mutation_request(
-            StateMutationRequest {
-                service_name: "web_portal".to_string(),
-                binding_name: "patient_records".to_string(),
-                key: "/state/health/patient-1".to_string(),
-                operation: StateMutationOperation::Upsert,
-                value_size_bytes: Some(512),
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                governance_tx_hash: Hash::new(b"governance-tx-4"),
-            },
-            &key_pair,
-        );
-        let overwrite_err = registry
-            .apply_state_mutation(overwrite)
-            .await
-            .expect_err("append-only overwrite must fail");
-        assert_eq!(overwrite_err.kind, SoracloudErrorKind::Conflict);
-
-        let wrong_prefix = signed_state_mutation_request(
-            StateMutationRequest {
-                service_name: "web_portal".to_string(),
-                binding_name: "session_store".to_string(),
-                key: "/state/other/key".to_string(),
-                operation: StateMutationOperation::Upsert,
-                value_size_bytes: Some(32),
-                encryption: SoraStateEncryptionV1::ClientCiphertext,
-                governance_tx_hash: Hash::new(b"governance-tx-5"),
-            },
-            &key_pair,
-        );
-        let prefix_err = registry
-            .apply_state_mutation(wrong_prefix)
-            .await
-            .expect_err("wrong prefix must fail");
-        assert_eq!(prefix_err.kind, SoracloudErrorKind::Conflict);
-    }
-
-    #[tokio::test]
-    async fn state_mutation_rejects_invalid_signature() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let other = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut request = signed_state_mutation_request(
-            StateMutationRequest {
-                service_name: "web_portal".to_string(),
-                binding_name: "session_store".to_string(),
-                key: "/state/session/user-1".to_string(),
-                operation: StateMutationOperation::Upsert,
-                value_size_bytes: Some(128),
-                encryption: SoraStateEncryptionV1::ClientCiphertext,
-                governance_tx_hash: Hash::new(b"tampered-governance"),
-            },
-            &key_pair,
-        );
-        request.provenance.signature = Signature::new(other.private_key(), b"tampered-payload");
-
-        let err = registry
-            .apply_state_mutation(request)
-            .await
-            .expect_err("invalid signature must fail");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-    }
-
-    #[tokio::test]
-    async fn fhe_job_run_tracks_ciphertext_binding_usage_and_audit_log() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let job = fixture_fhe_job_spec();
-        let expected_operation = job.operation;
-        let expected_output_key = job.output_state_key.clone();
-        let expected_output_bytes = job.deterministic_output_payload_bytes();
-        let expected_commitment = job.deterministic_output_commitment();
-        let response = registry
-            .apply_fhe_job_run(signed_fhe_job_run_request(
-                FheJobRunPayload {
-                    service_name: "web_portal".to_owned(),
-                    binding_name: "patient_records".to_owned(),
-                    job,
-                    policy: fixture_fhe_execution_policy(),
-                    param_set: fixture_fhe_param_set(),
-                    governance_tx_hash: Hash::new(b"fhe-governance-1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("fhe job run");
-
-        assert_eq!(response.action, SoracloudAction::FheJobRun);
-        assert_eq!(response.service_name, "web_portal");
-        assert_eq!(response.binding_name, "patient_records");
-        assert_eq!(response.operation, expected_operation);
-        assert_eq!(response.output_state_key, expected_output_key);
-        assert_eq!(response.output_payload_bytes, expected_output_bytes);
-        assert_eq!(response.output_commitment, expected_commitment);
-        assert_eq!(response.binding_total_bytes, expected_output_bytes);
-        assert_eq!(response.binding_key_count, 1);
-        assert_eq!(response.current_version, "1.0.0");
-        assert_eq!(response.audit_event_count, 2);
-
-        let snapshot = registry.snapshot(Some("web_portal"), 4).await;
-        assert_eq!(snapshot.audit_event_count, 2);
-        assert_eq!(snapshot.recent_audit_events.len(), 2);
-        assert_eq!(
-            snapshot.recent_audit_events[0].action,
-            SoracloudAction::FheJobRun
-        );
-    }
-
-    #[tokio::test]
-    async fn fhe_job_run_rejects_bindings_that_are_not_fhe_ciphertext() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let err = registry
-            .apply_fhe_job_run(signed_fhe_job_run_request(
-                FheJobRunPayload {
-                    service_name: "web_portal".to_owned(),
-                    binding_name: "session_store".to_owned(),
-                    job: fixture_fhe_job_spec(),
-                    policy: fixture_fhe_execution_policy(),
-                    param_set: fixture_fhe_param_set(),
-                    governance_tx_hash: Hash::new(b"fhe-governance-2"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("non-fhe binding must be rejected");
-
-        assert_eq!(err.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            err.message.contains("not configured for FHE ciphertexts"),
-            "unexpected non-fhe binding error: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn fhe_job_run_rejects_policy_name_mismatch() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut job = fixture_fhe_job_spec();
-        job.policy_name = "wrong_policy".parse().expect("valid policy name");
-        let err = registry
-            .apply_fhe_job_run(signed_fhe_job_run_request(
-                FheJobRunPayload {
-                    service_name: "web_portal".to_owned(),
-                    binding_name: "patient_records".to_owned(),
-                    job,
-                    policy: fixture_fhe_execution_policy(),
-                    param_set: fixture_fhe_param_set(),
-                    governance_tx_hash: Hash::new(b"fhe-governance-3"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("policy mismatch must be rejected");
-
-        assert_eq!(err.kind, SoracloudErrorKind::BadRequest);
-        assert!(
-            err.message.contains("policy_name"),
-            "unexpected policy mismatch error: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn decryption_request_records_audit_event_for_private_binding() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let request = fixture_decryption_request();
-        let policy = fixture_decryption_authority_policy();
-        let expected_policy_name = request.policy_name.clone();
-        let expected_binding = request.binding_name.clone();
-        let expected_request_id = request.request_id.clone();
-        let expected_state_key = request.state_key.clone();
-        let expected_governance_hash = request.governance_tx_hash;
-        let expected_jurisdiction = request.jurisdiction_tag.clone();
-        let expected_policy_snapshot_hash = Hash::new(Encode::encode(&policy));
-        let expected_consent_hash = request.consent_evidence_hash;
-
-        let response = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy,
-                    request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("decryption request");
-
-        assert_eq!(response.action, SoracloudAction::DecryptionRequest);
-        assert_eq!(response.service_name, "web_portal");
-        assert_eq!(response.policy_name, expected_policy_name);
-        assert_eq!(response.binding_name, expected_binding);
-        assert_eq!(response.request_id, expected_request_id);
-        assert_eq!(response.state_key, expected_state_key);
-        assert_eq!(response.jurisdiction_tag, expected_jurisdiction);
-        assert_eq!(response.policy_snapshot_hash, expected_policy_snapshot_hash);
-        assert_eq!(response.consent_evidence_hash, expected_consent_hash);
-        assert_eq!(response.governance_tx_hash, expected_governance_hash);
-        assert_eq!(response.audit_event_count, 2);
-
-        let snapshot = registry.snapshot(Some("web_portal"), 4).await;
-        assert_eq!(snapshot.audit_event_count, 2);
-        assert_eq!(snapshot.recent_audit_events.len(), 2);
-        let audit = &snapshot.recent_audit_events[0];
-        assert_eq!(audit.action, SoracloudAction::DecryptionRequest);
-        assert_eq!(audit.jurisdiction_tag.as_deref(), Some("us_hipaa"));
-        assert_eq!(audit.policy_name.as_deref(), Some("phi_threshold_policy"));
-        assert_eq!(
-            audit.policy_snapshot_hash,
-            Some(expected_policy_snapshot_hash)
-        );
-        assert_eq!(audit.consent_evidence_hash, expected_consent_hash);
-        assert_eq!(audit.break_glass, Some(false));
-    }
-
-    #[tokio::test]
-    async fn decryption_request_rejects_break_glass_when_policy_disallows_it() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut request = fixture_decryption_request();
-        request.break_glass = true;
-        request.break_glass_reason = Some("critical-care override".to_string());
-        let err = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: fixture_decryption_authority_policy(),
-                    request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("break-glass must fail when policy disallows it");
-
-        assert_eq!(err.kind, SoracloudErrorKind::BadRequest);
-        assert!(
-            err.message.contains("break_glass"),
-            "unexpected break-glass rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn decryption_request_rejects_missing_consent_evidence_when_policy_requires_it() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut request = fixture_decryption_request();
-        request.consent_evidence_hash = None;
-        let err = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: fixture_decryption_authority_policy(),
-                    request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("consent evidence is required for non-break-glass request");
-
-        assert_eq!(err.kind, SoracloudErrorKind::BadRequest);
-        assert!(
-            err.message.contains("consent_evidence_hash"),
-            "unexpected consent-evidence rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn decryption_request_rejects_jurisdiction_mismatch() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut request = fixture_decryption_request();
-        request.jurisdiction_tag = "eu_gdpr".to_string();
-        let err = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: fixture_decryption_authority_policy(),
-                    request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("jurisdiction mismatch should fail policy admission");
-
-        assert_eq!(err.kind, SoracloudErrorKind::BadRequest);
-        assert!(
-            err.message.contains("jurisdiction_tag"),
-            "unexpected jurisdiction rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn decryption_request_rejects_state_key_outside_binding_prefix() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut request = fixture_decryption_request();
-        request.state_key = "/state/session/user-1".to_owned();
-        let err = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: fixture_decryption_authority_policy(),
-                    request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("state key outside binding prefix must be rejected");
-
-        assert_eq!(err.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            err.message.contains("outside binding prefix"),
-            "unexpected binding-prefix rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn health_privacy_matrix_rejects_unauthorized_decryption_signatures() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut signed = signed_decryption_request(
-            DecryptionRequestPayload {
-                service_name: "web_portal".to_owned(),
-                policy: fixture_decryption_authority_policy(),
-                request: fixture_decryption_request(),
-            },
-            &key_pair,
-        );
-        signed.payload.request.justification = "tampered-justification".to_string();
-
-        let err = registry
-            .apply_decryption_request(signed)
-            .await
-            .expect_err("tampered signed payload must fail signature verification");
-        assert_eq!(err.kind, SoracloudErrorKind::Unauthorized);
-        assert!(
-            err.message.contains("signature verification failed"),
-            "unexpected unauthorized-signature rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn health_privacy_matrix_enforces_declared_binding_scope() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut request = fixture_decryption_request();
-        request.binding_name = "unknown_binding".parse().expect("valid binding name");
-        let err = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: fixture_decryption_authority_policy(),
-                    request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("undeclared binding should fail least-privilege enforcement");
-        assert_eq!(err.kind, SoracloudErrorKind::NotFound);
-        assert!(
-            err.message.contains("is not declared"),
-            "unexpected undeclared-binding rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn health_privacy_matrix_reports_evidence_completeness_gaps() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut policy = fixture_decryption_authority_policy();
-        policy.allow_break_glass = true;
-
-        let mut standard_request = fixture_decryption_request();
-        standard_request.request_id = "decrypt-req-matrix-1".to_string();
-        standard_request.state_key = "/state/health/matrix-patient-1".to_string();
-        standard_request.governance_tx_hash = Hash::new(b"health-matrix-gov-1");
-        registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: policy.clone(),
-                    request: standard_request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("standard request");
-
-        let mut break_glass_request = fixture_decryption_request();
-        break_glass_request.request_id = "decrypt-req-matrix-2".to_string();
-        break_glass_request.state_key = "/state/health/matrix-patient-2".to_string();
-        break_glass_request.break_glass = true;
-        break_glass_request.break_glass_reason = Some("critical care override".to_string());
-        break_glass_request.consent_evidence_hash = None;
-        break_glass_request.governance_tx_hash = Hash::new(b"health-matrix-gov-2");
-        registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy,
-                    request: break_glass_request,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("break-glass request");
-
-        let report = registry
-            .health_compliance_report(Some("web_portal"), Some("us_hipaa"), 20)
-            .await
-            .expect("health compliance report");
-        assert_eq!(report.total_access_events, 2);
-        assert_eq!(report.break_glass_events, 1);
-        assert_eq!(report.consent_evidence_present_events, 1);
-        assert_eq!(report.consent_evidence_coverage_bps, 5_000);
-    }
-
-    #[tokio::test]
-    async fn health_compliance_report_summarizes_access_logs_policy_history_and_attestations() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let policy_v1 = fixture_decryption_authority_policy();
-        let policy_hash_v1 = Hash::new(Encode::encode(&policy_v1));
-
-        let mut policy_v2 = policy_v1.clone();
-        policy_v2.allow_break_glass = true;
-        policy_v2.approver_quorum = 3u16.try_into().expect("non-zero approver quorum");
-        let policy_hash_v2 = Hash::new(Encode::encode(&policy_v2));
-
-        let mut policy_eu = policy_v2.clone();
-        policy_eu.jurisdiction_tag = "eu_gdpr".to_string();
-        policy_eu.require_consent_evidence = false;
-        let policy_hash_eu = Hash::new(Encode::encode(&policy_eu));
-
-        let request_v1 = fixture_decryption_request();
-        registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: policy_v1,
-                    request: request_v1,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("first decryption request");
-
-        let mut request_v2_break_glass = fixture_decryption_request();
-        request_v2_break_glass.request_id = "decrypt-req-0002".to_string();
-        request_v2_break_glass.state_key = "/state/health/patient-2".to_string();
-        request_v2_break_glass.break_glass = true;
-        request_v2_break_glass.break_glass_reason = Some("emergency trauma review".to_string());
-        request_v2_break_glass.consent_evidence_hash = None;
-        request_v2_break_glass.governance_tx_hash = Hash::new(b"health-gov-2");
-        registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: policy_v2.clone(),
-                    request: request_v2_break_glass,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("second decryption request");
-
-        let mut request_v2 = fixture_decryption_request();
-        request_v2.request_id = "decrypt-req-0003".to_string();
-        request_v2.state_key = "/state/health/patient-3".to_string();
-        request_v2.governance_tx_hash = Hash::new(b"health-gov-3");
-        let response_v2 = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: policy_v2,
-                    request: request_v2,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("third decryption request");
-
-        let mut request_eu = fixture_decryption_request();
-        request_eu.request_id = "decrypt-req-0004".to_string();
-        request_eu.state_key = "/state/health/patient-4".to_string();
-        request_eu.jurisdiction_tag = "eu_gdpr".to_string();
-        request_eu.consent_evidence_hash = None;
-        request_eu.governance_tx_hash = Hash::new(b"health-gov-4");
-        let response_eu = registry
-            .apply_decryption_request(signed_decryption_request(
-                DecryptionRequestPayload {
-                    service_name: "web_portal".to_owned(),
-                    policy: policy_eu,
-                    request: request_eu,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("fourth decryption request");
-
-        let report = registry
-            .health_compliance_report(Some("web_portal"), None, 20)
-            .await
-            .expect("health compliance report");
-
-        assert_eq!(report.schema_version, HEALTH_COMPLIANCE_REPORT_VERSION_V1);
-        assert_eq!(report.service_name.as_deref(), Some("web_portal"));
-        assert_eq!(report.total_access_events, 4);
-        assert_eq!(report.break_glass_events, 1);
-        assert_eq!(report.non_break_glass_events, 3);
-        assert_eq!(report.consent_evidence_present_events, 2);
-        assert_eq!(report.consent_evidence_coverage_bps, 5_000);
-        assert_eq!(report.recent_access_events.len(), 4);
-        assert_eq!(
-            report.recent_access_events[0].sequence,
-            response_eu.sequence
-        );
-        assert_eq!(
-            report.recent_access_events[1].sequence,
-            response_v2.sequence
-        );
-
-        let us_stats = report
-            .jurisdiction_stats
-            .iter()
-            .find(|entry| entry.jurisdiction_tag == "us_hipaa")
-            .expect("us_hipaa stats");
-        assert_eq!(us_stats.access_event_count, 3);
-        assert_eq!(us_stats.break_glass_event_count, 1);
-        let eu_stats = report
-            .jurisdiction_stats
-            .iter()
-            .find(|entry| entry.jurisdiction_tag == "eu_gdpr")
-            .expect("eu_gdpr stats");
-        assert_eq!(eu_stats.access_event_count, 1);
-        assert_eq!(eu_stats.break_glass_event_count, 0);
-
-        assert!(
-            report
-                .data_flow_attestations
-                .iter()
-                .any(|entry| entry.service_name == "web_portal"
-                    && entry.binding_name == "patient_records"),
-            "expected patient_records data-flow attestation"
-        );
-        assert!(
-            report
-                .data_flow_attestations
-                .iter()
-                .any(|entry| entry.service_name == "web_portal"
-                    && entry.binding_name == "session_store"),
-            "expected session_store data-flow attestation"
-        );
-
-        let policy_v2_history = report
-            .policy_diff_history
-            .iter()
-            .find(|entry| entry.policy_snapshot_hash == policy_hash_v2)
-            .expect("policy v2 history");
-        assert_eq!(policy_v2_history.event_count, 2);
-        assert!(
-            report
-                .policy_diff_history
-                .iter()
-                .any(|entry| entry.policy_snapshot_hash == policy_hash_v1),
-            "expected baseline policy history"
-        );
-        assert!(
-            report
-                .policy_diff_history
-                .iter()
-                .any(|entry| entry.policy_snapshot_hash == policy_hash_eu),
-            "expected EU policy history"
-        );
-
-        let us_filtered = registry
-            .health_compliance_report(Some("web_portal"), Some("us_hipaa"), 1)
-            .await
-            .expect("filtered health compliance report");
-        assert_eq!(us_filtered.total_access_events, 3);
-        assert_eq!(us_filtered.break_glass_events, 1);
-        assert_eq!(us_filtered.non_break_glass_events, 2);
-        assert_eq!(us_filtered.consent_evidence_present_events, 2);
-        assert_eq!(us_filtered.recent_access_events.len(), 1);
-        assert_eq!(
-            us_filtered.recent_access_events[0].sequence,
-            response_v2.sequence
-        );
-        assert_eq!(us_filtered.jurisdiction_stats.len(), 1);
-        assert_eq!(
-            us_filtered.jurisdiction_stats[0].jurisdiction_tag,
-            "us_hipaa"
-        );
-        assert_eq!(us_filtered.policy_diff_history.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn ciphertext_query_returns_minimal_metadata_with_inclusion_proofs() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-        registry
-            .apply_fhe_job_run(signed_fhe_job_run_request(
-                FheJobRunPayload {
-                    service_name: "web_portal".to_owned(),
-                    binding_name: "patient_records".to_owned(),
-                    job: fixture_fhe_job_spec(),
-                    policy: fixture_fhe_execution_policy(),
-                    param_set: fixture_fhe_param_set(),
-                    governance_tx_hash: Hash::new(b"fhe-governance-query-1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("fhe job run");
-
-        let response = registry
-            .apply_ciphertext_query(signed_ciphertext_query_request(
-                fixture_ciphertext_query_spec(),
-                &key_pair,
-            ))
-            .await
-            .expect("ciphertext query");
-        assert_eq!(response.action, SoracloudAction::CiphertextQuery);
-        assert_eq!(response.signed_by, key_pair.public_key().to_string());
-
-        let payload = response.response;
-        payload.validate().expect("query response should validate");
-        assert_eq!(
-            payload.metadata_level,
-            CiphertextQueryMetadataLevelV1::Minimal
-        );
-        assert_eq!(payload.result_count, 1);
-        assert!(!payload.truncated);
-        assert_eq!(payload.results.len(), 1);
-        let row = &payload.results[0];
-        assert!(
-            row.state_key.is_none(),
-            "minimal projection must hide state key"
-        );
-        assert_eq!(row.encryption, SoraStateEncryptionV1::FheCiphertext);
-        assert!(
-            row.proof
-                .as_ref()
-                .is_some_and(|proof| proof.proof_scheme == CIPHERTEXT_QUERY_PROOF_SCHEME_V1),
-            "inclusion proof should be attached for proof-enabled queries"
-        );
-    }
-
-    #[tokio::test]
-    async fn ciphertext_query_rejects_plaintext_bindings() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut bundle = fixture_bundle("1.0.0");
-        let session_binding = bundle
-            .service
-            .state_bindings
-            .iter_mut()
-            .find(|binding| binding.binding_name.as_ref() == "session_store")
-            .expect("session binding should exist");
-        session_binding.encryption = SoraStateEncryptionV1::Plaintext;
-        registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect("deploy");
-
-        let err = registry
-            .apply_ciphertext_query(signed_ciphertext_query_request(
-                CiphertextQuerySpecV1 {
-                    schema_version: fixture_ciphertext_query_spec().schema_version,
-                    service_name: "web_portal".parse().expect("valid name"),
-                    binding_name: "session_store".parse().expect("valid name"),
-                    state_key_prefix: "/state/session".to_owned(),
-                    max_results: std::num::NonZeroU16::new(16).expect("nonzero"),
-                    metadata_level: CiphertextQueryMetadataLevelV1::Minimal,
-                    include_proof: true,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("plaintext binding should not be queryable via ciphertext interface");
-        assert_eq!(err.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            err.message.contains("plaintext"),
-            "unexpected plaintext-binding rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn ciphertext_query_rejects_prefix_outside_binding_scope() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let mut query = fixture_ciphertext_query_spec();
-        query.state_key_prefix = "/state/session".to_owned();
-        let err = registry
-            .apply_ciphertext_query(signed_ciphertext_query_request(query, &key_pair))
-            .await
-            .expect_err("prefix outside binding scope should be rejected");
-        assert_eq!(err.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            err.message.contains("outside binding prefix"),
-            "unexpected binding-scope rejection: {}",
-            err.message
-        );
-    }
-
-    #[tokio::test]
-    async fn ciphertext_query_response_is_deterministic_across_registries() {
-        let key_pair = KeyPair::random();
-        let registry_a = Registry::default();
-        let registry_b = Registry::default();
-
-        for registry in [&registry_a, &registry_b] {
-            registry
-                .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-                .await
-                .expect("deploy");
-            registry
-                .apply_fhe_job_run(signed_fhe_job_run_request(
-                    FheJobRunPayload {
-                        service_name: "web_portal".to_owned(),
-                        binding_name: "patient_records".to_owned(),
-                        job: fixture_fhe_job_spec(),
-                        policy: fixture_fhe_execution_policy(),
-                        param_set: fixture_fhe_param_set(),
-                        governance_tx_hash: Hash::new(b"fhe-governance-query-parity"),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("fhe job run");
-        }
-
-        let response_a = registry_a
-            .apply_ciphertext_query(signed_ciphertext_query_request(
-                fixture_ciphertext_query_spec(),
-                &key_pair,
-            ))
-            .await
-            .expect("query a");
-        let response_b = registry_b
-            .apply_ciphertext_query(signed_ciphertext_query_request(
-                fixture_ciphertext_query_spec(),
-                &key_pair,
-            ))
-            .await
-            .expect("query b");
-
-        assert_eq!(response_a.response, response_b.response);
-        assert_eq!(response_a.signed_by, response_b.signed_by);
-    }
-
-    #[tokio::test]
-    async fn rollout_canary_advances_and_closes_on_full_promotion() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-
-        let upgraded = registry
-            .apply_upgrade(signed_bundle_request(fixture_bundle("1.1.0"), &key_pair))
-            .await
-            .expect("upgrade");
-        let handle = upgraded
-            .rollout_handle
-            .clone()
-            .expect("upgrade should provide rollout handle");
-        assert_eq!(upgraded.rollout_stage, Some(RolloutStage::Canary));
-        assert_eq!(upgraded.rollout_percent, Some(20));
-
-        let canary = registry
-            .apply_rollout(signed_rollout_request(
-                "web_portal",
-                &handle,
-                true,
-                Some(50),
-                b"rollout-canary-1",
-                &key_pair,
-            ))
-            .await
-            .expect("canary advance");
-        assert_eq!(canary.action, SoracloudAction::Rollout);
-        assert_eq!(canary.stage, RolloutStage::Canary);
-        assert_eq!(canary.traffic_percent, 50);
-
-        let promoted = registry
-            .apply_rollout(signed_rollout_request(
-                "web_portal",
-                &handle,
-                true,
-                None,
-                b"rollout-promote-2",
-                &key_pair,
-            ))
-            .await
-            .expect("promotion");
-        assert_eq!(promoted.action, SoracloudAction::Rollout);
-        assert_eq!(promoted.stage, RolloutStage::Promoted);
-        assert_eq!(promoted.traffic_percent, 100);
-
-        let snapshot = registry.snapshot(Some("web_portal"), 10).await;
-        let service = snapshot.services.first().expect("service exists");
-        assert!(
-            service.active_rollout.is_none(),
-            "promoted rollout should close"
-        );
-        assert_eq!(
-            service.last_rollout.as_ref().map(|rollout| rollout.stage),
-            Some(RolloutStage::Promoted)
-        );
-    }
-
-    #[tokio::test]
-    async fn rollout_auto_rolls_back_after_health_failures() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        registry
-            .apply_deploy(signed_bundle_request(fixture_bundle("1.0.0"), &key_pair))
-            .await
-            .expect("deploy");
-        let upgraded = registry
-            .apply_upgrade(signed_bundle_request(fixture_bundle("1.1.0"), &key_pair))
-            .await
-            .expect("upgrade");
-        let handle = upgraded
-            .rollout_handle
-            .clone()
-            .expect("upgrade should provide rollout handle");
-
-        for index in 0..2 {
-            let response = registry
-                .apply_rollout(signed_rollout_request(
-                    "web_portal",
-                    &handle,
-                    false,
-                    None,
-                    format!("rollout-fail-{index}").as_bytes(),
-                    &key_pair,
-                ))
-                .await
-                .expect("pre-threshold health failure");
-            assert_eq!(response.action, SoracloudAction::Rollout);
-            assert_eq!(response.stage, RolloutStage::Canary);
-        }
-
-        let rollback = registry
-            .apply_rollout(signed_rollout_request(
-                "web_portal",
-                &handle,
-                false,
-                None,
-                b"rollout-fail-terminal",
-                &key_pair,
-            ))
-            .await
-            .expect("terminal health failure should rollback");
-        assert_eq!(rollback.action, SoracloudAction::Rollback);
-        assert_eq!(rollback.stage, RolloutStage::RolledBack);
-        assert_eq!(rollback.current_version, "1.0.0");
-        assert_eq!(rollback.traffic_percent, 0);
-
-        let snapshot = registry.snapshot(Some("web_portal"), 10).await;
-        let service = snapshot.services.first().expect("service exists");
-        assert_eq!(service.current_version, "1.0.0");
-        assert!(service.active_rollout.is_none());
-        assert_eq!(
-            service.last_rollout.as_ref().map(|rollout| rollout.stage),
-            Some(RolloutStage::RolledBack)
-        );
-    }
-
-    #[tokio::test]
-    async fn agent_autonomy_runtime_enforces_allowlist_budget_and_revocation() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-
-        let deployed = registry
-            .apply_agent_deploy(signed_agent_deploy_request(
-                AgentDeployPayload {
-                    manifest: fixture_agent_manifest(),
-                    lease_ticks: 32,
-                    autonomy_budget_units: Some(500),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("agent deploy");
-        assert_eq!(deployed.action, AgentApartmentAction::Deploy);
-        assert_eq!(deployed.budget_remaining_units, 500);
-
-        let allow = registry
-            .apply_agent_artifact_allow(signed_agent_artifact_allow_request(
-                AgentArtifactAllowPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("allow artifact");
-        assert_eq!(allow.action, AgentApartmentAction::ArtifactAllowed);
-        assert_eq!(allow.allowlist_count, 1);
-        assert_eq!(allow.budget_remaining_units, 500);
-
-        let run = registry
-            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
-                AgentAutonomyRunPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                    budget_units: 120,
-                    run_label: "nightly-train-step-1".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("autonomy run");
-        assert_eq!(run.action, AgentApartmentAction::AutonomyRunApproved);
-        assert_eq!(run.run_count, 1);
-        assert_eq!(run.budget_remaining_units, 380);
-        assert!(
-            run.run_id
-                .as_deref()
-                .is_some_and(|run_id| run_id.contains(":autonomy:"))
-        );
-
-        let status = registry
-            .agent_autonomy_status("ops_agent")
-            .await
-            .expect("autonomy status");
-        assert_eq!(status.allowlist_count, 1);
-        assert_eq!(status.run_count, 1);
-        assert_eq!(status.budget_remaining_units, 380);
-        assert_eq!(status.recent_runs.len(), 1);
-        assert_eq!(status.recent_runs[0].run_label, "nightly-train-step-1");
-
-        let provenance_mismatch = registry
-            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
-                AgentAutonomyRunPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: Some("hash:WRONG0001#01".to_owned()),
-                    budget_units: 1,
-                    run_label: "mismatch".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("provenance mismatch must fail");
-        assert_eq!(provenance_mismatch.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            provenance_mismatch.message.contains("provenance mismatch"),
-            "unexpected mismatch error: {}",
-            provenance_mismatch.message
-        );
-
-        let revoke = registry
-            .apply_agent_policy_revoke(signed_agent_policy_revoke_request(
-                AgentPolicyRevokePayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    capability: "agent.autonomy.run".to_owned(),
-                    reason: Some("manual-review".to_owned()),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("policy revoke");
-        assert_eq!(revoke.action, AgentApartmentAction::PolicyRevoked);
-        assert_eq!(revoke.revoked_policy_capability_count, 1);
-
-        let revoked_run = registry
-            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
-                AgentAutonomyRunPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                    budget_units: 1,
-                    run_label: "revoked".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("run with revoked capability must fail");
-        assert_eq!(revoked_run.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            revoked_run.message.contains("agent.autonomy.run"),
-            "unexpected revoked capability error: {}",
-            revoked_run.message
-        );
-    }
-
-    #[tokio::test]
-    async fn agent_autonomy_runtime_rejects_actions_after_lease_expiry() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-
-        registry
-            .apply_agent_deploy(signed_agent_deploy_request(
-                AgentDeployPayload {
-                    manifest: fixture_agent_manifest(),
-                    lease_ticks: 1,
-                    autonomy_budget_units: Some(100),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("agent deploy");
-
-        let expired_allow = registry
-            .apply_agent_artifact_allow(signed_agent_artifact_allow_request(
-                AgentArtifactAllowPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: None,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("allow should fail after lease expiry");
-        assert_eq!(expired_allow.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            expired_allow.message.contains("lease expired"),
-            "unexpected lease-expiry error: {}",
-            expired_allow.message
-        );
-
-        let status = registry
-            .agent_autonomy_status("ops_agent")
-            .await
-            .expect("status should still resolve");
-        assert_eq!(status.status, AgentRuntimeStatus::LeaseExpired);
-        assert_eq!(status.lease_remaining_ticks, 0);
-    }
-
-    #[tokio::test]
-    async fn agent_runtime_lease_renew_restart_and_status_flow() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-
-        let deployed = registry
-            .apply_agent_deploy(signed_agent_deploy_request(
-                AgentDeployPayload {
-                    manifest: fixture_agent_manifest_with_capabilities("ops_agent", &[]),
-                    lease_ticks: 1,
-                    autonomy_budget_units: Some(250),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("agent deploy");
-        assert_eq!(deployed.action, AgentApartmentAction::Deploy);
-
-        let expired_restart = registry
-            .apply_agent_restart(signed_agent_restart_request(
-                AgentRestartPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    reason: "expired-lease".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("restart should fail while lease is expired");
-        assert_eq!(expired_restart.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            expired_restart.message.contains("lease expired"),
-            "unexpected lease-expiry error: {}",
-            expired_restart.message
-        );
-
-        let renewed = registry
-            .apply_agent_lease_renew(signed_agent_lease_renew_request(
-                AgentLeaseRenewPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    lease_ticks: 20,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("lease renew");
-        assert_eq!(renewed.action, AgentApartmentAction::LeaseRenew);
-        assert_eq!(renewed.status, AgentRuntimeStatus::Running);
-        assert!(renewed.lease_remaining_ticks > 0);
-
-        let restarted = registry
-            .apply_agent_restart(signed_agent_restart_request(
-                AgentRestartPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    reason: "manual-restart".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("restart");
-        assert_eq!(restarted.action, AgentApartmentAction::Restart);
-        assert_eq!(restarted.restart_count, 1);
-        assert_eq!(
-            restarted.last_restart_reason.as_deref(),
-            Some("manual-restart")
-        );
-        assert_eq!(restarted.process_generation, 2);
-        assert_eq!(restarted.process_started_sequence, restarted.sequence);
-        assert_eq!(restarted.last_active_sequence, restarted.sequence);
-        assert_eq!(restarted.checkpoint_count, 0);
-        assert_eq!(restarted.persistent_state_total_bytes, 0);
-        assert_eq!(restarted.persistent_state_key_count, 0);
-
-        let status = registry
-            .agent_status(Some("ops_agent"))
-            .await
-            .expect("agent status");
-        assert_eq!(status.apartment_count, 1);
-        assert_eq!(status.apartments.len(), 1);
-        let apartment = &status.apartments[0];
-        assert_eq!(apartment.apartment_name, "ops_agent");
-        assert_eq!(apartment.status, AgentRuntimeStatus::Running);
-        assert_eq!(apartment.restart_count, 1);
-        assert!(
-            apartment
-                .last_restart_reason
-                .as_deref()
-                .is_some_and(|reason| reason == "manual-restart")
-        );
-        assert_eq!(apartment.process_generation, 2);
-        assert_eq!(
-            apartment.process_started_sequence,
-            restarted.process_started_sequence
-        );
-        assert_eq!(apartment.checkpoint_count, 0);
-        assert_eq!(apartment.persistent_state_total_bytes, 0);
-        assert_eq!(apartment.persistent_state_key_count, 0);
-        assert!(
-            apartment.lease_remaining_ticks > 0,
-            "lease should be active after renewal"
-        );
-    }
-
-    #[tokio::test]
-    async fn agent_runtime_wallet_and_mailbox_policy_flow() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-
-        let sender_manifest =
-            fixture_agent_manifest_with_capabilities("ops_agent", &["agent.mailbox.send"]);
-        let mut recipient_manifest =
-            fixture_agent_manifest_with_capabilities("worker_agent", &["agent.mailbox.receive"]);
-        recipient_manifest
-            .policy_capabilities
-            .retain(|capability| capability.as_ref() != "agent.mailbox.send");
-        recipient_manifest.validate().expect("recipient manifest");
-
-        registry
-            .apply_agent_deploy(signed_agent_deploy_request(
-                AgentDeployPayload {
-                    manifest: sender_manifest,
-                    lease_ticks: 64,
-                    autonomy_budget_units: Some(500),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("sender deploy");
-        registry
-            .apply_agent_deploy(signed_agent_deploy_request(
-                AgentDeployPayload {
-                    manifest: recipient_manifest,
-                    lease_ticks: 64,
-                    autonomy_budget_units: Some(500),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("recipient deploy");
-
-        let wallet_request = registry
-            .apply_agent_wallet_spend(signed_agent_wallet_spend_request(
-                AgentWalletSpendPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    asset_definition: "xor#sora".to_owned(),
-                    amount_nanos: 1_000_000,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("wallet spend request");
-        assert_eq!(
-            wallet_request.action,
-            AgentApartmentAction::WalletSpendRequested
-        );
-        assert_eq!(wallet_request.pending_request_count, 1);
-        let request_id = wallet_request
-            .request_id
-            .clone()
-            .expect("wallet request id must be present");
-
-        let wallet_approve = registry
-            .apply_agent_wallet_approve(signed_agent_wallet_approve_request(
-                AgentWalletApprovePayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    request_id: request_id.clone(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("wallet approve");
-        assert_eq!(
-            wallet_approve.action,
-            AgentApartmentAction::WalletSpendApproved
-        );
-        assert_eq!(wallet_approve.pending_request_count, 0);
-        assert_eq!(
-            wallet_approve.request_id.as_deref(),
-            Some(request_id.as_str())
-        );
-
-        let message_send = registry
-            .apply_agent_message_send(signed_agent_message_send_request(
-                AgentMessageSendPayload {
-                    from_apartment: "ops_agent".to_owned(),
-                    to_apartment: "worker_agent".to_owned(),
-                    channel: "ops.sync".to_owned(),
-                    payload: "rotate-key-42".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("message send");
-        assert_eq!(message_send.action, AgentApartmentAction::MessageEnqueued);
-        assert_eq!(message_send.pending_message_count, 1);
-        let message_id = message_send.message_id.clone();
-
-        let mailbox_status = registry
-            .agent_mailbox_status("worker_agent")
-            .await
-            .expect("mailbox status");
-        assert_eq!(mailbox_status.pending_message_count, 1);
-        assert_eq!(mailbox_status.messages.len(), 1);
-        assert_eq!(mailbox_status.messages[0].message_id, message_id);
-
-        let message_ack = registry
-            .apply_agent_message_ack(signed_agent_message_ack_request(
-                AgentMessageAckPayload {
-                    apartment_name: "worker_agent".to_owned(),
-                    message_id: message_id.clone(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("message ack");
-        assert_eq!(
-            message_ack.action,
-            AgentApartmentAction::MessageAcknowledged
-        );
-        assert_eq!(message_ack.pending_message_count, 0);
-
-        let mailbox_status_empty = registry
-            .agent_mailbox_status("worker_agent")
-            .await
-            .expect("mailbox status after ack");
-        assert_eq!(mailbox_status_empty.pending_message_count, 0);
-        assert!(mailbox_status_empty.messages.is_empty());
-
-        registry
-            .apply_agent_policy_revoke(signed_agent_policy_revoke_request(
-                AgentPolicyRevokePayload {
-                    apartment_name: "worker_agent".to_owned(),
-                    capability: "agent.mailbox.receive".to_owned(),
-                    reason: Some("maintenance-window".to_owned()),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("revoke recipient mailbox capability");
-
-        let rejected_send = registry
-            .apply_agent_message_send(signed_agent_message_send_request(
-                AgentMessageSendPayload {
-                    from_apartment: "ops_agent".to_owned(),
-                    to_apartment: "worker_agent".to_owned(),
-                    channel: "ops.sync".to_owned(),
-                    payload: "rotate-key-43".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("message send should fail after recipient capability revocation");
-        assert_eq!(rejected_send.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            rejected_send.message.contains("agent.mailbox.receive"),
-            "unexpected revoked-capability error: {}",
-            rejected_send.message
-        );
-    }
-
-    #[tokio::test]
-    async fn training_job_lifecycle_tracks_checkpoints_retries_and_completion() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let bundle = fixture_bundle_with_training("2026.03.0", true);
-        let service_name = bundle.service.service_name.to_string();
-
-        registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect("training-capable service deploy");
-
-        let started = registry
-            .apply_training_job_start(signed_training_job_start_request(
-                TrainingJobStartPayload {
-                    service_name: service_name.clone(),
-                    model_name: "foundation_model".to_owned(),
-                    job_id: "job-1".to_owned(),
-                    worker_group_size: 2,
-                    target_steps: 6,
-                    checkpoint_interval_steps: 2,
-                    max_retries: 2,
-                    step_compute_units: 10,
-                    compute_budget_units: 200,
-                    storage_budget_bytes: 500,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training start");
-        assert_eq!(started.action, TrainingJobAction::Start);
-        assert_eq!(started.status, TrainingJobStatus::Running);
-        assert_eq!(started.training_event_count, 1);
-        assert_eq!(started.compute_consumed_units, 0);
-        assert_eq!(started.storage_consumed_bytes, 0);
-
-        let checkpoint_one = registry
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    completed_step: 2,
-                    checkpoint_size_bytes: 100,
-                    metrics_hash: Hash::new(b"checkpoint-1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("checkpoint one");
-        assert_eq!(checkpoint_one.status, TrainingJobStatus::Running);
-        assert_eq!(checkpoint_one.completed_steps, 2);
-        assert_eq!(checkpoint_one.checkpoint_count, 1);
-        assert_eq!(checkpoint_one.compute_consumed_units, 40);
-        assert_eq!(checkpoint_one.storage_consumed_bytes, 100);
-        assert_eq!(checkpoint_one.training_event_count, 2);
-
-        let retry = registry
-            .apply_training_job_retry(signed_training_job_retry_request(
-                TrainingJobRetryPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    reason: "gradient divergence at shard 3".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("retry request");
-        assert_eq!(retry.action, TrainingJobAction::Retry);
-        assert_eq!(retry.status, TrainingJobStatus::RetryPending);
-        assert_eq!(retry.retry_count, 1);
-        assert_eq!(
-            retry.last_failure_reason.as_deref(),
-            Some("gradient divergence at shard 3")
-        );
-        assert_eq!(retry.training_event_count, 3);
-
-        let checkpoint_two = registry
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    completed_step: 4,
-                    checkpoint_size_bytes: 120,
-                    metrics_hash: Hash::new(b"checkpoint-2"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("checkpoint two");
-        assert_eq!(checkpoint_two.status, TrainingJobStatus::Running);
-        assert_eq!(checkpoint_two.completed_steps, 4);
-        assert_eq!(checkpoint_two.checkpoint_count, 2);
-        assert_eq!(checkpoint_two.compute_consumed_units, 80);
-        assert_eq!(checkpoint_two.storage_consumed_bytes, 220);
-        assert_eq!(checkpoint_two.retry_count, 1);
-        assert!(checkpoint_two.last_failure_reason.is_none());
-        assert_eq!(checkpoint_two.training_event_count, 4);
-
-        let completed = registry
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    completed_step: 6,
-                    checkpoint_size_bytes: 140,
-                    metrics_hash: Hash::new(b"checkpoint-3"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("checkpoint three");
-        assert_eq!(completed.status, TrainingJobStatus::Completed);
-        assert_eq!(completed.completed_steps, 6);
-        assert_eq!(completed.checkpoint_count, 3);
-        assert_eq!(completed.compute_consumed_units, 120);
-        assert_eq!(completed.storage_consumed_bytes, 360);
-        assert_eq!(completed.training_event_count, 5);
-
-        let status = registry
-            .training_job_status(&service_name, "job-1")
-            .await
-            .expect("training status");
-        assert_eq!(status.schema_version, TRAINING_JOB_STATUS_SCHEMA_VERSION_V1);
-        assert_eq!(status.job.status, TrainingJobStatus::Completed);
-        assert_eq!(status.job.completed_steps, 6);
-        assert_eq!(status.job.compute_consumed_units, 120);
-        assert_eq!(status.job.compute_remaining_units, 80);
-        assert_eq!(status.job.storage_consumed_bytes, 360);
-        assert_eq!(status.job.storage_remaining_bytes, 140);
-        assert_eq!(status.job.retry_count, 1);
-    }
-
-    #[tokio::test]
-    async fn training_job_start_rejects_services_without_training_capability() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let bundle = fixture_bundle_with_training("2026.03.0", false);
-        let service_name = bundle.service.service_name.to_string();
-
-        registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect("service deploy");
-
-        let error = registry
-            .apply_training_job_start(signed_training_job_start_request(
-                TrainingJobStartPayload {
-                    service_name,
-                    model_name: "foundation_model".to_owned(),
-                    job_id: "job-1".to_owned(),
-                    worker_group_size: 2,
-                    target_steps: 4,
-                    checkpoint_interval_steps: 2,
-                    max_retries: 1,
-                    step_compute_units: 10,
-                    compute_budget_units: 100,
-                    storage_budget_bytes: 256,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("training start should reject non-training service");
-        assert_eq!(error.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            error.message.contains("does not allow model training"),
-            "unexpected rejection: {}",
-            error.message
-        );
-    }
-
-    #[tokio::test]
-    async fn model_weight_lifecycle_supports_lineage_promotion_and_rollback() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let bundle = fixture_bundle_with_training("2026.03.0", true);
-        let service_name = bundle.service.service_name.to_string();
-        let model_name = "foundation_model".to_owned();
-
-        registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect("training-capable service deploy");
-
-        registry
-            .apply_training_job_start(signed_training_job_start_request(
-                TrainingJobStartPayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    worker_group_size: 2,
-                    target_steps: 2,
-                    checkpoint_interval_steps: 1,
-                    max_retries: 1,
-                    step_compute_units: 10,
-                    compute_budget_units: 80,
-                    storage_budget_bytes: 256,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training job 1 start");
-        registry
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    completed_step: 2,
-                    checkpoint_size_bytes: 64,
-                    metrics_hash: Hash::new(b"job-1-metrics"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training job 1 complete");
-
-        registry
-            .apply_model_artifact_register(signed_model_artifact_register_request(
-                ModelArtifactRegisterPayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    training_job_id: "job-1".to_owned(),
-                    weight_artifact_hash: Hash::new(b"weight-v1"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v1"),
-                    reproducibility_hash: Hash::new(b"repro-v1"),
-                    provenance_attestation_hash: Hash::new(b"attest-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("artifact register v1");
-
-        let register_v1 = registry
-            .apply_model_weight_register(signed_model_weight_register_request(
-                ModelWeightRegisterPayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    weight_version: "v1".to_owned(),
-                    training_job_id: "job-1".to_owned(),
-                    parent_version: None,
-                    weight_artifact_hash: Hash::new(b"weight-v1"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v1"),
-                    reproducibility_hash: Hash::new(b"repro-v1"),
-                    provenance_attestation_hash: Hash::new(b"attest-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("register v1");
-        assert_eq!(register_v1.action, ModelWeightAction::Register);
-        assert_eq!(register_v1.target_version, "v1");
-        assert!(register_v1.current_version.is_none());
-        assert_eq!(register_v1.version_count, 1);
-
-        let promote_v1 = registry
-            .apply_model_weight_promote(signed_model_weight_promote_request(
-                ModelWeightPromotePayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    weight_version: "v1".to_owned(),
-                    gate_approved: true,
-                    gate_report_hash: Hash::new(b"gate-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("promote v1");
-        assert_eq!(promote_v1.action, ModelWeightAction::Promote);
-        assert_eq!(promote_v1.current_version.as_deref(), Some("v1"));
-
-        registry
-            .apply_training_job_start(signed_training_job_start_request(
-                TrainingJobStartPayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    job_id: "job-2".to_owned(),
-                    worker_group_size: 2,
-                    target_steps: 2,
-                    checkpoint_interval_steps: 1,
-                    max_retries: 1,
-                    step_compute_units: 10,
-                    compute_budget_units: 80,
-                    storage_budget_bytes: 256,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training job 2 start");
-        registry
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-2".to_owned(),
-                    completed_step: 2,
-                    checkpoint_size_bytes: 64,
-                    metrics_hash: Hash::new(b"job-2-metrics"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training job 2 complete");
-
-        registry
-            .apply_model_artifact_register(signed_model_artifact_register_request(
-                ModelArtifactRegisterPayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    training_job_id: "job-2".to_owned(),
-                    weight_artifact_hash: Hash::new(b"weight-v2"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v2"),
-                    reproducibility_hash: Hash::new(b"repro-v2"),
-                    provenance_attestation_hash: Hash::new(b"attest-v2"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("artifact register v2");
-
-        let register_v2 = registry
-            .apply_model_weight_register(signed_model_weight_register_request(
-                ModelWeightRegisterPayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    weight_version: "v2".to_owned(),
-                    training_job_id: "job-2".to_owned(),
-                    parent_version: Some("v1".to_owned()),
-                    weight_artifact_hash: Hash::new(b"weight-v2"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v2"),
-                    reproducibility_hash: Hash::new(b"repro-v2"),
-                    provenance_attestation_hash: Hash::new(b"attest-v2"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("register v2");
-        assert_eq!(register_v2.version_count, 2);
-        assert_eq!(register_v2.parent_version.as_deref(), Some("v1"));
-        assert_eq!(register_v2.current_version.as_deref(), Some("v1"));
-
-        let promote_v2 = registry
-            .apply_model_weight_promote(signed_model_weight_promote_request(
-                ModelWeightPromotePayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    weight_version: "v2".to_owned(),
-                    gate_approved: true,
-                    gate_report_hash: Hash::new(b"gate-v2"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("promote v2");
-        assert_eq!(promote_v2.current_version.as_deref(), Some("v2"));
-
-        let rollback = registry
-            .apply_model_weight_rollback(signed_model_weight_rollback_request(
-                ModelWeightRollbackPayload {
-                    service_name: service_name.clone(),
-                    model_name: model_name.clone(),
-                    target_version: "v1".to_owned(),
-                    reason: "regression in validation shard".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("rollback to v1");
-        assert_eq!(rollback.action, ModelWeightAction::Rollback);
-        assert_eq!(rollback.current_version.as_deref(), Some("v1"));
-        assert_eq!(rollback.version_count, 2);
-
-        let status = registry
-            .model_weight_status(&service_name, &model_name)
-            .await
-            .expect("model status");
-        assert_eq!(status.schema_version, MODEL_WEIGHT_STATUS_SCHEMA_VERSION_V1);
-        assert_eq!(status.model.current_version.as_deref(), Some("v1"));
-        assert_eq!(status.model.version_count, 2);
-        assert_eq!(status.model.versions.len(), 2);
-        assert_eq!(status.model.versions[0].weight_version, "v1");
-        assert_eq!(status.model.versions[1].weight_version, "v2");
-        assert_eq!(
-            status.model.versions[1].parent_version.as_deref(),
-            Some("v1")
-        );
-    }
-
-    #[tokio::test]
-    async fn model_weight_register_rejects_non_completed_training_jobs() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let bundle = fixture_bundle_with_training("2026.03.0", true);
-        let service_name = bundle.service.service_name.to_string();
-
-        registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect("training-capable service deploy");
-
-        registry
-            .apply_training_job_start(signed_training_job_start_request(
-                TrainingJobStartPayload {
-                    service_name: service_name.clone(),
-                    model_name: "foundation_model".to_owned(),
-                    job_id: "job-1".to_owned(),
-                    worker_group_size: 2,
-                    target_steps: 2,
-                    checkpoint_interval_steps: 1,
-                    max_retries: 1,
-                    step_compute_units: 10,
-                    compute_budget_units: 80,
-                    storage_budget_bytes: 256,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training start");
-
-        let error = registry
-            .apply_model_weight_register(signed_model_weight_register_request(
-                ModelWeightRegisterPayload {
-                    service_name,
-                    model_name: "foundation_model".to_owned(),
-                    weight_version: "v1".to_owned(),
-                    training_job_id: "job-1".to_owned(),
-                    parent_version: None,
-                    weight_artifact_hash: Hash::new(b"weight-v1"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v1"),
-                    reproducibility_hash: Hash::new(b"repro-v1"),
-                    provenance_attestation_hash: Hash::new(b"attest-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("register should fail for non-completed training job");
-        assert_eq!(error.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            error.message.contains("not completed"),
-            "unexpected error: {}",
-            error.message
-        );
-    }
-
-    #[tokio::test]
-    async fn secure_artifact_pipeline_requires_artifact_registration_before_weight_register() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let bundle = fixture_bundle_with_training("2026.03.0", true);
-        let service_name = bundle.service.service_name.to_string();
-
-        registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect("training-capable service deploy");
-
-        registry
-            .apply_training_job_start(signed_training_job_start_request(
-                TrainingJobStartPayload {
-                    service_name: service_name.clone(),
-                    model_name: "foundation_model".to_owned(),
-                    job_id: "job-1".to_owned(),
-                    worker_group_size: 2,
-                    target_steps: 2,
-                    checkpoint_interval_steps: 1,
-                    max_retries: 1,
-                    step_compute_units: 10,
-                    compute_budget_units: 80,
-                    storage_budget_bytes: 256,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training start");
-        registry
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    completed_step: 2,
-                    checkpoint_size_bytes: 64,
-                    metrics_hash: Hash::new(b"job-1-metrics"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training complete");
-
-        let error = registry
-            .apply_model_weight_register(signed_model_weight_register_request(
-                ModelWeightRegisterPayload {
-                    service_name,
-                    model_name: "foundation_model".to_owned(),
-                    weight_version: "v1".to_owned(),
-                    training_job_id: "job-1".to_owned(),
-                    parent_version: None,
-                    weight_artifact_hash: Hash::new(b"weight-v1"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v1"),
-                    reproducibility_hash: Hash::new(b"repro-v1"),
-                    provenance_attestation_hash: Hash::new(b"attest-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("register should fail when artifact metadata is missing");
-        assert_eq!(error.kind, SoracloudErrorKind::NotFound);
-        assert!(
-            error.message.contains("artifact metadata"),
-            "unexpected error: {}",
-            error.message
-        );
-    }
-
-    #[tokio::test]
-    async fn secure_artifact_pipeline_enforces_metadata_match_and_consumption() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let bundle = fixture_bundle_with_training("2026.03.0", true);
-        let service_name = bundle.service.service_name.to_string();
-
-        registry
-            .apply_deploy(signed_bundle_request(bundle, &key_pair))
-            .await
-            .expect("training-capable service deploy");
-
-        registry
-            .apply_training_job_start(signed_training_job_start_request(
-                TrainingJobStartPayload {
-                    service_name: service_name.clone(),
-                    model_name: "foundation_model".to_owned(),
-                    job_id: "job-1".to_owned(),
-                    worker_group_size: 2,
-                    target_steps: 2,
-                    checkpoint_interval_steps: 1,
-                    max_retries: 1,
-                    step_compute_units: 10,
-                    compute_budget_units: 80,
-                    storage_budget_bytes: 256,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training start");
-        registry
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name: service_name.clone(),
-                    job_id: "job-1".to_owned(),
-                    completed_step: 2,
-                    checkpoint_size_bytes: 64,
-                    metrics_hash: Hash::new(b"job-1-metrics"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("training complete");
-
-        registry
-            .apply_model_artifact_register(signed_model_artifact_register_request(
-                ModelArtifactRegisterPayload {
-                    service_name: service_name.clone(),
-                    model_name: "foundation_model".to_owned(),
-                    training_job_id: "job-1".to_owned(),
-                    weight_artifact_hash: Hash::new(b"weight-v1"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v1"),
-                    reproducibility_hash: Hash::new(b"repro-v1"),
-                    provenance_attestation_hash: Hash::new(b"attest-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("artifact register");
-
-        let mismatch = registry
-            .apply_model_weight_register(signed_model_weight_register_request(
-                ModelWeightRegisterPayload {
-                    service_name: service_name.clone(),
-                    model_name: "foundation_model".to_owned(),
-                    weight_version: "v1".to_owned(),
-                    training_job_id: "job-1".to_owned(),
-                    parent_version: None,
-                    weight_artifact_hash: Hash::new(b"weight-v1"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v1"),
-                    reproducibility_hash: Hash::new(b"repro-v1"),
-                    provenance_attestation_hash: Hash::new(b"attest-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("register should fail on artifact metadata mismatch");
-        assert_eq!(mismatch.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            mismatch.message.contains("dataset_ref mismatch"),
-            "unexpected mismatch error: {}",
-            mismatch.message
-        );
-
-        registry
-            .apply_model_weight_register(signed_model_weight_register_request(
-                ModelWeightRegisterPayload {
-                    service_name: service_name.clone(),
-                    model_name: "foundation_model".to_owned(),
-                    weight_version: "v1".to_owned(),
-                    training_job_id: "job-1".to_owned(),
-                    parent_version: None,
-                    weight_artifact_hash: Hash::new(b"weight-v1"),
-                    dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                    training_config_hash: Hash::new(b"config-v1"),
-                    reproducibility_hash: Hash::new(b"repro-v1"),
-                    provenance_attestation_hash: Hash::new(b"attest-v1"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("register weight");
-
-        let artifact_status = registry
-            .model_artifact_status(&service_name, "job-1")
-            .await
-            .expect("artifact status");
-        assert_eq!(
-            artifact_status.schema_version,
-            MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1
-        );
-        assert_eq!(
-            artifact_status.artifact.consumed_by_version.as_deref(),
-            Some("v1")
-        );
-    }
-
-    #[tokio::test]
-    async fn training_benchmark_throughput_and_checkpoint_recovery_are_deterministic() {
-        let key_pair = KeyPair::random();
-        let temp_dir = tempfile::tempdir().expect("temporary persistence directory");
-        let persistence_path = temp_dir.path().join("registry_state.to");
-        let service_name = "web_portal".to_owned();
-
-        {
-            let registry = Registry::with_persistence(persistence_path.clone());
-            let bundle = fixture_bundle_with_training("2026.03.0", true);
-            registry
-                .apply_deploy(signed_bundle_request(bundle, &key_pair))
-                .await
-                .expect("training-capable service deploy");
-            registry
-                .apply_training_job_start(signed_training_job_start_request(
-                    TrainingJobStartPayload {
-                        service_name: service_name.clone(),
-                        model_name: "foundation_model".to_owned(),
-                        job_id: "bench-job".to_owned(),
-                        worker_group_size: 2,
-                        target_steps: 10,
-                        checkpoint_interval_steps: 5,
-                        max_retries: 2,
-                        step_compute_units: 10,
-                        compute_budget_units: 400,
-                        storage_budget_bytes: 1024,
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("training start");
-            registry
-                .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                    TrainingJobCheckpointPayload {
-                        service_name: service_name.clone(),
-                        job_id: "bench-job".to_owned(),
-                        completed_step: 5,
-                        checkpoint_size_bytes: 200,
-                        metrics_hash: Hash::new(b"bench-metrics-1"),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("first checkpoint");
-        }
-
-        let recovered = Registry::with_persistence(persistence_path);
-        let recovered_status = recovered
-            .training_job_status(&service_name, "bench-job")
-            .await
-            .expect("training status after reload");
-        assert_eq!(recovered_status.job.completed_steps, 5);
-        assert_eq!(recovered_status.job.checkpoint_count, 1);
-
-        recovered
-            .apply_training_job_retry(signed_training_job_retry_request(
-                TrainingJobRetryPayload {
-                    service_name: service_name.clone(),
-                    job_id: "bench-job".to_owned(),
-                    reason: "benchmark recovery resume".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("retry after reload");
-
-        let completed = recovered
-            .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                TrainingJobCheckpointPayload {
-                    service_name,
-                    job_id: "bench-job".to_owned(),
-                    completed_step: 10,
-                    checkpoint_size_bytes: 220,
-                    metrics_hash: Hash::new(b"bench-metrics-2"),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("second checkpoint");
-        assert_eq!(completed.status, TrainingJobStatus::Completed);
-        assert_eq!(completed.checkpoint_count, 2);
-        assert_eq!(completed.retry_count, 1);
-        assert_eq!(completed.training_event_count, 4);
-        assert_eq!(completed.completed_steps, 10);
-
-        // Deterministic benchmark ratio: steps/event = 10/4.
-        let throughput_numerator = u64::from(completed.completed_steps);
-        let throughput_denominator = u64::from(completed.training_event_count);
-        assert_eq!((throughput_numerator, throughput_denominator), (10, 4));
-    }
-
-    #[tokio::test]
-    async fn promotion_policy_benchmark_gate_enforcement_is_deterministic() {
-        async fn run_once() -> (String, Option<String>, u32) {
-            let registry = Registry::default();
-            let key_pair = KeyPair::random();
-            let bundle = fixture_bundle_with_training("2026.03.0", true);
-            let service_name = bundle.service.service_name.to_string();
-
-            registry
-                .apply_deploy(signed_bundle_request(bundle, &key_pair))
-                .await
-                .expect("training-capable service deploy");
-            registry
-                .apply_training_job_start(signed_training_job_start_request(
-                    TrainingJobStartPayload {
-                        service_name: service_name.clone(),
-                        model_name: "foundation_model".to_owned(),
-                        job_id: "job-1".to_owned(),
-                        worker_group_size: 2,
-                        target_steps: 2,
-                        checkpoint_interval_steps: 1,
-                        max_retries: 1,
-                        step_compute_units: 10,
-                        compute_budget_units: 80,
-                        storage_budget_bytes: 256,
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("training start");
-            registry
-                .apply_training_job_checkpoint(signed_training_job_checkpoint_request(
-                    TrainingJobCheckpointPayload {
-                        service_name: service_name.clone(),
-                        job_id: "job-1".to_owned(),
-                        completed_step: 2,
-                        checkpoint_size_bytes: 64,
-                        metrics_hash: Hash::new(b"job-1-metrics"),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("training complete");
-            registry
-                .apply_model_artifact_register(signed_model_artifact_register_request(
-                    ModelArtifactRegisterPayload {
-                        service_name: service_name.clone(),
-                        model_name: "foundation_model".to_owned(),
-                        training_job_id: "job-1".to_owned(),
-                        weight_artifact_hash: Hash::new(b"weight-v1"),
-                        dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                        training_config_hash: Hash::new(b"config-v1"),
-                        reproducibility_hash: Hash::new(b"repro-v1"),
-                        provenance_attestation_hash: Hash::new(b"attest-v1"),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("artifact register");
-            registry
-                .apply_model_weight_register(signed_model_weight_register_request(
-                    ModelWeightRegisterPayload {
-                        service_name: service_name.clone(),
-                        model_name: "foundation_model".to_owned(),
-                        weight_version: "v1".to_owned(),
-                        training_job_id: "job-1".to_owned(),
-                        parent_version: None,
-                        weight_artifact_hash: Hash::new(b"weight-v1"),
-                        dataset_ref: "sorafs://datasets/health/v2".to_owned(),
-                        training_config_hash: Hash::new(b"config-v1"),
-                        reproducibility_hash: Hash::new(b"repro-v1"),
-                        provenance_attestation_hash: Hash::new(b"attest-v1"),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("weight register");
-
-            let rejected = registry
-                .apply_model_weight_promote(signed_model_weight_promote_request(
-                    ModelWeightPromotePayload {
-                        service_name: service_name.clone(),
-                        model_name: "foundation_model".to_owned(),
-                        weight_version: "v1".to_owned(),
-                        gate_approved: false,
-                        gate_report_hash: Hash::new(b"gate-v1-rejected"),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect_err("promotion must reject when gate is false");
-            let promoted = registry
-                .apply_model_weight_promote(signed_model_weight_promote_request(
-                    ModelWeightPromotePayload {
-                        service_name,
-                        model_name: "foundation_model".to_owned(),
-                        weight_version: "v1".to_owned(),
-                        gate_approved: true,
-                        gate_report_hash: Hash::new(b"gate-v1-approved"),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("promotion should pass with approved gate");
-            (
-                rejected.message,
-                promoted.current_version,
-                promoted.model_event_count,
-            )
-        }
-
-        let first = run_once().await;
-        let second = run_once().await;
-        assert_eq!(first, second);
-        assert!(
-            first.0.contains("gate is not approved"),
-            "unexpected rejection reason: {}",
-            first.0
-        );
-        assert_eq!(first.1.as_deref(), Some("v1"));
-        assert_eq!(first.2, 2);
-    }
-
-    #[tokio::test]
-    async fn agent_autonomy_checkpoint_rejects_when_state_quota_is_exceeded() {
-        let registry = Registry::default();
-        let key_pair = KeyPair::random();
-        let mut manifest = fixture_agent_manifest_with_capabilities("ops_agent", &[]);
-        manifest.state_quota_bytes = NonZeroU64::new(80).expect("non-zero quota");
-
-        registry
-            .apply_agent_deploy(signed_agent_deploy_request(
-                AgentDeployPayload {
-                    manifest,
-                    lease_ticks: 64,
-                    autonomy_budget_units: Some(200),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("agent deploy");
-        registry
-            .apply_agent_artifact_allow(signed_agent_artifact_allow_request(
-                AgentArtifactAllowPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("artifact allow");
-
-        let oversized = registry
-            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
-                AgentAutonomyRunPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                    budget_units: 10,
-                    run_label: "x".repeat(96),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect_err("autonomy run should fail when state quota would be exceeded");
-        assert_eq!(oversized.kind, SoracloudErrorKind::Conflict);
-        assert!(
-            oversized.message.contains("state_quota_bytes"),
-            "unexpected state-quota rejection: {}",
-            oversized.message
-        );
-
-        let status = registry
-            .agent_autonomy_status("ops_agent")
-            .await
-            .expect("autonomy status");
-        assert_eq!(status.run_count, 0);
-        assert_eq!(status.checkpoint_count, 0);
-        assert_eq!(status.persistent_state_total_bytes, 0);
-        assert_eq!(status.persistent_state_key_count, 0);
-        assert_eq!(status.budget_remaining_units, 200);
-    }
-
-    #[tokio::test]
-    async fn agent_runtime_state_persists_across_registry_reload() {
-        let key_pair = KeyPair::random();
-        let temp_dir = tempfile::tempdir().expect("temporary persistence directory");
-        let persistence_path = temp_dir.path().join("registry_state.to");
-
-        let sender_manifest =
-            fixture_agent_manifest_with_capabilities("ops_agent", &["agent.mailbox.send"]);
-        let mut recipient_manifest =
-            fixture_agent_manifest_with_capabilities("worker_agent", &["agent.mailbox.receive"]);
-        recipient_manifest
-            .policy_capabilities
-            .retain(|capability| capability.as_ref() != "agent.mailbox.send");
-        recipient_manifest.validate().expect("recipient manifest");
-
-        let wallet_request_id;
-        let mailbox_message_id;
-        let first_run_persistent_total;
-        {
-            let registry = Registry::with_persistence(persistence_path.clone());
-
-            registry
-                .apply_agent_deploy(signed_agent_deploy_request(
-                    AgentDeployPayload {
-                        manifest: sender_manifest,
-                        lease_ticks: 128,
-                        autonomy_budget_units: Some(500),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("sender deploy");
-            registry
-                .apply_agent_deploy(signed_agent_deploy_request(
-                    AgentDeployPayload {
-                        manifest: recipient_manifest,
-                        lease_ticks: 128,
-                        autonomy_budget_units: Some(250),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("recipient deploy");
-
-            registry
-                .apply_agent_artifact_allow(signed_agent_artifact_allow_request(
-                    AgentArtifactAllowPayload {
-                        apartment_name: "ops_agent".to_owned(),
-                        artifact_hash: "hash:ABCD0123#01".to_owned(),
-                        provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("artifact allow");
-
-            let first_run = registry
-                .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
-                    AgentAutonomyRunPayload {
-                        apartment_name: "ops_agent".to_owned(),
-                        artifact_hash: "hash:ABCD0123#01".to_owned(),
-                        provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                        budget_units: 120,
-                        run_label: "before-reload".to_owned(),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("autonomy run before reload");
-            assert_eq!(first_run.run_count, 1);
-            assert_eq!(first_run.budget_remaining_units, 380);
-            assert_eq!(first_run.process_generation, 1);
-            assert_eq!(first_run.checkpoint_count, 1);
-            assert!(
-                first_run.persistent_state_total_bytes > 0,
-                "autonomy checkpoint should consume persistent state bytes"
-            );
-            first_run_persistent_total = first_run.persistent_state_total_bytes;
-            assert_eq!(first_run.persistent_state_key_count, 1);
-            assert_eq!(first_run.last_checkpoint_sequence, Some(first_run.sequence));
-
-            let wallet_request = registry
-                .apply_agent_wallet_spend(signed_agent_wallet_spend_request(
-                    AgentWalletSpendPayload {
-                        apartment_name: "ops_agent".to_owned(),
-                        asset_definition: "xor#sora".to_owned(),
-                        amount_nanos: 1_000_000,
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("wallet request before reload");
-            assert_eq!(wallet_request.pending_request_count, 1);
-            wallet_request_id = wallet_request
-                .request_id
-                .expect("wallet request id before reload");
-
-            let mailbox_send = registry
-                .apply_agent_message_send(signed_agent_message_send_request(
-                    AgentMessageSendPayload {
-                        from_apartment: "ops_agent".to_owned(),
-                        to_apartment: "worker_agent".to_owned(),
-                        channel: "ops.sync".to_owned(),
-                        payload: "rotate-key-42".to_owned(),
-                    },
-                    &key_pair,
-                ))
-                .await
-                .expect("mailbox send before reload");
-            assert_eq!(mailbox_send.pending_message_count, 1);
-            mailbox_message_id = mailbox_send.message_id;
-        }
-
-        let recovered = Registry::with_persistence(persistence_path);
-        let recovered_autonomy = recovered
-            .agent_autonomy_status("ops_agent")
-            .await
-            .expect("autonomy status after reload");
-        assert_eq!(recovered_autonomy.run_count, 1);
-        assert_eq!(recovered_autonomy.budget_remaining_units, 380);
-
-        let recovered_status = recovered
-            .agent_status(Some("ops_agent"))
-            .await
-            .expect("agent status after reload");
-        assert_eq!(recovered_status.apartment_count, 1);
-        assert_eq!(recovered_status.apartments.len(), 1);
-        let apartment = &recovered_status.apartments[0];
-        assert_eq!(apartment.apartment_name, "ops_agent");
-        assert_eq!(apartment.pending_wallet_request_count, 1);
-        assert_eq!(apartment.process_generation, 1);
-        assert_eq!(apartment.checkpoint_count, 1);
-        assert!(
-            apartment.persistent_state_total_bytes > 0,
-            "persistent checkpoint bytes should survive reload"
-        );
-        assert_eq!(apartment.persistent_state_key_count, 1);
-        assert!(apartment.last_checkpoint_sequence.is_some());
-        assert!(
-            apartment.lease_remaining_ticks > 0,
-            "lease should remain active after reload"
-        );
-
-        let recovered_mailbox = recovered
-            .agent_mailbox_status("worker_agent")
-            .await
-            .expect("mailbox status after reload");
-        assert_eq!(recovered_mailbox.pending_message_count, 1);
-        assert_eq!(recovered_mailbox.messages.len(), 1);
-        assert_eq!(recovered_mailbox.messages[0].message_id, mailbox_message_id);
-
-        let approved = recovered
-            .apply_agent_wallet_approve(signed_agent_wallet_approve_request(
-                AgentWalletApprovePayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    request_id: wallet_request_id,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("wallet approve after reload");
-        assert_eq!(approved.pending_request_count, 0);
-
-        let acknowledged = recovered
-            .apply_agent_message_ack(signed_agent_message_ack_request(
-                AgentMessageAckPayload {
-                    apartment_name: "worker_agent".to_owned(),
-                    message_id: mailbox_message_id,
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("mailbox ack after reload");
-        assert_eq!(acknowledged.pending_message_count, 0);
-
-        let second_run = recovered
-            .apply_agent_autonomy_run(signed_agent_autonomy_run_request(
-                AgentAutonomyRunPayload {
-                    apartment_name: "ops_agent".to_owned(),
-                    artifact_hash: "hash:ABCD0123#01".to_owned(),
-                    provenance_hash: Some("hash:PROV0001#01".to_owned()),
-                    budget_units: 50,
-                    run_label: "after-reload".to_owned(),
-                },
-                &key_pair,
-            ))
-            .await
-            .expect("autonomy run after reload");
-        assert_eq!(second_run.run_count, 2);
-        assert_eq!(second_run.budget_remaining_units, 330);
-        assert_eq!(second_run.process_generation, 1);
-        assert_eq!(second_run.checkpoint_count, 2);
-        assert!(
-            second_run.persistent_state_total_bytes > first_run_persistent_total,
-            "second checkpoint should increase persistent state usage"
-        );
-        assert_eq!(second_run.persistent_state_key_count, 2);
-        assert_eq!(
-            second_run.last_checkpoint_sequence,
-            Some(second_run.sequence)
-        );
-
-        let mailbox_after_ack = recovered
-            .agent_mailbox_status("worker_agent")
-            .await
-            .expect("mailbox status after ack");
-        assert_eq!(mailbox_after_ack.pending_message_count, 0);
-        assert!(mailbox_after_ack.messages.is_empty());
     }
 }

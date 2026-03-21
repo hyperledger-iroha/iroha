@@ -94,6 +94,7 @@ impl AccountRekeyRecord {
         if self.active_account_id == next_account_id {
             return self.clone();
         }
+        let active_signatory = next_account_id.try_signatory().cloned();
 
         let mut previous_account_ids = self.previous_account_ids.clone();
         previous_account_ids.push(self.active_account_id.clone());
@@ -105,9 +106,9 @@ impl AccountRekeyRecord {
 
         Self {
             label: self.label.clone(),
-            active_account_id: next_account_id.clone(),
+            active_account_id: next_account_id,
             previous_account_ids,
-            active_signatory: next_account_id.try_signatory().cloned(),
+            active_signatory,
             previous_signatories,
         }
     }

@@ -12208,6 +12208,22 @@ impl<'world> WorldBlock<'world> {
         &mut self.commit_qcs
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable pin-manifest registry accessor used by tests that need committed SoraFS state.
+    pub fn pin_manifests_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, ManifestDigest, PinManifestRecord> {
+        &mut self.pin_manifests
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable replication-order registry accessor used by tests that need committed SoraFS state.
+    pub fn replication_orders_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord> {
+        &mut self.replication_orders
+    }
+
     #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
     /// Mutable verifying-key registry accessor used exclusively by tests and API scaffolding.
     pub fn verifying_keys_mut_for_testing(

@@ -55,7 +55,7 @@ fn encode_prog_syscall_uses_valid_metadata_header() {
     let parsed = ProgramMetadata::parse(&program).expect("metadata should parse");
 
     assert_eq!(parsed.metadata.version_major, 1);
-    assert_eq!(parsed.metadata.version_minor, 0);
+    assert_eq!(parsed.metadata.version_minor, 1);
     assert_eq!(parsed.metadata.abi_version, 1);
     assert_eq!(parsed.code_offset, parsed.header_len);
     assert!(

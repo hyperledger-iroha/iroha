@@ -15205,8 +15205,17 @@ fn instruction_matches_account_id(
     if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
         return set.asset().account() == expected;
     }
+    if let Some(set) = any.downcast_ref::<SetKeyValueBox>() {
+        return matches!(set, SetKeyValueBox::Account(inner) if inner.object() == expected);
+    }
     if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
         return remove.asset().account() == expected;
+    }
+    if let Some(remove) = any.downcast_ref::<RemoveKeyValueBox>() {
+        return matches!(
+            remove,
+            RemoveKeyValueBox::Account(inner) if inner.object() == expected
+        );
     }
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
         return rewards.reward_asset().account() == expected;
@@ -15249,8 +15258,9 @@ fn instruction_matches_domain_id(
     expected: &DomainId,
 ) -> bool {
     use iroha_data_model::isi::{
-        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, SetAssetKeyValue,
-        TransferAssetBatch, TransferBox, staking::RecordPublicLaneRewards,
+        BurnBox, CustomInstruction, MintBox, RemoveAssetKeyValue, RemoveKeyValueBox,
+        SetAssetKeyValue, SetKeyValueBox, TransferAssetBatch, TransferBox,
+        staking::RecordPublicLaneRewards,
     };
     use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
@@ -15341,7 +15351,8 @@ fn tx_references_account_id(
 ) -> bool {
     match tx.entrypoint() {
         TransactionEntrypoint::External(signed) => {
-            executable_contains_account_id(signed.instructions(), expected)
+            signed.authority() == expected
+                || executable_contains_account_id(signed.instructions(), expected)
         }
         TransactionEntrypoint::Time(entry) => entry
             .instructions
@@ -17749,6 +17760,9 @@ pub async fn handle_v1_transactions_history_get(
     #[cfg(feature = "telemetry")]
     use std::time::Instant;
 
+    #[cfg(not(feature = "telemetry"))]
+    let _ = &telemetry;
+
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     let cap = app_query_page_cap(&state);
@@ -18681,11 +18695,33 @@ mod tx_query_filter_tests {
     }
 
     #[test]
+    fn instruction_matches_account_id_matches_set_account_key_value_account() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let set = dm::SetKeyValue::account(alice.clone(), "key".parse().unwrap(), "value");
+        let instruction: dm::InstructionBox = set.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(!instruction_matches_account_id(&instruction, &bob));
+    }
+
+    #[test]
     fn instruction_matches_account_id_matches_remove_asset_key_value_asset_account() {
         let (alice, _) = account_with_key();
         let (bob, _) = account_with_key();
         let asset_id = dm::AssetId::new(test_asset_definition_id(), alice.clone());
         let remove = RemoveAssetKeyValue::new(asset_id, "key".parse().unwrap());
+        let instruction: dm::InstructionBox = remove.into();
+
+        assert!(instruction_matches_account_id(&instruction, &alice));
+        assert!(!instruction_matches_account_id(&instruction, &bob));
+    }
+
+    #[test]
+    fn instruction_matches_account_id_matches_remove_account_key_value_account() {
+        let (alice, _) = account_with_key();
+        let (bob, _) = account_with_key();
+        let remove = dm::RemoveKeyValue::account(alice.clone(), "key".parse().unwrap());
         let instruction: dm::InstructionBox = remove.into();
 
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -19963,7 +19999,11 @@ mod tx_query_integration_smoke {
             .ok();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::ScopedAccountId::new(domain_id.clone(), kp_a.public_key().clone());
-        let account_literal = acc_a.to_string();
+        let account_literal = acc_a
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
         dm::Register::account(dm::Account::new(acc_a.clone()))
             .execute(exec_id.account(), &mut stx)
             .ok();
@@ -20189,7 +20229,11 @@ mod tx_query_integration_smoke {
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
         // Query with fetch_size smaller than total to ensure streaming totals kick in.
-        let authority_literal = format!("{}", actor_id);
+        let authority_literal = actor_id
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("actor i105 literal");
         let env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
@@ -20350,7 +20394,13 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(acc_b.to_string()),
+            axum::extract::Path(
+                acc_b
+                    .account()
+                    .to_account_address()
+                    .and_then(|address| address.to_i105())
+                    .expect("account i105 literal"),
+            ),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -20410,12 +20460,10 @@ mod tx_query_integration_smoke {
         let committed = valid.clone().commit_unchecked().unpack(|_| {});
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
-        let i105_literal = {
-            let address = account
-                .to_account_address()
-                .expect("account address constructs");
-            address.to_i105().expect("i105 encoding succeeds")
-        };
+        let i105_literal = account
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
 
         let env = crate::filter::QueryEnvelope {
             query: None,
@@ -20430,7 +20478,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(account.to_string()),
+            axum::extract::Path(i105_literal.clone()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -20445,7 +20493,6 @@ mod tx_query_integration_smoke {
         let raw = items[0]["authority"].as_str().unwrap();
         let normalized = decode_latin1_utf8(raw).unwrap_or_else(|| raw.to_string());
         assert_eq!(normalized, i105_literal);
-        assert_ne!(normalized, account.to_string());
     }
 
     #[tokio::test]
@@ -20465,7 +20512,10 @@ mod tx_query_integration_smoke {
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
-        let acc_b_str = format!("{}", acc_b);
+        let acc_b_str = acc_b
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -20571,7 +20621,10 @@ mod tx_query_integration_smoke {
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
-        let acc_a_str = format!("{}", acc_a);
+        let acc_a_str = acc_a
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
             let p = v.world().parameters();
@@ -20610,7 +20663,7 @@ mod tx_query_integration_smoke {
         let expr = crate::filter::FilterExpr::Or(vec![
             crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("authority".into()),
-                norito::json::Value::String(acc_a_str),
+                norito::json::Value::String(acc_a_str.clone()),
             ),
             crate::filter::FilterExpr::Lt(
                 crate::filter::FieldPath("timestamp_ms".into()),
@@ -20633,7 +20686,7 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(acc_a.to_string()),
+            axum::extract::Path(acc_a_str.clone()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -20734,7 +20787,13 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(acc_a.to_string()),
+            axum::extract::Path(
+                acc_a
+                    .account()
+                    .to_account_address()
+                    .and_then(|address| address.to_i105())
+                    .expect("account i105 literal"),
+            ),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -20770,8 +20829,16 @@ mod tx_query_integration_smoke {
         let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
         let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
         let acc_c = dm::ScopedAccountId::new(dom.clone(), kp_c.public_key().clone());
-        let acc_a_str = format!("{}", acc_a);
-        let acc_b_str = format!("{}", acc_b);
+        let acc_a_str = acc_a
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
+        let acc_b_str = acc_b
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -20917,8 +20984,21 @@ mod tx_query_integration_smoke {
         let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
         let acc_b = dm::ScopedAccountId::new(dom.clone(), kp_b.public_key().clone());
         let acc_c = dm::ScopedAccountId::new(dom.clone(), kp_c.public_key().clone());
-        let acc_a_str = format!("{}", acc_a);
-        let acc_b_str = format!("{}", acc_b);
+        let acc_a_str = acc_a
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
+        let acc_b_str = acc_b
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
+        let acc_c_str = acc_c
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -21029,7 +21109,7 @@ mod tx_query_integration_smoke {
                 crate::filter::FieldPath("authority".into()),
                 vec![
                     norito::json::Value::String(acc_a_str.clone()),
-                    norito::json::Value::String(format!("{}", acc_c)),
+                    norito::json::Value::String(acc_c_str),
                 ],
             )),
             select: None,
@@ -21104,7 +21184,11 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random();
         let dom: dm::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
-        let account_literal = acc_a.to_string();
+        let account_literal = acc_a
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -21310,7 +21394,11 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random();
         let dom: dm::domain::DomainId = "wonderland".parse().unwrap();
         let acc_a = dm::account::ScopedAccountId::new(dom.clone(), kp_a.public_key().clone());
-        let account_literal = acc_a.to_string();
+        let account_literal = acc_a
+            .account()
+            .to_account_address()
+            .and_then(|address| address.to_i105())
+            .expect("account i105 literal");
 
         let (_max_clock_drift, _tx_limits) = {
             let v = state.view();
@@ -21633,7 +21721,13 @@ mod tx_query_integration_smoke {
 
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(acc_b.to_string()),
+            axum::extract::Path(
+                acc_b
+                    .account()
+                    .to_account_address()
+                    .and_then(|address| address.to_i105())
+                    .expect("account i105 literal"),
+            ),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -21797,7 +21891,13 @@ mod tx_query_integration_smoke {
         };
         let resp = handle_v1_account_transactions(
             state.clone(),
-            axum::extract::Path(acc_a.to_string()),
+            axum::extract::Path(
+                acc_a
+                    .account()
+                    .to_account_address()
+                    .and_then(|address| address.to_i105())
+                    .expect("account i105 literal"),
+            ),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
