@@ -82,6 +82,10 @@ pub const SORA_SERVICE_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
 pub const SORA_RUNTIME_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoracloudHostRequestEnvelopeV1`].
+pub const SORACLOUD_HOST_REQUEST_VERSION_V1: u16 = 1;
+/// Schema version for [`SoracloudHostResponseEnvelopeV1`].
+pub const SORACLOUD_HOST_RESPONSE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceRolloutStateV1`].
 pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceDeploymentStateV1`].
@@ -5099,6 +5103,376 @@ impl SoraRuntimeReceiptV1 {
 
         Ok(())
     }
+}
+
+/// Soracloud host operation routed through the dedicated runtime syscall block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "operation", content = "value"))]
+pub enum SoracloudHostOperationV1 {
+    /// Read committed service-state metadata visible to the active handler.
+    ReadCommittedState,
+    /// Stage a deterministic service-state mutation for core-side validation/write-back.
+    EmitStateMutation,
+    /// Stage an outbound mailbox message for authoritative persistence.
+    EmitMailboxMessage,
+    /// Append runtime journal material and return its content-addressed digest.
+    AppendJournal,
+    /// Publish a checkpoint artifact and return its content-addressed digest.
+    PublishCheckpoint,
+    /// Read node-local secret material exposed only through the runtime host.
+    ReadSecret,
+    /// Read node-local credential material exposed only through the runtime host.
+    ReadCredential,
+    /// Perform a bounded, policy-checked egress fetch.
+    EgressFetch,
+}
+
+/// Request envelope decoded from the Soracloud request pointer-ABI payload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudHostRequestEnvelopeV1 {
+    /// Schema version; must equal [`SORACLOUD_HOST_REQUEST_VERSION_V1`].
+    pub schema_version: u16,
+    /// Requested host operation.
+    pub operation: SoracloudHostOperationV1,
+    /// Operation-specific payload.
+    pub payload: SoracloudHostRequestPayloadV1,
+}
+
+impl SoracloudHostRequestEnvelopeV1 {
+    /// Validate the request envelope schema version.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when the schema version is unsupported.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORACLOUD_HOST_REQUEST_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "soracloud host request envelope",
+                expected: SORACLOUD_HOST_REQUEST_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Operation-specific Soracloud host request payload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
+pub enum SoracloudHostRequestPayloadV1 {
+    /// Request to read committed service-state metadata.
+    ReadCommittedState(SoracloudReadCommittedStateRequestV1),
+    /// Request to stage a deterministic service-state mutation.
+    EmitStateMutation(SoracloudEmitStateMutationRequestV1),
+    /// Request to emit an outbound mailbox message.
+    EmitMailboxMessage(SoracloudEmitMailboxMessageRequestV1),
+    /// Request to append journal material.
+    AppendJournal(SoracloudAppendJournalRequestV1),
+    /// Request to publish a checkpoint artifact.
+    PublishCheckpoint(SoracloudPublishCheckpointRequestV1),
+    /// Request to read a node-local secret.
+    ReadSecret(SoracloudReadSecretRequestV1),
+    /// Request to read a node-local credential.
+    ReadCredential(SoracloudReadCredentialRequestV1),
+    /// Request to perform a bounded egress fetch.
+    EgressFetch(SoracloudEgressFetchRequestV1),
+}
+
+/// Response envelope encoded into the Soracloud response pointer-ABI payload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudHostResponseEnvelopeV1 {
+    /// Schema version; must equal [`SORACLOUD_HOST_RESPONSE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Operation serviced by the host.
+    pub operation: SoracloudHostOperationV1,
+    /// Operation-specific payload.
+    pub payload: SoracloudHostResponsePayloadV1,
+}
+
+impl SoracloudHostResponseEnvelopeV1 {
+    /// Validate the response envelope schema version.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when the schema version is unsupported.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORACLOUD_HOST_RESPONSE_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "soracloud host response envelope",
+                expected: SORACLOUD_HOST_RESPONSE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Operation-specific Soracloud host response payload.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "payload_type", content = "value"))]
+pub enum SoracloudHostResponsePayloadV1 {
+    /// Response to committed service-state metadata lookups.
+    ReadCommittedState(SoracloudReadCommittedStateResponseV1),
+    /// Response to staged service-state mutations.
+    EmitStateMutation(SoracloudEmitStateMutationResponseV1),
+    /// Response to staged outbound mailbox messages.
+    EmitMailboxMessage(SoracloudEmitMailboxMessageResponseV1),
+    /// Response to appended journal material.
+    AppendJournal(SoracloudAppendJournalResponseV1),
+    /// Response to published checkpoint material.
+    PublishCheckpoint(SoracloudPublishCheckpointResponseV1),
+    /// Response to secret lookups.
+    ReadSecret(SoracloudReadSecretResponseV1),
+    /// Response to credential lookups.
+    ReadCredential(SoracloudReadCredentialResponseV1),
+    /// Response to bounded egress fetches.
+    EgressFetch(SoracloudEgressFetchResponseV1),
+}
+
+/// Read committed service-state metadata for one binding/key pair.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadCommittedStateRequestV1 {
+    /// Declared binding name to read from.
+    pub binding_name: Name,
+    /// Canonical state key scoped under the binding prefix.
+    pub state_key: String,
+}
+
+/// Response to a committed service-state metadata lookup.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadCommittedStateResponseV1 {
+    /// Matching entry when one exists.
+    #[norito(default)]
+    pub entry: Option<SoraServiceStateEntryV1>,
+}
+
+/// Stage a deterministic service-state mutation.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudEmitStateMutationRequestV1 {
+    /// Binding mutated by the runtime.
+    pub binding_name: Name,
+    /// Canonical key scoped under the binding prefix.
+    pub state_key: String,
+    /// Mutation mode to apply.
+    pub operation: SoraStateMutationOperationV1,
+    /// Encryption contract expected by the binding.
+    pub encryption: SoraStateEncryptionV1,
+    /// Declared payload size when the mutation upserts content.
+    #[norito(default)]
+    pub payload_bytes: Option<u64>,
+    /// Deterministic commitment over the opaque payload.
+    #[norito(default)]
+    pub payload_commitment: Option<Hash>,
+}
+
+/// Response to a staged service-state mutation.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudEmitStateMutationResponseV1 {
+    /// Stable mutation digest returned by the host after staging the write-back.
+    pub mutation_commitment: Hash,
+}
+
+/// Stage an outbound Soracloud mailbox message.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudEmitMailboxMessageRequestV1 {
+    /// Destination service name.
+    pub to_service: Name,
+    /// Destination handler name.
+    pub to_handler: Name,
+    /// Opaque mailbox payload bytes.
+    #[norito(default)]
+    pub payload_bytes: Vec<u8>,
+    /// Earliest execution sequence for the emitted message.
+    pub available_after_sequence: u64,
+    /// Optional expiry sequence for the emitted message.
+    #[norito(default)]
+    pub expires_at_sequence: Option<u64>,
+}
+
+/// Response to a staged outbound mailbox message.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudEmitMailboxMessageResponseV1 {
+    /// Deterministic mailbox message identifier.
+    pub message_id: Hash,
+    /// Commitment over the emitted mailbox payload.
+    pub payload_commitment: Hash,
+}
+
+/// Append deterministic journal material for the active handler execution.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudAppendJournalRequestV1 {
+    /// Runtime-relative journal path for the appended material.
+    pub artifact_path: String,
+    /// Journal payload bytes.
+    #[norito(default)]
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Response to appended journal material.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudAppendJournalResponseV1 {
+    /// Content-addressed digest of the materialized journal payload.
+    pub artifact_hash: Hash,
+}
+
+/// Publish deterministic checkpoint material for the active handler execution.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudPublishCheckpointRequestV1 {
+    /// Runtime-relative checkpoint path for the published material.
+    pub artifact_path: String,
+    /// Checkpoint payload bytes.
+    #[norito(default)]
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Response to published checkpoint material.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudPublishCheckpointResponseV1 {
+    /// Content-addressed digest of the materialized checkpoint payload.
+    pub artifact_hash: Hash,
+}
+
+/// Read node-local secret material for the active service revision.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadSecretRequestV1 {
+    /// Stable secret identifier relative to the node-local secret root.
+    pub secret_name: String,
+}
+
+/// Response to a node-local secret lookup.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadSecretResponseV1 {
+    /// Whether the requested secret was found locally.
+    pub found: bool,
+    /// Secret payload bytes when the lookup succeeds.
+    #[norito(default)]
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Read node-local credential material for the active service revision.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadCredentialRequestV1 {
+    /// Stable credential identifier relative to the node-local credential root.
+    pub credential_name: String,
+}
+
+/// Response to a node-local credential lookup.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadCredentialResponseV1 {
+    /// Whether the requested credential was found locally.
+    pub found: bool,
+    /// Credential payload bytes when the lookup succeeds.
+    #[norito(default)]
+    pub payload_bytes: Vec<u8>,
+}
+
+/// Perform a bounded, policy-checked egress fetch from an allowlisted host.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudEgressFetchRequestV1 {
+    /// Absolute URL to fetch.
+    pub url: String,
+    /// Maximum number of response bytes the caller is willing to accept.
+    pub max_bytes: u64,
+    /// Optional expected digest for content-addressed verification.
+    #[norito(default)]
+    pub expected_hash: Option<Hash>,
+}
+
+/// Response to a bounded egress fetch.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudEgressFetchResponseV1 {
+    /// HTTP status code returned by the fetch.
+    pub status_code: u16,
+    /// Content type reported by the source when present.
+    #[norito(default)]
+    pub content_type: Option<String>,
+    /// Response body bytes, truncated only by caller/configured ceilings.
+    #[norito(default)]
+    pub body: Vec<u8>,
+    /// Content-addressed hash of `body`.
+    pub body_hash: Hash,
 }
 
 /// Encode the canonical provenance signature payload for deployment bundles.

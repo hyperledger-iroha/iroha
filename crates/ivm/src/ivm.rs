@@ -2154,6 +2154,20 @@ impl IVM {
         self.pc
     }
 
+    /// Set the current program counter to a decoded instruction boundary.
+    ///
+    /// # Errors
+    /// Returns [`VMError::DecodeError`] when `pc` does not refer to a decoded
+    /// instruction in the currently loaded program.
+    pub fn set_program_counter(&mut self, pc: u64) -> Result<(), VMError> {
+        if self.predecoded_index.contains_key(&pc) {
+            self.pc = pc;
+            Ok(())
+        } else {
+            Err(VMError::DecodeError)
+        }
+    }
+
     /// Allocate space in the INPUT region and write the provided TLV bytes.
     /// Returns the absolute pointer to the start of the TLV.
     pub fn alloc_input_tlv(&mut self, tlv: &[u8]) -> Result<u64, VMError> {

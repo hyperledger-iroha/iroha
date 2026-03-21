@@ -17,6 +17,8 @@ fn pointer_type_ids_match_golden() {
     assert_eq!(P::AxtDescriptor as u16, 0x000B);
     assert_eq!(P::AssetHandle as u16, 0x000C);
     assert_eq!(P::ProofBlob as u16, 0x000D);
+    assert_eq!(P::SoracloudRequest as u16, 0x000E);
+    assert_eq!(P::SoracloudResponse as u16, 0x000F);
 }
 
 #[test]
@@ -36,6 +38,8 @@ fn pointer_policy_allows_expected_types_for_v1() {
         P::AxtDescriptor,
         P::AssetHandle,
         P::ProofBlob,
+        P::SoracloudRequest,
+        P::SoracloudResponse,
     ] {
         assert!(is_type_allowed_for_policy(SyscallPolicy::AbiV1, ty));
     }

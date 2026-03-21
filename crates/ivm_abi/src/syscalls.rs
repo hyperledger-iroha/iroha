@@ -352,6 +352,24 @@ pub const SYSCALL_VERIFY_DS_PROOF: u32 = 0xB3;
 /// Use a capability handle granted by an asset DS inside an AXT.
 pub const SYSCALL_USE_ASSET_HANDLE: u32 = 0xB4;
 
+/// Soracloud runtime host surface.
+/// Read committed service-state metadata for handler-local execution.
+pub const SYSCALL_SORACLOUD_READ_COMMITTED_STATE: u32 = 0xC0;
+/// Emit a deterministic service-state mutation staged for authoritative write-back.
+pub const SYSCALL_SORACLOUD_EMIT_STATE_MUTATION: u32 = 0xC1;
+/// Emit an outbound Soracloud mailbox message.
+pub const SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE: u32 = 0xC2;
+/// Append deterministic runtime journal material.
+pub const SYSCALL_SORACLOUD_APPEND_JOURNAL: u32 = 0xC3;
+/// Publish a checkpoint artifact.
+pub const SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT: u32 = 0xC4;
+/// Read node-local secret material exposed only through the Soracloud host.
+pub const SYSCALL_SORACLOUD_READ_SECRET: u32 = 0xC5;
+/// Read node-local credential material exposed only through the Soracloud host.
+pub const SYSCALL_SORACLOUD_READ_CREDENTIAL: u32 = 0xC6;
+/// Perform a bounded, policy-checked egress fetch against allowlisted hosts.
+pub const SYSCALL_SORACLOUD_EGRESS_FETCH: u32 = 0xC7;
+
 /// Returns whether a syscall number is allowed for the given ABI policy.
 ///
 /// This function centralizes the mapping between `ProgramMetadata.abi_version`
@@ -533,6 +551,17 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_VERIFY_DS_PROOF,
             SYSCALL_USE_ASSET_HANDLE,
         ]);
+        // Soracloud runtime host surface
+        v.extend_from_slice(&[
+            SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
+            SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
+            SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE,
+            SYSCALL_SORACLOUD_APPEND_JOURNAL,
+            SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT,
+            SYSCALL_SORACLOUD_READ_SECRET,
+            SYSCALL_SORACLOUD_READ_CREDENTIAL,
+            SYSCALL_SORACLOUD_EGRESS_FETCH,
+        ]);
         // ZK extras
         v.extend_from_slice(&[
             SYSCALL_GET_ACCOUNT_BALANCE,
@@ -690,6 +719,14 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_AXT_COMMIT => "AXT_COMMIT",
         SYSCALL_VERIFY_DS_PROOF => "VERIFY_DS_PROOF",
         SYSCALL_USE_ASSET_HANDLE => "USE_ASSET_HANDLE",
+        SYSCALL_SORACLOUD_READ_COMMITTED_STATE => "SORACLOUD_READ_COMMITTED_STATE",
+        SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => "SORACLOUD_EMIT_STATE_MUTATION",
+        SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => "SORACLOUD_EMIT_MAILBOX_MESSAGE",
+        SYSCALL_SORACLOUD_APPEND_JOURNAL => "SORACLOUD_APPEND_JOURNAL",
+        SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => "SORACLOUD_PUBLISH_CHECKPOINT",
+        SYSCALL_SORACLOUD_READ_SECRET => "SORACLOUD_READ_SECRET",
+        SYSCALL_SORACLOUD_READ_CREDENTIAL => "SORACLOUD_READ_CREDENTIAL",
+        SYSCALL_SORACLOUD_EGRESS_FETCH => "SORACLOUD_EGRESS_FETCH",
         // ZK extras
         SYSCALL_GET_ACCOUNT_BALANCE => "GET_ACCOUNT_BALANCE",
         SYSCALL_USE_NULLIFIER => "USE_NULLIFIER",

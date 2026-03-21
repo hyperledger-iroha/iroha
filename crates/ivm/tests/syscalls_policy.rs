@@ -14,6 +14,8 @@ fn baseline_policy_allows_known_surface_numbers() {
         SYSCALL_VERIFY_PROOF,
         SYSCALL_USE_NULLIFIER,
         SYSCALL_GET_MERKLE_PATH,
+        SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
+        SYSCALL_SORACLOUD_EGRESS_FETCH,
         // WSV helpers
         SYSCALL_SET_ACCOUNT_DETAIL,
         SYSCALL_MINT_ASSET,
@@ -31,7 +33,7 @@ fn baseline_policy_allows_known_surface_numbers() {
 
 #[test]
 fn unknown_numbers_rejected() {
-    let nums = [0x7Fu32, 0x99u32, 0xEEu32];
+    let nums = [0x80u32, 0x98u32, 0xEEu32];
     for &n in &nums {
         assert!(!ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, n));
     }

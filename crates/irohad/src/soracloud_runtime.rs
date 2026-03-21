@@ -7,9 +7,9 @@
 //! `NativeProcess` deployments are rejected during admission and runtime
 //! activation.
 //!
-//! TODO: Replace the synthetic ordered-mailbox executor with the real IVM
-//! Soracloud host surface. Authoritative mailbox payload bytes are now
-//! available, but the VM/ABI cutover is still pending.
+//! Ordered mailbox execution now runs admitted IVM bundles directly through
+//! the Soracloud host surface while local reads continue to resolve from the
+//! committed snapshot plus hydrated artifact cache.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -37,13 +37,34 @@ use iroha_data_model::{
     Encode,
     name::Name,
     soracloud::{
-        SoraAgentApartmentRecordV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
-        SoraDeploymentBundleV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
+        SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
+        SORACLOUD_HOST_RESPONSE_VERSION_V1, SoraAgentApartmentRecordV1, SoraArtifactKindV1,
+        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraDeploymentBundleV1,
+        SoraNetworkPolicyV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
         SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceStateEntryV1,
+        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraStateBindingV1,
+        SoraStateMutationOperationV1, SoracloudAppendJournalResponseV1,
+        SoracloudEgressFetchRequestV1, SoracloudEgressFetchResponseV1,
+        SoracloudEmitMailboxMessageRequestV1, SoracloudEmitMailboxMessageResponseV1,
+        SoracloudEmitStateMutationRequestV1, SoracloudEmitStateMutationResponseV1,
+        SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1,
+        SoracloudHostRequestPayloadV1, SoracloudHostResponseEnvelopeV1,
+        SoracloudHostResponsePayloadV1, SoracloudPublishCheckpointResponseV1,
+        SoracloudReadCommittedStateResponseV1, SoracloudReadCredentialResponseV1,
+        SoracloudReadSecretResponseV1,
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use ivm::{
+    IVM, IVMHost, PointerType, VMError, verify_contract_artifact,
+    syscalls::{
+        SYSCALL_SORACLOUD_APPEND_JOURNAL, SYSCALL_SORACLOUD_EGRESS_FETCH,
+        SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE, SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
+        SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT, SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
+        SYSCALL_SORACLOUD_READ_CREDENTIAL, SYSCALL_SORACLOUD_READ_SECRET,
+    },
+};
 use mv::storage::StorageReadOnly;
 use parking_lot::RwLock;
 use tokio::task::JoinHandle;
@@ -84,6 +105,7 @@ impl SoracloudRuntimeManagerConfig {
 #[derive(Clone)]
 pub struct SoracloudRuntimeManagerHandle {
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
+    config: Arc<SoracloudRuntimeManagerConfig>,
     state_dir: Arc<PathBuf>,
     state: Arc<State>,
 }
@@ -136,70 +158,158 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         &self,
         request: SoracloudOrderedMailboxExecutionRequest,
     ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError> {
-        ensure_ivm_runtime(
+        if request.handler.is_none() {
+            return Ok(deterministic_mailbox_failure_result(
+                request,
+                "missing_handler",
+                SoraServiceHealthStatusV1::Degraded,
+            ));
+        }
+        if let Err(message) = ensure_ivm_runtime(
             request.bundle.container.runtime,
             request.deployment.service_name.as_ref(),
             &request.deployment.current_service_version,
-        )
-        .map_err(|message| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+        ) {
+            return Ok(deterministic_mailbox_failure_result_with_message(
+                request,
+                "invalid_runtime",
                 message,
-            )
-        })?;
-        let handler_class = request
-            .handler
-            .as_ref()
-            .map(|handler| handler.class)
-            .unwrap_or(SoraServiceHandlerClassV1::Update);
-        let failure = request.handler.is_none();
-        let health_status = if failure {
-            SoraServiceHealthStatusV1::Degraded
-        } else {
-            SoraServiceHealthStatusV1::Healthy
-        };
-        let outcome_label = if failure { "missing_handler" } else { "synthetic_ok" };
-        let result_commitment = mailbox_result_commitment(
-            request.mailbox_message.message_id,
-            request.deployment.service_name.as_ref(),
-            &request.deployment.current_service_version,
-            request.mailbox_message.to_handler.as_ref(),
-            outcome_label,
-            request.execution_sequence,
-        );
-        let receipt_id = mailbox_receipt_id(
-            request.mailbox_message.message_id,
-            request.deployment.service_name.as_ref(),
-            &request.deployment.current_service_version,
-            request.execution_sequence,
-            outcome_label,
-        );
-        let runtime_state = Some(updated_runtime_state(
-            request.runtime_state.clone(),
-            &request,
-            health_status,
-        ));
+                SoraServiceHealthStatusV1::Degraded,
+            ));
+        }
 
-        Ok(SoracloudOrderedMailboxExecutionResult {
-            state_mutations: Vec::new(),
-            outbound_mailbox_messages: Vec::new(),
-            runtime_state,
-            runtime_receipt: SoraRuntimeReceiptV1 {
-                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-                receipt_id,
-                service_name: request.deployment.service_name,
-                service_version: request.deployment.current_service_version,
-                handler_name: request.mailbox_message.to_handler.clone(),
-                handler_class,
-                request_commitment: request.mailbox_message.payload_commitment,
-                result_commitment,
-                certified_by: SoraCertifiedResponsePolicyV1::None,
-                emitted_sequence: request.execution_sequence,
-                mailbox_message_id: Some(request.mailbox_message.message_id),
-                journal_artifact_hash: None,
-                checkpoint_artifact_hash: None,
+        let bundle_cache_path = self
+            .state_dir
+            .join("artifacts")
+            .join(hash_cache_name(request.bundle.container.bundle_hash));
+        let bundle_bytes = match read_and_verify_cached_artifact(
+            &bundle_cache_path,
+            request.bundle.container.bundle_hash,
+        ) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Ok(deterministic_mailbox_failure_result_with_message(
+                    request,
+                    "bundle_unavailable",
+                    error.message,
+                    SoraServiceHealthStatusV1::Degraded,
+                ));
+            }
+        };
+
+        let verified = match verify_contract_artifact(&bundle_bytes) {
+            Ok(verified) => verified,
+            Err(error) => {
+                return Ok(deterministic_mailbox_failure_result_with_message(
+                    request,
+                    "invalid_bundle",
+                    error.to_string(),
+                    SoraServiceHealthStatusV1::Degraded,
+                ));
+            }
+        };
+        let Some(entrypoint) = verified
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| {
+                request
+                    .handler
+                    .as_ref()
+                    .is_some_and(|handler| entrypoint.name == handler.entrypoint)
+            })
+        else {
+            return Ok(deterministic_mailbox_failure_result(
+                request,
+                "missing_entrypoint",
+                SoraServiceHealthStatusV1::Degraded,
+            ));
+        };
+
+        let committed_entries = collect_committed_service_state_entries(
+            &self.state.view(),
+            request.deployment.service_name.as_ref(),
+        );
+        let host = SoracloudIvmHost::new(
+            request.clone(),
+            self.state_dir(),
+            self.config.egress.clone(),
+            committed_entries,
+        );
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+        if let Err(error) = vm.load_program(&bundle_bytes) {
+            return Ok(deterministic_mailbox_failure_result(
+                request,
+                vm_error_label(&error),
+                SoraServiceHealthStatusV1::Degraded,
+            ));
+        }
+        let entry_pc = u64::try_from(verified.code_offset.saturating_sub(verified.header_len))
+            .unwrap_or(u64::MAX)
+            .saturating_add(entrypoint.entry_pc);
+        if let Err(error) = vm.set_program_counter(entry_pc) {
+            return Ok(deterministic_mailbox_failure_result(
+                request,
+                vm_error_label(&error),
+                SoraServiceHealthStatusV1::Degraded,
+            ));
+        }
+        match mailbox_payload_tlv_bytes(&request.mailbox_message.payload_bytes) {
+            Ok(tlv_bytes) => match vm.alloc_input_tlv(&tlv_bytes) {
+                Ok(ptr) => vm.set_register(10, ptr),
+                Err(error) => {
+                    return Ok(deterministic_mailbox_failure_result(
+                        request,
+                        vm_error_label(&error),
+                        SoraServiceHealthStatusV1::Degraded,
+                    ));
+                }
             },
-        })
+            Err(error) => {
+                return Ok(deterministic_mailbox_failure_result(
+                    request,
+                    vm_error_label(&error),
+                    SoraServiceHealthStatusV1::Degraded,
+                ));
+            }
+        }
+        vm.set_register(11, request.execution_sequence);
+        vm.set_register(12, request.observed_height);
+        if let Err(error) = vm.run() {
+            return Ok(deterministic_mailbox_failure_result(
+                request,
+                vm_error_label(&error),
+                SoraServiceHealthStatusV1::Degraded,
+            ));
+        }
+        let Some(host) = vm.host_mut_any().and_then(|host| host.downcast_mut::<SoracloudIvmHost>())
+        else {
+            return Ok(deterministic_mailbox_failure_result(
+                request,
+                "host_unavailable",
+                SoraServiceHealthStatusV1::Degraded,
+            ));
+        };
+        match std::mem::replace(
+            host,
+            SoracloudIvmHost::new(
+                request.clone(),
+                self.state_dir(),
+                self.config.egress.clone(),
+                BTreeMap::new(),
+            ),
+        )
+        .into_execution_result()
+        {
+            Ok(result) => Ok(result),
+            Err(error) => Ok(deterministic_mailbox_failure_result_with_message(
+                request,
+                "materialization_failure",
+                error.message,
+                SoraServiceHealthStatusV1::Degraded,
+            )),
+        }
     }
 
     fn execute_apartment(
@@ -241,6 +351,630 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 record.status,
             ),
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StagedRuntimeArtifact {
+    artifact_path: String,
+    bytes: Vec<u8>,
+    artifact_hash: Hash,
+}
+
+struct SoracloudIvmHost {
+    request: SoracloudOrderedMailboxExecutionRequest,
+    state_dir: PathBuf,
+    egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
+    committed_entries: BTreeMap<(String, String), SoraServiceStateEntryV1>,
+    binding_totals: BTreeMap<String, u64>,
+    staged_state_mutations: Vec<iroha_core::soracloud_runtime::SoracloudDeterministicStateMutation>,
+    staged_outbound_mailbox_messages: Vec<SoraServiceMailboxMessageV1>,
+    staged_journal: Option<StagedRuntimeArtifact>,
+    staged_checkpoint: Option<StagedRuntimeArtifact>,
+    egress_requests: u32,
+    egress_bytes: u64,
+}
+
+impl SoracloudIvmHost {
+    fn new(
+        request: SoracloudOrderedMailboxExecutionRequest,
+        state_dir: PathBuf,
+        egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
+        committed_entries: BTreeMap<(String, String), SoraServiceStateEntryV1>,
+    ) -> Self {
+        let mut binding_totals = BTreeMap::new();
+        for entry in committed_entries.values() {
+            let total = binding_totals
+                .entry(entry.binding_name.to_string())
+                .or_insert(0u64);
+            *total = total.saturating_add(entry.payload_bytes.get());
+        }
+        Self {
+            request,
+            state_dir,
+            egress,
+            committed_entries,
+            binding_totals,
+            staged_state_mutations: Vec::new(),
+            staged_outbound_mailbox_messages: Vec::new(),
+            staged_journal: None,
+            staged_checkpoint: None,
+            egress_requests: 0,
+            egress_bytes: 0,
+        }
+    }
+
+    fn handler_class(&self) -> SoraServiceHandlerClassV1 {
+        self.request
+            .handler
+            .as_ref()
+            .map(|handler| handler.class)
+            .unwrap_or(SoraServiceHandlerClassV1::Update)
+    }
+
+    fn service_name(&self) -> &Name {
+        &self.request.deployment.service_name
+    }
+
+    fn service_version(&self) -> &str {
+        &self.request.deployment.current_service_version
+    }
+
+    fn require_private_runtime(&self, syscall: u32) -> Result<(), VMError> {
+        if self.handler_class() == SoraServiceHandlerClassV1::PrivateUpdate {
+            Ok(())
+        } else {
+            Err(VMError::NotImplemented { syscall })
+        }
+    }
+
+    fn read_request_payload(
+        &self,
+        vm: &mut IVM,
+        expected_operation: SoracloudHostOperationV1,
+        syscall: u32,
+    ) -> Result<SoracloudHostRequestPayloadV1, VMError> {
+        let tlv = vm.memory.validate_tlv(vm.register(10))?;
+        if tlv.type_id != PointerType::SoracloudRequest {
+            return Err(VMError::AbiTypeNotAllowed {
+                abi: vm.abi_version(),
+                type_id: tlv.type_id_raw(),
+            });
+        }
+        let envelope = norito::decode_from_bytes::<SoracloudHostRequestEnvelopeV1>(tlv.payload)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        envelope.validate().map_err(|_| VMError::NoritoInvalid)?;
+        if envelope.operation != expected_operation {
+            return Err(VMError::NotImplemented { syscall });
+        }
+        Ok(envelope.payload)
+    }
+
+    fn write_response(
+        &self,
+        vm: &mut IVM,
+        operation: SoracloudHostOperationV1,
+        payload: SoracloudHostResponsePayloadV1,
+    ) -> Result<(), VMError> {
+        let envelope = SoracloudHostResponseEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
+            operation,
+            payload,
+        };
+        envelope.validate().map_err(|_| VMError::NoritoInvalid)?;
+        let payload_bytes = norito::to_bytes(&envelope).map_err(|_| VMError::NoritoInvalid)?;
+        let tlv = make_pointer_tlv(PointerType::SoracloudResponse, &payload_bytes);
+        let ptr = vm.alloc_input_tlv(&tlv)?;
+        vm.set_register(10, ptr);
+        Ok(())
+    }
+
+    fn binding(&self, binding_name: &Name) -> Result<&SoraStateBindingV1, VMError> {
+        self.request
+            .bundle
+            .service
+            .state_bindings
+            .iter()
+            .find(|binding| binding.binding_name == *binding_name)
+            .ok_or(VMError::PermissionDenied)
+    }
+
+    fn state_entry_key(binding_name: &Name, state_key: &str) -> (String, String) {
+        (binding_name.to_string(), state_key.to_owned())
+    }
+
+    fn current_entry_size(&self, binding_name: &Name, state_key: &str) -> u64 {
+        let key = Self::state_entry_key(binding_name, state_key);
+        self.committed_entries
+            .get(&key)
+            .map(|entry| entry.payload_bytes.get())
+            .unwrap_or(0)
+    }
+
+    fn stage_state_mutation(
+        &mut self,
+        request: SoracloudEmitStateMutationRequestV1,
+    ) -> Result<SoracloudEmitStateMutationResponseV1, VMError> {
+        if !self.request.bundle.container.capabilities.allow_state_writes {
+            return Err(VMError::PermissionDenied);
+        }
+        if request.state_key.trim().is_empty() || !request.state_key.starts_with('/') {
+            return Err(VMError::PermissionDenied);
+        }
+        let binding = self.binding(&request.binding_name)?.clone();
+        if !request.state_key.starts_with(&binding.key_prefix) {
+            return Err(VMError::PermissionDenied);
+        }
+        if binding.encryption != request.encryption {
+            return Err(VMError::PermissionDenied);
+        }
+        let binding_name = request.binding_name.to_string();
+        let current_size = self.current_entry_size(&request.binding_name, &request.state_key);
+        match request.operation {
+            SoraStateMutationOperationV1::Upsert => {
+                let Some(payload_bytes) = request.payload_bytes else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                if payload_bytes == 0 {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let Some(payload_commitment) = request.payload_commitment else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                if payload_bytes > binding.max_item_bytes.get() {
+                    return Err(VMError::PermissionDenied);
+                }
+                if !matches!(binding.mutability, iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly | iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite) {
+                    return Err(VMError::PermissionDenied);
+                }
+                if binding.mutability
+                    == iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly
+                    && current_size > 0
+                {
+                    return Err(VMError::PermissionDenied);
+                }
+                let current_total = self.binding_totals.get(&binding_name).copied().unwrap_or(0);
+                let next_total = current_total
+                    .saturating_sub(current_size)
+                    .saturating_add(payload_bytes);
+                if next_total > binding.max_total_bytes.get() {
+                    return Err(VMError::PermissionDenied);
+                }
+                self.binding_totals.insert(binding_name.clone(), next_total);
+                self.committed_entries.insert(
+                    Self::state_entry_key(&request.binding_name, &request.state_key),
+                    SoraServiceStateEntryV1 {
+                        schema_version: iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                        service_name: self.request.deployment.service_name.clone(),
+                        service_version: self.request.deployment.current_service_version.clone(),
+                        binding_name: request.binding_name.clone(),
+                        state_key: request.state_key.clone(),
+                        encryption: request.encryption,
+                        payload_bytes: std::num::NonZeroU64::new(payload_bytes)
+                            .ok_or(VMError::NoritoInvalid)?,
+                        payload_commitment,
+                        last_update_sequence: self.request.execution_sequence,
+                        governance_tx_hash: self.request.mailbox_message.payload_commitment,
+                        source_action: SoraServiceLifecycleActionV1::StateMutation,
+                    },
+                );
+            }
+            SoraStateMutationOperationV1::Delete => {
+                if request.payload_bytes.is_some() || request.payload_commitment.is_some() {
+                    return Err(VMError::NoritoInvalid);
+                }
+                if binding.mutability != iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite {
+                    return Err(VMError::PermissionDenied);
+                }
+                let current_total = self.binding_totals.get(&binding_name).copied().unwrap_or(0);
+                self.binding_totals.insert(
+                    binding_name.clone(),
+                    current_total.saturating_sub(current_size),
+                );
+                self.committed_entries
+                    .remove(&Self::state_entry_key(&request.binding_name, &request.state_key));
+            }
+        }
+
+        let mutation = iroha_core::soracloud_runtime::SoracloudDeterministicStateMutation {
+            binding_name,
+            state_key: request.state_key.clone(),
+            operation: request.operation,
+            encryption: request.encryption,
+            payload_bytes: request.payload_bytes,
+            payload_commitment: request.payload_commitment,
+        };
+        let mutation_commitment = Hash::new(Encode::encode(&(
+            "soracloud.host.state-mutation.v1",
+            self.request.mailbox_message.message_id,
+            mutation.binding_name.as_str(),
+            mutation.state_key.as_str(),
+            mutation.operation,
+            mutation.encryption,
+            mutation.payload_bytes,
+            mutation.payload_commitment,
+            u64::try_from(self.staged_state_mutations.len()).unwrap_or(u64::MAX),
+        )));
+        self.staged_state_mutations.push(mutation);
+        Ok(SoracloudEmitStateMutationResponseV1 { mutation_commitment })
+    }
+
+    fn stage_outbound_mailbox_message(
+        &mut self,
+        request: SoracloudEmitMailboxMessageRequestV1,
+    ) -> SoracloudEmitMailboxMessageResponseV1 {
+        let payload_commitment = Hash::new(&request.payload_bytes);
+        let message_id = Hash::new(Encode::encode(&(
+            "soracloud.host.mailbox.v1",
+            self.request.mailbox_message.message_id,
+            self.request.deployment.service_name.as_ref(),
+            self.request.mailbox_message.to_handler.as_ref(),
+            request.to_service.as_ref(),
+            request.to_handler.as_ref(),
+            payload_commitment,
+            request.available_after_sequence,
+            request.expires_at_sequence,
+            u64::try_from(self.staged_outbound_mailbox_messages.len()).unwrap_or(u64::MAX),
+        )));
+        self.staged_outbound_mailbox_messages.push(SoraServiceMailboxMessageV1 {
+            schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+            message_id,
+            from_service: self.request.deployment.service_name.clone(),
+            from_handler: self.request.mailbox_message.to_handler.clone(),
+            to_service: request.to_service,
+            to_handler: request.to_handler,
+            payload_bytes: request.payload_bytes,
+            payload_commitment,
+            enqueue_sequence: self.request.execution_sequence,
+            available_after_sequence: request
+                .available_after_sequence
+                .max(self.request.execution_sequence),
+            expires_at_sequence: request.expires_at_sequence,
+        });
+        SoracloudEmitMailboxMessageResponseV1 {
+            message_id,
+            payload_commitment,
+        }
+    }
+
+    fn stage_artifact(
+        slot: &mut Option<StagedRuntimeArtifact>,
+        request: String,
+        bytes: Vec<u8>,
+    ) -> Hash {
+        let artifact_hash = Hash::new(&bytes);
+        *slot = Some(StagedRuntimeArtifact {
+            artifact_path: request,
+            bytes,
+            artifact_hash,
+        });
+        artifact_hash
+    }
+
+    fn read_material(
+        &self,
+        root_name: &str,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>, VMError> {
+        let relative = sanitized_relative_material_path(key)?;
+        let path = self
+            .state_dir
+            .join(root_name)
+            .join(sanitize_path_component(self.service_name().as_ref()))
+            .join(sanitize_path_component(self.service_version()))
+            .join(relative);
+        match fs::read(path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(VMError::PermissionDenied),
+        }
+    }
+
+    fn host_network_allows(&self, host: &str) -> bool {
+        let container_policy: &SoraCapabilityPolicyV1 = &self.request.bundle.container.capabilities;
+        let container_allows = match &container_policy.network {
+            SoraNetworkPolicyV1::Isolated => false,
+            SoraNetworkPolicyV1::Allowlist(hosts) => hosts.iter().any(|allowed| allowed == host),
+        };
+        if !container_allows {
+            return false;
+        }
+        if self.egress.default_allow {
+            true
+        } else {
+            self.egress.allowed_hosts.iter().any(|allowed| allowed == host)
+        }
+    }
+
+    fn egress_fetch(
+        &mut self,
+        request: SoracloudEgressFetchRequestV1,
+    ) -> Result<SoracloudEgressFetchResponseV1, VMError> {
+        self.require_private_runtime(SYSCALL_SORACLOUD_EGRESS_FETCH)?;
+        let Some(expected_hash) = request.expected_hash else {
+            return Err(VMError::PermissionDenied);
+        };
+        let Some(host) = url_host(&request.url) else {
+            return Err(VMError::PermissionDenied);
+        };
+        if !self.host_network_allows(host) {
+            return Err(VMError::PermissionDenied);
+        }
+        let max_requests = self.egress.rate_per_minute.map(|value| value.get()).unwrap_or(u32::MAX);
+        if self.egress_requests >= max_requests {
+            return Err(VMError::PermissionDenied);
+        }
+        let remaining_budget = self
+            .egress
+            .max_bytes_per_minute
+            .map(|value| value.get())
+            .unwrap_or(u64::MAX)
+            .saturating_sub(self.egress_bytes);
+        let response_cap = remaining_budget.min(request.max_bytes);
+        if response_cap == 0 {
+            return Err(VMError::PermissionDenied);
+        }
+        let response = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|_| VMError::PermissionDenied)?
+            .get(&request.url)
+            .send()
+            .map_err(|_| VMError::PermissionDenied)?;
+        let status_code = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let body = response
+            .bytes()
+            .map_err(|_| VMError::PermissionDenied)?
+            .to_vec();
+        if u64::try_from(body.len()).unwrap_or(u64::MAX) > response_cap {
+            return Err(VMError::PermissionDenied);
+        }
+        let body_hash = Hash::new(&body);
+        if body_hash != expected_hash {
+            return Err(VMError::PermissionDenied);
+        }
+        self.egress_requests = self.egress_requests.saturating_add(1);
+        self.egress_bytes = self
+            .egress_bytes
+            .saturating_add(u64::try_from(body.len()).unwrap_or(u64::MAX));
+        Ok(SoracloudEgressFetchResponseV1 {
+            status_code,
+            content_type,
+            body,
+            body_hash,
+        })
+    }
+
+    fn into_execution_result(
+        self,
+    ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError> {
+        let handler_class = self.handler_class();
+        let journal_artifact_hash = persist_staged_runtime_artifact(
+            self.state_dir.join("journals"),
+            self.staged_journal.as_ref(),
+        )?;
+        let checkpoint_artifact_hash = persist_staged_runtime_artifact(
+            self.state_dir.join("checkpoints"),
+            self.staged_checkpoint.as_ref(),
+        )?;
+        let runtime_state = updated_runtime_state_with_outbound_mailbox(
+            self.request.runtime_state.clone(),
+            &self.request,
+            SoraServiceHealthStatusV1::Healthy,
+            &self.staged_outbound_mailbox_messages,
+        );
+        let result_commitment = authoritative_mailbox_result_commitment(
+            &self.request,
+            &self.staged_state_mutations,
+            &self.staged_outbound_mailbox_messages,
+            &runtime_state,
+            journal_artifact_hash,
+            checkpoint_artifact_hash,
+        );
+        let receipt_id = Hash::new(Encode::encode(&(
+            "soracloud:runtime-receipt:v1",
+            self.request.mailbox_message.message_id,
+            self.request.deployment.service_name.as_ref(),
+            self.request.deployment.current_service_version.as_str(),
+            self.request.mailbox_message.to_handler.as_ref(),
+            self.request.execution_sequence,
+            result_commitment,
+        )));
+        Ok(SoracloudOrderedMailboxExecutionResult {
+            state_mutations: self.staged_state_mutations,
+            outbound_mailbox_messages: self.staged_outbound_mailbox_messages,
+            runtime_state: Some(runtime_state),
+            runtime_receipt: SoraRuntimeReceiptV1 {
+                schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+                receipt_id,
+                service_name: self.request.deployment.service_name,
+                service_version: self.request.deployment.current_service_version,
+                handler_name: self.request.mailbox_message.to_handler.clone(),
+                handler_class,
+                request_commitment: self.request.mailbox_message.payload_commitment,
+                result_commitment,
+                certified_by: SoraCertifiedResponsePolicyV1::None,
+                emitted_sequence: self.request.execution_sequence,
+                mailbox_message_id: Some(self.request.mailbox_message.message_id),
+                journal_artifact_hash,
+                checkpoint_artifact_hash,
+            },
+        })
+    }
+}
+
+impl IVMHost for SoracloudIvmHost {
+    fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        match number {
+            SYSCALL_SORACLOUD_READ_COMMITTED_STATE => {
+                let SoracloudHostRequestPayloadV1::ReadCommittedState(request) = self
+                    .read_request_payload(
+                        vm,
+                        SoracloudHostOperationV1::ReadCommittedState,
+                        number,
+                    )?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let entry = self
+                    .committed_entries
+                    .get(&Self::state_entry_key(&request.binding_name, &request.state_key))
+                    .cloned();
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::ReadCommittedState,
+                    SoracloudHostResponsePayloadV1::ReadCommittedState(
+                        SoracloudReadCommittedStateResponseV1 { entry },
+                    ),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => {
+                let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = self
+                    .read_request_payload(
+                        vm,
+                        SoracloudHostOperationV1::EmitStateMutation,
+                        number,
+                    )?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let response = self.stage_state_mutation(request)?;
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::EmitStateMutation,
+                    SoracloudHostResponsePayloadV1::EmitStateMutation(response),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => {
+                let SoracloudHostRequestPayloadV1::EmitMailboxMessage(request) = self
+                    .read_request_payload(
+                        vm,
+                        SoracloudHostOperationV1::EmitMailboxMessage,
+                        number,
+                    )?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let response = self.stage_outbound_mailbox_message(request);
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::EmitMailboxMessage,
+                    SoracloudHostResponsePayloadV1::EmitMailboxMessage(response),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_APPEND_JOURNAL => {
+                let SoracloudHostRequestPayloadV1::AppendJournal(request) = self
+                    .read_request_payload(vm, SoracloudHostOperationV1::AppendJournal, number)?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let artifact_hash = Self::stage_artifact(
+                    &mut self.staged_journal,
+                    request.artifact_path,
+                    request.payload_bytes,
+                );
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::AppendJournal,
+                    SoracloudHostResponsePayloadV1::AppendJournal(
+                        SoracloudAppendJournalResponseV1 { artifact_hash },
+                    ),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => {
+                let SoracloudHostRequestPayloadV1::PublishCheckpoint(request) = self
+                    .read_request_payload(
+                        vm,
+                        SoracloudHostOperationV1::PublishCheckpoint,
+                        number,
+                    )?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let artifact_hash = Self::stage_artifact(
+                    &mut self.staged_checkpoint,
+                    request.artifact_path,
+                    request.payload_bytes,
+                );
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::PublishCheckpoint,
+                    SoracloudHostResponsePayloadV1::PublishCheckpoint(
+                        SoracloudPublishCheckpointResponseV1 { artifact_hash },
+                    ),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_READ_SECRET => {
+                self.require_private_runtime(number)?;
+                let SoracloudHostRequestPayloadV1::ReadSecret(request) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::ReadSecret, number)?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let payload_bytes = self.read_material("secrets", &request.secret_name)?;
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::ReadSecret,
+                    SoracloudHostResponsePayloadV1::ReadSecret(SoracloudReadSecretResponseV1 {
+                        found: payload_bytes.is_some(),
+                        payload_bytes: payload_bytes.unwrap_or_default(),
+                    }),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_READ_CREDENTIAL => {
+                self.require_private_runtime(number)?;
+                let SoracloudHostRequestPayloadV1::ReadCredential(request) = self
+                    .read_request_payload(vm, SoracloudHostOperationV1::ReadCredential, number)?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let payload_bytes = self.read_material("credentials", &request.credential_name)?;
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::ReadCredential,
+                    SoracloudHostResponsePayloadV1::ReadCredential(
+                        SoracloudReadCredentialResponseV1 {
+                            found: payload_bytes.is_some(),
+                            payload_bytes: payload_bytes.unwrap_or_default(),
+                        },
+                    ),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_EGRESS_FETCH => {
+                let SoracloudHostRequestPayloadV1::EgressFetch(request) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::EgressFetch, number)?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let response = self.egress_fetch(request)?;
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::EgressFetch,
+                    SoracloudHostResponsePayloadV1::EgressFetch(response),
+                )?;
+                Ok(0)
+            }
+            _ => Err(VMError::UnknownSyscall(number)),
+        }
+    }
+
+    fn as_any(&mut self) -> &mut dyn std::any::Any
+    where
+        Self: 'static,
+    {
+        self
     }
 }
 
@@ -326,6 +1060,7 @@ impl SoracloudRuntimeManager {
         }
         let handle = SoracloudRuntimeManagerHandle {
             snapshot: Arc::clone(&manager.snapshot),
+            config: Arc::new(manager.config.clone()),
             state_dir: Arc::new(manager.config.state_dir.clone()),
             state: Arc::clone(&manager.state),
         };
@@ -376,6 +1111,8 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.checkpoints_root().display()))?;
         fs::create_dir_all(self.secrets_root())
             .wrap_err_with(|| format!("create {}", self.secrets_root().display()))?;
+        fs::create_dir_all(self.credentials_root())
+            .wrap_err_with(|| format!("create {}", self.credentials_root().display()))?;
 
         let view = self.state.view();
         let bundle_registry = collect_service_revision_registry(&view);
@@ -435,6 +1172,10 @@ impl SoracloudRuntimeManager {
 
     fn secrets_root(&self) -> PathBuf {
         self.config.state_dir.join("secrets")
+    }
+
+    fn credentials_root(&self) -> PathBuf {
+        self.config.state_dir.join("credentials")
     }
 
     fn write_service_materializations(
@@ -1304,20 +2045,83 @@ fn authoritative_mailbox_counts(
     counts
 }
 
-fn mailbox_result_commitment(
-    message_id: Hash,
+fn collect_committed_service_state_entries(
+    view: &StateView<'_>,
     service_name: &str,
-    service_version: &str,
-    handler_name: &str,
+) -> BTreeMap<(String, String), SoraServiceStateEntryV1> {
+    view.world()
+        .soracloud_service_state_entries()
+        .iter()
+        .filter(|((_service, _binding, _key), entry)| entry.service_name.as_ref() == service_name)
+        .map(|((_service, binding, key), entry)| ((binding.clone(), key.clone()), entry.clone()))
+        .collect()
+}
+
+fn deterministic_mailbox_failure_result(
+    request: SoracloudOrderedMailboxExecutionRequest,
     outcome_label: &str,
-    execution_sequence: u64,
-) -> Hash {
-    Hash::new(
-        format!(
-            "soracloud:runtime-result:{message_id}:{service_name}:{service_version}:{handler_name}:{outcome_label}:{execution_sequence}"
-        )
-        .as_bytes(),
+    health_status: SoraServiceHealthStatusV1,
+) -> SoracloudOrderedMailboxExecutionResult {
+    deterministic_mailbox_failure_result_with_message(
+        request,
+        outcome_label,
+        outcome_label.to_owned(),
+        health_status,
     )
+}
+
+fn deterministic_mailbox_failure_result_with_message(
+    request: SoracloudOrderedMailboxExecutionRequest,
+    outcome_label: &str,
+    detail: String,
+    health_status: SoraServiceHealthStatusV1,
+) -> SoracloudOrderedMailboxExecutionResult {
+    let result_commitment = Hash::new(Encode::encode(&(
+        "soracloud:runtime-failure:v1",
+        request.mailbox_message.message_id,
+        request.deployment.service_name.as_ref(),
+        request.deployment.current_service_version.as_str(),
+        request.mailbox_message.to_handler.as_ref(),
+        request.execution_sequence,
+        outcome_label,
+        detail,
+    )));
+    let receipt_id = mailbox_receipt_id(
+        request.mailbox_message.message_id,
+        request.deployment.service_name.as_ref(),
+        &request.deployment.current_service_version,
+        request.execution_sequence,
+        outcome_label,
+    );
+    SoracloudOrderedMailboxExecutionResult {
+        state_mutations: Vec::new(),
+        outbound_mailbox_messages: Vec::new(),
+        runtime_state: Some(updated_runtime_state_with_outbound_mailbox(
+            request.runtime_state.clone(),
+            &request,
+            health_status,
+            &[],
+        )),
+        runtime_receipt: SoraRuntimeReceiptV1 {
+            schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+            receipt_id,
+            service_name: request.deployment.service_name,
+            service_version: request.deployment.current_service_version,
+            handler_name: request.mailbox_message.to_handler.clone(),
+            handler_class: request
+                .handler
+                .as_ref()
+                .map(|handler| handler.class)
+                .unwrap_or(SoraServiceHandlerClassV1::Update),
+            request_commitment: request.mailbox_message.payload_commitment,
+            result_commitment,
+            certified_by: SoraCertifiedResponsePolicyV1::None,
+            emitted_sequence: request.execution_sequence,
+            mailbox_message_id: Some(request.mailbox_message.message_id),
+            journal_artifact_hash: None,
+            checkpoint_artifact_hash: None,
+        },
+    }
 }
 
 fn mailbox_receipt_id(
@@ -1356,17 +2160,23 @@ fn synthetic_runtime_state(
     }
 }
 
-fn updated_runtime_state(
+fn updated_runtime_state_with_outbound_mailbox(
     runtime_state: Option<iroha_data_model::soracloud::SoraServiceRuntimeStateV1>,
     request: &SoracloudOrderedMailboxExecutionRequest,
     health_status: SoraServiceHealthStatusV1,
+    outbound_mailbox_messages: &[SoraServiceMailboxMessageV1],
 ) -> iroha_data_model::soracloud::SoraServiceRuntimeStateV1 {
     let mut runtime_state =
         runtime_state.unwrap_or_else(|| synthetic_runtime_state(request, health_status));
+    let self_requeued = outbound_mailbox_messages
+        .iter()
+        .filter(|message| message.to_service == request.deployment.service_name)
+        .count();
     runtime_state.health_status = health_status;
     runtime_state.pending_mailbox_message_count = request
         .authoritative_pending_mailbox_messages
-        .saturating_sub(1);
+        .saturating_sub(1)
+        .saturating_add(u32::try_from(self_requeued).unwrap_or(u32::MAX));
     runtime_state
 }
 
@@ -1380,6 +2190,163 @@ fn ensure_ivm_runtime(
         iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess => Err(format!(
             "service `{service_name}` revision `{service_version}` targets unsupported Soracloud runtime `NativeProcess`; v1 currently admits only `Ivm`"
         )),
+    }
+}
+
+fn authoritative_mailbox_result_commitment(
+    request: &SoracloudOrderedMailboxExecutionRequest,
+    state_mutations: &[iroha_core::soracloud_runtime::SoracloudDeterministicStateMutation],
+    outbound_mailbox_messages: &[SoraServiceMailboxMessageV1],
+    runtime_state: &SoraServiceRuntimeStateV1,
+    journal_artifact_hash: Option<Hash>,
+    checkpoint_artifact_hash: Option<Hash>,
+) -> Hash {
+    let mutation_fingerprints = state_mutations
+        .iter()
+        .map(|mutation| {
+            (
+                mutation.binding_name.as_str(),
+                mutation.state_key.as_str(),
+                mutation.operation,
+                mutation.encryption,
+                mutation.payload_bytes,
+                mutation.payload_commitment,
+            )
+        })
+        .collect::<Vec<_>>();
+    let outbound_fingerprints = outbound_mailbox_messages
+        .iter()
+        .map(|message| {
+            (
+                message.message_id,
+                message.from_service.as_ref(),
+                message.from_handler.as_ref(),
+                message.to_service.as_ref(),
+                message.to_handler.as_ref(),
+                message.payload_commitment,
+                message.available_after_sequence,
+                message.expires_at_sequence,
+            )
+        })
+        .collect::<Vec<_>>();
+    Hash::new(Encode::encode(&(
+        "soracloud:runtime-result:v1",
+        request.mailbox_message.message_id,
+        request.deployment.service_name.as_ref(),
+        request.deployment.current_service_version.as_str(),
+        request.mailbox_message.to_handler.as_ref(),
+        request.execution_sequence,
+        mutation_fingerprints,
+        outbound_fingerprints,
+        runtime_state.clone(),
+        journal_artifact_hash,
+        checkpoint_artifact_hash,
+    )))
+}
+
+fn mailbox_payload_tlv_bytes(payload_bytes: &[u8]) -> Result<Vec<u8>, VMError> {
+    if payload_bytes.is_empty() {
+        return Ok(make_pointer_tlv(PointerType::Blob, &[]));
+    }
+    if ivm::pointer_abi::validate_tlv_bytes(payload_bytes).is_ok() {
+        return Ok(payload_bytes.to_vec());
+    }
+    Ok(make_pointer_tlv(PointerType::Blob, payload_bytes))
+}
+
+fn make_pointer_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(u32::try_from(payload.len()).unwrap_or(u32::MAX)).to_be_bytes());
+    out.extend_from_slice(payload);
+    out.extend_from_slice(Hash::new(payload).as_ref());
+    out
+}
+
+fn vm_error_label(error: &VMError) -> &'static str {
+    match error {
+        VMError::OutOfGas => "out_of_gas",
+        VMError::OutOfMemory => "out_of_memory",
+        VMError::MemoryAccessViolation { .. } => "memory_access_violation",
+        VMError::MisalignedAccess { .. } => "misaligned_access",
+        VMError::MemoryOutOfBounds => "memory_out_of_bounds",
+        VMError::UnalignedAccess => "unaligned_access",
+        VMError::MemoryPermissionDenied => "memory_permission_denied",
+        VMError::DecodeError => "decode_error",
+        VMError::InvalidOpcode(_) => "invalid_opcode",
+        VMError::UnknownSyscall(_) => "unknown_syscall",
+        VMError::HostUnavailable => "host_unavailable",
+        VMError::NotImplemented { .. } => "not_implemented",
+        VMError::AssertionFailed => "assertion_failed",
+        VMError::ExceededMaxCycles => "exceeded_max_cycles",
+        VMError::InvalidMetadata => "invalid_metadata",
+        VMError::VectorExtensionDisabled => "vector_disabled",
+        VMError::ZkExtensionDisabled => "zk_disabled",
+        VMError::NullifierAlreadyUsed => "nullifier_used",
+        VMError::PermissionDenied => "permission_denied",
+        VMError::PrivacyViolation => "privacy_violation",
+        VMError::RegisterOutOfBounds => "register_out_of_bounds",
+        VMError::HTMAbort => "htm_abort",
+        VMError::NoritoInvalid => "norito_invalid",
+        VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
+        VMError::AmxBudgetExceeded { .. } => "amx_budget_exceeded",
+    }
+}
+
+fn persist_staged_runtime_artifact(
+    root: PathBuf,
+    artifact: Option<&StagedRuntimeArtifact>,
+) -> Result<Option<Hash>, SoracloudRuntimeExecutionError> {
+    let Some(artifact) = artifact else {
+        return Ok(None);
+    };
+    fs::create_dir_all(&root).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!("create Soracloud runtime artifact root {}: {error}", root.display()),
+        )
+    })?;
+    let path = root.join(hash_cache_name(artifact.artifact_hash));
+    fs::write(&path, &artifact.bytes).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "persist Soracloud runtime artifact `{}` at {}: {error}",
+                artifact.artifact_path,
+                path.display()
+            ),
+        )
+    })?;
+    Ok(Some(artifact.artifact_hash))
+}
+
+fn sanitized_relative_material_path(key: &str) -> Result<PathBuf, VMError> {
+    if key.trim().is_empty() {
+        return Err(VMError::PermissionDenied);
+    }
+    let mut path = PathBuf::new();
+    for component in key.split('/') {
+        if component.is_empty() || matches!(component, "." | "..") {
+            return Err(VMError::PermissionDenied);
+        }
+        path.push(sanitize_path_component(component));
+    }
+    Ok(path)
+}
+
+fn url_host(url: &str) -> Option<&str> {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest.split('/').next()?;
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = authority
+        .strip_prefix('[')
+        .and_then(|value| value.split_once(']').map(|(host, _)| host))
+        .unwrap_or_else(|| authority.split(':').next().unwrap_or(authority));
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
     }
 }
 
@@ -1500,12 +2467,14 @@ mod tests {
     use eyre::Result;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
     use iroha_data_model::{
+        smart_contract::manifest::EntryPointKind,
         soracloud::{
             AgentApartmentManifestV1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-            SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1,
-            SoraDeploymentBundleV1, SoraServiceDeploymentStateV1, SoraServiceHealthStatusV1,
-            SoraServiceRuntimeStateV1,
+            SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+            SORA_SERVICE_RUNTIME_STATE_VERSION_V1, SoraAgentPersistentStateV1,
+            SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+            SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+            SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
         },
     };
 
@@ -1592,6 +2561,105 @@ mod tests {
         }
     }
 
+    fn soracloud_entrypoint(
+        name: &str,
+        entry_pc: u64,
+    ) -> ivm::EmbeddedEntrypointDescriptor {
+        ivm::EmbeddedEntrypointDescriptor {
+            name: name.to_owned(),
+            kind: EntryPointKind::Public,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc,
+        }
+    }
+
+    fn simple_soracloud_contract_artifact(entrypoints: &[&str]) -> Vec<u8> {
+        let metadata = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 0,
+            abi_version: 1,
+        };
+        let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "irohad-soracloud-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: entrypoints
+                .iter()
+                .map(|name| soracloud_entrypoint(name, 0))
+                .collect(),
+        };
+        let mut bytes = metadata.encode();
+        bytes.extend_from_slice(&contract_interface.encode_section());
+        bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        bytes
+    }
+
+    fn bundle_handler(
+        bundle: &SoraDeploymentBundleV1,
+        handler_name: &str,
+    ) -> iroha_data_model::soracloud::SoraServiceHandlerV1 {
+        bundle
+            .service
+            .handlers
+            .iter()
+            .find(|handler| handler.handler_name.as_ref() == handler_name)
+            .cloned()
+            .expect("fixture handler must exist")
+    }
+
+    fn sample_mailbox_message(
+        bundle: &SoraDeploymentBundleV1,
+        handler_name: &str,
+        payload_bytes: Vec<u8>,
+    ) -> SoraServiceMailboxMessageV1 {
+        let payload_commitment = Hash::new(&payload_bytes);
+        SoraServiceMailboxMessageV1 {
+            schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+            message_id: Hash::new(Encode::encode(&(
+                "soracloud.runtime.tests.mailbox",
+                bundle.service.service_name.as_ref(),
+                handler_name,
+                payload_commitment,
+            ))),
+            from_service: "scheduler".parse().expect("literal name"),
+            from_handler: "dispatch".parse().expect("literal name"),
+            to_service: bundle.service.service_name.clone(),
+            to_handler: handler_name.parse().expect("fixture handler name"),
+            payload_bytes,
+            payload_commitment,
+            enqueue_sequence: 6,
+            available_after_sequence: 6,
+            expires_at_sequence: None,
+        }
+    }
+
+    fn sample_ordered_mailbox_request(
+        bundle: &SoraDeploymentBundleV1,
+        handler_name: &str,
+        mailbox_message: SoraServiceMailboxMessageV1,
+    ) -> SoracloudOrderedMailboxExecutionRequest {
+        SoracloudOrderedMailboxExecutionRequest {
+            observed_height: 0,
+            observed_block_hash: None,
+            execution_sequence: 7,
+            deployment: sample_deployment_state(bundle),
+            bundle: bundle.clone(),
+            handler: Some(bundle_handler(bundle, handler_name)),
+            mailbox_message,
+            runtime_state: Some(sample_runtime_state(bundle)),
+            authoritative_pending_mailbox_messages: 1,
+        }
+    }
+
     fn test_runtime_manager_config(state_dir: PathBuf) -> SoracloudRuntimeManagerConfig {
         let runtime = iroha_config::parameters::actual::SoracloudRuntime {
             state_dir,
@@ -1606,6 +2674,7 @@ mod tests {
     ) -> SoracloudRuntimeManagerHandle {
         SoracloudRuntimeManagerHandle {
             snapshot: Arc::clone(&manager.snapshot),
+            config: Arc::new(manager.config.clone()),
             state_dir: Arc::new(manager.config.state_dir.clone()),
             state,
         }
@@ -2077,6 +3146,134 @@ mod tests {
             response.bindings[0].state_key.as_deref(),
             Some("/state/session/alice")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn execute_ordered_mailbox_runs_update_handler_from_admitted_ivm_bundle() -> Result<()> {
+        let state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let artifact_bytes =
+            simple_soracloud_contract_artifact(&["apply_update", "apply_private_update"]);
+        bundle.container.bundle_hash = Hash::new(&artifact_bytes);
+        let temp_dir = tempfile::tempdir()?;
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
+            &artifact_bytes,
+        )?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        let request = sample_ordered_mailbox_request(
+            &bundle,
+            "update",
+            sample_mailbox_message(&bundle, "update", b"hello-update".to_vec()),
+        );
+
+        let result = handle
+            .execute_ordered_mailbox(request.clone())
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        assert!(result.state_mutations.is_empty());
+        assert!(result.outbound_mailbox_messages.is_empty());
+        let runtime_state = result.runtime_state.expect("runtime state");
+        assert_eq!(runtime_state.health_status, SoraServiceHealthStatusV1::Healthy);
+        assert_eq!(runtime_state.pending_mailbox_message_count, 0);
+        assert_eq!(
+            result.runtime_receipt.handler_class,
+            SoraServiceHandlerClassV1::Update
+        );
+        assert_eq!(
+            result.runtime_receipt.request_commitment,
+            request.mailbox_message.payload_commitment
+        );
+        assert_eq!(
+            result.runtime_receipt.mailbox_message_id,
+            Some(request.mailbox_message.message_id)
+        );
+        assert_ne!(result.runtime_receipt.result_commitment, Hash::prehashed([0; Hash::LENGTH]));
+        Ok(())
+    }
+
+    #[test]
+    fn execute_ordered_mailbox_runs_private_update_handler_from_admitted_ivm_bundle() -> Result<()> {
+        let state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let artifact_bytes =
+            simple_soracloud_contract_artifact(&["apply_update", "apply_private_update"]);
+        bundle.container.bundle_hash = Hash::new(&artifact_bytes);
+        let temp_dir = tempfile::tempdir()?;
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
+            &artifact_bytes,
+        )?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        let request = sample_ordered_mailbox_request(
+            &bundle,
+            "private_update",
+            sample_mailbox_message(&bundle, "private_update", b"secret-input".to_vec()),
+        );
+
+        let result = handle
+            .execute_ordered_mailbox(request)
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        assert!(result.state_mutations.is_empty());
+        assert!(result.outbound_mailbox_messages.is_empty());
+        assert_eq!(
+            result.runtime_receipt.handler_class,
+            SoraServiceHandlerClassV1::PrivateUpdate
+        );
+        assert_eq!(
+            result.runtime_state.expect("runtime state").health_status,
+            SoraServiceHealthStatusV1::Healthy
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cache() -> Result<()> {
+        let state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
+        bundle.container.bundle_hash = Hash::new(&artifact_bytes);
+        let temp_dir = tempfile::tempdir()?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        let request = sample_ordered_mailbox_request(
+            &bundle,
+            "update",
+            sample_mailbox_message(&bundle, "update", b"missing-bundle".to_vec()),
+        );
+
+        let result = handle
+            .execute_ordered_mailbox(request)
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        assert!(result.state_mutations.is_empty());
+        assert!(result.outbound_mailbox_messages.is_empty());
+        assert_eq!(
+            result.runtime_state.expect("runtime state").health_status,
+            SoraServiceHealthStatusV1::Degraded
+        );
+        assert_eq!(result.runtime_receipt.journal_artifact_hash, None);
+        assert_eq!(result.runtime_receipt.checkpoint_artifact_hash, None);
         Ok(())
     }
 

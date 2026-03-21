@@ -3,10 +3,12 @@ use ivm::{self, PointerType, SyscallPolicy};
 #[test]
 fn syscall_policy_allows_known_and_rejects_unknown_for_v1() {
     // Known allowed syscall in the canonical surface
-    assert!(ivm::syscalls::abi_syscall_list().contains(&ivm::syscalls::SYSCALL_EXIT));
+    assert!(ivm::syscalls::abi_syscall_list().contains(
+        &ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
+    ));
     assert!(ivm::syscalls::is_syscall_allowed(
         SyscallPolicy::AbiV1,
-        ivm::syscalls::SYSCALL_EXIT
+        ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
     ));
 
     // Pick a number not present in the canonical surface.
@@ -30,9 +32,9 @@ fn syscall_policy_allows_known_and_rejects_unknown_for_v1() {
 }
 
 #[test]
-fn pointer_type_policy_allows_asset_id_under_abi_v1() {
+fn pointer_type_policy_allows_soracloud_response_under_abi_v1() {
     assert!(ivm::is_type_allowed_for_policy(
         SyscallPolicy::AbiV1,
-        PointerType::AssetId
+        PointerType::SoracloudResponse
     ));
 }

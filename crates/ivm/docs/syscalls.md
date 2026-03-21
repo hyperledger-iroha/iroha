@@ -240,6 +240,17 @@ AXT host flow
 - 0xB4 USE_ASSET_HANDLE — Args: `r10=&AssetHandle`, `r11=&NoritoBytes(RemoteSpendIntent)`, `r12=&ProofBlob` (optional). Validates capability bindings/budgets and records spend intents for later commit checks.
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
+Soracloud runtime host surface
+- 0xC0 SORACLOUD_READ_COMMITTED_STATE — Args: `r10=&SoracloudRequest(ReadCommittedState)` → `r10=&SoracloudResponse(ReadCommittedState)`. Returns committed service-state metadata for one declared binding/key pair.
+- 0xC1 SORACLOUD_EMIT_STATE_MUTATION — Args: `r10=&SoracloudRequest(EmitStateMutation)` → `r10=&SoracloudResponse(EmitStateMutation)`. Stages a deterministic write-back validated again by core before persistence.
+- 0xC2 SORACLOUD_EMIT_MAILBOX_MESSAGE — Args: `r10=&SoracloudRequest(EmitMailboxMessage)` → `r10=&SoracloudResponse(EmitMailboxMessage)`. Emits an outbound mailbox message for authoritative queueing after receipt validation.
+- 0xC3 SORACLOUD_APPEND_JOURNAL — Args: `r10=&SoracloudRequest(AppendJournal)` → `r10=&SoracloudResponse(AppendJournal)`. Stages deterministic journal material and returns its content hash.
+- 0xC4 SORACLOUD_PUBLISH_CHECKPOINT — Args: `r10=&SoracloudRequest(PublishCheckpoint)` → `r10=&SoracloudResponse(PublishCheckpoint)`. Stages checkpoint material and returns its content hash.
+- 0xC5 SORACLOUD_READ_SECRET — Args: `r10=&SoracloudRequest(ReadSecret)` → `r10=&SoracloudResponse(ReadSecret)`. Reads node-local secret material and is only valid from `private_update`.
+- 0xC6 SORACLOUD_READ_CREDENTIAL — Args: `r10=&SoracloudRequest(ReadCredential)` → `r10=&SoracloudResponse(ReadCredential)`. Reads node-local credential material and is only valid from `private_update`.
+- 0xC7 SORACLOUD_EGRESS_FETCH — Args: `r10=&SoracloudRequest(EgressFetch)` → `r10=&SoracloudResponse(EgressFetch)`. Performs a bounded host-allowlisted fetch and fails deterministically on policy or hash mismatch.
+- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
+
 ZK Helpers
 - 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
@@ -412,6 +423,14 @@ but they must not change the host ABI.
 | 0xB2 | AXT_COMMIT | - | u64=0 | - |
 | 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 |
 | 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | - |
+| 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) | - |
+| 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) | - |
+| 0xC2 | SORACLOUD_EMIT_MAILBOX_MESSAGE | r10=&SoracloudRequest(EmitMailboxMessage) | r10=&SoracloudResponse(EmitMailboxMessage) | - |
+| 0xC3 | SORACLOUD_APPEND_JOURNAL | r10=&SoracloudRequest(AppendJournal) | r10=&SoracloudResponse(AppendJournal) | - |
+| 0xC4 | SORACLOUD_PUBLISH_CHECKPOINT | r10=&SoracloudRequest(PublishCheckpoint) | r10=&SoracloudResponse(PublishCheckpoint) | - |
+| 0xC5 | SORACLOUD_READ_SECRET | r10=&SoracloudRequest(ReadSecret) | r10=&SoracloudResponse(ReadSecret) | - |
+| 0xC6 | SORACLOUD_READ_CREDENTIAL | r10=&SoracloudRequest(ReadCredential) | r10=&SoracloudResponse(ReadCredential) | - |
+| 0xC7 | SORACLOUD_EGRESS_FETCH | r10=&SoracloudRequest(EgressFetch) | r10=&SoracloudResponse(EgressFetch) | - |
 | 0xE0 | INPUT_PUBLISH_TLV | r10=&Blob(TLV) | ptr (r10) | asset:gas/G_input_publish@ivm.core/v2 |
 | 0xF0 | ALLOC | r10=bytes:u64 | ptr (r10) | asset:gas/G_alloc@ivm.core/v2 + bytes |
 | 0xF1 | GET_PUBLIC_INPUT | r10=&Name | ptr (&Tlv) | asset:gas/G_get_pub@ivm.core/v2 + bytes |
@@ -427,6 +446,8 @@ but they must not change the host ABI.
 | 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v2 |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 <!-- END GENERATED SYSCALLS -->
+
+
 
 
 

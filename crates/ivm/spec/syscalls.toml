@@ -601,6 +601,54 @@ ret = "u64=0"
 gas = "-"
 
 [[syscall]]
+number = "0xC0"
+args = "r10=&SoracloudRequest(ReadCommittedState)"
+ret = "r10=&SoracloudResponse(ReadCommittedState)"
+gas = "-"
+
+[[syscall]]
+number = "0xC1"
+args = "r10=&SoracloudRequest(EmitStateMutation)"
+ret = "r10=&SoracloudResponse(EmitStateMutation)"
+gas = "-"
+
+[[syscall]]
+number = "0xC2"
+args = "r10=&SoracloudRequest(EmitMailboxMessage)"
+ret = "r10=&SoracloudResponse(EmitMailboxMessage)"
+gas = "-"
+
+[[syscall]]
+number = "0xC3"
+args = "r10=&SoracloudRequest(AppendJournal)"
+ret = "r10=&SoracloudResponse(AppendJournal)"
+gas = "-"
+
+[[syscall]]
+number = "0xC4"
+args = "r10=&SoracloudRequest(PublishCheckpoint)"
+ret = "r10=&SoracloudResponse(PublishCheckpoint)"
+gas = "-"
+
+[[syscall]]
+number = "0xC5"
+args = "r10=&SoracloudRequest(ReadSecret)"
+ret = "r10=&SoracloudResponse(ReadSecret)"
+gas = "-"
+
+[[syscall]]
+number = "0xC6"
+args = "r10=&SoracloudRequest(ReadCredential)"
+ret = "r10=&SoracloudResponse(ReadCredential)"
+gas = "-"
+
+[[syscall]]
+number = "0xC7"
+args = "r10=&SoracloudRequest(EgressFetch)"
+ret = "r10=&SoracloudResponse(EgressFetch)"
+gas = "-"
+
+[[syscall]]
 number = "0xF0"
 args = "r10=bytes:u64"
 ret = "ptr (r10)"

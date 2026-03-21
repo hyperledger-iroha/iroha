@@ -41,6 +41,10 @@ pub enum PointerType {
     AssetHandle = 0x000C,
     /// Proof blob (deterministic Norito or compressed proof bytes).
     ProofBlob = 0x000D,
+    /// Soracloud host request envelope.
+    SoracloudRequest = 0x000E,
+    /// Soracloud host response envelope.
+    SoracloudResponse = 0x000F,
     /// Test-only pointer type used to exercise policy failures.
     #[cfg(test)]
     TestOnly = 0x0FFE,
@@ -62,6 +66,8 @@ impl PointerType {
             0x000B => Some(Self::AxtDescriptor),
             0x000C => Some(Self::AssetHandle),
             0x000D => Some(Self::ProofBlob),
+            0x000E => Some(Self::SoracloudRequest),
+            0x000F => Some(Self::SoracloudResponse),
             #[cfg(test)]
             0x0FFE => Some(Self::TestOnly),
             _ => None,
@@ -84,6 +90,8 @@ impl PointerType {
             Self::AxtDescriptor,
             Self::AssetHandle,
             Self::ProofBlob,
+            Self::SoracloudRequest,
+            Self::SoracloudResponse,
             #[cfg(test)]
             Self::TestOnly,
         ]
@@ -173,6 +181,8 @@ fn allowed_types_for_policy(policy: SyscallPolicy) -> &'static HashSet<PointerTy
             PointerType::AxtDescriptor,
             PointerType::AssetHandle,
             PointerType::ProofBlob,
+            PointerType::SoracloudRequest,
+            PointerType::SoracloudResponse,
         ])
     });
     let SyscallPolicy::AbiV1 = policy;
@@ -244,6 +254,14 @@ pub fn render_pointer_types_markdown_table() -> String {
         ),
         (PointerType::AssetHandle as u16, PointerType::AssetHandle),
         (PointerType::ProofBlob as u16, PointerType::ProofBlob),
+        (
+            PointerType::SoracloudRequest as u16,
+            PointerType::SoracloudRequest,
+        ),
+        (
+            PointerType::SoracloudResponse as u16,
+            PointerType::SoracloudResponse,
+        ),
     ];
     all.sort_by_key(|(id, _)| *id);
 
