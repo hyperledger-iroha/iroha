@@ -9119,7 +9119,7 @@ mod tests {
     #[test]
     fn signed_agent_deploy_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request =
             signed_agent_deploy_request(fixture_agent_apartment(), 120, 500, &authority, &key_pair)
                 .expect("signed agent deploy request");
@@ -9137,7 +9137,7 @@ mod tests {
     #[test]
     fn signed_agent_lease_renew_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request =
             signed_agent_lease_renew_request("ops_agent", 120, &authority, &key_pair)
                 .expect("signed agent lease renew request");
@@ -9155,7 +9155,7 @@ mod tests {
     #[test]
     fn signed_agent_restart_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_restart_request(
             "ops_agent",
             "manual-restart",
@@ -9177,7 +9177,7 @@ mod tests {
     #[test]
     fn signed_agent_policy_revoke_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_policy_revoke_request(
             "ops_agent",
             "agent.autonomy.run",
@@ -9200,7 +9200,7 @@ mod tests {
     #[test]
     fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_wallet_spend_request(
             "ops_agent",
             "xor#sora",
@@ -9223,7 +9223,7 @@ mod tests {
     #[test]
     fn signed_agent_wallet_approve_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_wallet_approve_request(
             "ops_agent",
             "ops_agent:wallet:7",
@@ -9245,7 +9245,7 @@ mod tests {
     #[test]
     fn signed_agent_message_send_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_message_send_request(
             "ops_agent",
             "worker_agent",
@@ -9269,7 +9269,7 @@ mod tests {
     #[test]
     fn signed_agent_message_ack_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_message_ack_request(
             "worker_agent",
             "worker_agent:mail:3",
@@ -9291,7 +9291,7 @@ mod tests {
     #[test]
     fn signed_agent_artifact_allow_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_artifact_allow_request(
             "ops_agent",
             "hash:ABCD0123#01",
@@ -9314,7 +9314,7 @@ mod tests {
     #[test]
     fn signed_agent_autonomy_run_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
-        let authority: AccountId = "alice@wonderland".parse().expect("valid authority");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_agent_autonomy_run_request(
             "ops_agent",
             "hash:ABCD0123#01",
