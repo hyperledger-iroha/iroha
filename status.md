@@ -42,10 +42,6 @@ Last updated: 2026-03-21
   enforces that the commitment matches those bytes. This removes the
   commitment-only mailbox-model gap that was blocking future real IVM
   ordered-mailbox execution.
-- Removed the stale dead `torii.identifier_resolver` config field from
-  `iroha_config`; Torii already derives the in-process hidden-identifier
-  resolver from `torii.ram_lfe`, and the dead config reference was blocking
-  focused Soracloud test builds.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-target cargo test -p iroha_torii soracloud_public_local_read_route --lib` (pass)
   - `CARGO_HOME=/tmp/iroha-codex-cargo-home-irohad CARGO_TARGET_DIR=/tmp/iroha-codex-irohad-target cargo test -p irohad execute_local_read` (pass)
@@ -61,6 +57,23 @@ Last updated: 2026-03-21
   - the private-runtime secret/credential capability layer, Torii shadow
     registry deletion, and the IVM cloud-runtime ABI/syscall cutover remain
     outstanding.
+
+## 2026-03-21 Follow-up: removed the last stale `torii.identifier_resolver` config references from `iroha_config`
+- Cleaned up the leftover `ToriiIdentifierResolver` field references in
+  `crates/iroha_config/src/parameters/{user.rs,actual.rs}` after the
+  `torii.ram_lfe` rename landed, so `iroha_config` no longer refers to a type
+  that was deleted during the config-surface migration.
+- Updated config fixtures and helper `actual::Torii` constructors in
+  `crates/iroha_config/tests/fixtures.rs`,
+  `crates/iroha_core/src/kiso.rs`,
+  `crates/iroha_torii/src/test_utils.rs`, and
+  `crates/iroha_torii/tests/connect_gating.rs`
+  to match the canonical `torii.ram_lfe`-only shape.
+- Validation:
+  - `cargo check -p iroha_config` (pass)
+  - `cargo test -p iroha_config torii_ram_lfe_parses -- --nocapture` (pass)
+  - `cargo fmt --all --check` (pass)
+  - `cargo check -p iroha_core -p iroha_torii` (pass; existing unrelated warning remains in `crates/iroha_torii/src/routing.rs`)
 
 ## 2026-03-21 Follow-up: Soracloud v1 now rejects `NativeProcess` and the runtime-manager prepares the IVM-only host layout
 - Closed the revised IVM-only admission/runtime gap across
