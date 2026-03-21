@@ -474,6 +474,9 @@ public final class OfflineQrStream {
         if (!Arrays.equals(decoded.streamId(), frame.streamId())) {
           throw new IllegalArgumentException("Stream id mismatch");
         }
+        if (envelope != null && Arrays.equals(envelope.streamId(), decoded.streamId())) {
+          return;
+        }
         envelope = decoded;
         dataChunks = new byte[decoded.dataChunks()][];
         parityChunks = new byte[decoded.parityChunks()][];
