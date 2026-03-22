@@ -10,6 +10,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
+    asset::AssetDefinitionId,
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -18,6 +19,7 @@ use crate::{
         SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
         SoraStateEncryptionV1, SoraStateMutationOperationV1,
     },
+    sorafs::pin_registry::StorageClass,
 };
 
 fn encoded_order<T: Encode>(left: &T, right: &T) -> Ordering {
@@ -175,6 +177,115 @@ pub struct RecordSoracloudDecryptionRequest {
 impl crate::seal::Instruction for RecordSoracloudDecryptionRequest {}
 
 impl PartialOrd for RecordSoracloudDecryptionRequest {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Join or create a shared Hugging Face lease window on Soracloud.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct JoinSoracloudHfSharedLease {
+    /// Hugging Face repository identifier.
+    pub repo_id: String,
+    /// Exact pinned revision for the canonical source.
+    pub resolved_revision: String,
+    /// Normalized model name used for Soracloud bindings.
+    pub model_name: String,
+    /// Service binding that will reuse the shared lease.
+    pub service_name: Name,
+    /// Optional apartment binding that will reuse the shared lease.
+    #[norito(default)]
+    pub apartment_name: Option<Name>,
+    /// Requested shared storage class.
+    pub storage_class: StorageClass,
+    /// Shared lease window length in milliseconds.
+    pub lease_term_ms: u64,
+    /// Asset definition used for lease settlement.
+    pub lease_asset_definition_id: AssetDefinitionId,
+    /// Full-window price in nanos of `lease_asset_definition_id`.
+    pub base_fee_nanos: u128,
+    /// Provenance attestation over the join payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for JoinSoracloudHfSharedLease {}
+
+impl PartialOrd for JoinSoracloudHfSharedLease {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Leave the current shared Hugging Face lease window.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LeaveSoracloudHfSharedLease {
+    /// Hugging Face repository identifier.
+    pub repo_id: String,
+    /// Exact pinned revision for the canonical source.
+    pub resolved_revision: String,
+    /// Shared storage class.
+    pub storage_class: StorageClass,
+    /// Shared lease window length in milliseconds.
+    pub lease_term_ms: u64,
+    /// Optional service binding being detached for audit context.
+    #[norito(default)]
+    pub service_name: Option<Name>,
+    /// Optional apartment binding being detached for audit context.
+    #[norito(default)]
+    pub apartment_name: Option<Name>,
+    /// Provenance attestation over the leave payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for LeaveSoracloudHfSharedLease {}
+
+impl PartialOrd for LeaveSoracloudHfSharedLease {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Sponsor a fresh shared Hugging Face lease window after expiry or retirement.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RenewSoracloudHfSharedLease {
+    /// Hugging Face repository identifier.
+    pub repo_id: String,
+    /// Exact pinned revision for the canonical source.
+    pub resolved_revision: String,
+    /// Normalized model name used for Soracloud bindings.
+    pub model_name: String,
+    /// Service binding that will reuse the renewed shared lease.
+    pub service_name: Name,
+    /// Optional apartment binding that will reuse the renewed shared lease.
+    #[norito(default)]
+    pub apartment_name: Option<Name>,
+    /// Requested shared storage class.
+    pub storage_class: StorageClass,
+    /// Shared lease window length in milliseconds.
+    pub lease_term_ms: u64,
+    /// Asset definition used for lease settlement.
+    pub lease_asset_definition_id: AssetDefinitionId,
+    /// Full-window price in nanos of `lease_asset_definition_id`.
+    pub base_fee_nanos: u128,
+    /// Provenance attestation over the renew payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for RenewSoracloudHfSharedLease {}
+
+impl PartialOrd for RenewSoracloudHfSharedLease {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }

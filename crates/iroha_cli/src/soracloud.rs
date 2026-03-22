@@ -2,8 +2,9 @@
 //!
 //! `init` scaffolds Soracloud manifests and template artifacts offline. All
 //! other commands validate request inputs locally and then call the
-//! authoritative Soracloud control plane through Torii. Model-training and
-//! weight-lifecycle helpers also execute through live Torii endpoints.
+//! authoritative Soracloud control plane through Torii. Model-training,
+//! Hugging Face shared-lease, and weight-lifecycle helpers also execute
+//! through live Torii endpoints.
 
 use std::{
     fs,
@@ -15,6 +16,7 @@ use std::{
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::{
     account::AccountId,
+    asset::AssetDefinitionId,
     Encode,
     name::Name,
     prelude::ExposedPrivateKey,
@@ -31,6 +33,9 @@ use iroha::data_model::{
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
+        encode_hf_shared_lease_join_provenance_payload,
+        encode_hf_shared_lease_leave_provenance_payload,
+        encode_hf_shared_lease_renew_provenance_payload,
         encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
         encode_agent_wallet_approve_provenance_payload,
         encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
@@ -41,6 +46,7 @@ use iroha::data_model::{
         encode_rollout_provenance_payload, encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     },
+    sorafs::pin_registry::StorageClass,
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -57,6 +63,10 @@ const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
     "fixtures/soracloud/agent_apartment_manifest_v1.json";
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 10_000;
 const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
+const HF_DEFAULT_RESOLVED_REVISION: &str = "main";
+const HF_REPO_ID_MAX_BYTES: usize = 256;
+const HF_REVISION_MAX_BYTES: usize = 160;
+const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 
 /// Soracloud control-plane commands.
 #[derive(clap::Subcommand, Debug)]
@@ -119,6 +129,14 @@ pub enum Command {
     ModelWeightRollback(ModelWeightRollbackArgs),
     /// Query model weight status in live Torii control-plane mode.
     ModelWeightStatus(ModelWeightStatusArgs),
+    /// Join or create a shared Hugging Face lease pool in live Torii control-plane mode.
+    HfDeploy(HfDeployArgs),
+    /// Query shared Hugging Face lease pool status in live Torii control-plane mode.
+    HfStatus(HfStatusArgs),
+    /// Leave a shared Hugging Face lease pool in live Torii control-plane mode.
+    HfLeaseLeave(HfLeaseLeaveArgs),
+    /// Renew an expired or drained shared Hugging Face lease pool window.
+    HfLeaseRenew(HfLeaseRenewArgs),
 }
 
 impl Run for Command {
@@ -224,6 +242,19 @@ impl Run for Command {
                 context.print_data(&output)
             }
             Command::ModelWeightStatus(args) => context.print_data(&args.run()?),
+            Command::HfDeploy(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::HfStatus(args) => context.print_data(&args.run()?),
+            Command::HfLeaseLeave(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::HfLeaseRenew(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
         }
     }
 }
@@ -1643,10 +1674,266 @@ impl ModelWeightStatusArgs {
     }
 }
 
+/// Arguments for `app soracloud hf-deploy`.
+#[derive(clap::Args, Debug)]
+pub struct HfDeployArgs {
+    /// Hugging Face repository identifier (for example `openai/gpt-oss`).
+    #[arg(long, value_name = "REPO")]
+    repo_id: String,
+    /// Optional Hugging Face revision. Defaults to `main` when omitted.
+    #[arg(long, value_name = "REVISION")]
+    revision: Option<String>,
+    /// Optional local model label. Defaults to the repo slug.
+    #[arg(long, value_name = "NAME")]
+    model_name: Option<String>,
+    /// Soracloud service name bound to this lease membership.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Optional agent apartment name bound to this lease membership.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: Option<String>,
+    /// Shared-lease storage tier.
+    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+    storage_class: HfStorageClassArg,
+    /// Shared-lease window length in milliseconds.
+    #[arg(long, value_name = "MS")]
+    lease_term_ms: u64,
+    /// Settlement asset definition identifier.
+    #[arg(long, value_name = "ASSET")]
+    lease_asset_definition: String,
+    /// Base lease fee, charged in nanos of the settlement asset.
+    #[arg(long, value_name = "NANOS")]
+    base_fee_nanos: u128,
+    /// Torii base URL for authoritative `hf/deploy`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl HfDeployArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_hf_deploy_request(
+            &self.repo_id,
+            self.revision.as_deref(),
+            self.model_name.as_deref(),
+            &self.service_name,
+            self.apartment_name.as_deref(),
+            self.storage_class.to_storage_class(),
+            self.lease_term_ms,
+            &self.lease_asset_definition,
+            self.base_fee_nanos,
+            authority,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/hf/deploy",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud hf-status`.
+#[derive(clap::Args, Debug)]
+pub struct HfStatusArgs {
+    /// Hugging Face repository identifier (for example `openai/gpt-oss`).
+    #[arg(long, value_name = "REPO")]
+    repo_id: String,
+    /// Optional Hugging Face revision. Defaults to `main` when omitted.
+    #[arg(long, value_name = "REVISION")]
+    revision: Option<String>,
+    /// Shared-lease storage tier.
+    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+    storage_class: HfStorageClassArg,
+    /// Shared-lease window length in milliseconds.
+    #[arg(long, value_name = "MS")]
+    lease_term_ms: u64,
+    /// Optional account filter for membership-specific status.
+    #[arg(long, value_name = "ACCOUNT")]
+    account_id: Option<String>,
+    /// Torii base URL for authoritative `hf/status`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane queries.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl HfStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_hf_status(
+            torii_url,
+            &self.repo_id,
+            self.revision.as_deref(),
+            self.storage_class.to_storage_class(),
+            self.lease_term_ms,
+            self.account_id.as_deref(),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud hf-lease-leave`.
+#[derive(clap::Args, Debug)]
+pub struct HfLeaseLeaveArgs {
+    /// Hugging Face repository identifier.
+    #[arg(long, value_name = "REPO")]
+    repo_id: String,
+    /// Optional Hugging Face revision. Defaults to `main` when omitted.
+    #[arg(long, value_name = "REVISION")]
+    revision: Option<String>,
+    /// Shared-lease storage tier.
+    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+    storage_class: HfStorageClassArg,
+    /// Shared-lease window length in milliseconds.
+    #[arg(long, value_name = "MS")]
+    lease_term_ms: u64,
+    /// Optional service binding to include in the signed leave request.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional apartment binding to include in the signed leave request.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: Option<String>,
+    /// Torii base URL for authoritative `hf/lease/leave`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl HfLeaseLeaveArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_hf_lease_leave_request(
+            &self.repo_id,
+            self.revision.as_deref(),
+            self.storage_class.to_storage_class(),
+            self.lease_term_ms,
+            self.service_name.as_deref(),
+            self.apartment_name.as_deref(),
+            authority,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/hf/lease/leave",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud hf-lease-renew`.
+#[derive(clap::Args, Debug)]
+pub struct HfLeaseRenewArgs {
+    /// Hugging Face repository identifier.
+    #[arg(long, value_name = "REPO")]
+    repo_id: String,
+    /// Optional Hugging Face revision. Defaults to `main` when omitted.
+    #[arg(long, value_name = "REVISION")]
+    revision: Option<String>,
+    /// Optional local model label. Defaults to the repo slug.
+    #[arg(long, value_name = "NAME")]
+    model_name: Option<String>,
+    /// Soracloud service name bound to the renewed lease membership.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Optional agent apartment name bound to the renewed lease membership.
+    #[arg(long, value_name = "NAME")]
+    apartment_name: Option<String>,
+    /// Shared-lease storage tier.
+    #[arg(long, value_enum, default_value_t = HfStorageClassArg::Warm)]
+    storage_class: HfStorageClassArg,
+    /// Shared-lease window length in milliseconds.
+    #[arg(long, value_name = "MS")]
+    lease_term_ms: u64,
+    /// Settlement asset definition identifier.
+    #[arg(long, value_name = "ASSET")]
+    lease_asset_definition: String,
+    /// Base lease fee, charged in nanos of the settlement asset.
+    #[arg(long, value_name = "NANOS")]
+    base_fee_nanos: u128,
+    /// Torii base URL for authoritative `hf/lease/renew`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl HfLeaseRenewArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_hf_lease_renew_request(
+            &self.repo_id,
+            self.revision.as_deref(),
+            self.model_name.as_deref(),
+            &self.service_name,
+            self.apartment_name.as_deref(),
+            self.storage_class.to_storage_class(),
+            self.lease_term_ms,
+            &self.lease_asset_definition,
+            self.base_fee_nanos,
+            authority,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/hf/lease/renew",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MutationMode {
     Deploy,
     Upgrade,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum HfStorageClassArg {
+    Hot,
+    #[default]
+    Warm,
+    Cold,
+}
+
+impl HfStorageClassArg {
+    const fn to_storage_class(self) -> StorageClass {
+        match self {
+            Self::Hot => StorageClass::Hot,
+            Self::Warm => StorageClass::Warm,
+            Self::Cold => StorageClass::Cold,
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -1877,6 +2164,107 @@ struct AgentLeaseRenewPayload {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedAgentLeaseRenewRequest {
     payload: AgentLeaseRenewPayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct HfDeployPayload {
+    repo_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
+    model_name: String,
+    service_name: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    apartment_name: Option<String>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition_id: AssetDefinitionId,
+    base_fee_nanos: u128,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedHfDeployRequest {
+    payload: HfDeployPayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct HfLeaseLeavePayload {
+    repo_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    service_name: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    apartment_name: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedHfLeaseLeaveRequest {
+    payload: HfLeaseLeavePayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct HfLeaseRenewPayload {
+    repo_id: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
+    model_name: String,
+    service_name: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    apartment_name: Option<String>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition_id: AssetDefinitionId,
+    base_fee_nanos: u128,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedHfLeaseRenewRequest {
+    payload: HfLeaseRenewPayload,
     provenance: ManifestProvenance,
     #[norito(default)]
     authority: Option<AccountId>,
@@ -2415,6 +2803,228 @@ fn signed_agent_lease_renew_request(
         .wrap_err("failed to encode agent lease renew payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &encoded);
     Ok(SignedAgentLeaseRenewRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+    })
+}
+
+fn normalize_hf_token(flag_name: &str, value: &str, max_bytes: usize) -> Result<String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(eyre!("{flag_name} must not be empty"));
+    }
+    if normalized.len() > max_bytes {
+        return Err(eyre!("{flag_name} exceeds max bytes ({max_bytes})"));
+    }
+    if normalized.chars().any(char::is_whitespace) || normalized.chars().any(char::is_control) {
+        return Err(eyre!(
+            "{flag_name} must not contain whitespace or control characters"
+        ));
+    }
+    Ok(normalized.to_owned())
+}
+
+fn parse_hf_repo_id_arg(repo_id: &str) -> Result<String> {
+    normalize_hf_token("--repo-id", repo_id, HF_REPO_ID_MAX_BYTES)
+}
+
+fn parse_hf_revision_arg(revision: &str) -> Result<String> {
+    normalize_hf_token("--revision", revision, HF_REVISION_MAX_BYTES)
+}
+
+fn resolve_hf_revision_arg(revision: Option<&str>) -> Result<String> {
+    revision
+        .map(parse_hf_revision_arg)
+        .transpose()
+        .map(|value| value.unwrap_or_else(|| HF_DEFAULT_RESOLVED_REVISION.to_owned()))
+}
+
+fn parse_hf_model_name_arg(model_name: &str) -> Result<String> {
+    normalize_hf_token("--model-name", model_name, HF_MODEL_NAME_MAX_BYTES)
+}
+
+fn default_hf_model_name(repo_id: &str) -> Result<String> {
+    let repo_id = parse_hf_repo_id_arg(repo_id)?;
+    let slug = repo_id
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(repo_id.as_str());
+    parse_hf_model_name_arg(slug)
+}
+
+fn parse_hf_service_name_arg(service_name: &str) -> Result<String> {
+    service_name
+        .trim()
+        .parse::<Name>()
+        .map(|name| name.to_string())
+        .wrap_err("invalid --service-name")
+}
+
+fn parse_hf_apartment_name_arg(apartment_name: Option<&str>) -> Result<Option<String>> {
+    apartment_name
+        .map(|name| {
+            name.trim()
+                .parse::<Name>()
+                .map(|name| name.to_string())
+                .wrap_err("invalid --apartment-name")
+        })
+        .transpose()
+}
+
+fn parse_hf_account_id_arg(account_id: Option<&str>) -> Result<Option<String>> {
+    account_id
+        .map(|literal| {
+            AccountId::parse_encoded(literal.trim())
+                .map(|parsed| parsed.into_account_id().to_string())
+                .wrap_err("invalid --account-id")
+        })
+        .transpose()
+}
+
+fn parse_asset_definition_arg(
+    flag_name: &str,
+    asset_definition: &str,
+) -> Result<AssetDefinitionId> {
+    asset_definition
+        .trim()
+        .parse()
+        .wrap_err_with(|| format!("invalid {flag_name}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_hf_deploy_request(
+    repo_id: &str,
+    revision: Option<&str>,
+    model_name: Option<&str>,
+    service_name: &str,
+    apartment_name: Option<&str>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition: &str,
+    base_fee_nanos: u128,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedHfDeployRequest> {
+    if lease_term_ms == 0 {
+        return Err(eyre!("--lease-term-ms must be greater than zero"));
+    }
+    if base_fee_nanos == 0 {
+        return Err(eyre!("--base-fee-nanos must be greater than zero"));
+    }
+    let payload = HfDeployPayload {
+        repo_id: parse_hf_repo_id_arg(repo_id)?,
+        revision: revision.map(parse_hf_revision_arg).transpose()?,
+        model_name: match model_name {
+            Some(model_name) => parse_hf_model_name_arg(model_name)?,
+            None => default_hf_model_name(repo_id)?,
+        },
+        service_name: parse_hf_service_name_arg(service_name)?,
+        apartment_name: parse_hf_apartment_name_arg(apartment_name)?,
+        storage_class,
+        lease_term_ms,
+        lease_asset_definition_id: parse_asset_definition_arg(
+            "--lease-asset-definition",
+            lease_asset_definition,
+        )?,
+        base_fee_nanos,
+    };
+    let encoded = encode_hf_deploy_signature_payload(&payload)
+        .wrap_err("failed to encode hf deploy payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedHfDeployRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+    })
+}
+
+fn signed_hf_lease_leave_request(
+    repo_id: &str,
+    revision: Option<&str>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    service_name: Option<&str>,
+    apartment_name: Option<&str>,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedHfLeaseLeaveRequest> {
+    if lease_term_ms == 0 {
+        return Err(eyre!("--lease-term-ms must be greater than zero"));
+    }
+    let payload = HfLeaseLeavePayload {
+        repo_id: parse_hf_repo_id_arg(repo_id)?,
+        revision: revision.map(parse_hf_revision_arg).transpose()?,
+        storage_class,
+        lease_term_ms,
+        service_name: service_name
+            .map(parse_hf_service_name_arg)
+            .transpose()?,
+        apartment_name: parse_hf_apartment_name_arg(apartment_name)?,
+    };
+    let encoded = encode_hf_lease_leave_signature_payload(&payload)
+        .wrap_err("failed to encode hf lease leave payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedHfLeaseLeaveRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_hf_lease_renew_request(
+    repo_id: &str,
+    revision: Option<&str>,
+    model_name: Option<&str>,
+    service_name: &str,
+    apartment_name: Option<&str>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition: &str,
+    base_fee_nanos: u128,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedHfLeaseRenewRequest> {
+    if lease_term_ms == 0 {
+        return Err(eyre!("--lease-term-ms must be greater than zero"));
+    }
+    if base_fee_nanos == 0 {
+        return Err(eyre!("--base-fee-nanos must be greater than zero"));
+    }
+    let payload = HfLeaseRenewPayload {
+        repo_id: parse_hf_repo_id_arg(repo_id)?,
+        revision: revision.map(parse_hf_revision_arg).transpose()?,
+        model_name: match model_name {
+            Some(model_name) => parse_hf_model_name_arg(model_name)?,
+            None => default_hf_model_name(repo_id)?,
+        },
+        service_name: parse_hf_service_name_arg(service_name)?,
+        apartment_name: parse_hf_apartment_name_arg(apartment_name)?,
+        storage_class,
+        lease_term_ms,
+        lease_asset_definition_id: parse_asset_definition_arg(
+            "--lease-asset-definition",
+            lease_asset_definition,
+        )?,
+        base_fee_nanos,
+    };
+    let encoded = encode_hf_lease_renew_signature_payload(&payload)
+        .wrap_err("failed to encode hf lease renew payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedHfLeaseRenewRequest {
         payload,
         provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
@@ -3168,6 +3778,51 @@ fn encode_agent_autonomy_run_signature_payload(
     .wrap_err("failed to encode agent autonomy run signature payload tuple")
 }
 
+fn encode_hf_deploy_signature_payload(payload: &HfDeployPayload) -> Result<Vec<u8>> {
+    let resolved_revision = resolve_hf_revision_arg(payload.revision.as_deref())?;
+    encode_hf_shared_lease_join_provenance_payload(
+        payload.repo_id.as_str(),
+        resolved_revision.as_str(),
+        payload.model_name.as_str(),
+        payload.service_name.as_str(),
+        payload.apartment_name.as_deref(),
+        payload.storage_class,
+        payload.lease_term_ms,
+        &payload.lease_asset_definition_id,
+        payload.base_fee_nanos,
+    )
+    .wrap_err("failed to encode hf deploy signature payload tuple")
+}
+
+fn encode_hf_lease_leave_signature_payload(payload: &HfLeaseLeavePayload) -> Result<Vec<u8>> {
+    let resolved_revision = resolve_hf_revision_arg(payload.revision.as_deref())?;
+    encode_hf_shared_lease_leave_provenance_payload(
+        payload.repo_id.as_str(),
+        resolved_revision.as_str(),
+        payload.storage_class,
+        payload.lease_term_ms,
+        payload.service_name.as_deref(),
+        payload.apartment_name.as_deref(),
+    )
+    .wrap_err("failed to encode hf lease leave signature payload tuple")
+}
+
+fn encode_hf_lease_renew_signature_payload(payload: &HfLeaseRenewPayload) -> Result<Vec<u8>> {
+    let resolved_revision = resolve_hf_revision_arg(payload.revision.as_deref())?;
+    encode_hf_shared_lease_renew_provenance_payload(
+        payload.repo_id.as_str(),
+        resolved_revision.as_str(),
+        payload.model_name.as_str(),
+        payload.service_name.as_str(),
+        payload.apartment_name.as_deref(),
+        payload.storage_class,
+        payload.lease_term_ms,
+        &payload.lease_asset_definition_id,
+        payload.base_fee_nanos,
+    )
+    .wrap_err("failed to encode hf lease renew signature payload tuple")
+}
+
 fn encode_training_job_start_signature_payload(
     payload: &TrainingJobStartPayload,
 ) -> Result<Vec<u8>> {
@@ -3746,6 +4401,83 @@ fn fetch_torii_soracloud_model_weight_status(
 
     let payload: norito::json::Value = json::from_slice(&body)
         .wrap_err("failed to decode Torii model weight status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+const fn storage_class_query_label(storage_class: StorageClass) -> &'static str {
+    match storage_class {
+        StorageClass::Hot => "Hot",
+        StorageClass::Warm => "Warm",
+        StorageClass::Cold => "Cold",
+    }
+}
+
+fn fetch_torii_soracloud_hf_status(
+    torii_url: &str,
+    repo_id: &str,
+    revision: Option<&str>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    account_id: Option<&str>,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    if lease_term_ms == 0 {
+        return Err(eyre!("--lease-term-ms must be greater than zero"));
+    }
+    let repo_id = parse_hf_repo_id_arg(repo_id)?;
+    let revision = revision.map(parse_hf_revision_arg).transpose()?;
+    let account_id = parse_hf_account_id_arg(account_id)?;
+    let storage_class = storage_class_query_label(storage_class);
+
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/hf/status")
+        .wrap_err("failed to derive /v1/soracloud/hf/status URL from --torii-url")?;
+    {
+        let mut query = endpoint.query_pairs_mut();
+        query
+            .append_pair("repo_id", repo_id.as_str())
+            .append_pair("storage_class", storage_class)
+            .append_pair("lease_term_ms", &lease_term_ms.to_string());
+        if let Some(revision) = revision.as_deref() {
+            query.append_pair("revision", revision);
+        }
+        if let Some(account_id) = account_id.as_deref() {
+            query.append_pair("account_id", account_id);
+        }
+    }
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud hf status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii hf status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/hf/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value =
+        json::from_slice(&body).wrap_err("failed to decode Torii hf status JSON payload")?;
     Ok((endpoint.to_string(), payload))
 }
 
@@ -6260,6 +6992,12 @@ mod tests {
             .expect("agent apartment fixture")
     }
 
+    fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
+        "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+            .parse()
+            .expect("valid asset definition")
+    }
+
     fn node_available() -> bool {
         match Command::new("node").arg("--version").output() {
             Ok(output) => output.status.success(),
@@ -6439,6 +7177,22 @@ mod tests {
     }
 
     #[test]
+    fn fetch_torii_hf_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_hf_status(
+            "not-a-url",
+            "openai/gpt-oss",
+            None,
+            StorageClass::Warm,
+            604_800_000,
+            None,
+            None,
+            5,
+        )
+        .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("torii-url"));
+    }
+
+    #[test]
     fn signed_bundle_request_uses_verifiable_signature() {
         let container = fixture_container();
         let mut service = fixture_service();
@@ -6534,6 +7288,91 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
+    }
+
+    #[test]
+    fn signed_hf_deploy_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_hf_deploy_request(
+            "openai/gpt-oss",
+            None,
+            None,
+            "hf_lease_a",
+            Some("ops_agent"),
+            StorageClass::Warm,
+            604_800_000,
+            &hf_shared_lease_asset_definition().to_string(),
+            10_000,
+            &authority,
+            &key_pair,
+        )
+        .expect("signed hf deploy request");
+        let payload = encode_hf_deploy_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+        assert_eq!(request.payload.model_name, "gpt-oss");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
+    }
+
+    #[test]
+    fn signed_hf_lease_leave_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_hf_lease_leave_request(
+            "openai/gpt-oss",
+            Some("rev-1"),
+            StorageClass::Warm,
+            604_800_000,
+            Some("hf_lease_a"),
+            Some("ops_agent"),
+            &authority,
+            &key_pair,
+        )
+        .expect("signed hf leave request");
+        let payload =
+            encode_hf_lease_leave_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
+    }
+
+    #[test]
+    fn signed_hf_lease_renew_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_hf_lease_renew_request(
+            "openai/gpt-oss",
+            None,
+            None,
+            "hf_lease_renew",
+            Some("ops_agent"),
+            StorageClass::Warm,
+            604_800_000,
+            &hf_shared_lease_asset_definition().to_string(),
+            10_000,
+            &authority,
+            &key_pair,
+        )
+        .expect("signed hf renew request");
+        let payload =
+            encode_hf_lease_renew_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+        assert_eq!(request.payload.model_name, "gpt-oss");
         assert_eq!(request.authority.as_ref(), Some(&authority));
         assert!(request.private_key.is_some());
     }
@@ -7100,6 +7939,99 @@ mod tests {
             payload.provenance_hash.as_deref(),
             payload.budget_units,
             payload.run_label.as_str(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn default_hf_model_name_uses_repo_slug() {
+        assert_eq!(
+            default_hf_model_name("openai/gpt-oss").expect("derive model name"),
+            "gpt-oss"
+        );
+    }
+
+    #[test]
+    fn hf_deploy_signature_payload_layout_is_canonical_tuple() {
+        let asset_definition = hf_shared_lease_asset_definition();
+        let payload = HfDeployPayload {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: None,
+            model_name: "gpt-oss".to_owned(),
+            service_name: "hf_lease_a".to_owned(),
+            apartment_name: Some("ops_agent".to_owned()),
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+            lease_asset_definition_id: asset_definition.clone(),
+            base_fee_nanos: 10_000,
+        };
+        let encoded = encode_hf_deploy_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.repo_id.as_str(),
+            HF_DEFAULT_RESOLVED_REVISION,
+            payload.model_name.as_str(),
+            payload.service_name.as_str(),
+            payload.apartment_name.as_deref(),
+            payload.storage_class,
+            payload.lease_term_ms,
+            asset_definition,
+            payload.base_fee_nanos,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn hf_lease_leave_signature_payload_layout_is_canonical_tuple() {
+        let payload = HfLeaseLeavePayload {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: Some("rev-1".to_owned()),
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+            service_name: Some("hf_lease_a".to_owned()),
+            apartment_name: Some("ops_agent".to_owned()),
+        };
+        let encoded =
+            encode_hf_lease_leave_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.repo_id.as_str(),
+            "rev-1",
+            payload.storage_class,
+            payload.lease_term_ms,
+            payload.service_name.as_deref(),
+            payload.apartment_name.as_deref(),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn hf_lease_renew_signature_payload_layout_is_canonical_tuple() {
+        let asset_definition = hf_shared_lease_asset_definition();
+        let payload = HfLeaseRenewPayload {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: None,
+            model_name: "gpt-oss".to_owned(),
+            service_name: "hf_lease_renew".to_owned(),
+            apartment_name: Some("ops_agent".to_owned()),
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+            lease_asset_definition_id: asset_definition.clone(),
+            base_fee_nanos: 10_000,
+        };
+        let encoded =
+            encode_hf_lease_renew_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            payload.repo_id.as_str(),
+            HF_DEFAULT_RESOLVED_REVISION,
+            payload.model_name.as_str(),
+            payload.service_name.as_str(),
+            payload.apartment_name.as_deref(),
+            payload.storage_class,
+            payload.lease_term_ms,
+            asset_definition,
+            payload.base_fee_nanos,
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);

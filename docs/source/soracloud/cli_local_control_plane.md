@@ -48,6 +48,13 @@ Soracloud v1 is an authoritative, IVM-only runtime.
   - all training job commands are Torii-backed only.
 - `iroha app soracloud model-*`
   - all model artifact and weight commands are Torii-backed only.
+- `iroha app soracloud hf-*`
+  - `hf-deploy`, `hf-status`, `hf-lease-leave`, and `hf-lease-renew` are
+    Torii-backed only.
+  - these commands manage authoritative shared Hugging Face lease
+    source/pool/member state and request signatures; they do not yet perform
+    async Hub import, runtime hydration, or inference-service/apartment
+    bring-up.
 
 ## Status Semantics
 

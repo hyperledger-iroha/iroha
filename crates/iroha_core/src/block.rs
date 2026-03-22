@@ -9884,6 +9884,7 @@ pub(crate) mod valid {
                         network: SoraNetworkPolicyV1::Isolated,
                         allow_wallet_signing: false,
                         allow_state_writes: false,
+                        allow_model_inference: false,
                         allow_model_training: false,
                     },
                     resources: SoraResourceLimitsV1 {

@@ -16704,6 +16704,16 @@ impl Torii {
                     "/v1/soracloud/model/artifact/status",
                     get(soracloud::handle_model_artifact_status),
                 )
+                .route("/v1/soracloud/hf/deploy", post(soracloud::handle_hf_deploy))
+                .route("/v1/soracloud/hf/status", get(soracloud::handle_hf_status))
+                .route(
+                    "/v1/soracloud/hf/lease/leave",
+                    post(soracloud::handle_hf_lease_leave),
+                )
+                .route(
+                    "/v1/soracloud/hf/lease/renew",
+                    post(soracloud::handle_hf_lease_renew),
+                )
                 .route(
                     "/v1/soracloud/agent/deploy",
                     post(soracloud::handle_agent_deploy),
@@ -22064,6 +22074,7 @@ pub(crate) mod tests_runtime_handlers {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,
                     allow_state_writes: false,
+                    allow_model_inference: false,
                     allow_model_training: false,
                 },
                 resources: iroha_data_model::soracloud::SoraResourceLimitsV1 {

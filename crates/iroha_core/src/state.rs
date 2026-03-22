@@ -98,11 +98,12 @@ use iroha_data_model::{
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
     soracloud::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
-        SoraModelRegistryV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
-        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraDeploymentBundleV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberV1,
+        SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
+        SoraModelWeightVersionRecordV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
     },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
@@ -430,6 +431,12 @@ macro_rules! build_world_block {
             soracloud_model_artifact_audit_events: $state
                 .soracloud_model_artifact_audit_events
                 .$method(),
+            soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
+            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
+            soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
+            soracloud_hf_shared_lease_audit_events: $state
+                .soracloud_hf_shared_lease_audit_events
+                .$method(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
             capacity_declarations: $state.capacity_declarations.$method(),
@@ -587,6 +594,14 @@ macro_rules! build_world_transaction {
             soracloud_model_artifacts: $state.soracloud_model_artifacts.transaction(),
             soracloud_model_artifact_audit_events: $state
                 .soracloud_model_artifact_audit_events
+                .transaction(),
+            soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
+            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
+            soracloud_hf_shared_lease_members: $state
+                .soracloud_hf_shared_lease_members
+                .transaction(),
+            soracloud_hf_shared_lease_audit_events: $state
+                .soracloud_hf_shared_lease_audit_events
                 .transaction(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
@@ -1538,6 +1553,15 @@ pub struct World {
     pub(crate) soracloud_model_artifacts: Storage<(String, String), SoraModelArtifactRecordV1>,
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events: Storage<u64, SoraModelArtifactAuditEventV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: Storage<Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools: Storage<Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        Storage<(String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events: Storage<u64, SoraHfSharedLeaseAuditEventV1>,
     /// Ordered Soracloud mailbox messages keyed by deterministic message id.
     pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by deterministic receipt id.
@@ -1908,6 +1932,16 @@ pub struct WorldBlock<'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageBlock<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: StorageBlock<'world, Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools: StorageBlock<'world, Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        StorageBlock<'world, (String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events:
+        StorageBlock<'world, u64, SoraHfSharedLeaseAuditEventV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -2436,6 +2470,17 @@ pub struct WorldTransaction<'block, 'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageTransaction<'block, 'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: StorageTransaction<'block, 'world, Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools:
+        StorageTransaction<'block, 'world, Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        StorageTransaction<'block, 'world, (String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraHfSharedLeaseAuditEventV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages:
         StorageTransaction<'block, 'world, Hash, SoraServiceMailboxMessageV1>,
@@ -3025,6 +3070,16 @@ pub struct WorldView<'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageView<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: StorageView<'world, Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools: StorageView<'world, Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        StorageView<'world, (String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events:
+        StorageView<'world, u64, SoraHfSharedLeaseAuditEventV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -9948,6 +10003,34 @@ impl World {
         &mut self.soracloud_model_artifact_audit_events
     }
 
+    /// Provides mutable access to canonical Hugging Face sources for tests and API scaffolding.
+    pub fn soracloud_hf_sources_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraHfSourceRecordV1> {
+        &mut self.soracloud_hf_sources
+    }
+
+    /// Provides mutable access to HF shared-lease pools for tests and API scaffolding.
+    pub fn soracloud_hf_shared_lease_pools_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraHfSharedLeasePoolV1> {
+        &mut self.soracloud_hf_shared_lease_pools
+    }
+
+    /// Provides mutable access to HF shared-lease memberships for tests and API scaffolding.
+    pub fn soracloud_hf_shared_lease_members_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraHfSharedLeaseMemberV1> {
+        &mut self.soracloud_hf_shared_lease_members
+    }
+
+    /// Provides mutable access to HF shared-lease audit events for tests and API scaffolding.
+    pub fn soracloud_hf_shared_lease_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraHfSharedLeaseAuditEventV1> {
+        &mut self.soracloud_hf_shared_lease_audit_events
+    }
+
     /// Provides mutable access to Soracloud mailbox messages for tests and API scaffolding.
     pub fn soracloud_mailbox_messages_mut_for_testing(
         &mut self,
@@ -10670,6 +10753,12 @@ impl World {
             soracloud_model_artifact_audit_events: self
                 .soracloud_model_artifact_audit_events
                 .view(),
+            soracloud_hf_sources: self.soracloud_hf_sources.view(),
+            soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
+            soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
+            soracloud_hf_shared_lease_audit_events: self
+                .soracloud_hf_shared_lease_audit_events
+                .view(),
             soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
             soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
             capacity_declarations: self.capacity_declarations.view(),
@@ -11048,6 +11137,20 @@ pub trait WorldReadOnly {
     fn soracloud_model_artifact_audit_events(
         &self,
     ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1>;
+    /// Canonical Hugging Face sources keyed by source identifier (read-only).
+    fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1>;
+    /// HF shared-lease pools keyed by canonical pool identifier (read-only).
+    fn soracloud_hf_shared_lease_pools(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraHfSharedLeasePoolV1>;
+    /// HF shared-lease memberships keyed by `(pool_id, account_id)` (read-only).
+    fn soracloud_hf_shared_lease_members(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraHfSharedLeaseMemberV1>;
+    /// HF shared-lease audit events keyed by deterministic sequence (read-only).
+    fn soracloud_hf_shared_lease_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1>;
     /// Ordered Soracloud mailbox messages keyed by message id (read-only).
     fn soracloud_mailbox_messages(
         &self,
@@ -11933,6 +12036,24 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1> {
                 &self.soracloud_model_artifact_audit_events
             }
+            fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1> {
+                &self.soracloud_hf_sources
+            }
+            fn soracloud_hf_shared_lease_pools(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraHfSharedLeasePoolV1> {
+                &self.soracloud_hf_shared_lease_pools
+            }
+            fn soracloud_hf_shared_lease_members(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraHfSharedLeaseMemberV1> {
+                &self.soracloud_hf_shared_lease_members
+            }
+            fn soracloud_hf_shared_lease_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1> {
+                &self.soracloud_hf_shared_lease_audit_events
+            }
             fn soracloud_mailbox_messages(
                 &self,
             ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1> {
@@ -12361,6 +12482,10 @@ impl<'world> WorldBlock<'world> {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -12455,6 +12580,10 @@ impl<'world> WorldBlock<'world> {
         soracloud_model_weight_audit_events.commit();
         soracloud_model_artifacts.commit();
         soracloud_model_artifact_audit_events.commit();
+        soracloud_hf_sources.commit();
+        soracloud_hf_shared_lease_pools.commit();
+        soracloud_hf_shared_lease_members.commit();
+        soracloud_hf_shared_lease_audit_events.commit();
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
         capacity_disputes.commit();
@@ -13384,6 +13513,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -13464,6 +13597,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_model_weight_audit_events.apply();
         soracloud_model_artifacts.apply();
         soracloud_model_artifact_audit_events.apply();
+        soracloud_hf_sources.apply();
+        soracloud_hf_shared_lease_pools.apply();
+        soracloud_hf_shared_lease_members.apply();
+        soracloud_hf_shared_lease_audit_events.apply();
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
         capacity_disputes.apply();
@@ -25666,6 +25803,13 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_model_artifacts")?;
         let soracloud_model_artifact_audit_events =
             take_optional_default(&mut map, "soracloud_model_artifact_audit_events")?;
+        let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
+        let soracloud_hf_shared_lease_pools =
+            take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
+        let soracloud_hf_shared_lease_members =
+            take_optional_default(&mut map, "soracloud_hf_shared_lease_members")?;
+        let soracloud_hf_shared_lease_audit_events =
+            take_optional_default(&mut map, "soracloud_hf_shared_lease_audit_events")?;
         let soracloud_mailbox_messages =
             take_optional_default(&mut map, "soracloud_mailbox_messages")?;
         let soracloud_runtime_receipts =
@@ -25785,6 +25929,10 @@ pub(crate) mod deserialize {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations: Storage::default(),
@@ -41009,6 +41157,7 @@ mod tests {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,
                     allow_state_writes: false,
+                    allow_model_inference: false,
                     allow_model_training: false,
                 },
                 resources: iroha_data_model::soracloud::SoraResourceLimitsV1 {
@@ -41270,6 +41419,13 @@ mod tests {
                     weight_version: "v2".to_string(),
                     parent_version: Some("v1".to_string()),
                     training_job_id: "job-1".to_string(),
+                    source_provenance: Some(
+                        iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
+                            kind:
+                                iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
+                            id: "job-1".to_string(),
+                        },
+                    ),
                     weight_artifact_hash: Hash::new(b"weights"),
                     dataset_ref: "dataset://train".to_string(),
                     training_config_hash: Hash::new(b"train-config"),
@@ -41309,6 +41465,10 @@ mod tests {
                 service_version: service_version.clone(),
                 model_name: "vision_model".to_string(),
                 training_job_id: "job-1".to_string(),
+                source_provenance: Some(iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
+                    kind: iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
+                    id: "job-1".to_string(),
+                }),
                 weight_artifact_hash: Hash::new(b"weights"),
                 dataset_ref: "dataset://train".to_string(),
                 training_config_hash: Hash::new(b"train-config"),

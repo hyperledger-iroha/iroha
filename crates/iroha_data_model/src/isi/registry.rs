@@ -107,6 +107,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::MutateSoracloudState>,
     InstructionRegistry::register::<soracloud::RunSoracloudFheJob>,
     InstructionRegistry::register::<soracloud::RecordSoracloudDecryptionRequest>,
+    InstructionRegistry::register::<soracloud::JoinSoracloudHfSharedLease>,
+    InstructionRegistry::register::<soracloud::LeaveSoracloudHfSharedLease>,
+    InstructionRegistry::register::<soracloud::RenewSoracloudHfSharedLease>,
     InstructionRegistry::register::<soracloud::DeploySoracloudAgentApartment>,
     InstructionRegistry::register::<soracloud::RenewSoracloudAgentLease>,
     InstructionRegistry::register::<soracloud::RestartSoracloudAgentApartment>,
@@ -301,6 +304,15 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
         registry.register_with_id::<soracloud::RunSoracloudFheJob>("soracloud::RunSoracloudFheJob");
     registry = registry.register_with_id::<soracloud::RecordSoracloudDecryptionRequest>(
         "soracloud::RecordSoracloudDecryptionRequest",
+    );
+    registry = registry.register_with_id::<soracloud::JoinSoracloudHfSharedLease>(
+        "soracloud::JoinSoracloudHfSharedLease",
+    );
+    registry = registry.register_with_id::<soracloud::LeaveSoracloudHfSharedLease>(
+        "soracloud::LeaveSoracloudHfSharedLease",
+    );
+    registry = registry.register_with_id::<soracloud::RenewSoracloudHfSharedLease>(
+        "soracloud::RenewSoracloudHfSharedLease",
     );
     registry = registry.register_with_id::<soracloud::DeploySoracloudAgentApartment>(
         "soracloud::DeploySoracloudAgentApartment",

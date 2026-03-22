@@ -2,6 +2,101 @@
 
 Last updated: 2026-03-21
 
+Latest sync (2026-03-21 Soracloud HF live proration coverage):
+`integration_tests/tests/iroha_cli.rs`
+now extends the shared-lease CLI integration suite beyond single-account
+membership plumbing into the actual shared-cost math:
+
+- The integration harness now has a reusable per-account `ProgramConfig`
+  helper so Bob and Carpenter can drive the Soracloud CLI against the same
+  Torii-backed network with their own keypairs/domains.
+- A new 4-peer live test grants Soracloud + transfer permissions to Bob and
+  Carpenter in genesis, funds Alice/Bob/Carpenter with a real registered
+  lease asset, and exercises Alice create-window, Bob join, and Carpenter join
+  through the public `hf-deploy` / `hf-status` commands.
+- The test computes Bob and Carpenter join fees from authoritative
+  `latest_audit_event` timestamps and verifies final
+  `total_paid_nanos` / `total_refunded_nanos` for all three accounts,
+  including deterministic remainder assignment based on core’s canonical
+  member ordering.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture`
+
+Open work for this slice now remains:
+- wire the async HF importer/runtime reconciliation and generated inference
+  service/apartment bring-up on top of the shared-lease membership path,
+- implement pre-expiry next-window sponsorship and replace the temporary
+  immediate-drain expiry clamp with configurable drain grace.
+
+Latest sync (2026-03-21 Soracloud HF CLI + live integration coverage):
+`crates/iroha_cli/src/soracloud.rs`,
+`integration_tests/tests/iroha_cli.rs`,
+`crates/iroha_torii/src/soracloud.rs`,
+and
+`docs/source/soracloud/cli_local_control_plane.md`
+now carry the HF shared-lease slice through the public CLI surface:
+
+- The Soracloud CLI now exposes `hf-deploy`, `hf-status`,
+  `hf-lease-leave`, and `hf-lease-renew`, with canonical provenance signing,
+  repo-slug defaulting for omitted `model_name`, and the same `revision ->
+  main` normalization used by Torii.
+- Live integration coverage now exercises the HF path end-to-end against a
+  4-peer network: first sponsor join, same-account zero-charge rebind,
+  authoritative status read, leave, and renew.
+- `GET /v1/soracloud/hf/status` now accepts scalar query labels for
+  `storage_class` (`hot|warm|cold`) and parses them server-side, which avoids
+  the earlier `NoritoQuery` mismatch with the tagged `StorageClass` enum.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_cli hf_ -- --nocapture`
+- `cargo test -p iroha_torii parse_storage_class_query_accepts_case_insensitive_labels --lib -- --nocapture`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture`
+- `cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_cli -p integration_tests`
+
+Open work for this slice now remains:
+- wire the async HF importer/runtime reconciliation and generated inference
+  service/apartment bring-up on top of the shared-lease membership path,
+- implement pre-expiry next-window sponsorship and replace the temporary
+  immediate-drain expiry clamp with configurable drain grace.
+
+Latest sync (2026-03-21 Soracloud HF shared-lease Torii/control-plane slice):
+`crates/iroha_data_model/src/{soracloud.rs,isi/soracloud.rs}`,
+`crates/iroha_core/src/{smartcontracts/isi/soracloud.rs,state.rs,block.rs}`,
+and
+`crates/iroha_torii/src/{soracloud.rs,lib.rs}`
+now land the first authoritative Hugging Face shared-lease substrate:
+
+- Torii now exposes `POST /v1/soracloud/hf/deploy`,
+  `GET /v1/soracloud/hf/status`,
+  `POST /v1/soracloud/hf/lease/leave`, and
+  `POST /v1/soracloud/hf/lease/renew`, all backed by the authoritative HF
+  source/pool/member/audit records already added to `World`.
+- HF request provenance is now verified against canonical payload encodings in
+  Torii, including deterministic revision normalization (`None -> "main"`)
+  before instruction submission.
+- Torii status/mutation responses for the HF shared-lease path now come from
+  committed world state rather than any local mirror, and SCR control-plane
+  snapshots now expose `allow_model_inference`.
+- Core’s shared Soracloud audit sequence now includes HF shared-lease audit
+  events so consecutive HF joins/leaves/renewals advance monotonically.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo check -p iroha_data_model -p iroha_core -p iroha_torii`
+- `CARGO_TARGET_DIR=target_tmp_hf_torii cargo test -p iroha_torii --lib hf_ -- --nocapture`
+- `cargo test -p iroha_core next_soracloud_audit_sequence_includes_hf_shared_lease_events -- --nocapture`
+
+Open work for this slice now remains:
+- wire the async HF importer/runtime reconciliation and generated inference
+  service/apartment bring-up on top of the new shared-lease membership path
+  (the new HF endpoints currently admit and manage lease membership only),
+- add CLI support plus live Torii/integration coverage for the new HF routes,
+- implement pre-expiry next-window sponsorship and replace the temporary
+  immediate-drain expiry clamp with configurable drain grace.
+
 Latest sync (2026-03-21 Soracloud complete; workspace blocker was unrelated IVM metadata drift):
 `crates/ivm_abi/src/metadata.rs`,
 `crates/ivm/tests/metadata.rs`,
