@@ -97,6 +97,31 @@ Open work for this slice now remains:
 - implement pre-expiry next-window sponsorship and replace the temporary
   immediate-drain expiry clamp with configurable drain grace.
 
+Latest sync (2026-03-21 RBC restart recovery survives roster-change reset):
+`crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+and `crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the `sumeragi_rbc_recovers_after_restart_with_roster_change`
+regression:
+
+- The roster-change cache reset no longer wipes the operator-facing
+  `rbc_status` snapshot, so `/v1/sumeragi/rbc/sessions` can still report a
+  session recovered from disk even if the restarted peer immediately catches a
+  membership-changing commit.
+- Added a focused unit test that persists an in-flight RBC session, reloads it
+  through restart recovery, applies `reset_consensus_state_for_roster_change()`,
+  and asserts the recovered summary remains while the runtime RBC session cache
+  is cleared.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_core --lib rbc_status_summary_survives_roster_change_reset_after_restart_recovery -- --nocapture`
+- `cargo test -p iroha_core --lib rbc_session_roster_persists_across_restart_with_roster_change -- --nocapture`
+- `cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture --exact --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader Sumeragi/integration sweep, or the full
+  `cargo test --workspace`, when the multi-hour validation budget is available.
+
 Latest sync (2026-03-21 Soracloud complete; workspace blocker was unrelated IVM metadata drift):
 `crates/ivm_abi/src/metadata.rs`,
 `crates/ivm/tests/metadata.rs`,
@@ -3150,7 +3175,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 7. **RBC-LIVENESS-RECOVERY — Diagnose and unblock reliable-broadcast stalls** (Consensus/Sumeragi/Core, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)
    - [x] Instrumentation: RBC backlog and status snapshots now export READY/chunk deferral counters, pending-stash age/size/drops, retry/abort totals, and store-pressure gauges across `/v1/status`, `/v1/sumeragi/status`, and Prometheus so stalled deliveries can be triaged quickly.【crates/iroha_core/src/sumeragi/status.rs】【crates/iroha_telemetry/src/metrics.rs】
    - [x] Reschedule paths: pending blocks stuck on `MissingLocalData` are rescheduled off the availability timeout (requeue payloads, purge RBC state, bump view), and RBC handlers keep sessions bounded with unit coverage for deferral/eviction counters and stash limits.【crates/iroha_core/src/sumeragi/main_loop.rs】
-   - [x] Adversarial coverage: chunk-drop/shuffle scenarios, cold-start recovery, and restart liveness suites hold blocks pending without committing until RBC delivery resumes and assert telemetry reflects the stalled sessions under packet loss/reorder/view changes.【integration_tests/tests/sumeragi_adversarial.rs】【integration_tests/tests/sumeragi_da.rs】【integration_tests/tests/sumeragi_npos_liveness.rs】
+   - [x] Adversarial coverage: chunk-drop/shuffle scenarios, cold-start recovery, restart liveness suites, and the NPoS chunk-loss backlog regression all hold blocks pending without committing until RBC delivery resumes and assert telemetry reflects the stalled sessions under packet loss/reorder/view changes; the NPoS backlog probe now seeds one committed block and uses a 64 KiB multi-chunk payload so the undelivered session/backlog signal remains observable on the 4-peer harness.【integration_tests/tests/sumeragi_adversarial.rs】【integration_tests/tests/sumeragi_da.rs】【integration_tests/tests/sumeragi_npos_liveness.rs】【integration_tests/tests/sumeragi_npos_performance.rs】
    - [x] Operational guidance: the Sumeragi runbook documents the RBC backlog/deferral/store-pressure signals, availability vote health, and DA reschedule counters used to remediate stalls.【docs/source/sumeragi.md】
 
 8. **SUM-MODE-CUTOVER-LIVE — Runtime flip between permissioned and NPoS without restart** (Consensus/Sumeragi/Core, Line: Shared, Owner: Consensus WG, Priority: High, Status: 🈴 Completed, target TBD)

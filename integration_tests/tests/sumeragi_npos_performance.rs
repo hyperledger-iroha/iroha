@@ -51,6 +51,7 @@ const RBC_STORE_MAX_BYTES: i64 = 128 * 1024;
 const RBC_STORE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const RBC_STORE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CHUNK_LOSS_SCENARIO_NAME: &str = "npos_rbc_chunk_loss_fault";
+const CHUNK_LOSS_PAYLOAD_BYTES: usize = 64 * 1024;
 const CHUNK_LOSS_DROP_INTERVAL: i64 = 2;
 const CHUNK_LOSS_POLL_TIMEOUT: Duration = Duration::from_secs(40);
 
@@ -83,6 +84,17 @@ fn stress_collectors_k(default: u16, peers: usize) -> u16 {
 
 fn stress_redundant_send_r(default: u8) -> u8 {
     env_parse::<u8>(STRESS_REDUNDANT_SEND_R_ENV).unwrap_or(default)
+}
+
+fn npos_custom_parameter(collectors_k: u16, redundant_send_r: u8) -> Parameter {
+    Parameter::Custom(
+        SumeragiNposParameters {
+            k_aggregators: collectors_k,
+            redundant_send_r,
+            ..SumeragiNposParameters::default()
+        }
+        .into_custom_parameter(),
+    )
 }
 
 fn i64_to_f64(value: i64) -> f64 {
@@ -547,6 +559,10 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::RedundantSendR(redundant_send_r),
+        )))
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
+            collectors_k,
+            redundant_send_r,
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -780,6 +796,10 @@ async fn npos_pacemaker_jitter_within_band() -> Result<()> {
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::RedundantSendR(redundant_send_r),
+        )))
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
+            collectors_k,
+            redundant_send_r,
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -978,6 +998,10 @@ async fn npos_rbc_store_backpressure_records_metrics() -> Result<()> {
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
+            collectors_k,
+            redundant_send_r,
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1160,6 +1184,10 @@ async fn npos_redundant_send_retries_update_metrics() -> Result<()> {
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
+            collectors_k,
+            redundant_send_r,
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1292,6 +1320,10 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::BlockTimeMs(1_500),
+        )))
+        .with_genesis_instruction(SetParameter::new(npos_custom_parameter(
+            collectors_k,
+            redundant_send_r,
         )));
 
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -1308,13 +1340,14 @@ async fn npos_rbc_chunk_loss_fault_reports_backlog() -> Result<()> {
         .await?;
 
     let client = network.client();
+    client.submit_blocking(Log::new(Level::INFO, "chunk-loss seed".to_owned()))?;
     let status_before = client.get_status().wrap_err("fetch initial status")?;
     let expected_height = status_before.blocks + 1;
 
     let chain_id = network.chain_id();
     let message = format!(
         "chunk-loss-fault-{}",
-        "C".repeat(RBC_STORE_PAYLOAD_BYTES.saturating_sub(18))
+        "C".repeat(CHUNK_LOSS_PAYLOAD_BYTES.saturating_sub(18))
     );
     let tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
         .with_instructions([Log::new(Level::INFO, message)])

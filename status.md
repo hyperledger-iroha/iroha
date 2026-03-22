@@ -1,6 +1,49 @@
 # Status
 
-Last updated: 2026-03-21
+Last updated: 2026-03-22
+
+## 2026-03-22 Follow-up: NPoS RBC chunk-loss backlog regression is green again
+- Fixed the flaky `npos_rbc_chunk_loss_fault_reports_backlog` harness in
+  `integration_tests/tests/sumeragi_npos_performance.rs` so it reliably
+  reaches an undelivered multi-chunk RBC session on the 4-peer localnet used
+  by the test:
+  - the NPoS stress tests now install the same custom NPoS genesis parameter
+    bundle they configure through the standard Sumeragi parameters, which
+    keeps the collectors/redundant-send settings aligned with the scenario
+    under test,
+  - the chunk-loss scenario now submits one small seed block before the
+    fault-injected transaction so the probe runs after genesis-only startup,
+    and
+  - the injected payload was reduced from the 3 MiB store-pressure blob to a
+    64 KiB payload, which still spans multiple 16 KiB RBC chunks but no
+    longer stalls before the backlog telemetry becomes observable.
+- Validation:
+  - `cargo test -p integration_tests --test sumeragi_npos_performance npos_rbc_chunk_loss_fault_reports_backlog -- --nocapture --exact --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_performance -- --nocapture --test-threads=1` (pass)
+
+## 2026-03-21 Follow-up: RBC restart recovery now survives the post-restart roster-change reset
+- Fixed `crates/iroha_core/src/sumeragi/main_loop/commit.rs` so
+  `reset_consensus_state_for_roster_change()` no longer clears the
+  operator-facing `rbc_status` snapshot, which is the source of
+  `/v1/sumeragi/rbc/sessions`; recovered sessions loaded from disk now remain
+  observable while runtime-only RBC state is cleared on membership change.
+- Added
+  `rbc_status_summary_survives_roster_change_reset_after_restart_recovery`
+  in `crates/iroha_core/src/sumeragi/main_loop/tests.rs` to persist an
+  in-flight RBC session, reload it as recovered, apply the roster-reset path,
+  and verify that the recovered status summary survives while the live session
+  cache is still cleared.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib rbc_status_summary_survives_roster_change_reset_after_restart_recovery -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib rbc_session_roster_persists_across_restart_with_roster_change -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_da sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture --exact --test-threads=1` (pass)
+- Notes:
+  - The integration rerun still emitted the existing non-fatal
+    `iroha_test_network` teardown warnings (`forcing peer shutdown after fatal
+    signal`, `timed out waiting for log flush`) and a temp-store recovery
+    warning from `rbc_status`; the test passed and all peers exited with
+    `status(0)`.
 
 ## 2026-03-21 Follow-up: Soracloud HF shared-lease live coverage now verifies multi-account proration and refund splitting
 - Extended

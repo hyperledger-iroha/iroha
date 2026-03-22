@@ -824,6 +824,86 @@ seiyaku Test {
     }
 
     #[test]
+    fn assert_compiles_without_zk_mode_and_uses_abort_syscall() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn main() {
+    assert(1 == 1);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler.compile_source(src).expect("compile assert");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        assert_eq!(
+            parsed.metadata.mode & crate::metadata::mode::ZK,
+            0,
+            "assert should not enable ZK mode"
+        );
+
+        let mut found_abort = false;
+        let mut found_zk_assert = false;
+        for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
+            let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+            let op = instruction::wide::opcode(word);
+            if op == instruction::wide::system::SCALL {
+                let (_op, imm8) = encoding::wide::decode_sys(word);
+                if imm8 == crate::syscalls::SYSCALL_ABORT as u8 {
+                    found_abort = true;
+                }
+            }
+            if op == instruction::wide::zk::ASSERT || op == instruction::wide::zk::ASSERT_EQ {
+                found_zk_assert = true;
+            }
+        }
+        assert!(found_abort, "expected ABORT syscall in compiled assert");
+        assert!(
+            !found_zk_assert,
+            "assert should not emit ZK ASSERT/ASSERT_EQ opcodes"
+        );
+    }
+
+    #[test]
+    fn assert_eq_compiles_without_zk_mode_and_uses_abort_syscall() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn main() {
+    assert_eq(1, 1);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler.compile_source(src).expect("compile assert_eq");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        assert_eq!(
+            parsed.metadata.mode & crate::metadata::mode::ZK,
+            0,
+            "assert_eq should not enable ZK mode"
+        );
+
+        let mut found_abort = false;
+        let mut found_zk_assert = false;
+        for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
+            let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
+            let op = instruction::wide::opcode(word);
+            if op == instruction::wide::system::SCALL {
+                let (_op, imm8) = encoding::wide::decode_sys(word);
+                if imm8 == crate::syscalls::SYSCALL_ABORT as u8 {
+                    found_abort = true;
+                }
+            }
+            if op == instruction::wide::zk::ASSERT || op == instruction::wide::zk::ASSERT_EQ {
+                found_zk_assert = true;
+            }
+        }
+        assert!(found_abort, "expected ABORT syscall in compiled assert_eq");
+        assert!(
+            !found_zk_assert,
+            "assert_eq should not emit ZK ASSERT/ASSERT_EQ opcodes"
+        );
+    }
+
+    #[test]
     fn validate_feature_requests_reports_unused_requested_features() {
         let mut meta = ContractMeta::default();
         meta.features.push(ContractFeature::Vector);
@@ -5070,23 +5150,27 @@ impl Compiler {
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::AssertEq { left, right } => {
-                            uses_zk = true;
                             let rs1 = src_reg(left, scratch1, &mut code)?;
                             let rs2 = src_reg(right, scratch2, &mut code)?;
-                            let word = encoding::wide::encode_rr(
-                                instruction::wide::zk::ASSERT_EQ,
-                                0,
-                                rs1,
-                                rs2,
+                            // Skip ABORT when the values are equal.
+                            let skip_word = encode_branch_rv(0x0, rs1, rs2, 8)?;
+                            push_word(&mut code, skip_word);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ABORT as u8,
                             );
-                            push_word(&mut code, word);
+                            code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::Assert { cond } => {
-                            uses_zk = true;
                             let rs = src_reg(cond, scratch1, &mut code)?;
-                            let word =
-                                encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, rs, 0);
-                            push_word(&mut code, word);
+                            // Skip ABORT when the condition is false (i.e., == 0).
+                            let skip_word = encode_branch_rv(0x0, rs, 0, 8)?;
+                            push_word(&mut code, skip_word);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_ABORT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
                         }
                         Instr::AbortIf { cond } => {
                             let rs = src_reg(cond, scratch1, &mut code)?;
