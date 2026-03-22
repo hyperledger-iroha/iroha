@@ -1,6 +1,25 @@
 # Status
 
-Last updated: 2026-03-21
+Last updated: 2026-03-22
+
+## 2026-03-22 Follow-up: NPoS RBC chunk-loss backlog regression is green again
+- Fixed the flaky `npos_rbc_chunk_loss_fault_reports_backlog` harness in
+  `integration_tests/tests/sumeragi_npos_performance.rs` so it reliably
+  reaches an undelivered multi-chunk RBC session on the 4-peer localnet used
+  by the test:
+  - the NPoS stress tests now install the same custom NPoS genesis parameter
+    bundle they configure through the standard Sumeragi parameters, which
+    keeps the collectors/redundant-send settings aligned with the scenario
+    under test,
+  - the chunk-loss scenario now submits one small seed block before the
+    fault-injected transaction so the probe runs after genesis-only startup,
+    and
+  - the injected payload was reduced from the 3 MiB store-pressure blob to a
+    64 KiB payload, which still spans multiple 16 KiB RBC chunks but no
+    longer stalls before the backlog telemetry becomes observable.
+- Validation:
+  - `cargo test -p integration_tests --test sumeragi_npos_performance npos_rbc_chunk_loss_fault_reports_backlog -- --nocapture --exact --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_performance -- --nocapture --test-threads=1` (pass)
 
 ## 2026-03-21 Follow-up: RBC restart recovery now survives the post-restart roster-change reset
 - Fixed `crates/iroha_core/src/sumeragi/main_loop/commit.rs` so
