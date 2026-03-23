@@ -12,14 +12,15 @@ use crate::{
             AcknowledgeSoracloudAgentMessage, AdvanceSoracloudRollout,
             AllowSoracloudAgentAutonomyArtifact, ApproveSoracloudAgentWalletSpend,
             CheckpointSoracloudTrainingJob, DeploySoracloudAgentApartment, DeploySoracloudService,
-            EnqueueSoracloudAgentMessage, MutateSoracloudState, PromoteSoracloudModelWeight,
-            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
-            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
-            RegisterSoracloudModelWeight, RenewSoracloudAgentLease,
-            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
-            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
-            RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, StartSoracloudTrainingJob, UpgradeSoracloudService,
+            EnqueueSoracloudAgentMessage, JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease,
+            MutateSoracloudState, PromoteSoracloudModelWeight, RecordSoracloudDecryptionRequest,
+            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt,
+            RegisterSoracloudModelArtifact, RegisterSoracloudModelWeight, RenewSoracloudAgentLease,
+            RenewSoracloudHfSharedLease, RequestSoracloudAgentWalletSpend,
+            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
+            RunSoracloudFheJob, SetSoracloudRuntimeState, StartSoracloudTrainingJob,
+            UpgradeSoracloudService,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
@@ -137,6 +138,12 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
         .downcast_ref::<RecordSoracloudDecryptionRequest>()
     {
         visitor.visit_record_soracloud_decryption_request(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<JoinSoracloudHfSharedLease>() {
+        visitor.visit_join_soracloud_hf_shared_lease(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<LeaveSoracloudHfSharedLease>() {
+        visitor.visit_leave_soracloud_hf_shared_lease(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RenewSoracloudHfSharedLease>() {
+        visitor.visit_renew_soracloud_hf_shared_lease(v);
     } else {
         return false;
     }
@@ -389,6 +396,9 @@ macro_rules! instruction_visitors {
             visit_mutate_soracloud_state(&MutateSoracloudState),
             visit_run_soracloud_fhe_job(&RunSoracloudFheJob),
             visit_record_soracloud_decryption_request(&RecordSoracloudDecryptionRequest),
+            visit_join_soracloud_hf_shared_lease(&JoinSoracloudHfSharedLease),
+            visit_leave_soracloud_hf_shared_lease(&LeaveSoracloudHfSharedLease),
+            visit_renew_soracloud_hf_shared_lease(&RenewSoracloudHfSharedLease),
             visit_deploy_soracloud_agent_apartment(&DeploySoracloudAgentApartment),
             visit_renew_soracloud_agent_lease(&RenewSoracloudAgentLease),
             visit_restart_soracloud_agent_apartment(&RestartSoracloudAgentApartment),

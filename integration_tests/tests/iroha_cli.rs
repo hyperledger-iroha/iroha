@@ -16,6 +16,9 @@ use iroha::{
     crypto::{ExposedPrivateKey, Hash, KeyPair},
     data_model::{
         Encode,
+        asset::{AssetDefinitionId, AssetId},
+        permission::Permission,
+        prelude::{Grant, Json, Mint},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -24,8 +27,11 @@ use iroha::{
 };
 use iroha_config_base::toml::WriteExt;
 use iroha_data_model::prelude::DomainId;
+use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::sample_ivm_path;
+use iroha_test_samples::{
+    ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, sample_ivm_path,
+};
 use norito::json::{self, Value};
 use reqwest::Url;
 
@@ -119,7 +125,7 @@ fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
         return false;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.contains("training-job-start")
+    stdout.contains("training-job-start") && stdout.contains("hf-deploy")
 }
 
 #[allow(unsafe_code)]
@@ -142,6 +148,13 @@ fn workspace_root() -> PathBuf {
 
 fn soracloud_fixture(path: &str) -> PathBuf {
     workspace_root().join(path)
+}
+
+fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        "domain".parse().expect("test domain should parse"),
+        "xor".parse().expect("test xor asset name should parse"),
+    )
 }
 
 #[test]
@@ -199,7 +212,7 @@ fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
     let script = temp.path().join("fake_iroha.sh");
     std::fs::write(
         &script,
-        "#!/bin/sh\necho 'Commands:\\n  training-job-start\\n  model-weight-register'\n",
+        "#!/bin/sh\necho 'Commands:\\n  training-job-start\\n  hf-deploy\\n  model-weight-register'\n",
     )
     .expect("write script");
     let mut perms = std::fs::metadata(&script).expect("metadata").permissions();
@@ -220,6 +233,26 @@ fn local_program_config() -> ProgramConfig {
     }
 }
 
+fn program_config_for_account(
+    client: &Client,
+    account_domain: &str,
+    key: &KeyPair,
+) -> ProgramConfig {
+    let account_domain: DomainId = account_domain
+        .parse()
+        .expect("account domain literal should parse");
+    let ttl = client
+        .transaction_ttl
+        .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
+    ProgramConfig {
+        torii_url: client.torii_url.clone(),
+        account_domain,
+        key: key.clone(),
+        status_timeout: client.transaction_status_timeout,
+        ttl,
+    }
+}
+
 struct ProgramConfig {
     torii_url: Url,
     account_domain: DomainId,
@@ -230,22 +263,7 @@ struct ProgramConfig {
 
 impl From<&Client> for ProgramConfig {
     fn from(value: &Client) -> Self {
-        let torii_url = value.torii_url.clone();
-        let account_domain: DomainId = "wonderland"
-            .parse()
-            .expect("wonderland domain should parse");
-        let key = value.key_pair.clone();
-        let status_timeout = value.transaction_status_timeout;
-        let ttl = value
-            .transaction_ttl
-            .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
-        Self {
-            torii_url,
-            account_domain,
-            key,
-            status_timeout,
-            ttl,
-        }
+        program_config_for_account(value, "wonderland", &value.key_pair)
     }
 }
 
@@ -324,6 +342,10 @@ fn assert_requires_torii_url(output: &std::process::Output) {
         "unexpected stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn tagged_enum_label<'a>(value: &'a Value, tag: &str) -> Option<&'a str> {
+    value.as_object()?.get(tag)?.as_str()
 }
 
 #[tokio::test]
@@ -1474,6 +1496,849 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
             .get("consumed_by_version")
             .and_then(Value::as_str),
         Some("1.1.0")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_hf_shared_lease_commands_use_live_torii_control_plane),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let repo_id = "openai/gpt-oss";
+    let service_name_a = "hf_lease_a";
+    let service_name_b = "hf_lease_b";
+    let service_name_renew = "hf_lease_renew";
+    let apartment_name = "ops_agent";
+    let lease_term_ms = "60000".to_string();
+    let base_fee_nanos = "10000".to_string();
+    let lease_asset_definition = soracloud_hf_lease_asset_definition().to_string();
+    let torii_url = network.client().torii_url.to_string();
+    let account_id = network.client().account.to_string();
+
+    let deploy = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            repo_id,
+            "--service-name",
+            service_name_a,
+            "--apartment-name",
+            apartment_name,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        deploy.status.success(),
+        "hf-deploy failed with status {} and stderr: {}",
+        deploy.status,
+        String::from_utf8_lossy(&deploy.stderr)
+    );
+    let deploy_payload: Value = json::from_slice(&deploy.stdout).expect("hf-deploy json");
+    assert_eq!(
+        deploy_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("CreateWindow")
+    );
+    assert_eq!(
+        deploy_payload
+            .get("importer_pending")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    let deploy_source = deploy_payload
+        .get("source")
+        .and_then(Value::as_object)
+        .expect("hf-deploy source object");
+    assert_eq!(
+        deploy_source.get("model_name").and_then(Value::as_str),
+        Some("gpt-oss")
+    );
+    assert_eq!(
+        deploy_source
+            .get("resolved_revision")
+            .and_then(Value::as_str),
+        Some("main")
+    );
+    let deploy_member = deploy_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("hf-deploy member object");
+    assert_eq!(
+        deploy_member
+            .get("last_charge_nanos")
+            .and_then(Value::as_u64),
+        Some(10_000)
+    );
+
+    let rebind = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            repo_id,
+            "--service-name",
+            service_name_b,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        rebind.status.success(),
+        "hf-deploy rebind failed with status {} and stderr: {}",
+        rebind.status,
+        String::from_utf8_lossy(&rebind.stderr)
+    );
+    let rebind_payload: Value = json::from_slice(&rebind.stdout).expect("hf rebind json");
+    assert_eq!(
+        rebind_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Join")
+    );
+    let rebind_member = rebind_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("hf rebind member object");
+    assert_eq!(
+        rebind_member
+            .get("last_charge_nanos")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    let rebind_services = rebind_member
+        .get("service_bindings")
+        .and_then(Value::as_array)
+        .expect("hf rebind service bindings");
+    assert_eq!(rebind_services.len(), 2);
+    assert!(
+        rebind_services
+            .iter()
+            .any(|value| value.as_str() == Some(service_name_a))
+    );
+    assert!(
+        rebind_services
+            .iter()
+            .any(|value| value.as_str() == Some(service_name_b))
+    );
+
+    let status = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--account-id",
+            account_id.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        status.status.success(),
+        "hf-status failed with status {} and stderr: {}",
+        status.status,
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_payload: Value = json::from_slice(&status.stdout).expect("hf-status json");
+    let status_pool = status_payload
+        .get("pool")
+        .and_then(Value::as_object)
+        .expect("hf status pool object");
+    assert_eq!(
+        status_pool
+            .get("active_member_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    let status_member = status_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("hf status member object");
+    let status_services = status_member
+        .get("service_bindings")
+        .and_then(Value::as_array)
+        .expect("hf status service bindings");
+    assert_eq!(status_services.len(), 2);
+
+    let leave = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-lease-leave",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--service-name",
+            service_name_a,
+            "--apartment-name",
+            apartment_name,
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        leave.status.success(),
+        "hf-lease-leave failed with status {} and stderr: {}",
+        leave.status,
+        String::from_utf8_lossy(&leave.stderr)
+    );
+    let leave_payload: Value = json::from_slice(&leave.stdout).expect("hf leave json");
+    assert_eq!(
+        leave_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Leave")
+    );
+    let leave_pool = leave_payload
+        .get("pool")
+        .and_then(Value::as_object)
+        .expect("hf leave pool object");
+    assert_eq!(
+        leave_pool
+            .get("status")
+            .and_then(|value| tagged_enum_label(value, "status")),
+        Some("Draining")
+    );
+    let leave_member = leave_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("hf leave member object");
+    assert_eq!(
+        leave_member
+            .get("status")
+            .and_then(|value| tagged_enum_label(value, "status")),
+        Some("Left")
+    );
+
+    let renew = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-lease-renew",
+            "--repo-id",
+            repo_id,
+            "--service-name",
+            service_name_renew,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        renew.status.success(),
+        "hf-lease-renew failed with status {} and stderr: {}",
+        renew.status,
+        String::from_utf8_lossy(&renew.stderr)
+    );
+    let renew_payload: Value = json::from_slice(&renew.stdout).expect("hf renew json");
+    assert_eq!(
+        renew_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Renew")
+    );
+    let renew_member = renew_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("hf renew member object");
+    assert_eq!(
+        renew_member
+            .get("status")
+            .and_then(|value| tagged_enum_label(value, "status")),
+        Some("Active")
+    );
+    assert_eq!(
+        renew_member
+            .get("last_charge_nanos")
+            .and_then(Value::as_u64),
+        Some(10_000)
+    );
+
+    let status_after_renew = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--account-id",
+            account_id.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        status_after_renew.status.success(),
+        "hf-status after renew failed with status {} and stderr: {}",
+        status_after_renew.status,
+        String::from_utf8_lossy(&status_after_renew.stderr)
+    );
+    let status_after_renew_payload: Value =
+        json::from_slice(&status_after_renew.stdout).expect("hf status after renew json");
+    let renewed_member = status_after_renew_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("hf renewed member object");
+    assert_eq!(
+        renewed_member
+            .get("status")
+            .and_then(|value| tagged_enum_label(value, "status")),
+        Some("Active")
+    );
+    let renewed_services = renewed_member
+        .get("service_bindings")
+        .and_then(Value::as_array)
+        .expect("hf renewed service bindings");
+    assert_eq!(renewed_services.len(), 1);
+    assert_eq!(renewed_services[0].as_str(), Some(service_name_renew));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
+    let lease_asset_definition = AssetDefinitionId::new(
+        "wonderland"
+            .parse()
+            .expect("wonderland domain should parse"),
+        "rose".parse().expect("rose asset name should parse"),
+    );
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        })
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::new("CanManageSoracloud".into(), Json::new(())),
+            BOB_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::new("CanManageSoracloud".into(), Json::new(())),
+            CARPENTER_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            CanTransferAssetWithDefinition {
+                asset_definition: lease_asset_definition.clone(),
+            },
+            BOB_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            CanTransferAssetWithDefinition {
+                asset_definition: lease_asset_definition.clone(),
+            },
+            CARPENTER_ID.clone(),
+        ))
+        .with_genesis_instruction(Mint::asset_numeric(
+            100_000_u32,
+            AssetId::new(lease_asset_definition.clone(), ALICE_ID.clone()),
+        ))
+        .with_genesis_instruction(Mint::asset_numeric(
+            100_000_u32,
+            AssetId::new(lease_asset_definition.clone(), BOB_ID.clone()),
+        ))
+        .with_genesis_instruction(Mint::asset_numeric(
+            100_000_u32,
+            AssetId::new(lease_asset_definition.clone(), CARPENTER_ID.clone()),
+        ));
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let alice_config = ProgramConfig::from(&network.client());
+    let bob_config = program_config_for_account(&network.client(), "wonderland", &BOB_KEYPAIR);
+    let carpenter_config = program_config_for_account(
+        &network.client(),
+        "garden_of_live_flowers",
+        &CARPENTER_KEYPAIR,
+    );
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&alice_config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let repo_id = "openai/gpt-oss";
+    let torii_url = network.client().torii_url.to_string();
+    let lease_term_ms = 60_000_u64;
+    let lease_term_ms_literal = lease_term_ms.to_string();
+    let base_fee_nanos = 10_000_u128;
+    let base_fee_nanos_literal = base_fee_nanos.to_string();
+    let lease_asset_definition = lease_asset_definition.to_string();
+    let alice_account_id = network.client().account.to_string();
+    let bob_account_id = BOB_ID.to_string();
+    let carpenter_account_id = CARPENTER_ID.to_string();
+
+    let alice_deploy = run_soracloud_command(
+        dir.path(),
+        &alice_config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            repo_id,
+            "--service-name",
+            "hf_lease_alice",
+            "--lease-term-ms",
+            lease_term_ms_literal.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos_literal.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        alice_deploy.status.success(),
+        "alice hf-deploy failed with status {} and stderr: {}",
+        alice_deploy.status,
+        String::from_utf8_lossy(&alice_deploy.stderr)
+    );
+    let alice_deploy_payload: Value =
+        json::from_slice(&alice_deploy.stdout).expect("alice hf-deploy json");
+    assert_eq!(
+        alice_deploy_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("CreateWindow")
+    );
+    assert_eq!(
+        alice_deploy_payload
+            .get("member")
+            .and_then(Value::as_object)
+            .and_then(|member| member.get("last_charge_nanos"))
+            .and_then(Value::as_u64),
+        Some(10_000)
+    );
+
+    let bob_deploy = run_soracloud_command(
+        dir.path(),
+        &bob_config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            repo_id,
+            "--service-name",
+            "hf_lease_bob",
+            "--lease-term-ms",
+            lease_term_ms_literal.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos_literal.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        bob_deploy.status.success(),
+        "bob hf-deploy failed with status {} and stderr: {}",
+        bob_deploy.status,
+        String::from_utf8_lossy(&bob_deploy.stderr)
+    );
+    let bob_deploy_payload: Value = json::from_slice(&bob_deploy.stdout).expect("bob deploy json");
+    assert_eq!(
+        bob_deploy_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Join")
+    );
+
+    let bob_status = run_soracloud_command(
+        dir.path(),
+        &bob_config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms_literal.as_str(),
+            "--account-id",
+            bob_account_id.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        bob_status.status.success(),
+        "bob hf-status failed with status {} and stderr: {}",
+        bob_status.status,
+        String::from_utf8_lossy(&bob_status.stderr)
+    );
+    let bob_status_payload: Value = json::from_slice(&bob_status.stdout).expect("bob status json");
+    let bob_pool = bob_status_payload
+        .get("pool")
+        .and_then(Value::as_object)
+        .expect("bob pool");
+    assert_eq!(
+        bob_pool.get("active_member_count").and_then(Value::as_u64),
+        Some(2)
+    );
+    let bob_latest_event = bob_status_payload
+        .get("latest_audit_event")
+        .and_then(Value::as_object)
+        .expect("bob latest audit event");
+    assert_eq!(
+        bob_latest_event
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Join")
+    );
+    assert_eq!(
+        bob_latest_event.get("account_id").and_then(Value::as_str),
+        Some(bob_account_id.as_str())
+    );
+    let bob_remaining_ms = bob_latest_event
+        .get("lease_expires_at_ms")
+        .and_then(Value::as_u64)
+        .expect("bob lease_expires_at_ms")
+        .saturating_sub(
+            bob_latest_event
+                .get("occurred_at_ms")
+                .and_then(Value::as_u64)
+                .expect("bob occurred_at_ms"),
+        );
+    let bob_expected_charge =
+        (base_fee_nanos * u128::from(bob_remaining_ms) / u128::from(lease_term_ms)) / 2;
+    assert_eq!(
+        bob_deploy_payload
+            .get("member")
+            .and_then(Value::as_object)
+            .and_then(|member| member.get("last_charge_nanos"))
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(bob_expected_charge)
+    );
+
+    let carpenter_deploy = run_soracloud_command(
+        dir.path(),
+        &carpenter_config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            repo_id,
+            "--service-name",
+            "hf_lease_carpenter",
+            "--lease-term-ms",
+            lease_term_ms_literal.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos_literal.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        carpenter_deploy.status.success(),
+        "carpenter hf-deploy failed with status {} and stderr: {}",
+        carpenter_deploy.status,
+        String::from_utf8_lossy(&carpenter_deploy.stderr)
+    );
+    let carpenter_deploy_payload: Value =
+        json::from_slice(&carpenter_deploy.stdout).expect("carpenter deploy json");
+    assert_eq!(
+        carpenter_deploy_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Join")
+    );
+
+    let carpenter_status = run_soracloud_command(
+        dir.path(),
+        &carpenter_config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms_literal.as_str(),
+            "--account-id",
+            carpenter_account_id.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        carpenter_status.status.success(),
+        "carpenter hf-status failed with status {} and stderr: {}",
+        carpenter_status.status,
+        String::from_utf8_lossy(&carpenter_status.stderr)
+    );
+    let carpenter_status_payload: Value =
+        json::from_slice(&carpenter_status.stdout).expect("carpenter status json");
+    let carpenter_pool = carpenter_status_payload
+        .get("pool")
+        .and_then(Value::as_object)
+        .expect("carpenter pool");
+    assert_eq!(
+        carpenter_pool
+            .get("active_member_count")
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    let carpenter_latest_event = carpenter_status_payload
+        .get("latest_audit_event")
+        .and_then(Value::as_object)
+        .expect("carpenter latest audit event");
+    assert_eq!(
+        carpenter_latest_event
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Join")
+    );
+    assert_eq!(
+        carpenter_latest_event
+            .get("account_id")
+            .and_then(Value::as_str),
+        Some(carpenter_account_id.as_str())
+    );
+    let carpenter_remaining_ms = carpenter_latest_event
+        .get("lease_expires_at_ms")
+        .and_then(Value::as_u64)
+        .expect("carpenter lease_expires_at_ms")
+        .saturating_sub(
+            carpenter_latest_event
+                .get("occurred_at_ms")
+                .and_then(Value::as_u64)
+                .expect("carpenter occurred_at_ms"),
+        );
+    let carpenter_expected_charge =
+        (base_fee_nanos * u128::from(carpenter_remaining_ms) / u128::from(lease_term_ms)) / 3;
+    assert_eq!(
+        carpenter_deploy_payload
+            .get("member")
+            .and_then(Value::as_object)
+            .and_then(|member| member.get("last_charge_nanos"))
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(carpenter_expected_charge)
+    );
+
+    let alice_status = run_soracloud_command(
+        dir.path(),
+        &alice_config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms_literal.as_str(),
+            "--account-id",
+            alice_account_id.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        alice_status.status.success(),
+        "alice hf-status failed with status {} and stderr: {}",
+        alice_status.status,
+        String::from_utf8_lossy(&alice_status.stderr)
+    );
+    let alice_status_payload: Value =
+        json::from_slice(&alice_status.stdout).expect("alice status json");
+    let alice_member = alice_status_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("alice member");
+
+    let bob_final_status = run_soracloud_command(
+        dir.path(),
+        &bob_config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms_literal.as_str(),
+            "--account-id",
+            bob_account_id.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        bob_final_status.status.success(),
+        "bob final hf-status failed with status {} and stderr: {}",
+        bob_final_status.status,
+        String::from_utf8_lossy(&bob_final_status.stderr)
+    );
+    let bob_final_status_payload: Value =
+        json::from_slice(&bob_final_status.stdout).expect("bob final status json");
+    let bob_member = bob_final_status_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("bob member");
+    let carpenter_member = carpenter_status_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("carpenter member");
+
+    let alice_join_order = (
+        alice_member
+            .get("joined_at_ms")
+            .and_then(Value::as_u64)
+            .expect("alice joined_at_ms"),
+        alice_account_id.as_str(),
+    );
+    let bob_join_order = (
+        bob_member
+            .get("joined_at_ms")
+            .and_then(Value::as_u64)
+            .expect("bob joined_at_ms"),
+        bob_account_id.as_str(),
+    );
+    let carpenter_base_refund = carpenter_expected_charge / 2;
+    let carpenter_remainder = carpenter_expected_charge % 2;
+    let (alice_carpenter_refund, bob_carpenter_refund) = if alice_join_order <= bob_join_order {
+        (
+            carpenter_base_refund + carpenter_remainder,
+            carpenter_base_refund,
+        )
+    } else {
+        (
+            carpenter_base_refund,
+            carpenter_base_refund + carpenter_remainder,
+        )
+    };
+
+    assert_eq!(
+        alice_status_payload
+            .get("pool")
+            .and_then(Value::as_object)
+            .and_then(|pool| pool.get("active_member_count"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        bob_final_status_payload
+            .get("pool")
+            .and_then(Value::as_object)
+            .and_then(|pool| pool.get("active_member_count"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        carpenter_status_payload
+            .get("pool")
+            .and_then(Value::as_object)
+            .and_then(|pool| pool.get("active_member_count"))
+            .and_then(Value::as_u64),
+        Some(3)
+    );
+    assert_eq!(
+        alice_member
+            .get("total_paid_nanos")
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(base_fee_nanos)
+    );
+    assert_eq!(
+        alice_member
+            .get("total_refunded_nanos")
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(bob_expected_charge + alice_carpenter_refund)
+    );
+    assert_eq!(
+        bob_member
+            .get("total_paid_nanos")
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(bob_expected_charge)
+    );
+    assert_eq!(
+        bob_member
+            .get("total_refunded_nanos")
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(bob_carpenter_refund)
+    );
+    assert_eq!(
+        carpenter_member
+            .get("total_paid_nanos")
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(carpenter_expected_charge)
+    );
+    assert_eq!(
+        carpenter_member
+            .get("total_refunded_nanos")
+            .and_then(Value::as_u64)
+            .map(u128::from),
+        Some(0)
     );
 
     Ok(())
@@ -3504,6 +4369,93 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
     )
     .await?;
     assert_requires_torii_url(&status);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_hf_shared_lease_commands_require_torii_url() -> eyre::Result<()> {
+    let config = local_program_config();
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let lease_term_ms = "60000".to_string();
+    let base_fee_nanos = "10000".to_string();
+    let lease_asset_definition = soracloud_hf_lease_asset_definition().to_string();
+
+    let deploy = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--service-name",
+            "hf_lease_a",
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos.as_str(),
+        ],
+    )
+    .await?;
+    assert_requires_torii_url(&deploy);
+
+    let status = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-status",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+        ],
+    )
+    .await?;
+    assert_requires_torii_url(&status);
+
+    let leave = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-lease-leave",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--service-name",
+            "hf_lease_a",
+        ],
+    )
+    .await?;
+    assert_requires_torii_url(&leave);
+
+    let renew = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-lease-renew",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--service-name",
+            "hf_lease_renew",
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos.as_str(),
+        ],
+    )
+    .await?;
+    assert_requires_torii_url(&renew);
 
     Ok(())
 }

@@ -266,6 +266,24 @@ impl From<crate::isi::soracloud::RecordSoracloudDecryptionRequest> for Instructi
     }
 }
 
+impl From<crate::isi::soracloud::JoinSoracloudHfSharedLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::JoinSoracloudHfSharedLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::LeaveSoracloudHfSharedLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::LeaveSoracloudHfSharedLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RenewSoracloudHfSharedLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RenewSoracloudHfSharedLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::DeploySoracloudAgentApartment> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeploySoracloudAgentApartment) -> Self {
         InstructionBox(Box::new(i))

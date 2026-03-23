@@ -139,6 +139,7 @@ fn expected_container_manifest() -> SoraContainerManifestV1 {
             ]),
             allow_wallet_signing: true,
             allow_state_writes: true,
+            allow_model_inference: true,
             allow_model_training: false,
         },
         resources: SoraResourceLimitsV1 {

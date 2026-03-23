@@ -6714,22 +6714,11 @@ pub async fn handle_post_contract_call(
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let instructions = build_direct_contract_call_instructions(
-        &authority,
-        &namespace,
-        &contract_id,
-        resolved_entrypoint,
-        payload.as_ref(),
-        gas_asset_id.as_deref(),
-        fee_sponsor.as_ref(),
-        gas_limit,
-        &manifest,
-        &code_hash,
-        code_bytes,
-    )?;
     let builder = builder
         .with_metadata(metadata)
-        .with_instructions(instructions);
+        .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
+            code_bytes,
+        )));
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
@@ -6943,9 +6932,8 @@ fn build_contract_call_metadata(
 }
 
 #[cfg(feature = "app_api")]
-fn derive_contract_call_trigger_id(
-    prefix: &str,
-    action_authority: &iroha_data_model::account::AccountId,
+fn derive_multisig_contract_call_trigger_id(
+    multisig_account_id: &iroha_data_model::account::AccountId,
     namespace: &str,
     contract_id: &str,
     entrypoint: &str,
@@ -6963,20 +6951,19 @@ fn derive_contract_call_trigger_id(
         .unwrap_or_default();
     let gas_asset_repr = gas_asset_id.unwrap_or_default();
     let seed = format!(
-        "{action_authority}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
+        "{multisig_account_id}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
         hex::encode(code_hash.as_ref())
     );
     let digest = blake3_hash(seed.as_bytes());
-    let trigger_name = format!("{prefix}_{}", &hex::encode(digest.as_bytes())[..24]);
+    let trigger_name = format!("msig_cc_{}", &hex::encode(digest.as_bytes())[..24]);
     let trigger_name = Name::from_str(&trigger_name)
         .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
     Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
 }
 
 #[cfg(feature = "app_api")]
-fn build_contract_call_trigger_instructions(
-    prefix: &str,
-    action_authority: &iroha_data_model::account::AccountId,
+fn build_multisig_contract_call_instructions(
+    multisig_account_id: &iroha_data_model::account::AccountId,
     namespace: &str,
     contract_id: &str,
     entrypoint: &str,
@@ -6987,10 +6974,12 @@ fn build_contract_call_trigger_instructions(
     manifest: &manifest::ContractManifest,
     code_hash: &Hash,
     code_bytes: Vec<u8>,
-) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
-    let trigger_id = derive_contract_call_trigger_id(
-        prefix,
-        action_authority,
+) -> Result<(
+    Vec<iroha_data_model::isi::InstructionBox>,
+    HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+)> {
+    let trigger_id = derive_multisig_contract_call_trigger_id(
+        multisig_account_id,
         namespace,
         contract_id,
         entrypoint,
@@ -7017,88 +7006,22 @@ fn build_contract_call_trigger_instructions(
             iroha_data_model::transaction::IvmBytecode::from_compiled(code_bytes),
         ),
         iroha_data_model::trigger::action::Repeats::Exactly(1),
-        action_authority.clone(),
+        multisig_account_id.clone(),
         filter,
     )
     .with_metadata(trigger_metadata);
     let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
-    let execute_trigger = if let Some(payload_value) = payload.cloned() {
-        iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone()).with_args(payload_value)
-    } else {
-        iroha_data_model::isi::ExecuteTrigger::new(trigger_id.clone())
-    };
-    // Exactly-once triggers self-expire after execution; an explicit unregister would
-    // race with that cleanup and reject the enclosing transaction on success.
     let instructions = vec![
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
             trigger,
         )),
-        iroha_data_model::isi::InstructionBox::from(execute_trigger),
+        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
+            trigger_id.clone(),
+        )),
+        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Unregister::trigger(
+            trigger_id,
+        )),
     ];
-    Ok(instructions)
-}
-
-#[cfg(feature = "app_api")]
-fn build_direct_contract_call_instructions(
-    authority: &iroha_data_model::account::AccountId,
-    namespace: &str,
-    contract_id: &str,
-    entrypoint: &str,
-    payload: Option<&IrohaJson>,
-    gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
-    gas_limit: u64,
-    manifest: &manifest::ContractManifest,
-    code_hash: &Hash,
-    code_bytes: Vec<u8>,
-) -> Result<Vec<iroha_data_model::isi::InstructionBox>> {
-    build_contract_call_trigger_instructions(
-        "cc",
-        authority,
-        namespace,
-        contract_id,
-        entrypoint,
-        payload,
-        gas_asset_id,
-        fee_sponsor,
-        gas_limit,
-        manifest,
-        code_hash,
-        code_bytes,
-    )
-}
-
-#[cfg(feature = "app_api")]
-fn build_multisig_contract_call_instructions(
-    multisig_account_id: &iroha_data_model::account::AccountId,
-    namespace: &str,
-    contract_id: &str,
-    entrypoint: &str,
-    payload: Option<&IrohaJson>,
-    gas_asset_id: Option<&str>,
-    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
-    gas_limit: u64,
-    manifest: &manifest::ContractManifest,
-    code_hash: &Hash,
-    code_bytes: Vec<u8>,
-) -> Result<(
-    Vec<iroha_data_model::isi::InstructionBox>,
-    HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
-)> {
-    let instructions = build_contract_call_trigger_instructions(
-        "msig_cc",
-        multisig_account_id,
-        namespace,
-        contract_id,
-        entrypoint,
-        payload,
-        gas_asset_id,
-        fee_sponsor,
-        gas_limit,
-        manifest,
-        code_hash,
-        code_bytes,
-    )?;
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
 }
@@ -7417,8 +7340,7 @@ mod multisig_contract_call_tests {
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
 
-        let first = derive_contract_call_trigger_id(
-            "msig_cc",
+        let first = derive_multisig_contract_call_trigger_id(
             &multisig,
             "apps",
             "calc.v1",
@@ -7430,8 +7352,7 @@ mod multisig_contract_call_tests {
             &code_hash,
         )
         .expect("trigger id");
-        let second = derive_contract_call_trigger_id(
-            "msig_cc",
+        let second = derive_multisig_contract_call_trigger_id(
             &multisig,
             "apps",
             "calc.v1",
@@ -7445,8 +7366,7 @@ mod multisig_contract_call_tests {
         .expect("trigger id");
         assert_eq!(first, second);
 
-        let changed = derive_contract_call_trigger_id(
-            "msig_cc",
+        let changed = derive_multisig_contract_call_trigger_id(
             &multisig,
             "apps",
             "calc.v1",
@@ -7492,7 +7412,7 @@ mod multisig_contract_call_tests {
         )
         .expect("instructions");
 
-        assert_eq!(instructions.len(), 2);
+        assert_eq!(instructions.len(), 3);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
     }
 }

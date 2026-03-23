@@ -24,6 +24,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     Encode,
     account::AccountId,
+    asset::AssetDefinitionId,
     isi::{self, InstructionBox},
     name::Name,
     prelude::ExposedPrivateKey,
@@ -37,14 +38,17 @@ use iroha_data_model::{
         SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
         SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
         SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
-        SoraModelArtifactRecordV1, SoraModelRegistryV1, SoraModelWeightActionV1,
-        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
-        SoraRolloutStageV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
-        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraTrainingJobStatusV1, encode_agent_artifact_allow_provenance_payload,
+        SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
+        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
+        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
+        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
+        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraRolloutStageV1,
+        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceLifecycleActionV1,
+        SoraServiceRolloutStateV1, SoraStateBindingV1, SoraStateEncryptionV1,
+        SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraTrainingJobActionV1,
+        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -52,7 +56,10 @@ use iroha_data_model::{
         encode_agent_wallet_approve_provenance_payload,
         encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
         encode_ciphertext_query_provenance_payload, encode_decryption_request_provenance_payload,
-        encode_fhe_job_run_provenance_payload, encode_model_artifact_register_provenance_payload,
+        encode_fhe_job_run_provenance_payload, encode_hf_shared_lease_join_provenance_payload,
+        encode_hf_shared_lease_leave_provenance_payload,
+        encode_hf_shared_lease_renew_provenance_payload,
+        encode_model_artifact_register_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
@@ -60,6 +67,7 @@ use iroha_data_model::{
         encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     },
+    sorafs::pin_registry::StorageClass,
     transaction::{SignedTransaction, signed::TransactionBuilder},
 };
 use mv::storage::StorageReadOnly;
@@ -91,6 +99,11 @@ const MODEL_WEIGHT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
 const MODEL_WEIGHT_MAX_REASON_BYTES: usize = 512;
 const MODEL_ARTIFACT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
+const HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1: u16 = 1;
+const HF_REPO_ID_MAX_BYTES: usize = 256;
+const HF_REVISION_MAX_BYTES: usize = 160;
+const HF_MODEL_NAME_MAX_BYTES: usize = 128;
+const HF_DEFAULT_RESOLVED_REVISION: &str = "main";
 const SCR_HOST_MAX_CPU_MILLIS: u32 = 64_000;
 const SCR_HOST_MAX_MEMORY_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 const SCR_HOST_MAX_EPHEMERAL_STORAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
@@ -374,6 +387,79 @@ pub(crate) struct AgentLeaseRenewPayload {
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub(crate) struct SignedAgentLeaseRenewRequest {
     pub payload: AgentLeaseRenewPayload,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct HfDeployPayload {
+    pub repo_id: String,
+    #[norito(default)]
+    pub revision: Option<String>,
+    pub model_name: String,
+    pub service_name: String,
+    #[norito(default)]
+    pub apartment_name: Option<String>,
+    pub storage_class: StorageClass,
+    pub lease_term_ms: u64,
+    pub lease_asset_definition_id: AssetDefinitionId,
+    pub base_fee_nanos: u128,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedHfDeployRequest {
+    pub payload: HfDeployPayload,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct HfLeaseLeavePayload {
+    pub repo_id: String,
+    #[norito(default)]
+    pub revision: Option<String>,
+    pub storage_class: StorageClass,
+    pub lease_term_ms: u64,
+    #[norito(default)]
+    pub service_name: Option<String>,
+    #[norito(default)]
+    pub apartment_name: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedHfLeaseLeaveRequest {
+    pub payload: HfLeaseLeavePayload,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct HfLeaseRenewPayload {
+    pub repo_id: String,
+    #[norito(default)]
+    pub revision: Option<String>,
+    pub model_name: String,
+    pub service_name: String,
+    #[norito(default)]
+    pub apartment_name: Option<String>,
+    pub storage_class: StorageClass,
+    pub lease_term_ms: u64,
+    pub lease_asset_definition_id: AssetDefinitionId,
+    pub base_fee_nanos: u128,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedHfLeaseRenewRequest {
+    pub payload: HfLeaseRenewPayload,
     pub provenance: ManifestProvenance,
     #[norito(default)]
     pub authority: Option<AccountId>,
@@ -953,6 +1039,36 @@ pub(crate) struct ModelArtifactStatusEntry {
     pub consumed_by_version: Option<String>,
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct HfSharedLeaseStatusResponse {
+    pub schema_version: u16,
+    pub source: SoraHfSourceRecordV1,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub pool: Option<SoraHfSharedLeasePoolV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub member: Option<SoraHfSharedLeaseMemberV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub latest_audit_event: Option<SoraHfSharedLeaseAuditEventV1>,
+    pub audit_event_count: u32,
+    pub importer_pending: bool,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct HfSharedLeaseMutationResponse {
+    pub schema_version: u16,
+    pub action: SoraHfSharedLeaseActionV1,
+    pub source: SoraHfSourceRecordV1,
+    pub pool: SoraHfSharedLeasePoolV1,
+    pub member: SoraHfSharedLeaseMemberV1,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub latest_audit_event: Option<SoraHfSharedLeaseAuditEventV1>,
+    pub importer_pending: bool,
+}
+
 #[derive(Clone, Debug, Default, JsonDeserialize)]
 pub(crate) struct HealthComplianceReportQuery {
     #[norito(default)]
@@ -979,6 +1095,17 @@ pub(crate) struct ModelWeightStatusQuery {
 pub(crate) struct ModelArtifactStatusQuery {
     pub service_name: String,
     pub training_job_id: String,
+}
+
+#[derive(Clone, Debug, JsonDeserialize)]
+pub(crate) struct HfSharedLeaseStatusQuery {
+    pub repo_id: String,
+    #[norito(default)]
+    pub revision: Option<String>,
+    pub storage_class: String,
+    pub lease_term_ms: u64,
+    #[norito(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize)]
@@ -1133,6 +1260,7 @@ struct ScrHostAdmission {
     runtime: SoraContainerRuntimeV1,
     allow_wallet_signing: bool,
     allow_state_writes: bool,
+    allow_model_inference: bool,
     allow_model_training: bool,
     network: SoraNetworkPolicyV1,
     cpu_millis: u32,
@@ -1163,6 +1291,8 @@ pub(crate) struct ControlPlaneServiceRevision {
     pub state_binding_count: u32,
     #[norito(default)]
     pub state_bindings: Vec<SoraStateBindingV1>,
+    #[norito(default)]
+    pub allow_model_inference: bool,
     #[norito(default)]
     pub allow_model_training: bool,
     /// Runtime type admitted by SCR for this revision.
@@ -2044,6 +2174,7 @@ fn admit_scr_host_bundle(
         network_policy.clone(),
         container.capabilities.allow_wallet_signing,
         container.capabilities.allow_state_writes,
+        container.capabilities.allow_model_inference,
         container.capabilities.allow_model_training,
         (
             resources.cpu_millis.get(),
@@ -2067,6 +2198,7 @@ fn admit_scr_host_bundle(
         runtime: container.runtime,
         allow_wallet_signing: container.capabilities.allow_wallet_signing,
         allow_state_writes: container.capabilities.allow_state_writes,
+        allow_model_inference: container.capabilities.allow_model_inference,
         allow_model_training: container.capabilities.allow_model_training,
         network: network_policy,
         cpu_millis: resources.cpu_millis.get(),
@@ -2103,6 +2235,17 @@ fn parse_agent_apartment_name(apartment_name: &str) -> Result<String, SoracloudE
     Ok(parsed.to_string())
 }
 
+fn parse_service_name(service_name: &str) -> Result<Name, SoracloudError> {
+    service_name
+        .trim()
+        .parse()
+        .map_err(|err| SoracloudError::bad_request(format!("invalid service_name: {err}")))
+}
+
+fn parse_optional_service_name(service_name: Option<&str>) -> Result<Option<Name>, SoracloudError> {
+    service_name.map(parse_service_name).transpose()
+}
+
 fn parse_agent_capability_name(capability: &str) -> Result<String, SoracloudError> {
     let normalized = capability.trim();
     let parsed: Name = normalized
@@ -2117,6 +2260,93 @@ fn parse_training_model_name(model_name: &str) -> Result<String, SoracloudError>
         .parse()
         .map_err(|err| SoracloudError::bad_request(format!("invalid model_name: {err}")))?;
     Ok(parsed.to_string())
+}
+
+fn normalize_hf_token(
+    field_name: &'static str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<String, SoracloudError> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(SoracloudError::bad_request(format!(
+            "{field_name} must not be empty"
+        )));
+    }
+    if normalized.len() > max_bytes {
+        return Err(SoracloudError::bad_request(format!(
+            "{field_name} exceeds max bytes ({max_bytes})"
+        )));
+    }
+    if normalized.chars().any(char::is_control) || normalized.chars().any(char::is_whitespace) {
+        return Err(SoracloudError::bad_request(format!(
+            "{field_name} must not contain control characters or whitespace"
+        )));
+    }
+    Ok(normalized.to_owned())
+}
+
+fn parse_hf_repo_id(repo_id: &str) -> Result<String, SoracloudError> {
+    normalize_hf_token("repo_id", repo_id, HF_REPO_ID_MAX_BYTES)
+}
+
+fn parse_hf_revision(resolved_revision: &str) -> Result<String, SoracloudError> {
+    normalize_hf_token(
+        "resolved_revision",
+        resolved_revision,
+        HF_REVISION_MAX_BYTES,
+    )
+}
+
+fn parse_hf_resolved_revision(resolved_revision: Option<&str>) -> Result<String, SoracloudError> {
+    resolved_revision
+        .map(parse_hf_revision)
+        .transpose()
+        .map(|resolved| resolved.unwrap_or_else(|| HF_DEFAULT_RESOLVED_REVISION.to_owned()))
+}
+
+fn parse_hf_model_name(model_name: &str) -> Result<String, SoracloudError> {
+    normalize_hf_token("model_name", model_name, HF_MODEL_NAME_MAX_BYTES)
+}
+
+fn parse_optional_account_id(
+    account_id: Option<&str>,
+) -> Result<Option<AccountId>, SoracloudError> {
+    account_id
+        .map(|literal| {
+            AccountId::parse_encoded(literal.trim())
+                .map(|parsed| parsed.into_account_id())
+                .map_err(|err| SoracloudError::bad_request(format!("invalid account_id: {err}")))
+        })
+        .transpose()
+}
+
+fn parse_storage_class_query(storage_class: &str) -> Result<StorageClass, SoracloudError> {
+    match storage_class.trim().to_ascii_lowercase().as_str() {
+        "hot" => Ok(StorageClass::Hot),
+        "warm" => Ok(StorageClass::Warm),
+        "cold" => Ok(StorageClass::Cold),
+        _ => Err(SoracloudError::bad_request(
+            "invalid storage_class: expected one of hot, warm, or cold",
+        )),
+    }
+}
+
+fn hf_source_id(repo_id: &str, resolved_revision: &str) -> Result<Hash, SoracloudError> {
+    let payload = norito::to_bytes(&(repo_id, resolved_revision))
+        .map_err(|err| SoracloudError::internal(format!("failed to encode hf source id: {err}")))?;
+    Ok(Hash::new(payload))
+}
+
+fn hf_shared_lease_pool_id(
+    source_id: Hash,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+) -> Result<Hash, SoracloudError> {
+    let payload = norito::to_bytes(&(source_id, storage_class, lease_term_ms)).map_err(|err| {
+        SoracloudError::internal(format!("failed to encode hf shared lease pool id: {err}"))
+    })?;
+    Ok(Hash::new(payload))
 }
 
 fn parse_training_job_id(job_id: &str) -> Result<String, SoracloudError> {
@@ -3190,6 +3420,50 @@ fn verify_agent_autonomy_run_signature(
     Ok(())
 }
 
+fn verify_hf_deploy_signature(request: &SignedHfDeployRequest) -> Result<(), SoracloudError> {
+    let payload = encode_hf_deploy_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized("hf deploy provenance signature verification failed")
+        })?;
+    Ok(())
+}
+
+fn verify_hf_lease_leave_signature(
+    request: &SignedHfLeaseLeaveRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_hf_lease_leave_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "hf shared-lease leave provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn verify_hf_lease_renew_signature(
+    request: &SignedHfLeaseRenewRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_hf_lease_renew_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "hf shared-lease renew provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
 fn encode_rollout_signature_payload(
     payload: &RolloutAdvancePayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -3506,6 +3780,117 @@ fn encode_agent_autonomy_run_signature_payload(
     })
 }
 
+fn encode_hf_deploy_signature_payload(
+    payload: &HfDeployPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    let repo_id = parse_hf_repo_id(&payload.repo_id)?;
+    let resolved_revision = parse_hf_resolved_revision(payload.revision.as_deref())?;
+    let model_name = parse_hf_model_name(&payload.model_name)?;
+    let service_name = parse_service_name(&payload.service_name)?.to_string();
+    let apartment_name = payload
+        .apartment_name
+        .as_deref()
+        .map(parse_agent_apartment_name)
+        .transpose()?;
+    if payload.lease_term_ms == 0 {
+        return Err(SoracloudError::bad_request(
+            "lease_term_ms must be greater than zero",
+        ));
+    }
+    if payload.base_fee_nanos == 0 {
+        return Err(SoracloudError::bad_request(
+            "base_fee_nanos must be greater than zero",
+        ));
+    }
+    encode_hf_shared_lease_join_provenance_payload(
+        &repo_id,
+        &resolved_revision,
+        &model_name,
+        &service_name,
+        apartment_name.as_deref(),
+        payload.storage_class,
+        payload.lease_term_ms,
+        &payload.lease_asset_definition_id,
+        payload.base_fee_nanos,
+    )
+    .map_err(|err| SoracloudError::internal(format!("failed to encode hf deploy payload: {err}")))
+}
+
+fn encode_hf_lease_leave_signature_payload(
+    payload: &HfLeaseLeavePayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    let repo_id = parse_hf_repo_id(&payload.repo_id)?;
+    let resolved_revision = parse_hf_resolved_revision(payload.revision.as_deref())?;
+    let service_name = payload
+        .service_name
+        .as_deref()
+        .map(|value| parse_service_name(value).map(|name| name.to_string()))
+        .transpose()?;
+    let apartment_name = payload
+        .apartment_name
+        .as_deref()
+        .map(parse_agent_apartment_name)
+        .transpose()?;
+    if payload.lease_term_ms == 0 {
+        return Err(SoracloudError::bad_request(
+            "lease_term_ms must be greater than zero",
+        ));
+    }
+    encode_hf_shared_lease_leave_provenance_payload(
+        &repo_id,
+        &resolved_revision,
+        payload.storage_class,
+        payload.lease_term_ms,
+        service_name.as_deref(),
+        apartment_name.as_deref(),
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode hf shared-lease leave payload: {err}"
+        ))
+    })
+}
+
+fn encode_hf_lease_renew_signature_payload(
+    payload: &HfLeaseRenewPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    let repo_id = parse_hf_repo_id(&payload.repo_id)?;
+    let resolved_revision = parse_hf_resolved_revision(payload.revision.as_deref())?;
+    let model_name = parse_hf_model_name(&payload.model_name)?;
+    let service_name = parse_service_name(&payload.service_name)?.to_string();
+    let apartment_name = payload
+        .apartment_name
+        .as_deref()
+        .map(parse_agent_apartment_name)
+        .transpose()?;
+    if payload.lease_term_ms == 0 {
+        return Err(SoracloudError::bad_request(
+            "lease_term_ms must be greater than zero",
+        ));
+    }
+    if payload.base_fee_nanos == 0 {
+        return Err(SoracloudError::bad_request(
+            "base_fee_nanos must be greater than zero",
+        ));
+    }
+    encode_hf_shared_lease_renew_provenance_payload(
+        &repo_id,
+        &resolved_revision,
+        &model_name,
+        &service_name,
+        apartment_name.as_deref(),
+        payload.storage_class,
+        payload.lease_term_ms,
+        &payload.lease_asset_definition_id,
+        payload.base_fee_nanos,
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode hf shared-lease renew payload: {err}"
+        ))
+    })
+}
+
 #[derive(Clone)]
 struct SoracloudMutationSigner {
     authority: AccountId,
@@ -3518,6 +3903,7 @@ struct SoracloudAuditBaseline {
     training_job_max: u64,
     model_weight_max: u64,
     model_artifact_max: u64,
+    hf_shared_lease_max: u64,
     agent_apartment_max: u64,
 }
 
@@ -3599,6 +3985,12 @@ fn soracloud_audit_baseline(app: &SharedAppState) -> SoracloudAuditBaseline {
             .unwrap_or(0),
         model_artifact_max: world
             .soracloud_model_artifact_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        hf_shared_lease_max: world
+            .soracloud_hf_shared_lease_audit_events()
             .iter()
             .map(|(sequence, _event)| *sequence)
             .max()
@@ -3704,6 +4096,22 @@ where
 {
     world
         .soracloud_model_artifact_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
+        .map(|(_sequence, event)| event)
+        .max_by_key(|event| event.sequence)
+}
+
+fn latest_hf_shared_lease_audit_event_after<'a, P>(
+    world: &'a impl WorldReadOnly,
+    after_sequence: u64,
+    predicate: P,
+) -> Option<&'a SoraHfSharedLeaseAuditEventV1>
+where
+    P: Fn(&SoraHfSharedLeaseAuditEventV1) -> bool,
+{
+    world
+        .soracloud_hf_shared_lease_audit_events()
         .iter()
         .filter(|(_sequence, event)| event.sequence > after_sequence && predicate(event))
         .map(|(_sequence, event)| event)
@@ -4092,6 +4500,63 @@ fn authoritative_model_artifact_status_response(
     })
 }
 
+fn authoritative_hf_shared_lease_status_response(
+    app: &SharedAppState,
+    repo_id: &str,
+    resolved_revision: &str,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    account_id: Option<&AccountId>,
+) -> Result<HfSharedLeaseStatusResponse, SoracloudError> {
+    if lease_term_ms == 0 {
+        return Err(SoracloudError::bad_request(
+            "lease_term_ms must be greater than zero",
+        ));
+    }
+
+    let source_id = hf_source_id(repo_id, resolved_revision)?;
+    let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
+    let member_key = account_id.map(|account_id| (pool_id.to_string(), account_id.to_string()));
+
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let source = world
+        .soracloud_hf_sources()
+        .get(&source_id)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "hf source `{repo_id}@{resolved_revision}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let pool = world
+        .soracloud_hf_shared_lease_pools()
+        .get(&pool_id)
+        .cloned();
+    let member = member_key.as_ref().and_then(|member_key| {
+        world
+            .soracloud_hf_shared_lease_members()
+            .get(member_key)
+            .cloned()
+    });
+    let latest_audit_event = world
+        .soracloud_hf_shared_lease_audit_events()
+        .iter()
+        .filter(|(_sequence, event)| event.pool_id == pool_id)
+        .map(|(_sequence, event)| event.clone())
+        .max_by_key(|event| event.sequence);
+
+    Ok(HfSharedLeaseStatusResponse {
+        schema_version: HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1,
+        source: source.clone(),
+        pool,
+        member,
+        latest_audit_event,
+        audit_event_count: authoritative_hf_shared_lease_event_count(world, &pool_id),
+        importer_pending: source.status != SoraHfSourceStatusV1::Ready,
+    })
+}
+
 fn authoritative_training_job_action(action: SoraTrainingJobActionV1) -> TrainingJobAction {
     match action {
         SoraTrainingJobActionV1::Start => TrainingJobAction::Start,
@@ -4112,6 +4577,17 @@ fn authoritative_model_artifact_action(action: SoraModelArtifactActionV1) -> Mod
     match action {
         SoraModelArtifactActionV1::Register => ModelArtifactAction::Register,
     }
+}
+
+fn authoritative_hf_shared_lease_event_count(world: &impl WorldReadOnly, pool_id: &Hash) -> u32 {
+    u32::try_from(
+        world
+            .soracloud_hf_shared_lease_audit_events()
+            .iter()
+            .filter(|(_sequence, event)| event.pool_id == *pool_id)
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 fn authoritative_agent_action(action: SoraAgentApartmentActionV1) -> AgentApartmentAction {
@@ -4898,6 +5374,82 @@ fn authoritative_model_artifact_mutation_response(
     })
 }
 
+fn authoritative_hf_shared_lease_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    repo_id: &str,
+    resolved_revision: &str,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    account_id: &AccountId,
+    service_name: Option<&str>,
+    apartment_name: Option<&str>,
+) -> Result<HfSharedLeaseMutationResponse, SoracloudError> {
+    if lease_term_ms == 0 {
+        return Err(SoracloudError::bad_request(
+            "lease_term_ms must be greater than zero",
+        ));
+    }
+
+    let source_id = hf_source_id(repo_id, resolved_revision)?;
+    let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
+    let member_key = (pool_id.to_string(), account_id.to_string());
+
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let source = world
+        .soracloud_hf_sources()
+        .get(&source_id)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::not_found(format!(
+                "hf source `{repo_id}@{resolved_revision}` not found in authoritative Soracloud state"
+            ))
+        })?;
+    let pool = world
+        .soracloud_hf_shared_lease_pools()
+        .get(&pool_id)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "hf shared lease pool for `{repo_id}@{resolved_revision}` is missing from authoritative Soracloud state"
+            ))
+        })?;
+    let member = world
+        .soracloud_hf_shared_lease_members()
+        .get(&member_key)
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "hf shared lease membership for account `{account_id}` in pool `{pool_id}` is missing from authoritative state"
+            ))
+        })?;
+    let event = latest_hf_shared_lease_audit_event_after(world, baseline.hf_shared_lease_max, |event| {
+        event.pool_id == pool_id
+            && event.account_id == *account_id
+            && service_name.is_none_or(|service_name| event.service_name.as_deref() == Some(service_name))
+            && apartment_name.is_none_or(|apartment_name| {
+                event.apartment_name.as_deref() == Some(apartment_name)
+            })
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative hf shared-lease mutation for `{repo_id}@{resolved_revision}` account `{account_id}` was not observed after mutation"
+        ))
+    })?;
+
+    Ok(HfSharedLeaseMutationResponse {
+        schema_version: HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1,
+        action: event.action,
+        source: source.clone(),
+        pool: pool.clone(),
+        member,
+        latest_audit_event: Some(event),
+        importer_pending: source.status != SoraHfSourceStatusV1::Ready,
+    })
+}
+
 fn authoritative_agent_deploy_mutation_response(
     app: &SharedAppState,
     baseline: &SoracloudAuditBaseline,
@@ -5366,6 +5918,12 @@ fn authoritative_soracloud_sequence(app: &SharedAppState) -> u64 {
             .unwrap_or(0),
         world
             .soracloud_model_artifact_audit_events()
+            .iter()
+            .map(|(sequence, _event)| *sequence)
+            .max()
+            .unwrap_or(0),
+        world
+            .soracloud_hf_shared_lease_audit_events()
             .iter()
             .map(|(sequence, _event)| *sequence)
             .max()
@@ -5998,6 +6556,7 @@ fn deployment_bundle_to_control_plane_revision(
         route_path_prefix: route.map(|route| route.path_prefix.clone()),
         state_binding_count: u32::try_from(bundle.service.state_bindings.len()).unwrap_or(u32::MAX),
         state_bindings: bundle.service.state_bindings.clone(),
+        allow_model_inference: bundle.container.capabilities.allow_model_inference,
         allow_model_training: bundle.container.capabilities.allow_model_training,
         runtime: bundle.container.runtime,
         allow_wallet_signing: bundle.container.capabilities.allow_wallet_signing,
@@ -7133,6 +7692,308 @@ pub(crate) async fn handle_model_artifact_status(
     }
 }
 
+pub(crate) async fn handle_hf_deploy(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedHfDeployRequest>,
+) -> Response {
+    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/deploy").await {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_hf_deploy_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let authority = signer.authority.clone();
+    let repo_id = match parse_hf_repo_id(&request.payload.repo_id) {
+        Ok(repo_id) => repo_id,
+        Err(err) => return err.into_response(),
+    };
+    let resolved_revision = match parse_hf_resolved_revision(request.payload.revision.as_deref()) {
+        Ok(resolved_revision) => resolved_revision,
+        Err(err) => return err.into_response(),
+    };
+    let model_name = match parse_hf_model_name(&request.payload.model_name) {
+        Ok(model_name) => model_name,
+        Err(err) => return err.into_response(),
+    };
+    let service_name = match parse_service_name(&request.payload.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let apartment_name = match request
+        .payload
+        .apartment_name
+        .as_deref()
+        .map(|value| value.trim().parse::<Name>())
+        .transpose()
+    {
+        Ok(apartment_name) => apartment_name,
+        Err(err) => {
+            return SoracloudError::bad_request(format!("invalid apartment_name: {err}"))
+                .into_response();
+        }
+    };
+    let service_label = service_name.to_string();
+    let apartment_label = apartment_name.as_ref().map(ToString::to_string);
+    let storage_class = request.payload.storage_class;
+    let lease_term_ms = request.payload.lease_term_ms;
+    let lease_asset_definition_id = request.payload.lease_asset_definition_id.clone();
+    let base_fee_nanos = request.payload.base_fee_nanos;
+
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::JoinSoracloudHfSharedLease {
+            repo_id: repo_id.clone(),
+            resolved_revision: resolved_revision.clone(),
+            model_name,
+            service_name,
+            apartment_name,
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id,
+            base_fee_nanos,
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/hf/deploy",
+        move |app, baseline| {
+            authoritative_hf_shared_lease_mutation_response(
+                app,
+                baseline,
+                &repo_id,
+                &resolved_revision,
+                storage_class,
+                lease_term_ms,
+                &authority,
+                Some(service_label.as_str()),
+                apartment_label.as_deref(),
+            )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_hf_status(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoQuery(query): NoritoQuery<HfSharedLeaseStatusQuery>,
+) -> Response {
+    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/status").await {
+        return err.into_response();
+    }
+
+    let repo_id = match parse_hf_repo_id(&query.repo_id) {
+        Ok(repo_id) => repo_id,
+        Err(err) => return err.into_response(),
+    };
+    let resolved_revision = match parse_hf_resolved_revision(query.revision.as_deref()) {
+        Ok(resolved_revision) => resolved_revision,
+        Err(err) => return err.into_response(),
+    };
+    let storage_class = match parse_storage_class_query(&query.storage_class) {
+        Ok(storage_class) => storage_class,
+        Err(err) => return err.into_response(),
+    };
+    let account_id = match parse_optional_account_id(query.account_id.as_deref()) {
+        Ok(account_id) => account_id,
+        Err(err) => return err.into_response(),
+    };
+
+    match authoritative_hf_shared_lease_status_response(
+        &app,
+        &repo_id,
+        &resolved_revision,
+        storage_class,
+        query.lease_term_ms,
+        account_id.as_ref(),
+    ) {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_hf_lease_leave(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedHfLeaseLeaveRequest>,
+) -> Response {
+    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/lease/leave").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_hf_lease_leave_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let authority = signer.authority.clone();
+    let repo_id = match parse_hf_repo_id(&request.payload.repo_id) {
+        Ok(repo_id) => repo_id,
+        Err(err) => return err.into_response(),
+    };
+    let resolved_revision = match parse_hf_resolved_revision(request.payload.revision.as_deref()) {
+        Ok(resolved_revision) => resolved_revision,
+        Err(err) => return err.into_response(),
+    };
+    let service_name = match parse_optional_service_name(request.payload.service_name.as_deref()) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let apartment_name = match request
+        .payload
+        .apartment_name
+        .as_deref()
+        .map(|value| value.trim().parse::<Name>())
+        .transpose()
+    {
+        Ok(apartment_name) => apartment_name,
+        Err(err) => {
+            return SoracloudError::bad_request(format!("invalid apartment_name: {err}"))
+                .into_response();
+        }
+    };
+    let service_label = service_name.as_ref().map(ToString::to_string);
+    let apartment_label = apartment_name.as_ref().map(ToString::to_string);
+    let storage_class = request.payload.storage_class;
+    let lease_term_ms = request.payload.lease_term_ms;
+
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::LeaveSoracloudHfSharedLease {
+            repo_id: repo_id.clone(),
+            resolved_revision: resolved_revision.clone(),
+            storage_class,
+            lease_term_ms,
+            service_name,
+            apartment_name,
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/hf/lease/leave",
+        move |app, baseline| {
+            authoritative_hf_shared_lease_mutation_response(
+                app,
+                baseline,
+                &repo_id,
+                &resolved_revision,
+                storage_class,
+                lease_term_ms,
+                &authority,
+                service_label.as_deref(),
+                apartment_label.as_deref(),
+            )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_hf_lease_renew(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedHfLeaseRenewRequest>,
+) -> Response {
+    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/lease/renew").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_hf_lease_renew_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let authority = signer.authority.clone();
+    let repo_id = match parse_hf_repo_id(&request.payload.repo_id) {
+        Ok(repo_id) => repo_id,
+        Err(err) => return err.into_response(),
+    };
+    let resolved_revision = match parse_hf_resolved_revision(request.payload.revision.as_deref()) {
+        Ok(resolved_revision) => resolved_revision,
+        Err(err) => return err.into_response(),
+    };
+    let model_name = match parse_hf_model_name(&request.payload.model_name) {
+        Ok(model_name) => model_name,
+        Err(err) => return err.into_response(),
+    };
+    let service_name = match parse_service_name(&request.payload.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let apartment_name = match request
+        .payload
+        .apartment_name
+        .as_deref()
+        .map(|value| value.trim().parse::<Name>())
+        .transpose()
+    {
+        Ok(apartment_name) => apartment_name,
+        Err(err) => {
+            return SoracloudError::bad_request(format!("invalid apartment_name: {err}"))
+                .into_response();
+        }
+    };
+    let service_label = service_name.to_string();
+    let apartment_label = apartment_name.as_ref().map(ToString::to_string);
+    let storage_class = request.payload.storage_class;
+    let lease_term_ms = request.payload.lease_term_ms;
+    let lease_asset_definition_id = request.payload.lease_asset_definition_id.clone();
+    let base_fee_nanos = request.payload.base_fee_nanos;
+
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::RenewSoracloudHfSharedLease {
+            repo_id: repo_id.clone(),
+            resolved_revision: resolved_revision.clone(),
+            model_name,
+            service_name,
+            apartment_name,
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id,
+            base_fee_nanos,
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/hf/lease/renew",
+        move |app, baseline| {
+            authoritative_hf_shared_lease_mutation_response(
+                app,
+                baseline,
+                &repo_id,
+                &resolved_revision,
+                storage_class,
+                lease_term_ms,
+                &authority,
+                Some(service_label.as_str()),
+                apartment_label.as_deref(),
+            )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
 pub(crate) async fn handle_agent_deploy(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -7751,7 +8612,8 @@ mod tests {
     use iroha_crypto::{KeyPair, Signature};
     use iroha_data_model::{
         Encode,
-        account::Account,
+        account::{Account, AccountId},
+        asset::AssetDefinitionId,
         domain::Domain,
         isi::Grant,
         name::Name,
@@ -7760,10 +8622,16 @@ mod tests {
         soracloud::{
             AgentApartmentManifestV1, CiphertextQueryMetadataLevelV1, CiphertextQuerySpecV1,
             DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1,
-            FheParamSetV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1,
+            FheParamSetV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+            SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_HF_SOURCE_RECORD_VERSION_V1,
+            SoraContainerManifestV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
+            SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+            SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
             SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceLifecycleActionV1,
             SoraServiceManifestV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
         },
+        sorafs::pin_registry::StorageClass,
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
@@ -7845,6 +8713,12 @@ mod tests {
         load_json(&workspace_fixture(
             "fixtures/soracloud/ciphertext_query_spec_v1.json",
         ))
+    }
+
+    fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
+        "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+            .parse()
+            .expect("valid asset definition")
     }
 
     fn signed_bundle_request(
@@ -8391,10 +9265,7 @@ mod tests {
                     },
                 );
             world.soracloud_model_registries_mut_for_testing().insert(
-                (
-                    service_name.as_ref().to_owned(),
-                    "vision_model".to_string(),
-                ),
+                (service_name.as_ref().to_owned(), "vision_model".to_string()),
                 iroha_data_model::soracloud::SoraModelRegistryV1 {
                     schema_version: iroha_data_model::soracloud::SORA_MODEL_REGISTRY_VERSION_V1,
                     service_name: service_name.clone(),
@@ -8407,30 +9278,38 @@ mod tests {
             world
                 .soracloud_model_weight_versions_mut_for_testing()
                 .insert(
-                    (
-                        service_name.as_ref().to_owned(),
-                        "vision_model".to_string(),
-                        "v2".to_string(),
+                (
+                    service_name.as_ref().to_owned(),
+                    "vision_model".to_string(),
+                    "v2".to_string(),
+                ),
+                iroha_data_model::soracloud::SoraModelWeightVersionRecordV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: bundle.service.service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    weight_version: "v2".to_string(),
+                    parent_version: Some("v1".to_string()),
+                    training_job_id: "job-1".to_string(),
+                    source_provenance: Some(
+                        iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
+                            kind:
+                                iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
+                            id: "job-1".to_string(),
+                        },
                     ),
-                    iroha_data_model::soracloud::SoraModelWeightVersionRecordV1 {
-                        schema_version: iroha_data_model::soracloud::SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
-                        service_name: service_name.clone(),
-                        service_version: bundle.service.service_version.clone(),
-                        model_name: "vision_model".to_string(),
-                        weight_version: "v2".to_string(),
-                        parent_version: Some("v1".to_string()),
-                        training_job_id: "job-1".to_string(),
-                        weight_artifact_hash: Hash::new(b"weights"),
-                        dataset_ref: "dataset://train".to_string(),
-                        training_config_hash: Hash::new(b"train-config"),
-                        reproducibility_hash: Hash::new(b"repro"),
-                        provenance_attestation_hash: Hash::new(b"prov"),
-                        registered_sequence: 7,
-                        promoted_sequence: Some(9),
-                        gate_report_hash: Some(Hash::new(b"gate")),
-                        promoted_by: Some(KeyPair::random().public_key().clone()),
-                    },
-                );
+                    weight_artifact_hash: Hash::new(b"weights"),
+                    dataset_ref: "dataset://train".to_string(),
+                    training_config_hash: Hash::new(b"train-config"),
+                    reproducibility_hash: Hash::new(b"repro"),
+                    provenance_attestation_hash: Hash::new(b"prov"),
+                    registered_sequence: 7,
+                    promoted_sequence: Some(9),
+                    gate_report_hash: Some(Hash::new(b"gate")),
+                    promoted_by: Some(KeyPair::random().public_key().clone()),
+                },
+            );
 
             let app = mk_app_state_for_tests_with_world(world);
             let response =
@@ -8491,6 +9370,13 @@ mod tests {
                     service_version: bundle.service.service_version.clone(),
                     model_name: "vision_model".to_string(),
                     training_job_id: "job-1".to_string(),
+                    source_provenance: Some(
+                        iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
+                            kind:
+                                iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
+                            id: "job-1".to_string(),
+                        },
+                    ),
                     weight_artifact_hash: Hash::new(b"weights"),
                     dataset_ref: "dataset://train".to_string(),
                     training_config_hash: Hash::new(b"train-config"),
@@ -9456,5 +10342,392 @@ mod tests {
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn hf_deploy_signature_payload_layout_is_canonical_tuple() {
+        let payload = HfDeployPayload {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: None,
+            model_name: "gpt_oss_20b".to_owned(),
+            service_name: "vision_portal".to_owned(),
+            apartment_name: Some("ops_agent".to_owned()),
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+            lease_asset_definition_id: hf_shared_lease_asset_definition(),
+            base_fee_nanos: 10_000,
+        };
+        let encoded =
+            encode_hf_deploy_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            "openai/gpt-oss",
+            "main",
+            "gpt_oss_20b",
+            "vision_portal",
+            Some("ops_agent"),
+            StorageClass::Warm,
+            604_800_000_u64,
+            hf_shared_lease_asset_definition(),
+            10_000_u128,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn hf_lease_leave_signature_payload_layout_is_canonical_tuple() {
+        let payload = HfLeaseLeavePayload {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: Some("refs/pr/7".to_owned()),
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+            service_name: Some("vision_portal".to_owned()),
+            apartment_name: Some("ops_agent".to_owned()),
+        };
+        let encoded =
+            encode_hf_lease_leave_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            "openai/gpt-oss",
+            "refs/pr/7",
+            StorageClass::Warm,
+            604_800_000_u64,
+            Some("vision_portal"),
+            Some("ops_agent"),
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn hf_lease_renew_signature_payload_layout_is_canonical_tuple() {
+        let payload = HfLeaseRenewPayload {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: Some("0123456789abcdef".to_owned()),
+            model_name: "gpt_oss_20b".to_owned(),
+            service_name: "vision_portal".to_owned(),
+            apartment_name: Some("ops_agent".to_owned()),
+            storage_class: StorageClass::Warm,
+            lease_term_ms: 604_800_000,
+            lease_asset_definition_id: hf_shared_lease_asset_definition(),
+            base_fee_nanos: 20_000,
+        };
+        let encoded =
+            encode_hf_lease_renew_signature_payload(&payload).expect("encode signature payload");
+        let expected = norito::to_bytes(&(
+            "openai/gpt-oss",
+            "0123456789abcdef",
+            "gpt_oss_20b",
+            "vision_portal",
+            Some("ops_agent"),
+            StorageClass::Warm,
+            604_800_000_u64,
+            hf_shared_lease_asset_definition(),
+            20_000_u128,
+        ))
+        .expect("encode canonical tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn admit_scr_host_bundle_exposes_model_inference_capability() {
+        let mut bundle = fixture_bundle("2026.04.0");
+        bundle.container.capabilities.allow_model_inference = true;
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+
+        let admission = admit_scr_host_bundle(&bundle).expect("SCR admission should succeed");
+        assert!(admission.allow_model_inference);
+
+        let deployment = SoraServiceDeploymentStateV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            current_service_version: bundle.service.service_version.clone(),
+            current_service_manifest_hash: bundle.service_manifest_hash(),
+            current_container_manifest_hash: bundle.container_manifest_hash(),
+            revision_count: 1,
+            process_generation: 1,
+            process_started_sequence: 1,
+            active_rollout: None,
+            last_rollout: None,
+        };
+        let revision = deployment_bundle_to_control_plane_revision(&deployment, &bundle, None);
+        assert!(revision.allow_model_inference);
+    }
+
+    #[test]
+    fn parse_storage_class_query_accepts_case_insensitive_labels() {
+        assert_eq!(
+            parse_storage_class_query("warm").expect("warm should parse"),
+            StorageClass::Warm
+        );
+        assert_eq!(
+            parse_storage_class_query("Hot").expect("Hot should parse"),
+            StorageClass::Hot
+        );
+        assert!(parse_storage_class_query("archive").is_err());
+    }
+
+    #[test]
+    fn authoritative_hf_shared_lease_status_reads_world_state() -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let repo_id = "openai/gpt-oss";
+            let resolved_revision = "0123456789abcdef";
+            let model_name = "gpt_oss_20b";
+            let storage_class = StorageClass::Warm;
+            let lease_term_ms = 604_800_000_u64;
+            let source_id = hf_source_id(repo_id, resolved_revision)
+                .map_err(|err| eyre::eyre!("failed to derive hf source id: {err:?}"))?;
+            let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)
+                .map_err(|err| eyre::eyre!("failed to derive hf pool id: {err:?}"))?;
+            let asset_definition = hf_shared_lease_asset_definition();
+            let mut world = World::default();
+
+            world.soracloud_hf_sources_mut_for_testing().insert(
+                source_id,
+                SoraHfSourceRecordV1 {
+                    schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
+                    source_id,
+                    repo_id: repo_id.to_owned(),
+                    resolved_revision: resolved_revision.to_owned(),
+                    model_name: model_name.to_owned(),
+                    adapter_id: "hf.shared.v1".to_owned(),
+                    normalized_runtime_hash: Hash::new(b"hf-runtime"),
+                    status: SoraHfSourceStatusV1::PendingImport,
+                    created_at_ms: 10,
+                    updated_at_ms: 20,
+                    last_error: None,
+                },
+            );
+            world
+                .soracloud_hf_shared_lease_pools_mut_for_testing()
+                .insert(
+                    pool_id,
+                    SoraHfSharedLeasePoolV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        storage_class,
+                        lease_asset_definition_id: asset_definition.clone(),
+                        base_fee_nanos: 10_000,
+                        lease_term_ms,
+                        window_started_at_ms: 10,
+                        window_expires_at_ms: lease_term_ms + 10,
+                        active_member_count: 1,
+                        status: SoraHfSharedLeaseStatusV1::Active,
+                    },
+                );
+            world
+                .soracloud_hf_shared_lease_members_mut_for_testing()
+                .insert(
+                    (pool_id.to_string(), ALICE_ID.to_string()),
+                    SoraHfSharedLeaseMemberV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        account_id: ALICE_ID.clone(),
+                        status: SoraHfSharedLeaseMemberStatusV1::Active,
+                        joined_at_ms: 10,
+                        updated_at_ms: 20,
+                        total_paid_nanos: 10_000,
+                        total_refunded_nanos: 0,
+                        last_charge_nanos: 10_000,
+                        service_bindings: std::collections::BTreeSet::from([
+                            "vision_portal".to_owned()
+                        ]),
+                        apartment_bindings: std::collections::BTreeSet::from([
+                            "ops_agent".to_owned()
+                        ]),
+                    },
+                );
+            world
+                .soracloud_hf_shared_lease_audit_events_mut_for_testing()
+                .insert(
+                    7,
+                    SoraHfSharedLeaseAuditEventV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+                        sequence: 7,
+                        action: SoraHfSharedLeaseActionV1::CreateWindow,
+                        pool_id,
+                        source_id,
+                        account_id: ALICE_ID.clone(),
+                        occurred_at_ms: 10,
+                        active_member_count: 1,
+                        charged_nanos: 10_000,
+                        refunded_nanos: 0,
+                        lease_expires_at_ms: lease_term_ms + 10,
+                        service_name: Some("vision_portal".to_owned()),
+                        apartment_name: Some("ops_agent".to_owned()),
+                    },
+                );
+
+            let app = mk_app_state_for_tests_with_world(world);
+            let response = authoritative_hf_shared_lease_status_response(
+                &app,
+                repo_id,
+                resolved_revision,
+                storage_class,
+                lease_term_ms,
+                Some(&ALICE_ID),
+            )
+            .map_err(|err| eyre::eyre!("authoritative hf status failed: {err:?}"))?;
+
+            assert_eq!(
+                response.schema_version,
+                HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1
+            );
+            assert_eq!(response.source.source_id, source_id);
+            assert_eq!(response.pool.as_ref().expect("pool").pool_id, pool_id);
+            assert_eq!(
+                response.member.as_ref().expect("member").account_id,
+                ALICE_ID.clone()
+            );
+            assert_eq!(response.audit_event_count, 1);
+            assert!(response.importer_pending);
+            assert_eq!(
+                response
+                    .latest_audit_event
+                    .as_ref()
+                    .expect("audit event")
+                    .action,
+                SoraHfSharedLeaseActionV1::CreateWindow
+            );
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn authoritative_hf_shared_lease_mutation_reads_world_state() -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let repo_id = "openai/gpt-oss";
+            let resolved_revision = "0123456789abcdef";
+            let model_name = "gpt_oss_20b";
+            let storage_class = StorageClass::Warm;
+            let lease_term_ms = 604_800_000_u64;
+            let source_id = hf_source_id(repo_id, resolved_revision)
+                .map_err(|err| eyre::eyre!("failed to derive hf source id: {err:?}"))?;
+            let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)
+                .map_err(|err| eyre::eyre!("failed to derive hf pool id: {err:?}"))?;
+            let asset_definition = hf_shared_lease_asset_definition();
+            let mut world = World::default();
+
+            world.soracloud_hf_sources_mut_for_testing().insert(
+                source_id,
+                SoraHfSourceRecordV1 {
+                    schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
+                    source_id,
+                    repo_id: repo_id.to_owned(),
+                    resolved_revision: resolved_revision.to_owned(),
+                    model_name: model_name.to_owned(),
+                    adapter_id: "hf.shared.v1".to_owned(),
+                    normalized_runtime_hash: Hash::new(b"hf-runtime"),
+                    status: SoraHfSourceStatusV1::Ready,
+                    created_at_ms: 10,
+                    updated_at_ms: 30,
+                    last_error: None,
+                },
+            );
+            world
+                .soracloud_hf_shared_lease_pools_mut_for_testing()
+                .insert(
+                    pool_id,
+                    SoraHfSharedLeasePoolV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        storage_class,
+                        lease_asset_definition_id: asset_definition.clone(),
+                        base_fee_nanos: 10_000,
+                        lease_term_ms,
+                        window_started_at_ms: 10,
+                        window_expires_at_ms: lease_term_ms + 10,
+                        active_member_count: 2,
+                        status: SoraHfSharedLeaseStatusV1::Active,
+                    },
+                );
+            world
+                .soracloud_hf_shared_lease_members_mut_for_testing()
+                .insert(
+                    (pool_id.to_string(), ALICE_ID.to_string()),
+                    SoraHfSharedLeaseMemberV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        account_id: ALICE_ID.clone(),
+                        status: SoraHfSharedLeaseMemberStatusV1::Active,
+                        joined_at_ms: 30,
+                        updated_at_ms: 30,
+                        total_paid_nanos: 13_333,
+                        total_refunded_nanos: 0,
+                        last_charge_nanos: 3_333,
+                        service_bindings: std::collections::BTreeSet::from([
+                            "vision_portal".to_owned()
+                        ]),
+                        apartment_bindings: std::collections::BTreeSet::from([
+                            "ops_agent".to_owned()
+                        ]),
+                    },
+                );
+            world
+                .soracloud_hf_shared_lease_audit_events_mut_for_testing()
+                .insert(
+                    5,
+                    SoraHfSharedLeaseAuditEventV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+                        sequence: 5,
+                        action: SoraHfSharedLeaseActionV1::Join,
+                        pool_id,
+                        source_id,
+                        account_id: ALICE_ID.clone(),
+                        occurred_at_ms: 30,
+                        active_member_count: 2,
+                        charged_nanos: 3_333,
+                        refunded_nanos: 0,
+                        lease_expires_at_ms: lease_term_ms + 10,
+                        service_name: Some("vision_portal".to_owned()),
+                        apartment_name: Some("ops_agent".to_owned()),
+                    },
+                );
+
+            let app = mk_app_state_for_tests_with_world(world);
+            let response = authoritative_hf_shared_lease_mutation_response(
+                &app,
+                &SoracloudAuditBaseline {
+                    hf_shared_lease_max: 4,
+                    ..SoracloudAuditBaseline::default()
+                },
+                repo_id,
+                resolved_revision,
+                storage_class,
+                lease_term_ms,
+                &ALICE_ID,
+                Some("vision_portal"),
+                Some("ops_agent"),
+            )
+            .map_err(|err| eyre::eyre!("authoritative hf mutation failed: {err:?}"))?;
+
+            assert_eq!(response.action, SoraHfSharedLeaseActionV1::Join);
+            assert_eq!(response.source.status, SoraHfSourceStatusV1::Ready);
+            assert_eq!(response.pool.pool_id, pool_id);
+            assert_eq!(response.member.account_id, ALICE_ID.clone());
+            assert_eq!(
+                response
+                    .latest_audit_event
+                    .as_ref()
+                    .expect("audit event")
+                    .sequence,
+                5
+            );
+            assert!(!response.importer_pending);
+            Ok(())
+        })
     }
 }

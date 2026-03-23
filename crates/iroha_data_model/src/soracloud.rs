@@ -20,7 +20,9 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
-use crate::name::Name;
+use crate::{
+    account::AccountId, asset::AssetDefinitionId, name::Name, sorafs::pin_registry::StorageClass,
+};
 
 /// Schema version for [`SoraContainerManifestV1`].
 pub const SORA_CONTAINER_MANIFEST_VERSION_V1: u16 = 1;
@@ -72,6 +74,14 @@ pub const SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1: u16 = 1;
 pub const SORA_MODEL_ARTIFACT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraModelArtifactAuditEventV1`].
 pub const SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraHfSourceRecordV1`].
+pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraHfSharedLeasePoolV1`].
+pub const SORA_HF_SHARED_LEASE_POOL_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraHfSharedLeaseMemberV1`].
+pub const SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraHfSharedLeaseAuditEventV1`].
+pub const SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraAgentApartmentRecordV1`].
 pub const SORA_AGENT_APARTMENT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraAgentApartmentAuditEventV1`].
@@ -198,6 +208,9 @@ pub struct SoraCapabilityPolicyV1 {
     pub allow_wallet_signing: bool,
     /// Whether deterministic key-value writes are allowed through bindings.
     pub allow_state_writes: bool,
+    /// Whether read-only model inference adapters are exposed to the service.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub allow_model_inference: bool,
     /// Whether model-training ops are allowed for this workload.
     pub allow_model_training: bool,
 }
@@ -3798,6 +3811,49 @@ pub enum SoraModelWeightActionV1 {
     Rollback,
 }
 
+/// Provenance source for model artifacts and weight versions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum SoraModelProvenanceKindV1 {
+    /// The model was produced by a Soracloud training job.
+    TrainingJob,
+    /// The model was imported from Hugging Face.
+    HfImport,
+}
+
+/// Reference to the origin of a model artifact or weight version.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraModelProvenanceRefV1 {
+    /// Origin kind.
+    pub kind: SoraModelProvenanceKindV1,
+    /// Stable origin identifier.
+    pub id: String,
+}
+
+impl SoraModelProvenanceRefV1 {
+    /// Validate model provenance references.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when the referenced identifier is empty.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.id.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora model provenance ref",
+                field: "id",
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Immutable metadata for an admitted model-weight version.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -3819,7 +3875,11 @@ pub struct SoraModelWeightVersionRecordV1 {
     #[norito(default)]
     pub parent_version: Option<String>,
     /// Training job that produced this weight version.
+    #[cfg_attr(feature = "json", norito(default))]
     pub training_job_id: String,
+    /// Generic provenance source for this weight version.
+    #[norito(default)]
+    pub source_provenance: Option<SoraModelProvenanceRefV1>,
     /// Weight artifact hash.
     pub weight_artifact_hash: Hash,
     /// Dataset reference identifier.
@@ -3861,7 +3921,6 @@ impl SoraModelWeightVersionRecordV1 {
             ("service_version", self.service_version.as_str()),
             ("model_name", self.model_name.as_str()),
             ("weight_version", self.weight_version.as_str()),
-            ("training_job_id", self.training_job_id.as_str()),
             ("dataset_ref", self.dataset_ref.as_str()),
         ] {
             if value.trim().is_empty() {
@@ -3870,6 +3929,13 @@ impl SoraModelWeightVersionRecordV1 {
                     field,
                 });
             }
+        }
+        if self.training_job_id.trim().is_empty() && self.source_provenance.is_none() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model weight version record",
+                field: "source_provenance",
+                reason: "training_job_id or source_provenance must be populated".to_string(),
+            });
         }
         if self
             .parent_version
@@ -3881,6 +3947,9 @@ impl SoraModelWeightVersionRecordV1 {
                 field: "parent_version",
                 reason: "must not be empty when provided".to_string(),
             });
+        }
+        if let Some(source_provenance) = &self.source_provenance {
+            source_provenance.validate()?;
         }
         if self.registered_sequence == 0 {
             return Err(SoraCloudManifestError::InvalidField {
@@ -4024,7 +4093,11 @@ pub struct SoraModelArtifactRecordV1 {
     /// Logical model name.
     pub model_name: String,
     /// Training job that produced this artifact.
+    #[cfg_attr(feature = "json", norito(default))]
     pub training_job_id: String,
+    /// Generic provenance source for this artifact.
+    #[norito(default)]
+    pub source_provenance: Option<SoraModelProvenanceRefV1>,
     /// Weight artifact hash.
     pub weight_artifact_hash: Hash,
     /// Dataset reference identifier.
@@ -4059,7 +4132,6 @@ impl SoraModelArtifactRecordV1 {
         for (field, value) in [
             ("service_version", self.service_version.as_str()),
             ("model_name", self.model_name.as_str()),
-            ("training_job_id", self.training_job_id.as_str()),
             ("dataset_ref", self.dataset_ref.as_str()),
         ] {
             if value.trim().is_empty() {
@@ -4068,6 +4140,13 @@ impl SoraModelArtifactRecordV1 {
                     field,
                 });
             }
+        }
+        if self.training_job_id.trim().is_empty() && self.source_provenance.is_none() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model artifact record",
+                field: "source_provenance",
+                reason: "training_job_id or source_provenance must be populated".to_string(),
+            });
         }
         if self
             .consumed_by_version
@@ -4080,11 +4159,426 @@ impl SoraModelArtifactRecordV1 {
                 reason: "must not be empty when provided".to_string(),
             });
         }
+        if let Some(source_provenance) = &self.source_provenance {
+            source_provenance.validate()?;
+        }
         if self.registered_sequence == 0 {
             return Err(SoraCloudManifestError::InvalidField {
                 manifest: "sora model artifact record",
                 field: "registered_sequence",
                 reason: "must be greater than zero".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Import lifecycle state for a canonical Hugging Face source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+pub enum SoraHfSourceStatusV1 {
+    /// Metadata has been admitted and the import worker still needs to hydrate bytes.
+    PendingImport,
+    /// Canonical import metadata is ready for shared leasing.
+    Ready,
+    /// The source failed import and requires operator intervention.
+    Failed,
+    /// The canonical source was retired and should no longer accept new joins.
+    Retired,
+}
+
+/// Authoritative canonical Hugging Face import metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraHfSourceRecordV1 {
+    /// Schema version; must equal [`SORA_HF_SOURCE_RECORD_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable canonical source identifier.
+    pub source_id: Hash,
+    /// Hugging Face repository identifier.
+    pub repo_id: String,
+    /// Exact pinned revision used for this canonical source.
+    pub resolved_revision: String,
+    /// Normalized model name used for Soracloud surfaces.
+    pub model_name: String,
+    /// Adapter identifier that will serve this source.
+    pub adapter_id: String,
+    /// Hash of the normalized runtime artifact layout.
+    pub normalized_runtime_hash: Hash,
+    /// Source lifecycle status.
+    pub status: SoraHfSourceStatusV1,
+    /// Block timestamp when the source was first admitted.
+    pub created_at_ms: u64,
+    /// Block timestamp of the last lifecycle mutation.
+    pub updated_at_ms: u64,
+    /// Latest import/runtime error when status is [`SoraHfSourceStatusV1::Failed`].
+    #[norito(default)]
+    pub last_error: Option<String>,
+}
+
+impl SoraHfSourceRecordV1 {
+    /// Validate canonical Hugging Face source metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// required identifiers are empty.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_HF_SOURCE_RECORD_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora hf source record",
+                expected: SORA_HF_SOURCE_RECORD_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        for (field, value) in [
+            ("repo_id", self.repo_id.as_str()),
+            ("resolved_revision", self.resolved_revision.as_str()),
+            ("model_name", self.model_name.as_str()),
+            ("adapter_id", self.adapter_id.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(SoraCloudManifestError::EmptyField {
+                    manifest: "sora hf source record",
+                    field,
+                });
+            }
+        }
+        if self.created_at_ms == 0 || self.updated_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf source record",
+                field: "created_at_ms",
+                reason: "created_at_ms and updated_at_ms must be greater than zero".to_string(),
+            });
+        }
+        if self.updated_at_ms < self.created_at_ms {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf source record",
+                field: "updated_at_ms",
+                reason: "must be >= created_at_ms".to_string(),
+            });
+        }
+        if self
+            .last_error
+            .as_ref()
+            .is_some_and(|error| error.trim().is_empty())
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf source record",
+                field: "last_error",
+                reason: "must not be empty when provided".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Shared-lease pool lifecycle state for a canonical HF source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+pub enum SoraHfSharedLeaseStatusV1 {
+    /// The pool is accepting joins against the current window.
+    Active,
+    /// The pool is draining after the last member left.
+    Draining,
+    /// The current window expired and requires a new sponsor.
+    Expired,
+    /// The pool was explicitly retired.
+    Retired,
+}
+
+/// Shared-lease membership lifecycle state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+pub enum SoraHfSharedLeaseMemberStatusV1 {
+    /// The account actively participates in the current window.
+    Active,
+    /// The account left the pool or was expired out of the current window.
+    Left,
+}
+
+/// Audit action recorded for shared Hugging Face lease windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "action", content = "value"))]
+pub enum SoraHfSharedLeaseActionV1 {
+    /// A brand new window was opened by a sponsor.
+    CreateWindow,
+    /// An account joined an active window.
+    Join,
+    /// An active membership left the current window.
+    Leave,
+    /// An expired or drained pool was renewed into a fresh window.
+    Renew,
+    /// The current window was retired early.
+    Retire,
+}
+
+/// Shared-lease pool metadata keyed by canonical import and pricing dimensions.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraHfSharedLeasePoolV1 {
+    /// Schema version; must equal [`SORA_HF_SHARED_LEASE_POOL_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable pool identifier.
+    pub pool_id: Hash,
+    /// Canonical imported source identifier.
+    pub source_id: Hash,
+    /// Storage class used by the shared lease.
+    pub storage_class: StorageClass,
+    /// Asset definition used for lease settlement.
+    pub lease_asset_definition_id: AssetDefinitionId,
+    /// Full-window price in nanos of `lease_asset_definition_id`.
+    pub base_fee_nanos: u128,
+    /// Shared window length in milliseconds.
+    pub lease_term_ms: u64,
+    /// Start timestamp for the active window.
+    pub window_started_at_ms: u64,
+    /// Expiry timestamp for the active window.
+    pub window_expires_at_ms: u64,
+    /// Number of currently active members.
+    pub active_member_count: u32,
+    /// Pool lifecycle status.
+    pub status: SoraHfSharedLeaseStatusV1,
+}
+
+impl SoraHfSharedLeasePoolV1 {
+    /// Validate shared-lease pool metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// time/price fields are invalid.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_HF_SHARED_LEASE_POOL_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora hf shared lease pool",
+                expected: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.base_fee_nanos == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease pool",
+                field: "base_fee_nanos",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.lease_term_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease pool",
+                field: "lease_term_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.window_started_at_ms == 0 || self.window_expires_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease pool",
+                field: "window_started_at_ms",
+                reason: "window timestamps must be greater than zero".to_string(),
+            });
+        }
+        if self.window_expires_at_ms <= self.window_started_at_ms {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease pool",
+                field: "window_expires_at_ms",
+                reason: "must be greater than window_started_at_ms".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Account-scoped shared-lease membership plus free service/apartment bindings.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraHfSharedLeaseMemberV1 {
+    /// Schema version; must equal [`SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1`].
+    pub schema_version: u16,
+    /// Pool this membership belongs to.
+    pub pool_id: Hash,
+    /// Canonical imported source identifier.
+    pub source_id: Hash,
+    /// Member account.
+    pub account_id: AccountId,
+    /// Membership lifecycle status.
+    pub status: SoraHfSharedLeaseMemberStatusV1,
+    /// Timestamp when the account first joined the current or previous windows.
+    pub joined_at_ms: u64,
+    /// Timestamp of the last mutation to this membership.
+    pub updated_at_ms: u64,
+    /// Total amount charged to this member across joins/renewals.
+    pub total_paid_nanos: u128,
+    /// Total amount refunded to this member by later joiners.
+    pub total_refunded_nanos: u128,
+    /// Most recent direct charge applied to this member.
+    pub last_charge_nanos: u128,
+    /// Bound Soracloud services that reuse this membership.
+    #[norito(default)]
+    pub service_bindings: BTreeSet<String>,
+    /// Bound Soracloud agent apartments that reuse this membership.
+    #[norito(default)]
+    pub apartment_bindings: BTreeSet<String>,
+}
+
+impl SoraHfSharedLeaseMemberV1 {
+    /// Validate shared-lease membership metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// bindings contain invalid names.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora hf shared lease member",
+                expected: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.joined_at_ms == 0 || self.updated_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease member",
+                field: "joined_at_ms",
+                reason: "joined_at_ms and updated_at_ms must be greater than zero".to_string(),
+            });
+        }
+        if self.updated_at_ms < self.joined_at_ms {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease member",
+                field: "updated_at_ms",
+                reason: "must be >= joined_at_ms".to_string(),
+            });
+        }
+        for service_name in &self.service_bindings {
+            if service_name.trim().is_empty() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora hf shared lease member",
+                    field: "service_bindings",
+                    reason: "service bindings must not contain empty names".to_string(),
+                });
+            }
+        }
+        for apartment_name in &self.apartment_bindings {
+            if apartment_name.trim().is_empty() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora hf shared lease member",
+                    field: "apartment_bindings",
+                    reason: "apartment bindings must not contain empty names".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Audit record for shared Hugging Face lease lifecycle changes.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraHfSharedLeaseAuditEventV1 {
+    /// Schema version; must equal [`SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1`].
+    pub schema_version: u16,
+    /// Deterministic Soracloud audit sequence.
+    pub sequence: u64,
+    /// Audit action that produced the event.
+    pub action: SoraHfSharedLeaseActionV1,
+    /// Pool affected by the event.
+    pub pool_id: Hash,
+    /// Canonical imported source identifier.
+    pub source_id: Hash,
+    /// Account responsible for the lifecycle mutation.
+    pub account_id: AccountId,
+    /// Block timestamp of the mutation.
+    pub occurred_at_ms: u64,
+    /// Number of active members after the mutation.
+    pub active_member_count: u32,
+    /// Direct amount charged to the acting account.
+    pub charged_nanos: u128,
+    /// Direct refund amount recorded for the acting account.
+    pub refunded_nanos: u128,
+    /// Current pool expiry after the mutation.
+    pub lease_expires_at_ms: u64,
+    /// Optional service binding touched by the mutation.
+    #[norito(default)]
+    pub service_name: Option<String>,
+    /// Optional apartment binding touched by the mutation.
+    #[norito(default)]
+    pub apartment_name: Option<String>,
+}
+
+impl SoraHfSharedLeaseAuditEventV1 {
+    /// Validate shared-lease audit metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// optional bindings contain empty names.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora hf shared lease audit event",
+                expected: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.sequence == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease audit event",
+                field: "sequence",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.occurred_at_ms == 0 || self.lease_expires_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease audit event",
+                field: "occurred_at_ms",
+                reason: "occurred_at_ms and lease_expires_at_ms must be greater than zero"
+                    .to_string(),
+            });
+        }
+        if self
+            .service_name
+            .as_ref()
+            .is_some_and(|service_name| service_name.trim().is_empty())
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease audit event",
+                field: "service_name",
+                reason: "must not be empty when provided".to_string(),
+            });
+        }
+        if self
+            .apartment_name
+            .as_ref()
+            .is_some_and(|apartment_name| apartment_name.trim().is_empty())
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora hf shared lease audit event",
+                field: "apartment_name",
+                reason: "must not be empty when provided".to_string(),
             });
         }
         Ok(())
@@ -5974,6 +6468,95 @@ pub fn encode_model_weight_rollback_provenance_payload(
     norito::to_bytes(&(service_name, model_name, target_version, reason))
 }
 
+/// Encode the canonical provenance signature payload for HF shared-lease joins.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(repo_id, resolved_revision, model_name, service_name, apartment_name, storage_class, lease_term_ms, lease_asset_definition_id, base_fee_nanos)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_hf_shared_lease_join_provenance_payload(
+    repo_id: &str,
+    resolved_revision: &str,
+    model_name: &str,
+    service_name: &str,
+    apartment_name: Option<&str>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition_id: &AssetDefinitionId,
+    base_fee_nanos: u128,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        repo_id,
+        resolved_revision,
+        model_name,
+        service_name,
+        apartment_name,
+        storage_class,
+        lease_term_ms,
+        lease_asset_definition_id.clone(),
+        base_fee_nanos,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for HF shared-lease leaves.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(repo_id, resolved_revision, storage_class, lease_term_ms, service_name, apartment_name)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_hf_shared_lease_leave_provenance_payload(
+    repo_id: &str,
+    resolved_revision: &str,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    service_name: Option<&str>,
+    apartment_name: Option<&str>,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        repo_id,
+        resolved_revision,
+        storage_class,
+        lease_term_ms,
+        service_name,
+        apartment_name,
+    ))
+}
+
+/// Encode the canonical provenance signature payload for HF shared-lease renewals.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(repo_id, resolved_revision, model_name, service_name, apartment_name, storage_class, lease_term_ms, lease_asset_definition_id, base_fee_nanos)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_hf_shared_lease_renew_provenance_payload(
+    repo_id: &str,
+    resolved_revision: &str,
+    model_name: &str,
+    service_name: &str,
+    apartment_name: Option<&str>,
+    storage_class: StorageClass,
+    lease_term_ms: u64,
+    lease_asset_definition_id: &AssetDefinitionId,
+    base_fee_nanos: u128,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        repo_id,
+        resolved_revision,
+        model_name,
+        service_name,
+        apartment_name,
+        storage_class,
+        lease_term_ms,
+        lease_asset_definition_id.clone(),
+        base_fee_nanos,
+    ))
+}
+
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -6043,7 +6626,9 @@ pub mod prelude {
         FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
-        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
+        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+        SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+        SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
         SORA_MODEL_ARTIFACT_RECORD_VERSION_V1, SORA_MODEL_REGISTRY_VERSION_V1,
         SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
         SORA_RUNTIME_RECEIPT_VERSION_V1, SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
@@ -6058,12 +6643,15 @@ pub mod prelude {
         SoraAgentWalletSpendRequestV1, SoraArtifactKindV1, SoraArtifactRefV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraCloudManifestError,
         SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraLifecycleHooksV1,
-        SoraMailboxContractV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
-        SoraModelArtifactRecordV1, SoraModelRegistryV1, SoraModelWeightActionV1,
-        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
-        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRolloutStageV1, SoraRouteTargetV1,
-        SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1,
+        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
+        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
+        SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
+        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
+        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRolloutStageV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
         SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
         SoraServiceManifestV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
@@ -6078,7 +6666,10 @@ pub mod prelude {
         encode_agent_wallet_approve_provenance_payload,
         encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
         encode_ciphertext_query_provenance_payload, encode_decryption_request_provenance_payload,
-        encode_fhe_job_run_provenance_payload, encode_model_artifact_register_provenance_payload,
+        encode_fhe_job_run_provenance_payload, encode_hf_shared_lease_join_provenance_payload,
+        encode_hf_shared_lease_leave_provenance_payload,
+        encode_hf_shared_lease_renew_provenance_payload,
+        encode_model_artifact_register_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
@@ -6091,7 +6682,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use iroha_crypto::KeyPair;
 
@@ -6109,6 +6700,90 @@ mod tests {
 
     fn sample_signer() -> PublicKey {
         KeyPair::random().public_key().clone()
+    }
+
+    fn sample_account_id(account_id: &str) -> AccountId {
+        account_id.parse().expect("valid account id")
+    }
+
+    fn sample_asset_definition_id(asset_definition_id: &str) -> AssetDefinitionId {
+        asset_definition_id
+            .parse()
+            .expect("valid asset definition id")
+    }
+
+    fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {
+        SoraModelProvenanceRefV1 {
+            kind: SoraModelProvenanceKindV1::TrainingJob,
+            id: "job-1".to_string(),
+        }
+    }
+
+    fn sample_hf_source_record() -> SoraHfSourceRecordV1 {
+        SoraHfSourceRecordV1 {
+            schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
+            source_id: sample_hash(21),
+            repo_id: "openai/demo-model".to_string(),
+            resolved_revision: "4f9d72c".to_string(),
+            model_name: "demo_model".to_string(),
+            adapter_id: "text-generation".to_string(),
+            normalized_runtime_hash: sample_hash(22),
+            status: SoraHfSourceStatusV1::PendingImport,
+            created_at_ms: 1_000,
+            updated_at_ms: 1_500,
+            last_error: None,
+        }
+    }
+
+    fn sample_hf_shared_lease_pool() -> SoraHfSharedLeasePoolV1 {
+        SoraHfSharedLeasePoolV1 {
+            schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+            pool_id: sample_hash(23),
+            source_id: sample_hash(21),
+            storage_class: StorageClass::Warm,
+            lease_asset_definition_id: sample_asset_definition_id("xor#wonderland"),
+            base_fee_nanos: 10_000,
+            lease_term_ms: 604_800_000,
+            window_started_at_ms: 10_000,
+            window_expires_at_ms: 604_810_000,
+            active_member_count: 2,
+            status: SoraHfSharedLeaseStatusV1::Active,
+        }
+    }
+
+    fn sample_hf_shared_lease_member() -> SoraHfSharedLeaseMemberV1 {
+        SoraHfSharedLeaseMemberV1 {
+            schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+            pool_id: sample_hash(23),
+            source_id: sample_hash(21),
+            account_id: sample_account_id("alice@wonderland"),
+            status: SoraHfSharedLeaseMemberStatusV1::Active,
+            joined_at_ms: 10_000,
+            updated_at_ms: 20_000,
+            total_paid_nanos: 10_000,
+            total_refunded_nanos: 5_000,
+            last_charge_nanos: 10_000,
+            service_bindings: BTreeSet::from(["demo_service".to_string()]),
+            apartment_bindings: BTreeSet::from(["demo_apartment".to_string()]),
+        }
+    }
+
+    fn sample_hf_shared_lease_audit_event() -> SoraHfSharedLeaseAuditEventV1 {
+        SoraHfSharedLeaseAuditEventV1 {
+            schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+            sequence: 44,
+            action: SoraHfSharedLeaseActionV1::Join,
+            pool_id: sample_hash(23),
+            source_id: sample_hash(21),
+            account_id: sample_account_id("bob@wonderland"),
+            occurred_at_ms: 20_000,
+            active_member_count: 2,
+            charged_nanos: 5_000,
+            refunded_nanos: 0,
+            lease_expires_at_ms: 604_810_000,
+            service_name: Some("demo_service".to_string()),
+            apartment_name: Some("demo_apartment".to_string()),
+        }
     }
 
     fn sample_training_job_record() -> SoraTrainingJobRecordV1 {
@@ -6181,6 +6856,7 @@ mod tests {
             weight_version: "v2".to_string(),
             parent_version: Some("v1".to_string()),
             training_job_id: "job-1".to_string(),
+            source_provenance: Some(sample_model_provenance_ref()),
             weight_artifact_hash: sample_hash(2),
             dataset_ref: "dataset://train".to_string(),
             training_config_hash: sample_hash(3),
@@ -6217,6 +6893,7 @@ mod tests {
             service_version: "2026.1".to_string(),
             model_name: "vision_model".to_string(),
             training_job_id: "job-1".to_string(),
+            source_provenance: Some(sample_model_provenance_ref()),
             weight_artifact_hash: sample_hash(7),
             dataset_ref: "dataset://train".to_string(),
             training_config_hash: sample_hash(8),
@@ -6577,6 +7254,89 @@ mod tests {
     }
 
     #[test]
+    fn hf_shared_lease_join_provenance_payload_encodes_canonical_tuple() {
+        let asset_definition_id = sample_asset_definition_id("xor#wonderland");
+        let encoded = encode_hf_shared_lease_join_provenance_payload(
+            "openai/demo-model",
+            "4f9d72c",
+            "demo_model",
+            "demo_service",
+            Some("demo_apartment"),
+            StorageClass::Warm,
+            604_800_000,
+            &asset_definition_id,
+            10_000,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "openai/demo-model",
+            "4f9d72c",
+            "demo_model",
+            "demo_service",
+            Some("demo_apartment"),
+            StorageClass::Warm,
+            604_800_000u64,
+            asset_definition_id,
+            10_000u128,
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn hf_shared_lease_leave_provenance_payload_encodes_canonical_tuple() {
+        let encoded = encode_hf_shared_lease_leave_provenance_payload(
+            "openai/demo-model",
+            "4f9d72c",
+            StorageClass::Warm,
+            604_800_000,
+            Some("demo_service"),
+            Some("demo_apartment"),
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "openai/demo-model",
+            "4f9d72c",
+            StorageClass::Warm,
+            604_800_000u64,
+            Some("demo_service"),
+            Some("demo_apartment"),
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn hf_shared_lease_renew_provenance_payload_encodes_canonical_tuple() {
+        let asset_definition_id = sample_asset_definition_id("xor#wonderland");
+        let encoded = encode_hf_shared_lease_renew_provenance_payload(
+            "openai/demo-model",
+            "4f9d72c",
+            "demo_model",
+            "demo_service",
+            Some("demo_apartment"),
+            StorageClass::Warm,
+            604_800_000,
+            &asset_definition_id,
+            10_000,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "openai/demo-model",
+            "4f9d72c",
+            "demo_model",
+            "demo_service",
+            Some("demo_apartment"),
+            StorageClass::Warm,
+            604_800_000u64,
+            asset_definition_id,
+            10_000u128,
+        ))
+        .expect("encode tuple");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
     fn fhe_job_run_provenance_payload_encodes_canonical_tuple() {
         let job = sample_fhe_job_spec();
         let policy = sample_fhe_execution_policy();
@@ -6669,6 +7429,7 @@ mod tests {
                 ]),
                 allow_wallet_signing: true,
                 allow_state_writes: true,
+                allow_model_inference: true,
                 allow_model_training: false,
             },
             resources: SoraResourceLimitsV1 {
@@ -8064,6 +8825,32 @@ mod tests {
         sample_model_artifact_record()
             .validate()
             .expect("valid artifact record");
+    }
+
+    #[test]
+    fn hf_source_record_validation_accepts_consistent_state() {
+        sample_hf_source_record().validate().expect("valid source");
+    }
+
+    #[test]
+    fn hf_shared_lease_pool_validation_accepts_consistent_state() {
+        sample_hf_shared_lease_pool()
+            .validate()
+            .expect("valid shared lease pool");
+    }
+
+    #[test]
+    fn hf_shared_lease_member_validation_accepts_consistent_state() {
+        sample_hf_shared_lease_member()
+            .validate()
+            .expect("valid shared lease member");
+    }
+
+    #[test]
+    fn hf_shared_lease_audit_event_validation_accepts_consistent_state() {
+        sample_hf_shared_lease_audit_event()
+            .validate()
+            .expect("valid shared lease audit event");
     }
 
     #[test]
