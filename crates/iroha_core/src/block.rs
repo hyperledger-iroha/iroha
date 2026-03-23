@@ -2582,6 +2582,9 @@ pub(crate) mod valid {
                 mailbox_message_id: Some(request.mailbox_message.message_id),
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
+                placement_id: None,
+                selected_validator_account_id: None,
+                selected_peer_id: None,
             },
         }
     }
@@ -9858,6 +9861,9 @@ pub(crate) mod valid {
                         mailbox_message_id: Some(request.mailbox_message.message_id),
                         journal_artifact_hash: None,
                         checkpoint_artifact_hash: None,
+                        placement_id: None,
+                        selected_validator_account_id: None,
+                        selected_peer_id: None,
                     },
                 })
             }

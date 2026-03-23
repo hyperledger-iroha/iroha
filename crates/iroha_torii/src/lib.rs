@@ -211,7 +211,11 @@ use iroha_core::{
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue},
     soracloud_runtime::{
-        SharedSoracloudRuntime, SoracloudLocalReadRequest, SoracloudRuntimeExecutionErrorKind,
+        SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+        SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SharedSoracloudRuntime,
+        SoracloudLocalReadProxyOutcomeV1, SoracloudLocalReadProxyRequestV1,
+        SoracloudLocalReadProxyResponseV1, SoracloudLocalReadRequest,
+        SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
     },
     state::{
         BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
@@ -1074,6 +1078,14 @@ struct AppState {
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
+    #[cfg(feature = "app_api")]
+    soracloud_proxy_pending: Arc<
+        tokio::sync::Mutex<
+            BTreeMap<Hash, tokio::sync::oneshot::Sender<SoracloudLocalReadProxyOutcomeV1>>,
+        >,
+    >,
+    #[cfg(feature = "app_api")]
+    soracloud_proxy_sequence: std::sync::atomic::AtomicU64,
     #[cfg(feature = "app_api")]
     sns_registry: Arc<sns::Registry>,
 }
@@ -8326,6 +8338,259 @@ fn soracloud_local_read_request_commitment(request: &SoracloudLocalReadRequest) 
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_soracloud_local_read_proxy_target(
+    app: &SharedAppState,
+    request: &SoracloudLocalReadRequest,
+) -> Result<Option<iroha_data_model::peer::PeerId>, SoracloudRuntimeExecutionError> {
+    if request.handler_name != "infer" {
+        return Ok(None);
+    }
+    let Some(runtime) = app.soracloud_runtime.as_ref() else {
+        return Ok(None);
+    };
+    let Some(local_peer_id) = runtime.local_peer_id() else {
+        return Ok(None);
+    };
+    let local_peer_id: iroha_data_model::peer::PeerId = local_peer_id.parse().map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
+        )
+    })?;
+
+    let state_view = app.state.view();
+    let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
+        request.service_name.clone(),
+        request.service_version.clone(),
+    )) else {
+        return Ok(None);
+    };
+    let Some(binding) =
+        iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(bundle)
+    else {
+        return Ok(None);
+    };
+    let primary_assignment = iroha_core::soracloud_runtime::resolve_generated_hf_primary_assignment(
+        state_view.world(),
+        request.service_name.as_str(),
+        &binding.source_id,
+    )
+    .map_err(|message| {
+        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
+    })?
+    .ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{}` has no warm authoritative primary host for source `{}`",
+                request.service_name, binding.source_id
+            ),
+        )
+    })?;
+    let primary_peer_id: iroha_data_model::peer::PeerId =
+        primary_assignment.peer_id.parse().map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "generated HF service `{}` has an invalid primary peer id `{}`: {error}",
+                    request.service_name, primary_assignment.peer_id
+                ),
+            )
+        })?;
+    if primary_peer_id == local_peer_id {
+        return Ok(None);
+    }
+    Ok(Some(primary_peer_id))
+}
+
+#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+async fn execute_soracloud_local_read_via_proxy(
+    app: &SharedAppState,
+    target_peer_id: iroha_data_model::peer::PeerId,
+    request: SoracloudLocalReadRequest,
+) -> Result<iroha_core::soracloud_runtime::SoracloudLocalReadResponse, SoracloudRuntimeExecutionError>
+{
+    let Some(runtime) = app.soracloud_runtime.as_ref() else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Soracloud runtime is unavailable on this ingress node",
+        ));
+    };
+    let Some(network) = app.p2p.as_ref() else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Soracloud proxy routing requires an attached P2P network",
+        ));
+    };
+
+    let request_id = Hash::new(
+        norito::to_bytes(&(
+            "soracloud:local-read-proxy",
+            app.soracloud_proxy_sequence
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            request.request_commitment,
+            target_peer_id.clone(),
+        ))
+        .expect("Soracloud proxy request id encoding should be infallible"),
+    );
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.soracloud_proxy_pending
+        .lock()
+        .await
+        .insert(request_id, tx);
+    network.post(iroha_p2p::Post {
+        peer_id: target_peer_id.clone(),
+        priority: iroha_p2p::Priority::High,
+        data: iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(Box::new(
+            SoracloudLocalReadProxyRequestV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+                request_id,
+                request,
+            },
+        )),
+    });
+
+    match tokio::time::timeout(runtime.local_read_proxy_timeout(), rx).await {
+        Ok(Ok(SoracloudLocalReadProxyOutcomeV1::Ok(response))) => Ok(response),
+        Ok(Ok(SoracloudLocalReadProxyOutcomeV1::Err(error))) => Err(error),
+        Ok(Err(_)) => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "Soracloud proxy request `{request_id}` to primary peer `{target_peer_id}` closed before returning a response"
+            ),
+        )),
+        Err(_) => {
+            app.soracloud_proxy_pending.lock().await.remove(&request_id);
+            Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "Soracloud proxy request `{request_id}` to primary peer `{target_peer_id}` timed out"
+                ),
+            ))
+        }
+    }
+}
+
+#[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
+async fn execute_soracloud_local_read_via_proxy(
+    _app: &SharedAppState,
+    target_peer_id: iroha_data_model::peer::PeerId,
+    _request: SoracloudLocalReadRequest,
+) -> Result<iroha_core::soracloud_runtime::SoracloudLocalReadResponse, SoracloudRuntimeExecutionError>
+{
+    Err(SoracloudRuntimeExecutionError::new(
+        SoracloudRuntimeExecutionErrorKind::Unavailable,
+        format!("Soracloud proxy routing to primary peer `{target_peer_id}` requires P2P support"),
+    ))
+}
+
+#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+async fn process_incoming_soracloud_proxy_request(
+    app: SharedAppState,
+    network: iroha_core::IrohaNetwork,
+    peer: iroha_data_model::peer::Peer,
+    proxy_request: SoracloudLocalReadProxyRequestV1,
+) {
+    let outcome = if proxy_request.schema_version != SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1 {
+        SoracloudLocalReadProxyOutcomeV1::Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "unsupported Soracloud local-read proxy request schema_version `{}`",
+                proxy_request.schema_version
+            ),
+        ))
+    } else {
+        match app.soracloud_runtime.as_ref() {
+            Some(runtime) => match runtime.execute_local_read(proxy_request.request) {
+                Ok(response) => SoracloudLocalReadProxyOutcomeV1::Ok(response),
+                Err(error) => SoracloudLocalReadProxyOutcomeV1::Err(error),
+            },
+            None => SoracloudLocalReadProxyOutcomeV1::Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                "Soracloud runtime is unavailable on the authoritative primary host",
+            )),
+        }
+    };
+
+    network.post(iroha_p2p::Post {
+        peer_id: peer.id().clone(),
+        priority: iroha_p2p::Priority::High,
+        data: iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(Box::new(
+            SoracloudLocalReadProxyResponseV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+                request_id: proxy_request.request_id,
+                outcome,
+            },
+        )),
+    });
+}
+
+#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+async fn process_incoming_soracloud_proxy_response(
+    app: &SharedAppState,
+    proxy_response: SoracloudLocalReadProxyResponseV1,
+) {
+    if proxy_response.schema_version != SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1 {
+        iroha_logger::warn!(
+            schema_version = proxy_response.schema_version,
+            request_id = %proxy_response.request_id,
+            "ignoring Soracloud local-read proxy response with unsupported schema version"
+        );
+        return;
+    }
+    let sender = app
+        .soracloud_proxy_pending
+        .lock()
+        .await
+        .remove(&proxy_response.request_id);
+    if let Some(sender) = sender {
+        let _ = sender.send(proxy_response.outcome);
+    }
+}
+
+#[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+fn attach_soracloud_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
+    if app.soracloud_runtime.is_none() {
+        return;
+    }
+    tokio::spawn(async move {
+        use iroha_p2p::network::{SubscriberFilter, message::Topic};
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(network.subscriber_queue_cap().get());
+        let filter = SubscriberFilter::topics([Topic::Control]);
+        let mut tx = tx;
+        loop {
+            match network.subscribe_to_peers_messages_with_filter(tx, filter.clone()) {
+                Ok(()) => break,
+                Err(returned) => {
+                    iroha_logger::warn!("retrying Soracloud proxy subscription to the P2P bus");
+                    tx = returned;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+
+        while let Some(msg) = rx.recv().await {
+            match msg.payload {
+                iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(request) => {
+                    process_incoming_soracloud_proxy_request(
+                        app.clone(),
+                        network.clone(),
+                        msg.peer,
+                        *request,
+                    )
+                    .await;
+                }
+                iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(response) => {
+                    process_incoming_soracloud_proxy_response(&app, *response).await;
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
+#[cfg(feature = "app_api")]
 fn soracloud_local_read_response(
     response: iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
 ) -> Response {
@@ -8420,14 +8685,14 @@ async fn handler_soracloud_public_local_read(
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let Some(runtime) = app.soracloud_runtime.as_ref() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
 
-    let state_view = app.state.view();
-    let observed_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-    let observed_block_hash = state_view.latest_block_hash().map(Hash::from);
-    drop(state_view);
+    let (observed_height, observed_block_hash) = {
+        let state_view = app.state.view();
+        (
+            u64::try_from(state_view.height()).unwrap_or(u64::MAX),
+            state_view.latest_block_hash().map(Hash::from),
+        )
+    };
     let request_headers = canonicalize_soracloud_local_read_headers(&headers);
     let mut request = SoracloudLocalReadRequest {
         observed_height,
@@ -8446,7 +8711,25 @@ async fn handler_soracloud_public_local_read(
     };
     request.request_commitment = soracloud_local_read_request_commitment(&request);
 
-    match runtime.execute_local_read(request) {
+    let proxy_target = match resolve_soracloud_local_read_proxy_target(&app, &request) {
+        Ok(target) => target,
+        Err(error) => return soracloud_local_read_error_response(error),
+    };
+    let execution = if let Some(primary_peer_id) = proxy_target {
+        execute_soracloud_local_read_via_proxy(&app, primary_peer_id, request).await
+    } else {
+        app.soracloud_runtime
+            .as_ref()
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "Soracloud runtime is unavailable on this ingress node",
+                )
+            })
+            .and_then(|runtime| runtime.execute_local_read(request))
+    };
+
+    match execution {
         Ok(response) => soracloud_local_read_response(response),
         Err(error) => soracloud_local_read_error_response(error),
     }
@@ -11374,6 +11657,90 @@ async fn handler_post_multisig_proposals_get(
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsListRequestDto>,
+) -> Result<AxResponse, Error> {
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        None,
+        &format!("v1/multisig/approvals/list:{}", viewer.subject),
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_approvals_list"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_approvals_list(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_list"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsGetRequestDto>,
+) -> Result<AxResponse, Error> {
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        None,
+        &format!("v1/multisig/approvals/get:{}", viewer.subject),
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_approvals_get"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_approvals_get(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_get"));
             Err(err)
         }
     }
@@ -16304,6 +16671,14 @@ impl Torii {
                 .route(
                     "/v1/multisig/proposals/get",
                     post(handler_post_multisig_proposals_get),
+                )
+                .route(
+                    "/v1/multisig/approvals/list",
+                    post(handler_post_multisig_approvals_list),
+                )
+                .route(
+                    "/v1/multisig/approvals/get",
+                    post(handler_post_multisig_approvals_get),
                 );
             #[cfg(not(feature = "app_api"))]
             let group = group;
@@ -16919,6 +17294,22 @@ impl Torii {
                 .route(
                     "/v1/soracloud/hf/lease/renew",
                     post(soracloud::handle_hf_lease_renew),
+                )
+                .route(
+                    "/v1/soracloud/model-host/advertise",
+                    post(soracloud::handle_model_host_advertise),
+                )
+                .route(
+                    "/v1/soracloud/model-host/heartbeat",
+                    post(soracloud::handle_model_host_heartbeat),
+                )
+                .route(
+                    "/v1/soracloud/model-host/withdraw",
+                    post(soracloud::handle_model_host_withdraw),
+                )
+                .route(
+                    "/v1/soracloud/model-host/status",
+                    get(soracloud::handle_model_host_status),
                 )
                 .route(
                     "/v1/soracloud/agent/deploy",
@@ -18354,6 +18745,10 @@ impl Torii {
             uaid_onboarding: self.uaid_onboarding.clone(),
             soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
+            soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            #[cfg(feature = "app_api")]
+            soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
+            #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
         });
 
@@ -18418,6 +18813,11 @@ impl Torii {
                     metadata.released_at_unix,
                 )
             });
+        }
+
+        #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+        if let Some(network) = app_state.p2p.clone() {
+            attach_soracloud_proxy_network(app_state.clone(), network);
         }
 
         let base_router: Router<SharedAppState> = Router::new().without_v07_checks();
@@ -20339,6 +20739,10 @@ pub(crate) mod tests_runtime_handlers {
             uaid_onboarding: None,
             soracloud_runtime: None,
             #[cfg(feature = "app_api")]
+            soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            #[cfg(feature = "app_api")]
+            soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
+            #[cfg(feature = "app_api")]
             sns_registry: Arc::new(sns::Registry::bootstrap_default()),
             rbc_sampling_enabled: false,
             rbc_sampling_store_dir: None,
@@ -22068,6 +22472,7 @@ pub(crate) mod tests_runtime_handlers {
     struct TestLocalReadRuntime {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
         state_dir: PathBuf,
+        local_peer_id: Option<String>,
         result: Result<
             iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
             iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
@@ -22082,6 +22487,10 @@ pub(crate) mod tests_runtime_handlers {
 
         fn state_dir(&self) -> PathBuf {
             self.state_dir.clone()
+        }
+
+        fn local_peer_id(&self) -> Option<String> {
+            self.local_peer_id.clone()
         }
     }
 
@@ -22150,6 +22559,7 @@ pub(crate) mod tests_runtime_handlers {
     struct TestSoracloudRuntimeHandle {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
         state_dir: PathBuf,
+        local_peer_id: Option<String>,
     }
 
     impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestSoracloudRuntimeHandle {
@@ -22159,6 +22569,10 @@ pub(crate) mod tests_runtime_handlers {
 
         fn state_dir(&self) -> PathBuf {
             self.state_dir.clone()
+        }
+
+        fn local_peer_id(&self) -> Option<String> {
+            self.local_peer_id.clone()
         }
     }
 
@@ -22404,6 +22818,150 @@ pub(crate) mod tests_runtime_handlers {
         world
     }
 
+    fn seed_generated_hf_public_world(primary_peer_id: &str) -> (World, String, String) {
+        use iroha_data_model::{
+            asset::AssetDefinitionId,
+            soracloud::{
+                SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraHfPlacementHostAssignmentV1,
+                SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
+                SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1,
+                SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
+                SoraServiceDeploymentStateV1,
+            },
+            sorafs::pin_registry::StorageClass,
+        };
+
+        let mut world = World::new();
+        let service_name: Name = "hf_router".parse().expect("service");
+        let service_name_string = service_name.as_ref().to_owned();
+        let source_id = Hash::new(b"generated-hf-source");
+        let pool_id = Hash::new(b"generated-hf-pool");
+        let bundle = iroha_core::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
+            service_name.clone(),
+            &source_id.to_string(),
+            "openai/gpt-oss",
+            "main",
+            "gpt-oss",
+        );
+        let service_version = bundle.service.service_version.clone();
+        let member_account = AccountId::new(KeyPair::random().public_key().clone());
+        let primary_validator = AccountId::new(KeyPair::random().public_key().clone());
+
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (service_name_string.clone(), service_version.clone()),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name,
+                SoraServiceDeploymentStateV1 {
+                    schema_version: SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    current_service_version: service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                },
+            );
+        world
+            .soracloud_hf_shared_lease_pools_mut_for_testing()
+            .insert(
+                pool_id,
+                SoraHfSharedLeasePoolV1 {
+                    schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                    pool_id,
+                    source_id,
+                    storage_class: StorageClass::Warm,
+                    lease_asset_definition_id: AssetDefinitionId::new(
+                        "wonderland".parse().expect("domain"),
+                        "xor".parse().expect("asset"),
+                    ),
+                    base_fee_nanos: 10_000,
+                    lease_term_ms: 60_000,
+                    window_started_at_ms: 1,
+                    window_expires_at_ms: 60_001,
+                    active_member_count: 1,
+                    status: SoraHfSharedLeaseStatusV1::Active,
+                    queued_next_window: None,
+                },
+            );
+        world
+            .soracloud_hf_shared_lease_members_mut_for_testing()
+            .insert(
+                (pool_id.to_string(), member_account.to_string()),
+                SoraHfSharedLeaseMemberV1 {
+                    schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                    pool_id,
+                    source_id,
+                    account_id: member_account,
+                    status: SoraHfSharedLeaseMemberStatusV1::Active,
+                    joined_at_ms: 1,
+                    updated_at_ms: 1,
+                    total_paid_nanos: 10_000,
+                    total_refunded_nanos: 0,
+                    last_charge_nanos: 10_000,
+                    total_compute_paid_nanos: 5_000,
+                    total_compute_refunded_nanos: 0,
+                    last_compute_charge_nanos: 5_000,
+                    service_bindings: std::collections::BTreeSet::from([
+                        service_name_string.clone()
+                    ]),
+                    apartment_bindings: std::collections::BTreeSet::new(),
+                },
+            );
+        world.soracloud_hf_placements_mut_for_testing().insert(
+            pool_id,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id: Hash::new(b"generated-hf-placement"),
+                source_id,
+                pool_id,
+                status: SoraHfPlacementStatusV1::Ready,
+                selection_seed_hash: Hash::new(b"generated-hf-seed"),
+                resource_profile: SoraHfResourceProfileV1 {
+                    required_model_bytes: 1_024,
+                    backend_family: SoraHfBackendFamilyV1::Transformers,
+                    model_format: SoraHfModelFormatV1::Safetensors,
+                    disk_cache_bytes_floor: 2_048,
+                    ram_bytes_floor: 2_048,
+                    vram_bytes_floor: 0,
+                },
+                eligible_validator_count: 2,
+                adaptive_target_host_count: 2,
+                assigned_hosts: vec![
+                    SoraHfPlacementHostAssignmentV1 {
+                        validator_account_id: primary_validator,
+                        peer_id: primary_peer_id.to_owned(),
+                        role: SoraHfPlacementHostRoleV1::Primary,
+                        status: SoraHfPlacementHostStatusV1::Warm,
+                        host_class: "gpu.large".to_owned(),
+                    },
+                    SoraHfPlacementHostAssignmentV1 {
+                        validator_account_id: AccountId::new(
+                            KeyPair::random().public_key().clone(),
+                        ),
+                        peer_id: PeerId::from(KeyPair::random().public_key().clone()).to_string(),
+                        role: SoraHfPlacementHostRoleV1::Replica,
+                        status: SoraHfPlacementHostStatusV1::Warm,
+                        host_class: "gpu.large".to_owned(),
+                    },
+                ],
+                total_reservation_fee_nanos: 5_000,
+                last_rebalance_at_ms: 1,
+                last_error: None,
+            },
+        );
+
+        (world, service_name_string, service_version)
+    }
+
     #[tokio::test]
     async fn soracloud_public_local_read_route_invokes_runtime_with_authoritative_context() {
         use http_body_util::BodyExt as _;
@@ -22413,6 +22971,7 @@ pub(crate) mod tests_runtime_handlers {
         let runtime = TestLocalReadRuntime {
             snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
             state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: None,
             result: Ok(iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
                 response_bytes: b"asset-body".to_vec(),
                 content_type: Some("text/plain; charset=utf-8".to_owned()),
@@ -22480,6 +23039,7 @@ pub(crate) mod tests_runtime_handlers {
         let runtime = TestLocalReadRuntime {
             snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
             state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: None,
             result: Err(
                 iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -22507,6 +23067,134 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    fn sample_generated_hf_infer_request(
+        service_name: String,
+        service_version: String,
+    ) -> SoracloudLocalReadRequest {
+        SoracloudLocalReadRequest {
+            observed_height: 1,
+            observed_block_hash: None,
+            service_name,
+            service_version,
+            handler_name: "infer".to_owned(),
+            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+            request_method: "POST".to_owned(),
+            request_path: "/infer".to_owned(),
+            handler_path: "/".to_owned(),
+            request_query: None,
+            request_headers: BTreeMap::new(),
+            request_body: b"{\"input\":\"hello\"}".to_vec(),
+            request_commitment: Hash::new(b"generated-hf-request"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_soracloud_local_read_proxy_target_returns_primary_when_local_is_not_primary() {
+        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&primary_peer_id);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(local_peer_id),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "proxy target tests should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }));
+
+        let target = super::resolve_soracloud_local_read_proxy_target(
+            &app,
+            &sample_generated_hf_infer_request(service_name, service_version),
+        )
+        .expect("proxy target resolution should succeed")
+        .expect("non-primary ingress should proxy to the authoritative primary");
+
+        assert_eq!(target.to_string(), primary_peer_id);
+    }
+
+    #[tokio::test]
+    async fn resolve_soracloud_local_read_proxy_target_skips_proxy_when_local_is_primary() {
+        let local_primary_peer_id =
+            PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&local_primary_peer_id);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(local_primary_peer_id),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "proxy target tests should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }));
+
+        let target = super::resolve_soracloud_local_read_proxy_target(
+            &app,
+            &sample_generated_hf_infer_request(service_name, service_version),
+        )
+        .expect("proxy target resolution should succeed");
+
+        assert!(
+            target.is_none(),
+            "local primary ingress should execute without proxying"
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_proxy_response_completes_pending_request() {
+        let app = mk_app_state_for_tests();
+        let request_id = Hash::new(b"soracloud-proxy-response");
+        let response = iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
+            response_bytes: b"proxied-body".to_vec(),
+            content_type: Some("text/plain".to_owned()),
+            content_encoding: None,
+            cache_control: None,
+            bindings: Vec::new(),
+            result_commitment: Hash::new(b"proxied-result"),
+            certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+            runtime_receipt: None,
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.soracloud_proxy_pending
+            .lock()
+            .await
+            .insert(request_id, tx);
+
+        super::process_incoming_soracloud_proxy_response(
+            &app,
+            SoracloudLocalReadProxyResponseV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+                request_id,
+                outcome: SoracloudLocalReadProxyOutcomeV1::Ok(response.clone()),
+            },
+        )
+        .await;
+
+        match rx.await.expect("pending proxy request should resolve") {
+            SoracloudLocalReadProxyOutcomeV1::Ok(delivered) => {
+                assert_eq!(delivered.response_bytes, response.response_bytes);
+                assert_eq!(delivered.result_commitment, response.result_commitment);
+            }
+            SoracloudLocalReadProxyOutcomeV1::Err(error) => {
+                panic!("expected successful proxied response, got error: {error:?}")
+            }
+        }
     }
 
     #[tokio::test]
@@ -22638,6 +23326,7 @@ pub(crate) mod tests_runtime_handlers {
                 iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             ),
             state_dir: PathBuf::from("/tmp/soracloud/runtime"),
+            local_peer_id: None,
         }));
 
         let response = super::handler_soracloud_status(State(app), HeaderMap::new(), None)
@@ -22727,6 +23416,7 @@ pub(crate) mod tests_runtime_handlers {
                 iroha_data_model::soracloud::SoraServiceHealthStatusV1::Hydrating,
             ),
             state_dir: PathBuf::from("/tmp/soracloud/runtime"),
+            local_peer_id: None,
         }));
 
         let (service_health, _runtime_pressure, runtime_manager) =

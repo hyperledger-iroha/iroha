@@ -1,12 +1,14 @@
 //! Shared Soracloud runtime snapshot types, generated HF manifests, and execution traits.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::PathBuf,
     sync::Arc,
+    time::Duration,
 };
 
+use crate::state::WorldReadOnly;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     isi::InstructionBox,
@@ -18,18 +20,21 @@ use iroha_data_model::{
         SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
         SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCapabilityPolicyV1,
         SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfSourceStatusV1, SoraLifecycleHooksV1,
-        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
-        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1,
-        SoraServiceManifestV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraTlsModeV1, SoraUploadedModelKeyEncapsulationV1,
-        SoraUploadedModelKeyWrapAeadV1,
+        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
+        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
+        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
+        SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
+        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraTlsModeV1, SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
     },
 };
+use mv::storage::StorageReadOnly;
 use norito::{
-    codec::Encode,
+    codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
 
@@ -316,6 +321,71 @@ pub fn soracloud_hf_generated_bundle_payload_if_applicable(
 ) -> Option<Vec<u8>> {
     soracloud_hf_generated_source_binding(bundle)
         .map(|_binding| soracloud_hf_generated_service_contract_artifact())
+}
+
+/// Resolve the authoritative active HF placement serving a generated service binding.
+pub fn resolve_generated_hf_active_placement(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    source_id: &str,
+) -> Result<Option<SoraHfPlacementRecordV1>, String> {
+    let mut matching_pool_ids = BTreeSet::new();
+    for ((_member_pool_id, _account_id), member) in world.soracloud_hf_shared_lease_members().iter()
+    {
+        if member.status != SoraHfSharedLeaseMemberStatusV1::Active
+            || !member.service_bindings.contains(service_name)
+            || member.source_id.to_string() != source_id
+        {
+            continue;
+        }
+        let Some(pool) = world.soracloud_hf_shared_lease_pools().get(&member.pool_id) else {
+            continue;
+        };
+        if pool.source_id == member.source_id
+            && matches!(
+                pool.status,
+                SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+            )
+        {
+            matching_pool_ids.insert(member.pool_id.clone());
+        }
+    }
+
+    if matching_pool_ids.len() > 1 {
+        return Err(format!(
+            "generated HF service `{service_name}` is bound to multiple active lease pools for source `{source_id}`"
+        ));
+    }
+
+    let Some(pool_id) = matching_pool_ids.into_iter().next() else {
+        return Ok(None);
+    };
+    let Some(placement) = world.soracloud_hf_placements().get(&pool_id).cloned() else {
+        return Err(format!(
+            "generated HF service `{service_name}` is missing an authoritative placement for pool `{pool_id}`"
+        ));
+    };
+    Ok(Some(placement))
+}
+
+/// Resolve the current authoritative primary host for a generated HF service.
+pub fn resolve_generated_hf_primary_assignment(
+    world: &impl WorldReadOnly,
+    service_name: &str,
+    source_id: &str,
+) -> Result<Option<SoraHfPlacementHostAssignmentV1>, String> {
+    let Some(placement) = resolve_generated_hf_active_placement(world, service_name, source_id)?
+    else {
+        return Ok(None);
+    };
+    Ok(placement
+        .assigned_hosts
+        .iter()
+        .find(|assignment| {
+            assignment.role == SoraHfPlacementHostRoleV1::Primary
+                && assignment.status == SoraHfPlacementHostStatusV1::Warm
+        })
+        .cloned())
 }
 
 /// Distinguishes the local runtime role of a materialized service revision.
@@ -643,6 +713,16 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
     ) -> Option<SoracloudUploadedModelEncryptionRecipient> {
         None
     }
+
+    /// Return the local peer id, when the runtime knows its host identity.
+    fn local_peer_id(&self) -> Option<String> {
+        None
+    }
+
+    /// Return the maximum time Torii should wait for an internal Soracloud proxy read.
+    fn local_read_proxy_timeout(&self) -> Duration {
+        Duration::from_secs(10)
+    }
 }
 
 /// Node-local uploaded-model encryption recipient descriptor exposed by the runtime handle.
@@ -668,7 +748,7 @@ pub struct SoracloudUploadedModelEncryptionRecipient {
 pub type SharedSoracloudRuntimeHandle = Arc<dyn SoracloudRuntimeReadHandle>;
 
 /// Coarse execution failure category for embedded Soracloud runtime requests.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudRuntimeExecutionErrorKind {
     /// The runtime cannot execute the request in the current node process.
     Unavailable,
@@ -679,7 +759,7 @@ pub enum SoracloudRuntimeExecutionErrorKind {
 }
 
 /// Structured error returned by the shared Soracloud runtime execution trait.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudRuntimeExecutionError {
     /// High-level error category.
     pub kind: SoracloudRuntimeExecutionErrorKind,
@@ -699,7 +779,7 @@ impl SoracloudRuntimeExecutionError {
 }
 
 /// Deterministic local read class for the Soracloud fast path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum SoracloudLocalReadKind {
     /// Static asset read bound to committed artifacts.
     Asset,
@@ -708,7 +788,7 @@ pub enum SoracloudLocalReadKind {
 }
 
 /// Shared request envelope for deterministic local Soracloud reads.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadRequest {
     /// Authoritative height used for the local read snapshot.
     pub observed_height: u64,
@@ -739,7 +819,7 @@ pub struct SoracloudLocalReadRequest {
 }
 
 /// Committed artifact/state binding attached to a certified local read response.
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudLocalReadBinding {
     /// Binding name when the response is derived from authoritative service state.
     pub binding_name: Option<String>,
@@ -752,7 +832,7 @@ pub struct SoracloudLocalReadBinding {
 }
 
 /// Shared response envelope for deterministic local Soracloud reads.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct SoracloudLocalReadResponse {
     /// Raw response bytes emitted by the runtime.
     pub response_bytes: Vec<u8>,
@@ -770,6 +850,42 @@ pub struct SoracloudLocalReadResponse {
     pub certified_by: SoraCertifiedResponsePolicyV1,
     /// Optional receipt emitted for audit-style certifications.
     pub runtime_receipt: Option<SoraRuntimeReceiptV1>,
+}
+
+/// Schema version for peer-to-peer Soracloud local-read proxy requests.
+pub const SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1: u16 = 1;
+/// Schema version for peer-to-peer Soracloud local-read proxy responses.
+pub const SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1: u16 = 1;
+
+/// Peer-to-peer local-read proxy request sent to the authoritative primary host.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct SoracloudLocalReadProxyRequestV1 {
+    /// Version of the proxy request envelope.
+    pub schema_version: u16,
+    /// Correlation id chosen by the ingress node.
+    pub request_id: Hash,
+    /// Canonical local-read request to execute on the primary host.
+    pub request: SoracloudLocalReadRequest,
+}
+
+/// Outcome for a peer-to-peer local-read proxy request.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum SoracloudLocalReadProxyOutcomeV1 {
+    /// Successful local-read execution.
+    Ok(SoracloudLocalReadResponse),
+    /// Failed local-read execution.
+    Err(SoracloudRuntimeExecutionError),
+}
+
+/// Peer-to-peer local-read proxy response sent back to the ingress node.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct SoracloudLocalReadProxyResponseV1 {
+    /// Version of the proxy response envelope.
+    pub schema_version: u16,
+    /// Correlation id selected by the ingress node.
+    pub request_id: Hash,
+    /// Execution result returned by the primary host.
+    pub outcome: SoracloudLocalReadProxyOutcomeV1,
 }
 
 /// Deterministic state mutation produced by ordered Soracloud execution.
@@ -996,6 +1112,146 @@ impl SoracloudRuntimeInstruction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{kura::Kura, query::store::LiveQueryStore, state::State, state::World};
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        account::AccountId,
+        asset::AssetDefinitionId,
+        soracloud::{
+            SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+            SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+            SoraHfPlacementHostAssignmentV1, SoraHfPlacementStatusV1, SoraHfResourceProfileV1,
+            SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+        },
+        sorafs::pin_registry::StorageClass,
+    };
+
+    fn seed_generated_hf_world_with_primary(
+        primary_peer_id: &str,
+    ) -> (World, String, String, String) {
+        let mut world = World::new();
+        let service_name: Name = "hf_service".parse().expect("valid service name");
+        let service_name_string = service_name.as_ref().to_owned();
+        let source_id = Hash::new(b"hf-source");
+        let pool_id = Hash::new(b"hf-pool");
+        let primary_validator = AccountId::new(KeyPair::random().public_key().clone());
+        let member_account = AccountId::new(KeyPair::random().public_key().clone());
+        let bundle = build_soracloud_hf_generated_service_bundle(
+            service_name.clone(),
+            &source_id.to_string(),
+            "openai/gpt-oss",
+            "main",
+            "gpt-oss",
+        );
+        let service_version = bundle.service.service_version.clone();
+
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (service_name_string.clone(), service_version.clone()),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name,
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    current_service_version: service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    service_name: bundle.service.service_name.clone(),
+                },
+            );
+        world
+            .soracloud_hf_shared_lease_pools_mut_for_testing()
+            .insert(
+                pool_id,
+                SoraHfSharedLeasePoolV1 {
+                    schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                    pool_id,
+                    source_id,
+                    storage_class: StorageClass::Warm,
+                    lease_asset_definition_id: AssetDefinitionId::new(
+                        "wonderland".parse().expect("domain"),
+                        "xor".parse().expect("asset"),
+                    ),
+                    base_fee_nanos: 10_000,
+                    lease_term_ms: 60_000,
+                    window_started_at_ms: 1,
+                    window_expires_at_ms: 60_001,
+                    active_member_count: 1,
+                    status: SoraHfSharedLeaseStatusV1::Active,
+                    queued_next_window: None,
+                },
+            );
+        world
+            .soracloud_hf_shared_lease_members_mut_for_testing()
+            .insert(
+                (pool_id.to_string(), member_account.to_string()),
+                SoraHfSharedLeaseMemberV1 {
+                    schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                    pool_id,
+                    source_id,
+                    account_id: member_account,
+                    status: SoraHfSharedLeaseMemberStatusV1::Active,
+                    joined_at_ms: 1,
+                    updated_at_ms: 1,
+                    total_paid_nanos: 10_000,
+                    total_refunded_nanos: 0,
+                    last_charge_nanos: 10_000,
+                    total_compute_paid_nanos: 5_000,
+                    total_compute_refunded_nanos: 0,
+                    last_compute_charge_nanos: 5_000,
+                    service_bindings: std::collections::BTreeSet::from([
+                        service_name_string.clone()
+                    ]),
+                    apartment_bindings: std::collections::BTreeSet::new(),
+                },
+            );
+        world.soracloud_hf_placements_mut_for_testing().insert(
+            pool_id,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id: Hash::new(b"hf-placement"),
+                source_id,
+                pool_id,
+                status: SoraHfPlacementStatusV1::Ready,
+                selection_seed_hash: Hash::new(b"hf-seed"),
+                resource_profile: SoraHfResourceProfileV1 {
+                    required_model_bytes: 1024,
+                    backend_family: SoraHfBackendFamilyV1::Transformers,
+                    model_format: SoraHfModelFormatV1::Safetensors,
+                    disk_cache_bytes_floor: 2048,
+                    ram_bytes_floor: 2048,
+                    vram_bytes_floor: 0,
+                },
+                eligible_validator_count: 1,
+                adaptive_target_host_count: 1,
+                assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                    validator_account_id: primary_validator,
+                    peer_id: primary_peer_id.to_owned(),
+                    role: SoraHfPlacementHostRoleV1::Primary,
+                    status: SoraHfPlacementHostStatusV1::Warm,
+                    host_class: "gpu.large".to_owned(),
+                }],
+                total_reservation_fee_nanos: 5_000,
+                last_rebalance_at_ms: 1,
+                last_error: None,
+            },
+        );
+
+        (
+            world,
+            service_name_string,
+            service_version,
+            source_id.to_string(),
+        )
+    }
 
     #[test]
     fn generated_hf_service_bundle_is_admissible_and_tagged() {
@@ -1082,5 +1338,27 @@ mod tests {
             ])
         );
         assert_eq!(manifest.tool_capabilities.len(), 2);
+    }
+
+    #[test]
+    fn resolve_generated_hf_primary_assignment_returns_warm_primary_for_bound_service() {
+        let primary_peer_id =
+            iroha_data_model::peer::PeerId::from(KeyPair::random().public_key().clone())
+                .to_string();
+        let (world, service_name, _service_version, source_id) =
+            seed_generated_hf_world_with_primary(&primary_peer_id);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query_handle);
+        let view = state.view();
+
+        let primary =
+            resolve_generated_hf_primary_assignment(view.world(), &service_name, &source_id)
+                .expect("primary lookup should succeed")
+                .expect("generated service should resolve a primary assignment");
+
+        assert_eq!(primary.peer_id, primary_peer_id);
+        assert_eq!(primary.role, SoraHfPlacementHostRoleV1::Primary);
+        assert_eq!(primary.status, SoraHfPlacementHostStatusV1::Warm);
     }
 }

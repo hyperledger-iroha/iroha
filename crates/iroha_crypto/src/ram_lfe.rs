@@ -60,6 +60,7 @@ const BFV_PROGRAM_REGISTER_COUNT: usize = 4;
 const BFV_PROGRAM_MIN_CIPHERTEXT_MODULUS: u64 = 1_u64 << 52;
 const BFV_PROGRAM_REGISTER_COUNT_U16: u16 = 4;
 const BFV_PROGRAM_STATE_WIDTH_U16: u16 = 32;
+const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT: usize = 64;
 const MAX_INPUT_BYTES: usize = 1_048_576;
 const MAX_SECRET_BYTES: usize = 4096;
 
@@ -362,22 +363,24 @@ pub const fn bfv_program_profile() -> BfvRamProgramProfile {
 /// Return the canonical hidden program used by the historical identifier-programmed backend.
 #[must_use]
 pub fn default_bfv_programmed_hidden_program() -> HiddenRamFheProgram {
+    let instructions = (0..BFV_PROGRAM_IDENTIFIER_SLOT_COUNT)
+        .flat_map(|slot| {
+            let slot_u16 = u16::try_from(slot).expect("identifier slot index fits into u16");
+            let lane_u16 =
+                u16::try_from(slot % BFV_PROGRAM_STATE_WIDTH).expect("state lane fits into u16");
+            [
+                HiddenRamFheInstruction::LoadInput(0, slot_u16),
+                HiddenRamFheInstruction::LoadState(1, lane_u16),
+                HiddenRamFheInstruction::Add(2, 0, 1),
+                HiddenRamFheInstruction::Output(2),
+            ]
+        })
+        .collect();
     HiddenRamFheProgram {
         version: 1,
         register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
         memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
-        instructions: vec![
-            HiddenRamFheInstruction::LoadInput(0, 0),
-            HiddenRamFheInstruction::LoadState(1, 0),
-            HiddenRamFheInstruction::Mul(2, 0, 1),
-            HiddenRamFheInstruction::AddPlain(2, 2, 17),
-            HiddenRamFheInstruction::StoreState(0, 2),
-            HiddenRamFheInstruction::LoadState(3, 1),
-            HiddenRamFheInstruction::Add(3, 3, 2),
-            HiddenRamFheInstruction::StoreState(1, 3),
-            HiddenRamFheInstruction::Output(2),
-            HiddenRamFheInstruction::Output(3),
-        ],
+        instructions,
     }
 }
 
@@ -1419,8 +1422,6 @@ mod tests {
         )
         .expect("build BFV policy commitment");
 
-        // The default hidden v1 program consumes the encoded length slot first, so the inputs
-        // must differ in length to guarantee distinct outputs here.
         let left = ClientRequest {
             normalized_input: norito::to_bytes(
                 &encrypt_identifier_from_seed(
@@ -1437,7 +1438,7 @@ mod tests {
             normalized_input: norito::to_bytes(
                 &encrypt_identifier_from_seed(
                     &public_parameters,
-                    b"bravo@example.tests",
+                    b"bravo@example.test",
                     b"bfv-programmed-right-seed",
                 )
                 .expect("encrypt right input"),
@@ -1448,6 +1449,7 @@ mod tests {
 
         let left = evaluate_commitment(secret, &commitment, &left).expect("left evaluation");
         let right = evaluate_commitment(secret, &commitment, &right).expect("right evaluation");
+        assert_ne!(left.output, right.output);
         assert_ne!(left.opaque_id, right.opaque_id);
         assert_ne!(left.receipt_hash, right.receipt_hash);
     }

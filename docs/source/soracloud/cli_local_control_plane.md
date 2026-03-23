@@ -54,6 +54,19 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     operations rather than creating a separate control-plane namespace.
   - see `uploaded_private_models.md` for the design that layers those routes
     onto the existing model registry and artifact/weight records.
+- `model-host` control-plane routes
+  - Torii now exposes authoritative
+    `POST /v1/soracloud/model-host/advertise`,
+    `POST /v1/soracloud/model-host/heartbeat`,
+    `POST /v1/soracloud/model-host/withdraw`, and
+    `GET /v1/soracloud/model-host/status`.
+  - these routes persist opt-in validator host capability adverts in
+    authoritative world state and let operators inspect which validators are
+    currently advertising model-host capacity.
+  - `iroha app soracloud model-host-advertise`,
+    `model-host-heartbeat`, `model-host-withdraw`, and
+    `model-host-status` now sign the same canonical provenance payloads as the
+    raw API and call the matching Torii routes directly.
 - `iroha app soracloud hf-*`
   - `hf-deploy`, `hf-status`, `hf-lease-leave`, and `hf-lease-renew` are
     Torii-backed only.
@@ -75,6 +88,26 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     the same transaction as the shared-lease mutation, the authoritative HF
     source now flips to `Ready` immediately and `importer_pending` stays
     `false` in the response.
+  - HF lease status and mutation responses now also expose any authoritative
+    placement snapshot already attached to the active lease window, including
+    assigned hosts, eligible-host count, warm-host count, and separate
+    storage-vs-compute fee fields.
+  - `hf-deploy` and `hf-lease-renew` now derive the canonical HF resource
+    profile from the resolved Hugging Face repo metadata before they submit the
+    mutation:
+    - Torii inspects the repo `siblings`, prefers `.gguf` over
+      `.safetensors` over PyTorch weight layouts, HEADs the selected files to
+      derive `required_model_bytes`, and maps that to a first-release
+      backend/format plus RAM/disk floors;
+    - lease admission fails closed when no live validator host advert can
+      satisfy that profile; and
+    - when a host set is available, the active window now records a
+      deterministic stake-weighted placement and a separate compute reservation
+      fee alongside the existing storage lease accounting.
+  - later members joining an active HF window now pay prorated storage and
+    compute shares for only the remaining window, while earlier members
+    receive the same deterministic storage refund and compute-refund accounting
+    from that late join.
   - the embedded runtime manager can synthesize the generated HF stub bundle
     locally, so those generated services can materialize without waiting for a
     committed SoraFS payload just for the placeholder inference bundle.
@@ -140,9 +173,23 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     - if the current window is expired or drained, it immediately opens a fresh
       window;
     - if the current window is still active, it queues the caller as the
-      next-window sponsor, charges the full next-window fee up front, and
-      exposes that queued sponsorship through `hf-status` until a later
-      mutation rolls the pool forward.
+      next-window sponsor, charges the full next-window storage and compute
+      reservation fees up front, persists the deterministic next-window
+      placement plan, and exposes that queued sponsorship through `hf-status`
+      until a later mutation rolls the pool forward.
+  - generated HF public `/infer` ingress now resolves the authoritative
+    placement and, when the receiving node is not the warm primary, proxies the
+    request over Soracloud P2P control messages to the assigned primary host;
+    the embedded runtime still fails closed on direct replica/unassigned local
+    execution and generated HF runtime receipts carry `placement_id`,
+    validator, and peer attribution from the authoritative placement record.
+  - remaining HF hosting work is now:
+    - deterministic replica failover/backfill against live runtime health, and
+    - slash-evidence emission for no-show / missed-heartbeat host violations.
+  - generated HF local execution now keeps a resident per-source Python worker
+    alive under `irohad`, reuses the loaded model across repeated `/infer`
+    calls, and restarts that worker deterministically if the local import
+    manifest changes or the process exits.
   - these routes are not the private uploaded-model path. HF shared leases stay
     focused on shared source/import membership rather than encrypted on-chain
     private model bytes.

@@ -25,14 +25,18 @@ use iroha::data_model::{
         AgentApartmentManifestV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
         SoraArtifactKindV1, SoraArtifactRefV1,
         SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraMailboxContractV1, SoraNetworkPolicyV1, SoraRouteTargetV1,
-        SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+        SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraNetworkPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
         SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
         encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
+        encode_model_host_advertise_provenance_payload,
+        encode_model_host_heartbeat_provenance_payload,
+        encode_model_host_withdraw_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
         encode_hf_shared_lease_leave_provenance_payload,
         encode_hf_shared_lease_renew_provenance_payload,
@@ -138,6 +142,14 @@ pub enum Command {
     HfLeaseLeave(HfLeaseLeaveArgs),
     /// Renew an expired or drained shared Hugging Face lease pool window.
     HfLeaseRenew(HfLeaseRenewArgs),
+    /// Advertise validator-host capabilities for authoritative HF placement.
+    ModelHostAdvertise(ModelHostAdvertiseArgs),
+    /// Refresh the heartbeat TTL for an advertised model host.
+    ModelHostHeartbeat(ModelHostHeartbeatArgs),
+    /// Withdraw an advertised model host capability.
+    ModelHostWithdraw(ModelHostWithdrawArgs),
+    /// Query authoritative model-host capability adverts.
+    ModelHostStatus(ModelHostStatusArgs),
 }
 
 impl Run for Command {
@@ -256,6 +268,19 @@ impl Run for Command {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
             }
+            Command::ModelHostAdvertise(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelHostHeartbeat(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelHostWithdraw(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelHostStatus(args) => context.print_data(&args.run()?),
         }
     }
 }
@@ -1940,6 +1965,158 @@ impl HfLeaseRenewArgs {
     }
 }
 
+/// Arguments for `app soracloud model-host-advertise`.
+#[derive(clap::Args, Debug)]
+pub struct ModelHostAdvertiseArgs {
+    /// Peer identifier used for Soracloud routing.
+    #[arg(long, value_name = "PEER_ID")]
+    peer_id: String,
+    /// Supported backend families.
+    #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
+    backends: Vec<ModelHostBackendArg>,
+    /// Supported model formats.
+    #[arg(long, value_enum, value_delimiter = ',', num_args = 1..)]
+    formats: Vec<ModelHostModelFormatArg>,
+    /// Maximum canonical model bytes accepted by this host.
+    #[arg(long, value_name = "BYTES")]
+    max_model_bytes: u64,
+    /// Maximum disk cache bytes reserved for resident models.
+    #[arg(long, value_name = "BYTES")]
+    max_disk_cache_bytes: u64,
+    /// Maximum system RAM bytes reserved for resident models.
+    #[arg(long, value_name = "BYTES")]
+    max_ram_bytes: u64,
+    /// Maximum accelerator VRAM bytes reserved for resident models.
+    #[arg(long, value_name = "BYTES", default_value_t = 0)]
+    max_vram_bytes: u64,
+    /// Maximum concurrent resident-model slots.
+    #[arg(long, value_name = "COUNT")]
+    max_concurrent_resident_models: u16,
+    /// Governance-defined host class used for compute tariff lookup.
+    #[arg(long, value_name = "CLASS")]
+    host_class: String,
+    /// Heartbeat expiry timestamp (unix ms) for this advert.
+    #[arg(long, value_name = "UNIX_MS")]
+    heartbeat_expires_at_ms: u64,
+    /// Torii base URL for authoritative `model-host/advertise`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelHostAdvertiseArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        let api_token = self.api_token.clone();
+        let timeout_secs = self.timeout_secs;
+        let request = signed_model_host_advertise_request(self, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url.as_str(),
+            "v1/soracloud/model-host/advertise",
+            &request,
+            api_token.as_deref(),
+            timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-host-heartbeat`.
+#[derive(clap::Args, Debug)]
+pub struct ModelHostHeartbeatArgs {
+    /// Heartbeat expiry timestamp (unix ms) for this advert.
+    #[arg(long, value_name = "UNIX_MS")]
+    heartbeat_expires_at_ms: u64,
+    /// Torii base URL for authoritative `model-host/heartbeat`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelHostHeartbeatArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_model_host_heartbeat_request(self.heartbeat_expires_at_ms, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model-host/heartbeat",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-host-withdraw`.
+#[derive(clap::Args, Debug)]
+pub struct ModelHostWithdrawArgs {
+    /// Torii base URL for authoritative `model-host/withdraw`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelHostWithdrawArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_model_host_withdraw_request(authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model-host/withdraw",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-host-status`.
+#[derive(clap::Args, Debug)]
+pub struct ModelHostStatusArgs {
+    /// Optional validator account identifier filter.
+    #[arg(long, value_name = "ACCOUNT")]
+    validator_account_id: Option<String>,
+    /// Torii base URL for authoritative `model-host/status`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane queries.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelHostStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_model_host_status(
+            torii_url,
+            self.validator_account_id.as_deref(),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MutationMode {
     Deploy,
@@ -1960,6 +2137,38 @@ impl HfStorageClassArg {
             Self::Hot => StorageClass::Hot,
             Self::Warm => StorageClass::Warm,
             Self::Cold => StorageClass::Cold,
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelHostBackendArg {
+    Transformers,
+    Gguf,
+}
+
+impl ModelHostBackendArg {
+    const fn to_backend_family(self) -> SoraHfBackendFamilyV1 {
+        match self {
+            Self::Transformers => SoraHfBackendFamilyV1::Transformers,
+            Self::Gguf => SoraHfBackendFamilyV1::Gguf,
+        }
+    }
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelHostModelFormatArg {
+    Safetensors,
+    Pytorch,
+    Gguf,
+}
+
+impl ModelHostModelFormatArg {
+    const fn to_model_format(self) -> SoraHfModelFormatV1 {
+        match self {
+            Self::Safetensors => SoraHfModelFormatV1::Safetensors,
+            Self::Pytorch => SoraHfModelFormatV1::PyTorch,
+            Self::Gguf => SoraHfModelFormatV1::Gguf,
         }
     }
 }
@@ -2293,6 +2502,73 @@ struct HfLeaseRenewPayload {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedHfLeaseRenewRequest {
     payload: HfLeaseRenewPayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ModelHostAdvertisePayload {
+    capability: SoraModelHostCapabilityRecordV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedModelHostAdvertiseRequest {
+    payload: ModelHostAdvertisePayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ModelHostHeartbeatPayload {
+    validator_account_id: AccountId,
+    heartbeat_expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedModelHostHeartbeatRequest {
+    payload: ModelHostHeartbeatPayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ModelHostWithdrawPayload {
+    validator_account_id: AccountId,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedModelHostWithdrawRequest {
+    payload: ModelHostWithdrawPayload,
     provenance: ManifestProvenance,
     #[norito(default)]
     authority: Option<AccountId>,
@@ -3056,6 +3332,114 @@ fn signed_hf_lease_renew_request(
         .wrap_err("failed to encode hf lease renew payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &encoded);
     Ok(SignedHfLeaseRenewRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+    })
+}
+
+fn signed_model_host_advertise_request(
+    args: ModelHostAdvertiseArgs,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedModelHostAdvertiseRequest> {
+    if args.peer_id.trim().is_empty() {
+        return Err(eyre!("--peer-id must not be empty"));
+    }
+    if args.backends.is_empty() {
+        return Err(eyre!("--backends must not be empty"));
+    }
+    if args.formats.is_empty() {
+        return Err(eyre!("--formats must not be empty"));
+    }
+    if args.max_model_bytes == 0
+        || args.max_disk_cache_bytes == 0
+        || args.max_ram_bytes == 0
+        || args.max_concurrent_resident_models == 0
+    {
+        return Err(eyre!(
+            "--max-model-bytes, --max-disk-cache-bytes, --max-ram-bytes, and --max-concurrent-resident-models must be greater than zero"
+        ));
+    }
+    let capability = SoraModelHostCapabilityRecordV1 {
+        schema_version: 0,
+        validator_account_id: authority.clone(),
+        peer_id: args.peer_id.trim().to_owned(),
+        supported_backends: args
+            .backends
+            .into_iter()
+            .map(ModelHostBackendArg::to_backend_family)
+            .collect(),
+        supported_formats: args
+            .formats
+            .into_iter()
+            .map(ModelHostModelFormatArg::to_model_format)
+            .collect(),
+        max_model_bytes: args.max_model_bytes,
+        max_disk_cache_bytes: args.max_disk_cache_bytes,
+        max_ram_bytes: args.max_ram_bytes,
+        max_vram_bytes: args.max_vram_bytes,
+        max_concurrent_resident_models: args.max_concurrent_resident_models,
+        host_class: args.host_class.trim().to_owned(),
+        advertised_at_ms: 0,
+        heartbeat_expires_at_ms: args.heartbeat_expires_at_ms,
+    };
+    let payload = ModelHostAdvertisePayload { capability };
+    let encoded = encode_model_host_advertise_signature_payload(&payload)
+        .wrap_err("failed to encode model host advertise payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedModelHostAdvertiseRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+    })
+}
+
+fn signed_model_host_heartbeat_request(
+    heartbeat_expires_at_ms: u64,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedModelHostHeartbeatRequest> {
+    if heartbeat_expires_at_ms == 0 {
+        return Err(eyre!("--heartbeat-expires-at-ms must be greater than zero"));
+    }
+    let payload = ModelHostHeartbeatPayload {
+        validator_account_id: authority.clone(),
+        heartbeat_expires_at_ms,
+    };
+    let encoded = encode_model_host_heartbeat_signature_payload(&payload)
+        .wrap_err("failed to encode model host heartbeat payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedModelHostHeartbeatRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: Some(authority.clone()),
+        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+    })
+}
+
+fn signed_model_host_withdraw_request(
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedModelHostWithdrawRequest> {
+    let payload = ModelHostWithdrawPayload {
+        validator_account_id: authority.clone(),
+    };
+    let encoded = encode_model_host_withdraw_signature_payload(&payload)
+        .wrap_err("failed to encode model host withdraw payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedModelHostWithdrawRequest {
         payload,
         provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
@@ -3882,6 +4266,30 @@ fn encode_hf_lease_renew_signature_payload(payload: &HfLeaseRenewPayload) -> Res
     .wrap_err("failed to encode hf lease renew signature payload tuple")
 }
 
+fn encode_model_host_advertise_signature_payload(
+    payload: &ModelHostAdvertisePayload,
+) -> Result<Vec<u8>> {
+    encode_model_host_advertise_provenance_payload(&payload.capability)
+        .wrap_err("failed to encode model host advertise signature payload tuple")
+}
+
+fn encode_model_host_heartbeat_signature_payload(
+    payload: &ModelHostHeartbeatPayload,
+) -> Result<Vec<u8>> {
+    encode_model_host_heartbeat_provenance_payload(
+        &payload.validator_account_id,
+        payload.heartbeat_expires_at_ms,
+    )
+    .wrap_err("failed to encode model host heartbeat signature payload tuple")
+}
+
+fn encode_model_host_withdraw_signature_payload(
+    payload: &ModelHostWithdrawPayload,
+) -> Result<Vec<u8>> {
+    encode_model_host_withdraw_provenance_payload(&payload.validator_account_id)
+        .wrap_err("failed to encode model host withdraw signature payload tuple")
+}
+
 fn encode_training_job_start_signature_payload(
     payload: &TrainingJobStartPayload,
 ) -> Result<Vec<u8>> {
@@ -4537,6 +4945,56 @@ fn fetch_torii_soracloud_hf_status(
 
     let payload: norito::json::Value =
         json::from_slice(&body).wrap_err("failed to decode Torii hf status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_model_host_status(
+    torii_url: &str,
+    validator_account_id: Option<&str>,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let validator_account_id = parse_hf_account_id_arg(validator_account_id)?;
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/model-host/status")
+        .wrap_err("failed to derive /v1/soracloud/model-host/status URL from --torii-url")?;
+    if let Some(validator_account_id) = validator_account_id.as_deref() {
+        endpoint
+            .query_pairs_mut()
+            .append_pair("account_id", validator_account_id);
+    }
+
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud model host status")?;
+
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii model host status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/model-host/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii model host status JSON payload")?;
     Ok((endpoint.to_string(), payload))
 }
 

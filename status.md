@@ -19,6 +19,227 @@ Last updated: 2026-03-23
   - `cargo test -p connect_norito_bridge --bin soracloud_request_signer -- --nocapture` (pass)
 - Remaining validation gap:
   - the broader workspace sweep was not rerun for this compile fix.
+## 2026-03-23 Follow-up: Soracloud HF public ingress now proxies generated `/infer` to the authoritative primary
+- Extended the generated-HF public ingress path across
+  `crates/iroha_core/src/{lib.rs,soracloud_runtime.rs}`,
+  `crates/iroha_torii/src/{lib.rs,soracloud.rs}`, and
+  `crates/irohad/src/{main.rs,soracloud_runtime.rs}`:
+  - shared runtime helpers now resolve the authoritative active placement and
+    current warm primary assignment for generated HF services directly from
+    committed lease/member/placement state;
+  - Torii now keeps a small pending-request map for Soracloud proxy responses,
+    subscribes to control-topic P2P messages, and forwards generated HF
+    `/infer` local reads to the authoritative primary peer when the receiving
+    ingress node is not itself primary; and
+  - the authoritative primary executes the proxied request through the normal
+    embedded runtime path and returns the full certified local-read response
+    body, bindings, and receipt metadata back to the ingress node.
+- Refreshed focused test fixtures in `crates/iroha_torii/src/soracloud.rs` to
+  include queued-window planned placements and compute fees now required by the
+  HF placement/economics model.
+- Added focused coverage proving:
+  - generated HF proxy-target resolution returns the authoritative primary when
+    the local ingress node is not primary,
+  - the same resolution stays local when the ingress node is already primary,
+    and
+  - incoming Soracloud proxy responses complete the correct pending Torii
+    request slot.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_torii --lib` (pass)
+  - `cargo test -p iroha_core resolve_generated_hf_primary_assignment_returns_warm_primary_for_bound_service --lib` (pass)
+  - `cargo test -p iroha_torii resolve_soracloud_local_read_proxy_target_returns_primary_when_local_is_not_primary --lib` (pass)
+  - `cargo test -p iroha_torii resolve_soracloud_local_read_proxy_target_skips_proxy_when_local_is_primary --lib` (pass)
+  - `cargo test -p iroha_torii soracloud_proxy_response_completes_pending_request --lib` (pass)
+- Remaining implementation gap:
+  - Soracloud still needs live replica promotion/backfill tied to runtime
+    health and host-violation slash evidence.
+
+## 2026-03-23 Follow-up: Soracloud HF local execution now reuses resident per-model workers
+- Extended the generated-HF local execution path in
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/irohad/resources/soracloud_hf_local_runner.py`, and
+  `docs/source/soracloud/cli_local_control_plane.md`:
+  - the embedded Python HF runner now supports a resident line-delimited
+    server mode and keeps a per-process transformers pipeline cache so an
+    already warmed model stays loaded across repeated `/infer` calls;
+  - `irohad` now keeps a per-source resident worker registry, restarts stale
+    or mismatched workers when the imported manifest changes, and prunes
+    orphaned workers during reconciliation when the authoritative HF source
+    disappears from the local runtime snapshot; and
+  - generated-HF local execution no longer rebuilds a fresh Python process for
+    every request, while the `_soracloud_fixture` test path now exposes a
+    stable `worker_instance_id` proving hot-worker reuse.
+- Added focused `irohad` runtime coverage proving repeated generated-HF
+  `/infer` calls reuse the same resident worker instance for one imported
+  source.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_runtime cargo test -p irohad generated_hf -- --nocapture` (pass)
+- Remaining implementation gap:
+  - Soracloud still needs live replica promotion/backfill tied to runtime
+    health and host-violation slash evidence.
+
+## 2026-03-23 Follow-up: Soracloud HF runtime now enforces local placement assignments and emits placement-backed receipts
+- Extended the remaining HF runtime slice across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/irohad/src/{main.rs,soracloud_runtime.rs}`,
+  `crates/iroha_torii/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`:
+  - runtime receipts now carry optional `placement_id`,
+    `selected_validator_account_id`, and `selected_peer_id`, and validation
+    enforces that placement attribution is all-or-nothing;
+  - `irohad` now threads the local validator account and peer identity into the
+    embedded runtime manager, resolves authoritative HF placements for
+    generated-HF services, and only imports/warms shared HF bytes on locally
+    assigned hosts;
+  - generated HF `metadata` local reads now require the node to be an assigned
+    host, the embedded runtime still fails closed on direct replica/unassigned
+    `infer` execution while Torii proxies public generated HF `/infer` ingress
+    to the authoritative primary, and successful local reads emit
+    placement-backed runtime receipts; and
+  - Torii agent-runtime receipt projections now preserve the placement-backed
+    host attribution fields instead of dropping them from runtime summaries.
+- Added focused `irohad` runtime coverage proving:
+  - unassigned hosts keep generated HF sources metadata-only during
+    reconciliation,
+  - locally assigned primary hosts include authoritative placement identity in
+    generated HF `/infer` receipts, and
+  - replica hosts reject local generated HF `/infer` execution until
+    proxy-to-primary routing is implemented.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_runtime cargo test -p iroha_data_model soracloud --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_runtime cargo test -p irohad generated_hf -- --nocapture` (pass)
+- Remaining implementation gap:
+  - the runtime path is now placement-aware, but Soracloud still needs
+    live replica promotion/backfill tied to runtime health and
+    host-violation slash evidence.
+
+## 2026-03-23 Follow-up: Soracloud HF lease admission now derives canonical HF resource profiles, records deterministic placements, and charges compute windows separately
+- Extended the Soracloud HF lease/control-plane slice across
+  `crates/iroha_data_model/src/{isi/soracloud.rs,soracloud.rs}`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/iroha_torii/src/soracloud.rs`,
+  `crates/iroha_cli/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`:
+  - `JoinSoracloudHfSharedLease` / `RenewSoracloudHfSharedLease` now carry an
+    optional canonical HF resource profile, queued-next-window records now
+    persist both a compute reservation fee and a deterministic planned
+    placement, and the data-model validation/tests enforce that linkage;
+  - core HF lease execution now resolves the canonical resource profile,
+    rejects admission when no active validator host advert can satisfy it,
+    selects stake-weighted deterministic placements for active/queued windows,
+    records those placements authoritatively, retires them when windows expire
+    without rollover, and keeps placement host sets refreshed when assigned
+    hosts heartbeat or withdraw;
+  - storage and compute lease accounting are now split in the core HF member
+    flow: initial joins and renewals charge both storage and compute window
+    reservations, later joins prorate only the remaining storage/compute
+    window, and existing members receive storage refunds plus authoritative
+    `total_compute_refunded_nanos` updates from those later joins;
+  - Torii `hf-deploy` / `hf-lease-renew` now derive the canonical HF profile
+    from the resolved repo metadata (`siblings` + HEAD `Content-Length`
+    inspection), prefer `gguf` over `safetensors` over PyTorch layouts, and
+    submit the resulting profile into lease admission instead of leaving
+    placement/resource data implicit; and
+  - the Soracloud CLI now exposes signed `model-host-advertise`,
+    `model-host-heartbeat`, `model-host-withdraw`, and `model-host-status`
+    commands against the authoritative Torii surface.
+- Added/updated focused coverage in
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs` proving:
+  - active-window renewals persist queued compute reservations and planned
+    placements,
+  - queued sponsorship rollover preserves the queued placement and resets
+    immediate member charges,
+  - HF lease admission now fails closed when no eligible host advert exists,
+    and
+  - late-join flows prorate compute charges and refund earlier members.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model soracloud --lib` (pass)
+  - `cargo test -p iroha_core model_host --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_finish cargo test -p iroha_core hf_shared_lease --lib` (pass)
+  - `cargo check -p iroha_torii --lib` (pass)
+  - `cargo check -p iroha_cli` (pass)
+- Remaining implementation gap:
+  - the authoritative placement/economics path is now wired through lease
+    admission, but the runtime-serving side is still follow-up work:
+    live replica promotion/backfill and slash-evidence emission for host
+    no-show / heartbeat violations are not yet implemented.
+
+## 2026-03-23 Follow-up: Torii approvals list now filters canonical operation types server-side and skips stale signatory-index entries
+- Extended the signer-scoped approvals read path in
+  `crates/iroha_torii/src/routing.rs` so
+  `POST /v1/multisig/approvals/list` now accepts canonical
+  `operation_type` filters, normalizes them to uppercase, classifies
+  multisig proposals directly from the on-chain instruction payload, and
+  applies that filtering before cursor pagination:
+  - the server-side classifier now recognizes the direct portal taxonomy
+    `TRANSFER`, `MINT`, `MINT_REQUEST`, `ISSUANCE_SWAP`,
+    `EXECUTE_TRIGGER`, and `ONCHAIN_MULTISIG`,
+  - relay approve wrappers and cancel wrappers remain hidden from approvals
+    list/get exactly as before, and
+  - unknown `operation_type` values now simply return no matches rather than
+    failing the request.
+- Hardened approvals discovery so stale multisig signatory-index entries are
+  logged and skipped instead of aborting the whole approvals request.
+- Refreshed adjacent HF shared-lease Torii test fixtures in
+  `crates/iroha_torii/src/soracloud.rs` with newly required
+  `resource_profile` and compute-charge fields so the targeted `iroha_torii`
+  unit test slice compiles again while validating the approvals changes.
+- Added focused regression coverage in `crates/iroha_torii/src/routing.rs`
+  proving:
+  - canonical approvals filters match each supported operation type,
+  - operation-type filtering happens before cursor pagination,
+  - relay/cancel wrappers stay hidden, and
+  - stale signatory-index entries are non-fatal.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib multisig_approvals_ -- --nocapture` (pass)
+- Remaining validation gap:
+  - the broader `iroha_torii` test sweep and a fresh reset/redeploy smoke run
+    against live Torii/web flows were not executed in this repo.
+
+## 2026-03-23 Follow-up: Soracloud HF host adverts and placement records now exist in authoritative state
+- Extended the Soracloud HF control-plane schema and execution path across
+  `crates/iroha_data_model/src/{isi/mod.rs,isi/registry.rs,isi/soracloud.rs,soracloud.rs,visit/mod.rs,visit/visit_instruction.rs}`,
+  `crates/iroha_core/src/{state.rs,smartcontracts/isi/mod.rs,smartcontracts/isi/soracloud.rs}`,
+  `crates/iroha_torii/src/{lib.rs,soracloud.rs}`, and
+  `docs/source/soracloud/cli_local_control_plane.md`:
+  - added first-class authoritative HF host capability adverts and HF
+    placement records to the data model, including canonical provenance
+    payload encoders, validation, and focused schema tests;
+  - extended authoritative core state with
+    `soracloud_model_host_capabilities` and `soracloud_hf_placements`, plus
+    new read-only/testing accessors;
+  - added `AdvertiseSoracloudModelHost`,
+    `HeartbeatSoracloudModelHost`, and `WithdrawSoracloudModelHost`
+    instructions, wired them through the visitor/registry/dispatch path, and
+    implemented core execution with active-validator gating;
+  - heartbeats now refresh the authoritative host advert and mark any assigned
+    placement host slot `Warm`, while withdrawals evict the advert and mark
+    assigned placement slots unavailable; and
+  - Torii now exposes `/v1/soracloud/model-host/{advertise,heartbeat,withdraw,status}`
+    and surfaces any authoritative HF placement snapshot plus separate
+    storage-vs-compute fee fields on HF lease status/mutation responses.
+- Added focused runtime coverage in
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs` proving host
+  advert/withdraw lifecycle updates authoritative state and that a host
+  heartbeat promotes an assigned placement to `Ready`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model soracloud --lib` (pass)
+  - `cargo check -p iroha_core --lib` (pass)
+  - `cargo test -p iroha_core model_host --lib` (pass)
+  - `cargo check -p iroha_torii --lib` (pass)
+- Remaining validation and implementation gaps:
+  - deterministic stake-weighted placement selection is not yet threaded into
+    `hf-deploy` / `hf-lease-renew`, so placement records are now authoritative
+    and inspectable but not yet auto-created by lease admission;
+  - separate compute-window proration/refund accounting is not yet wired into
+    shared-lease economics; and
+  - matching Soracloud CLI host-management commands are still pending.
 
 ## 2026-03-23 Follow-up: asset integration tests derive required display names from asset IDs again
 - Fixed the stale asset-definition constructors in

@@ -3,6 +3,8 @@
 
 This runner executes against an already-imported local HF source directory.
 It accepts one JSON request on stdin and emits one JSON response on stdout.
+When started with ``--server``, it stays resident and exchanges one JSON line
+per request/response pair so the loaded model can remain warm across calls.
 """
 
 from __future__ import annotations
@@ -10,11 +12,16 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
+
+WORKER_INSTANCE_ID = f"hf-worker-{os.getpid()}-{time.time_ns()}"
+PIPELINE_CACHE: dict[tuple[str, str], object] = {}
 
 
 def emit(payload: dict) -> int:
     sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+    sys.stdout.write("\n")
     sys.stdout.flush()
     return 0
 
@@ -55,6 +62,8 @@ def maybe_run_fixture(source_files_dir: Path, request_body: object, request: dic
         "repo_id": request.get("repo_id"),
         "model_name": request.get("model_name"),
         "pipeline_tag": request.get("pipeline_tag"),
+        "worker_instance_id": WORKER_INSTANCE_ID,
+        "worker_pid": os.getpid(),
         "inputs": inputs,
         "parameters": parameters,
         "request_query": request.get("request_query"),
@@ -63,6 +72,11 @@ def maybe_run_fixture(source_files_dir: Path, request_body: object, request: dic
 
 
 def build_transformers_pipeline(source_files_dir: Path, pipeline_tag: str):
+    cache_key = (str(source_files_dir), pipeline_tag)
+    cached = PIPELINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         import transformers  # type: ignore
@@ -97,11 +111,13 @@ def build_transformers_pipeline(source_files_dir: Path, pipeline_tag: str):
         kwargs["image_processor"] = str(source_files_dir)
 
     try:
-        return transformers.pipeline(**kwargs)
+        pipeline = transformers.pipeline(**kwargs)
     except Exception as exc:
         raise RuntimeError(
             f"failed to build local transformers pipeline `{pipeline_tag}` from {source_files_dir}: {exc}"
         ) from exc
+    PIPELINE_CACHE[cache_key] = pipeline
+    return pipeline
 
 
 def run_transformers(request: dict, request_body: object) -> dict:
@@ -136,24 +152,34 @@ def run_transformers(request: dict, request_body: object) -> dict:
     }
 
 
-def main() -> int:
-    try:
-        request = json.load(sys.stdin)
-    except Exception as exc:
-        return error("invalid_request", f"failed to decode local HF runner request: {exc}")
-
+def handle_request(request: dict) -> dict:
     if request.get("schema_version") != 1:
-        return error("unsupported_schema", "local HF runner request schema_version must be 1")
+        return {
+            "ok": False,
+            "error": {
+                "code": "unsupported_schema",
+                "message": "local HF runner request schema_version must be 1",
+            },
+        }
 
     source_files_dir_raw = request.get("source_files_dir")
     if not isinstance(source_files_dir_raw, str) or not source_files_dir_raw.strip():
-        return error("invalid_request", "local HF runner requires `source_files_dir`")
+        return {
+            "ok": False,
+            "error": {
+                "code": "invalid_request",
+                "message": "local HF runner requires `source_files_dir`",
+            },
+        }
     source_files_dir = Path(source_files_dir_raw)
     if not source_files_dir.is_dir():
-        return error(
-            "source_missing",
-            f"local HF source directory is missing: {source_files_dir}",
-        )
+        return {
+            "ok": False,
+            "error": {
+                "code": "source_missing",
+                "message": f"local HF source directory is missing: {source_files_dir}",
+            },
+        }
 
     request_body = request.get("request_body")
     if request_body is None:
@@ -166,15 +192,49 @@ def main() -> int:
         else:
             response = run_transformers(request, request_body)
     except Exception as exc:
-        return error("local_execution_failed", str(exc))
-
-    return emit(
-        {
-            "ok": True,
-            "content_type": "application/json",
-            "response_json": response,
+        return {
+            "ok": False,
+            "error": {"code": "local_execution_failed", "message": str(exc)},
         }
-    )
+
+    return {
+        "ok": True,
+        "content_type": "application/json",
+        "response_json": response,
+    }
+
+
+def serve_forever() -> int:
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+        except Exception as exc:
+            emit(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_request",
+                        "message": f"failed to decode local HF runner request: {exc}",
+                    },
+                }
+            )
+            continue
+        emit(handle_request(request))
+    return 0
+
+
+def main() -> int:
+    if "--server" in sys.argv[1:]:
+        return serve_forever()
+
+    try:
+        request = json.load(sys.stdin)
+    except Exception as exc:
+        return error("invalid_request", f"failed to decode local HF runner request: {exc}")
+    return emit(handle_request(request))
 
 
 if __name__ == "__main__":

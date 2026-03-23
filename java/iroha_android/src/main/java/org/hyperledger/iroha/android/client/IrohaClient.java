@@ -27,4 +27,12 @@ public interface IrohaClient {
         new UnsupportedOperationException("waitForTransactionStatus not supported"));
     return future;
   }
+
+  default CompletableFuture<Map<String, Object>> waitForTransactionStatusStream(
+      final String hashHex, final PipelineStatusOptions options) {
+    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("waitForTransactionStatusStream not supported"));
+    return future;
+  }
 }
