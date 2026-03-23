@@ -2,6 +2,35 @@
 
 Last updated: 2026-03-23
 
+Latest sync (2026-03-23 Soracloud HF authoritative expiry reconciliation):
+`crates/iroha_data_model/src/isi/{mod.rs,registry.rs,soracloud.rs}` and
+`crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+now carry the next HF hosting control-loop slice:
+
+- Soracloud now exposes an authoritative `ReconcileSoracloudModelHosts`
+  instruction so stale validator host adverts can be swept through the normal
+  on-chain instruction path;
+- expired assigned hosts now reconcile through the already committed placement
+  seed and ranking rules, which promotes the highest-ranked retained warm
+  replica to primary and deterministically backfills a vacant replica slot from
+  the remaining eligible hosts; and
+- repeated expiry sweeps are idempotent for already-evicted hosts, so
+  opportunistic reconciliation from other lease/host mutations no longer
+  rewrites placements unnecessarily.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model soracloud --lib`
+- `cargo test -p iroha_core reconcile_soracloud_model_hosts --lib -- --nocapture`
+- `cargo test -p iroha_core model_host --lib`
+- `cargo check -p iroha_core --lib`
+
+Open work for this slice now remains:
+- connect runtime health and missed-warmup detection to the new authoritative
+  reconciliation/slash path; and
+- add host-violation evidence/slash-path integration for warmup no-show,
+  repeated assigned-host heartbeat misses, and provable advert contradictions.
+
 Latest sync (2026-03-23 Soracloud request signer bundle-root hashing compiles again):
 `crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`
 now avoids the current Norito tuple-arity ceiling in the uploaded-model
@@ -57,7 +86,8 @@ Validation:
 - `CARGO_TARGET_DIR=target_soracloud_runtime cargo test -p irohad generated_hf -- --nocapture`
 
 Open work for this slice now remains:
-- add live replica promotion/backfill tied to runtime health; and
+- add live replica promotion/backfill tied to runtime health beyond the new
+  authoritative expiry sweep; and
 - add host-violation evidence/slash-path integration for warmup no-show,
   repeated assigned-host heartbeat misses, and provable advert contradictions.
 

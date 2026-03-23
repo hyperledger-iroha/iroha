@@ -302,6 +302,12 @@ impl From<crate::isi::soracloud::WithdrawSoracloudModelHost> for InstructionBox 
     }
 }
 
+impl From<crate::isi::soracloud::ReconcileSoracloudModelHosts> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReconcileSoracloudModelHosts) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::DeploySoracloudAgentApartment> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeploySoracloudAgentApartment) -> Self {
         InstructionBox(Box::new(i))

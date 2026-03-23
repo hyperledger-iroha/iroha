@@ -366,6 +366,22 @@ impl PartialOrd for WithdrawSoracloudModelHost {
     }
 }
 
+/// Reconcile expired validator-host adverts against authoritative HF placements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReconcileSoracloudModelHosts;
+
+impl crate::seal::Instruction for ReconcileSoracloudModelHosts {}
+
+impl PartialOrd for ReconcileSoracloudModelHosts {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
 /// Deploy a Soracloud agent apartment into authoritative world state.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(

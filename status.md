@@ -2,6 +2,37 @@
 
 Last updated: 2026-03-23
 
+## 2026-03-23 Follow-up: Soracloud HF placements now reconcile expired host adverts authoritatively
+- Extended the Soracloud HF host/placement control path across
+  `crates/iroha_data_model/src/isi/{mod.rs,registry.rs,soracloud.rs}` and
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`:
+  - added a new authoritative `ReconcileSoracloudModelHosts` instruction so an
+    operator or runtime control loop can sweep stale validator host adverts
+    without changing the client-facing inference surface;
+  - expired model-host adverts now reconcile through the existing committed
+    placement seed and ranking logic, marking stale assigned hosts
+    `Unavailable`, promoting the highest-ranked retained warm replica to
+    primary, and deterministically backfilling vacant replica slots from the
+    remaining eligible validator set; and
+  - repeated sweeps are now idempotent for already-evicted hosts, so the same
+    expiry reconciliation can run opportunistically from lease/host mutations
+    without churning placement records.
+- Added focused coverage proving:
+  - an expired primary advert promotes a warm replica and deterministically
+    backfills the missing replica slot, and
+  - repeating the same expiry sweep leaves the already-reconciled placement
+    unchanged.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model soracloud --lib` (pass)
+  - `cargo test -p iroha_core reconcile_soracloud_model_hosts --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_core model_host --lib` (pass)
+  - `cargo check -p iroha_core --lib` (pass)
+- Remaining implementation gap:
+  - Soracloud still needs runtime-health-driven host violation reporting and
+    slash-evidence integration for warmup no-show, repeated assigned-host
+    heartbeat misses, and provable advert contradictions.
+
 ## 2026-03-23 Follow-up: Soracloud request signer bundle-root hashing no longer trips Norito tuple arity limits
 - Fixed the `error[E0277]` regression in
   `crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`:

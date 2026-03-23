@@ -2351,6 +2351,30 @@ fn record_hf_placement(
     Ok(())
 }
 
+fn reconcile_expired_model_hosts(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    now_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    let expired_validator_account_ids = state_transaction
+        .world
+        .soracloud_model_host_capabilities
+        .iter()
+        .filter_map(|(validator_account_id, capability)| {
+            (!capability.is_active_at(now_ms)).then_some(validator_account_id.clone())
+        })
+        .collect::<Vec<_>>();
+    for validator_account_id in expired_validator_account_ids {
+        refresh_hf_placements_for_host_status(
+            state_transaction,
+            &validator_account_id,
+            SoraHfPlacementHostStatusV1::Unavailable,
+            now_ms,
+            Some("assigned host heartbeat expired"),
+        )?;
+    }
+    Ok(())
+}
+
 fn record_hf_shared_lease_member(
     state_transaction: &mut StateTransaction<'_, '_>,
     record: SoraHfSharedLeaseMemberV1,
@@ -2390,7 +2414,9 @@ fn refresh_hf_placements_for_host_status(
     for mut placement in placements {
         let mut changed = false;
         for assignment in &mut placement.assigned_hosts {
-            if assignment.validator_account_id == *validator_account_id {
+            if assignment.validator_account_id == *validator_account_id
+                && assignment.status != next_host_status
+            {
                 assignment.status = next_host_status;
                 changed = true;
             }
@@ -2886,6 +2912,7 @@ fn ensure_hf_placement_for_active_pool(
     resource_profile: &SoraHfResourceProfileV1,
     now_ms: u64,
 ) -> Result<SoraHfPlacementRecordV1, InstructionExecutionError> {
+    reconcile_expired_model_hosts(state_transaction, now_ms)?;
     if let Some(existing) = state_transaction
         .world
         .soracloud_hf_placements
@@ -3187,6 +3214,7 @@ fn promote_hf_shared_lease_queued_window(
     pool.queued_next_window = None;
     record_hf_shared_lease_pool(state_transaction, pool.clone())?;
     record_hf_placement(state_transaction, next_window.planned_placement)?;
+    reconcile_expired_model_hosts(state_transaction, now_ms)?;
     Ok(true)
 }
 
@@ -4397,6 +4425,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             status: SoraHfSharedLeaseStatusV1::Active,
             queued_next_window: None,
         };
+        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         let placement = select_hf_placement_for_window(
             state_transaction,
             source_id,
@@ -4812,6 +4841,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
 
             let next_window_started_at_ms = pool.window_expires_at_ms;
             let next_window_expires_at_ms = pool.window_expires_at_ms.saturating_add(lease_term_ms);
+            reconcile_expired_model_hosts(state_transaction, now_ms)?;
             let planned_placement = select_hf_placement_for_window(
                 state_transaction,
                 source_id,
@@ -4896,6 +4926,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         pool.active_member_count = 1;
         pool.status = SoraHfSharedLeaseStatusV1::Active;
         pool.queued_next_window = None;
+        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         let placement = select_hf_placement_for_window(
             state_transaction,
             source_id,
@@ -5005,6 +5036,7 @@ impl Execute for isi::AdvertiseSoracloudModelHost {
                 "model host capability heartbeat_expires_at_ms must be greater than advertised_at_ms",
             ));
         }
+        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         record_model_host_capability(state_transaction, capability)
     }
 }
@@ -5041,6 +5073,7 @@ impl Execute for isi::HeartbeatSoracloudModelHost {
                 "model host heartbeat_expires_at_ms must be in the future",
             ));
         }
+        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         let mut capability = state_transaction
             .world
             .soracloud_model_host_capabilities
@@ -5092,6 +5125,7 @@ impl Execute for isi::WithdrawSoracloudModelHost {
             .world
             .soracloud_model_host_capabilities
             .remove(validator_account_id.clone());
+        reconcile_expired_model_hosts(state_transaction, now_ms)?;
         refresh_hf_placements_for_host_status(
             state_transaction,
             &validator_account_id,
@@ -5099,6 +5133,18 @@ impl Execute for isi::WithdrawSoracloudModelHost {
             now_ms,
             Some("assigned host withdrew capability advert"),
         )
+    }
+}
+
+impl Execute for isi::ReconcileSoracloudModelHosts {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        require_soracloud_permission(authority, state_transaction)?;
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        reconcile_expired_model_hosts(state_transaction, now_ms)
     }
 }
 
@@ -9198,6 +9244,28 @@ mod tests {
         Ok(state)
     }
 
+    fn insert_active_public_lane_validator(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        validator: AccountId,
+        total_stake: u64,
+    ) {
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                stake_account: validator,
+                total_stake: Numeric::new(total_stake, 0),
+                self_stake: Numeric::new(total_stake, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
+    }
+
     fn sample_bundle(
         service_name: &str,
         service_version: &str,
@@ -10074,6 +10142,232 @@ mod tests {
             placement.assigned_hosts[0].status,
             SoraHfPlacementHostStatusV1::Warm
         );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_soracloud_model_hosts_promotes_warm_replica_after_primary_expiry()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let charlie_id = AccountId::new(KeyPair::random().public_key().clone());
+        let pool_id = Hash::new(b"pool");
+
+        let initial_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 100;
+            })
+            .as_ref()
+            .header();
+        let mut initial_block = state.block(initial_header);
+        let mut initial_tx = initial_block.transaction();
+        insert_active_public_lane_validator(&mut initial_tx, BOB_ID.clone(), 900);
+        insert_active_public_lane_validator(&mut initial_tx, charlie_id.clone(), 800);
+
+        let alice_capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
+        let mut bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 500);
+        bob_capability.peer_id = "12D3KooWBobHostTestPeer".to_string();
+        let mut charlie_capability = sample_model_host_capability(charlie_id.clone(), 10, 500);
+        charlie_capability.peer_id = "12D3KooWCharlieHostTestPeer".to_string();
+        record_model_host_capability(&mut initial_tx, alice_capability.clone())?;
+        record_model_host_capability(&mut initial_tx, bob_capability.clone())?;
+        record_model_host_capability(&mut initial_tx, charlie_capability.clone())?;
+
+        record_hf_placement(
+            &mut initial_tx,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id: Hash::new(b"placement"),
+                source_id: Hash::new(b"source"),
+                pool_id,
+                status: SoraHfPlacementStatusV1::Ready,
+                selection_seed_hash: Hash::new(b"seed"),
+                resource_profile: sample_hf_resource_profile(),
+                eligible_validator_count: 3,
+                adaptive_target_host_count: 2,
+                assigned_hosts: vec![
+                    SoraHfPlacementHostAssignmentV1 {
+                        validator_account_id: ALICE_ID.clone(),
+                        peer_id: alice_capability.peer_id.clone(),
+                        role: SoraHfPlacementHostRoleV1::Primary,
+                        status: SoraHfPlacementHostStatusV1::Warm,
+                        host_class: alice_capability.host_class.clone(),
+                    },
+                    SoraHfPlacementHostAssignmentV1 {
+                        validator_account_id: BOB_ID.clone(),
+                        peer_id: bob_capability.peer_id.clone(),
+                        role: SoraHfPlacementHostRoleV1::Replica,
+                        status: SoraHfPlacementHostStatusV1::Warm,
+                        host_class: bob_capability.host_class.clone(),
+                    },
+                ],
+                total_reservation_fee_nanos: 3_000,
+                last_rebalance_at_ms: 100,
+                last_error: None,
+            },
+        )?;
+        initial_tx.apply();
+        initial_block.commit()?;
+
+        let reconcile_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 111;
+            })
+            .as_ref()
+            .header();
+        let mut reconcile_block = state.block(reconcile_header);
+        let mut reconcile_tx = reconcile_block.transaction();
+        isi::ReconcileSoracloudModelHosts.execute(&ALICE_ID, &mut reconcile_tx)?;
+        reconcile_tx.apply();
+        reconcile_block.commit()?;
+
+        let view = state.view();
+        let placement = view
+            .world()
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("reconciled placement");
+        assert_eq!(placement.status, SoraHfPlacementStatusV1::Degraded);
+        assert_eq!(placement.eligible_validator_count, 2);
+        assert_eq!(placement.last_rebalance_at_ms, 111);
+        assert_eq!(
+            placement.last_error.as_deref(),
+            Some("assigned host heartbeat expired")
+        );
+        assert_eq!(placement.assigned_hosts.len(), 2);
+        assert_eq!(
+            placement.assigned_hosts[0].validator_account_id,
+            BOB_ID.clone()
+        );
+        assert_eq!(
+            placement.assigned_hosts[0].role,
+            SoraHfPlacementHostRoleV1::Primary
+        );
+        assert_eq!(
+            placement.assigned_hosts[0].status,
+            SoraHfPlacementHostStatusV1::Warm
+        );
+        assert_eq!(placement.assigned_hosts[1].validator_account_id, charlie_id);
+        assert_eq!(
+            placement.assigned_hosts[1].role,
+            SoraHfPlacementHostRoleV1::Replica
+        );
+        assert_eq!(
+            placement.assigned_hosts[1].status,
+            SoraHfPlacementHostStatusV1::Warming
+        );
+        assert!(
+            placement
+                .assigned_hosts
+                .iter()
+                .all(|assignment| assignment.validator_account_id != ALICE_ID.clone())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_soracloud_model_hosts_is_idempotent_after_primary_eviction()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let charlie_id = AccountId::new(KeyPair::random().public_key().clone());
+        let pool_id = Hash::new(b"pool");
+
+        let initial_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 100;
+            })
+            .as_ref()
+            .header();
+        let mut initial_block = state.block(initial_header);
+        let mut initial_tx = initial_block.transaction();
+        insert_active_public_lane_validator(&mut initial_tx, BOB_ID.clone(), 900);
+        insert_active_public_lane_validator(&mut initial_tx, charlie_id.clone(), 800);
+
+        let alice_capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
+        let mut bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 500);
+        bob_capability.peer_id = "12D3KooWBobHostTestPeer".to_string();
+        let mut charlie_capability = sample_model_host_capability(charlie_id, 10, 500);
+        charlie_capability.peer_id = "12D3KooWCharlieHostTestPeer".to_string();
+        record_model_host_capability(&mut initial_tx, alice_capability.clone())?;
+        record_model_host_capability(&mut initial_tx, bob_capability.clone())?;
+        record_model_host_capability(&mut initial_tx, charlie_capability.clone())?;
+
+        record_hf_placement(
+            &mut initial_tx,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id: Hash::new(b"placement"),
+                source_id: Hash::new(b"source"),
+                pool_id,
+                status: SoraHfPlacementStatusV1::Ready,
+                selection_seed_hash: Hash::new(b"seed"),
+                resource_profile: sample_hf_resource_profile(),
+                eligible_validator_count: 3,
+                adaptive_target_host_count: 2,
+                assigned_hosts: vec![
+                    SoraHfPlacementHostAssignmentV1 {
+                        validator_account_id: ALICE_ID.clone(),
+                        peer_id: alice_capability.peer_id.clone(),
+                        role: SoraHfPlacementHostRoleV1::Primary,
+                        status: SoraHfPlacementHostStatusV1::Warm,
+                        host_class: alice_capability.host_class.clone(),
+                    },
+                    SoraHfPlacementHostAssignmentV1 {
+                        validator_account_id: BOB_ID.clone(),
+                        peer_id: bob_capability.peer_id.clone(),
+                        role: SoraHfPlacementHostRoleV1::Replica,
+                        status: SoraHfPlacementHostStatusV1::Warm,
+                        host_class: bob_capability.host_class.clone(),
+                    },
+                ],
+                total_reservation_fee_nanos: 3_000,
+                last_rebalance_at_ms: 100,
+                last_error: None,
+            },
+        )?;
+        initial_tx.apply();
+        initial_block.commit()?;
+
+        let first_reconcile_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 111;
+            })
+            .as_ref()
+            .header();
+        let mut first_reconcile_block = state.block(first_reconcile_header);
+        let mut first_reconcile_tx = first_reconcile_block.transaction();
+        isi::ReconcileSoracloudModelHosts.execute(&ALICE_ID, &mut first_reconcile_tx)?;
+        first_reconcile_tx.apply();
+        first_reconcile_block.commit()?;
+
+        let placement_after_first = state
+            .view()
+            .world()
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("placement after first reconcile")
+            .clone();
+
+        let second_reconcile_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 222;
+            })
+            .as_ref()
+            .header();
+        let mut second_reconcile_block = state.block(second_reconcile_header);
+        let mut second_reconcile_tx = second_reconcile_block.transaction();
+        isi::ReconcileSoracloudModelHosts.execute(&ALICE_ID, &mut second_reconcile_tx)?;
+        second_reconcile_tx.apply();
+        second_reconcile_block.commit()?;
+
+        let view = state.view();
+        let placement_after_second = view
+            .world()
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("placement after second reconcile");
+        assert_eq!(*placement_after_second, placement_after_first);
         Ok(())
     }
 

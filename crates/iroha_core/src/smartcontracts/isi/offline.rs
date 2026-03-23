@@ -3,7 +3,10 @@
 use super::prelude::*;
 #[cfg(feature = "zk-stark")]
 use crate::zk_stark::verify_stark_fri_envelope;
-use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+use crate::{
+    smartcontracts::{ValidQuery, isi::asset::isi::assert_numeric_spec_with},
+    state::StateReadOnly,
+};
 mod aggregate_proof;
 mod balance_proof;
 use std::{
@@ -695,12 +698,14 @@ fn is_allowance_reserve_shortfall(err: &Error) -> bool {
     )
 }
 
-fn reserve_or_reallocate_allowance(
+fn reserve_or_reallocate_amount(
     state_transaction: &mut StateTransaction<'_, '_>,
-    certificate: &OfflineWalletCertificate,
+    controller: &AccountId,
+    asset: &AssetId,
+    amount: &Numeric,
+    excluded_certificate_id: Option<Hash>,
 ) -> Result<(), Error> {
-    let amount = &certificate.allowance.amount;
-    match reserve_offline_allowance(state_transaction, &certificate.allowance.asset, amount) {
+    match reserve_offline_allowance(state_transaction, asset, amount) {
         Ok(()) => return Ok(()),
         Err(err) if !is_allowance_reserve_shortfall(&err) => return Err(err),
         Err(_) => {}
@@ -711,10 +716,11 @@ fn reserve_or_reallocate_allowance(
         .offline_allowances
         .iter()
         .filter(|(_, record)| {
-            record.certificate.controller == certificate.controller
-                && record.certificate.allowance.asset == certificate.allowance.asset
+            record.certificate.controller == *controller
+                && record.certificate.allowance.asset == *asset
                 && !record.remaining_amount.is_zero()
         })
+        .filter(|(certificate_id, _)| Some(**certificate_id) != excluded_certificate_id)
         .map(|(certificate_id, record)| (*certificate_id, record.registered_at_ms))
         .collect::<Vec<_>>();
     candidates.sort_by(
@@ -751,7 +757,7 @@ fn reserve_or_reallocate_allowance(
     }
 
     if !shortfall.is_zero() {
-        reserve_offline_allowance(state_transaction, &certificate.allowance.asset, &shortfall)?;
+        reserve_offline_allowance(state_transaction, asset, &shortfall)?;
     }
 
     for (certificate_id, take) in reallocations {
@@ -768,6 +774,137 @@ fn reserve_or_reallocate_allowance(
     }
 
     Ok(())
+}
+
+fn refund_allowance_from_escrow(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    asset: &AssetId,
+    controller: &AccountId,
+    amount: &Numeric,
+) -> Result<(), Error> {
+    if amount.is_zero() {
+        return Ok(());
+    }
+
+    let definition_id = asset.definition().clone();
+    let spec = state_transaction.numeric_spec_for(&definition_id)?;
+    assert_numeric_spec_with(amount, spec)?;
+    let controller_asset = AssetId::new(definition_id.clone(), controller.clone());
+    let current_balance = state_transaction
+        .world
+        .assets
+        .get(&controller_asset)
+        .map(|asset| asset.as_ref().clone())
+        .unwrap_or_else(Numeric::zero);
+    current_balance
+        .checked_add(amount.clone())
+        .ok_or(MathError::Overflow)?;
+
+    let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?
+        .ok_or_else(|| {
+            labeled_invariant(
+                "escrow_missing",
+                format!(
+                    "offline escrow account not configured for asset definition `{definition_id}`",
+                ),
+            )
+        })?;
+    let escrow_asset = AssetId::new(definition_id, escrow_account);
+    state_transaction
+        .world
+        .withdraw_numeric_asset(&escrow_asset, amount)?;
+    if let Err(err) = state_transaction
+        .world
+        .deposit_numeric_asset(&controller_asset, amount)
+    {
+        state_transaction
+            .world
+            .deposit_numeric_asset(&escrow_asset, amount)
+            .expect("escrow refund must succeed after failed controller credit");
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+// Certificates linked through `prev_certificate_id` form a single active lineage head. When a
+// successor is registered, any predecessor reserve is rolled into the new head up to the new
+// certificate amount, and excess predecessor reserve is returned on-chain instead of remaining
+// as a stale allowance that can no longer produce valid platform proofs.
+fn reserve_or_reallocate_allowance(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    certificate: &OfflineWalletCertificate,
+    lineage: &CertificateLineageMetadata,
+) -> Result<(), Error> {
+    if let Some(previous_certificate_id) = lineage.prev_certificate_id {
+        let previous_record = state_transaction
+            .world
+            .offline_allowances
+            .get(&previous_certificate_id)
+            .cloned()
+            .ok_or_else(|| {
+                rejection_error(
+                    OfflineTransferRejectionReason::LineageInvalid,
+                    OfflineTransferRejectionPlatform::General,
+                    "previous lineage certificate is not registered",
+                )
+            })?;
+        if previous_record.certificate.controller != certificate.controller
+            || previous_record.certificate.allowance.asset != certificate.allowance.asset
+        {
+            return Err(rejection_error(
+                OfflineTransferRejectionReason::LineageInvalid,
+                OfflineTransferRejectionPlatform::General,
+                "renewed certificate must keep the predecessor controller and asset",
+            ));
+        }
+
+        let reused_amount = if previous_record.remaining_amount > certificate.allowance.amount {
+            certificate.allowance.amount.clone()
+        } else {
+            previous_record.remaining_amount.clone()
+        };
+        let shortfall = certificate
+            .allowance
+            .amount
+            .clone()
+            .checked_sub(reused_amount.clone())
+            .ok_or(MathError::NotEnoughQuantity)?;
+        reserve_or_reallocate_amount(
+            state_transaction,
+            &certificate.controller,
+            &certificate.allowance.asset,
+            &shortfall,
+            Some(previous_certificate_id),
+        )?;
+
+        let refund_amount = previous_record
+            .remaining_amount
+            .checked_sub(reused_amount)
+            .ok_or(MathError::NotEnoughQuantity)?;
+        refund_allowance_from_escrow(
+            state_transaction,
+            &certificate.allowance.asset,
+            &certificate.controller,
+            &refund_amount,
+        )?;
+
+        let previous_record = state_transaction
+            .world
+            .offline_allowances
+            .get_mut(&previous_certificate_id)
+            .expect("validated predecessor certificate must remain present");
+        previous_record.remaining_amount = Numeric::zero();
+        return Ok(());
+    }
+
+    reserve_or_reallocate_amount(
+        state_transaction,
+        &certificate.controller,
+        &certificate.allowance.asset,
+        &certificate.allowance.amount,
+        None,
+    )
 }
 
 fn ensure_uniform_asset(receipts: &[OfflineSpendReceipt]) -> Result<AssetId, Error> {
@@ -1235,7 +1372,7 @@ pub mod isi {
             ));
         }
 
-        reserve_or_reallocate_allowance(state_transaction, &certificate)?;
+        reserve_or_reallocate_allowance(state_transaction, &certificate, &lineage)?;
         let record = OfflineAllowanceRecord {
             certificate: certificate.clone(),
             current_commitment: certificate.allowance.commitment.clone(),
@@ -4291,7 +4428,7 @@ pub mod isi {
         }
 
         #[test]
-        fn register_allowance_reissue_prefers_newest_allowance_capacity_first() {
+        fn register_allowance_reissue_supersedes_head_allowance_and_refunds_excess_capacity() {
             let now_ms = 1_700_000_500;
             let mut older_certificate = sample_certificate();
             older_certificate.allowance.amount = Numeric::new(40, 0);
@@ -4435,8 +4572,8 @@ pub mod isi {
                 .expect("newer record should remain");
             assert_eq!(
                 newer.remaining_amount,
-                Numeric::new(10, 0),
-                "newer allowance should be consumed first",
+                Numeric::zero(),
+                "renewal/reissue should fully invalidate the direct predecessor allowance",
             );
 
             let reissued = transaction
@@ -4454,8 +4591,8 @@ pub mod isi {
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(
                 escrow_balance,
-                Numeric::new(80, 0),
-                "pure reallocation should keep escrow total unchanged",
+                Numeric::new(70, 0),
+                "excess predecessor reserve should be released back on-chain",
             );
 
             let controller_balance = transaction
@@ -4464,23 +4601,28 @@ pub mod isi {
                 .get(&AssetId::new(definition_id, controller))
                 .map(|asset| asset.as_ref().clone())
                 .unwrap_or_else(Numeric::zero);
-            assert_eq!(controller_balance, Numeric::zero());
+            assert_eq!(
+                controller_balance,
+                Numeric::new(10, 0),
+                "unused predecessor reserve should be refunded to the controller",
+            );
         }
 
         #[test]
-        fn renewal_registers_new_allowance_without_implicitly_reclaiming_expired_remainder() {
+        fn renewal_supersedes_previous_allowance_even_when_new_amount_can_be_fully_reserved() {
             let now_ms = 1_700_000_500;
-            let mut expired_certificate = sample_certificate();
-            expired_certificate.allowance.amount = Numeric::new(50, 0);
-            expired_certificate.policy.max_balance = Numeric::new(50, 0);
-            expired_certificate.policy.max_tx_value = Numeric::new(50, 0);
-            expired_certificate.expires_at_ms = now_ms - 100;
-            expired_certificate.policy.expires_at_ms = expired_certificate.expires_at_ms;
-            set_certificate_lineage(&mut expired_certificate, "register-renewal", 1, None);
-            let expired_id = expired_certificate.certificate_id();
+            let mut previous_certificate = sample_certificate();
+            previous_certificate.allowance.amount = Numeric::new(50, 0);
+            previous_certificate.policy.max_balance = Numeric::new(50, 0);
+            previous_certificate.policy.max_tx_value = Numeric::new(50, 0);
+            previous_certificate.issued_at_ms = now_ms - 2_000;
+            previous_certificate.expires_at_ms = now_ms + 10_000;
+            previous_certificate.policy.expires_at_ms = previous_certificate.expires_at_ms;
+            set_certificate_lineage(&mut previous_certificate, "register-renewal", 1, None);
+            let previous_id = previous_certificate.certificate_id();
 
-            let expired_record = OfflineAllowanceRecord {
-                certificate: expired_certificate,
+            let previous_record = OfflineAllowanceRecord {
+                certificate: previous_certificate,
                 current_commitment: vec![0; 32],
                 registered_at_ms: now_ms - 200,
                 remaining_amount: Numeric::new(50, 0),
@@ -4501,7 +4643,7 @@ pub mod isi {
                 &mut renewal_certificate,
                 "register-renewal",
                 2,
-                Some(expired_id),
+                Some(previous_id),
             );
             let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
             renewal_certificate.operator_signature = Signature::new(
@@ -4543,7 +4685,7 @@ pub mod isi {
                 [controller_asset, escrow_asset],
                 [],
             );
-            world.offline_allowances.insert(expired_id, expired_record);
+            world.offline_allowances.insert(previous_id, previous_record);
             let controller_asset = AssetId::new(definition_id.clone(), controller.clone());
 
             let kura = Kura::blank_kura_for_testing();
@@ -4568,12 +4710,16 @@ pub mod isi {
             )
             .expect("renewal register should succeed");
 
-            let preserved = transaction
+            let previous = transaction
                 .world
                 .offline_allowances
-                .get(&expired_id)
-                .expect("expired allowance must remain after renewal");
-            assert_eq!(preserved.remaining_amount, Numeric::new(50, 0));
+                .get(&previous_id)
+                .expect("previous allowance must remain for lineage history");
+            assert_eq!(
+                previous.remaining_amount,
+                Numeric::zero(),
+                "renewal should invalidate the superseded allowance",
+            );
             assert!(
                 transaction
                     .world
@@ -4591,8 +4737,8 @@ pub mod isi {
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(
                 escrow_balance,
-                Numeric::new(70, 0),
-                "renewal should only reserve the new amount and keep prior expired remainder locked"
+                Numeric::new(20, 0),
+                "renewal should leave escrow backed only by the new allowance head",
             );
 
             let on_chain_balance = transaction
@@ -4603,8 +4749,8 @@ pub mod isi {
                 .unwrap_or_else(Numeric::zero);
             assert_eq!(
                 on_chain_balance,
-                Numeric::new(30, 0),
-                "renewal should debit only the new allowance from on-chain balance"
+                Numeric::new(80, 0),
+                "unused predecessor reserve should be returned to the controller",
             );
         }
     }
@@ -5057,43 +5203,12 @@ pub mod isi {
         assert_numeric_spec_with(&amount, spec)?;
         state_transaction.world.account(&controller)?;
 
-        if !amount.is_zero() {
-            let controller_asset = AssetId::new(definition_id.clone(), controller.clone());
-            let current_balance = state_transaction
-                .world
-                .assets
-                .get(&controller_asset)
-                .map(|asset| asset.as_ref().clone())
-                .unwrap_or_else(Numeric::zero);
-            current_balance
-                .checked_add(amount.clone())
-                .ok_or(MathError::Overflow)?;
-
-            let escrow_account = resolve_offline_escrow_account(state_transaction, &definition_id)?
-                .ok_or_else(|| {
-                labeled_invariant(
-                    "escrow_missing",
-                    format!(
-                        "offline escrow account not configured for asset definition `{definition_id}`",
-                    ),
-                )
-            })?;
-            let escrow_asset = AssetId::new(definition_id.clone(), escrow_account);
-
-            state_transaction
-                .world
-                .withdraw_numeric_asset(&escrow_asset, &amount)?;
-            if let Err(err) = state_transaction
-                .world
-                .deposit_numeric_asset(&controller_asset, &amount)
-            {
-                state_transaction
-                    .world
-                    .deposit_numeric_asset(&escrow_asset, &amount)
-                    .expect("escrow refund must succeed after failed reclaim credit");
-                return Err(err);
-            }
-        }
+        refund_allowance_from_escrow(
+            state_transaction,
+            &record.certificate.allowance.asset,
+            &controller,
+            &amount,
+        )?;
 
         let removed = state_transaction
             .world

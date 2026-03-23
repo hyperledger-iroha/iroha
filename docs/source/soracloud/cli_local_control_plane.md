@@ -184,7 +184,8 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     execution and generated HF runtime receipts carry `placement_id`,
     validator, and peer attribution from the authoritative placement record.
   - remaining HF hosting work is now:
-    - deterministic replica failover/backfill against live runtime health, and
+    - deterministic replica failover/backfill against live runtime health
+      beyond the authoritative expired-host sweep, and
     - slash-evidence emission for no-show / missed-heartbeat host violations.
   - generated HF local execution now keeps a resident per-source Python worker
     alive under `irohad`, reuses the loaded model across repeated `/infer`
