@@ -120,6 +120,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::AcknowledgeSoracloudAgentMessage>,
     InstructionRegistry::register::<soracloud::AllowSoracloudAgentAutonomyArtifact>,
     InstructionRegistry::register::<soracloud::RunSoracloudAgentAutonomy>,
+    InstructionRegistry::register::<soracloud::RecordSoracloudAgentAutonomyExecution>,
     InstructionRegistry::register::<soracloud::StartSoracloudTrainingJob>,
     InstructionRegistry::register::<soracloud::CheckpointSoracloudTrainingJob>,
     InstructionRegistry::register::<soracloud::RetrySoracloudTrainingJob>,
@@ -127,6 +128,13 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::RegisterSoracloudModelWeight>,
     InstructionRegistry::register::<soracloud::PromoteSoracloudModelWeight>,
     InstructionRegistry::register::<soracloud::RollbackSoracloudModelWeight>,
+    InstructionRegistry::register::<soracloud::RegisterSoracloudUploadedModelBundle>,
+    InstructionRegistry::register::<soracloud::AppendSoracloudUploadedModelChunk>,
+    InstructionRegistry::register::<soracloud::FinalizeSoracloudUploadedModelBundle>,
+    InstructionRegistry::register::<soracloud::AdmitSoracloudPrivateCompileProfile>,
+    InstructionRegistry::register::<soracloud::AllowSoracloudUploadedModel>,
+    InstructionRegistry::register::<soracloud::StartSoracloudPrivateInference>,
+    InstructionRegistry::register::<soracloud::RecordSoracloudPrivateInferenceCheckpoint>,
     InstructionRegistry::register::<soracloud::AdvanceSoracloudRollout>,
     InstructionRegistry::register::<soracloud::SetSoracloudRuntimeState>,
     InstructionRegistry::register::<soracloud::RecordSoracloudMailboxMessage>,
@@ -344,6 +352,9 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     registry = registry.register_with_id::<soracloud::RunSoracloudAgentAutonomy>(
         "soracloud::RunSoracloudAgentAutonomy",
     );
+    registry = registry.register_with_id::<soracloud::RecordSoracloudAgentAutonomyExecution>(
+        "soracloud::RecordSoracloudAgentAutonomyExecution",
+    );
     registry = registry.register_with_id::<soracloud::StartSoracloudTrainingJob>(
         "soracloud::StartSoracloudTrainingJob",
     );
@@ -364,6 +375,27 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     );
     registry = registry.register_with_id::<soracloud::RollbackSoracloudModelWeight>(
         "soracloud::RollbackSoracloudModelWeight",
+    );
+    registry = registry.register_with_id::<soracloud::RegisterSoracloudUploadedModelBundle>(
+        "soracloud::RegisterSoracloudUploadedModelBundle",
+    );
+    registry = registry.register_with_id::<soracloud::AppendSoracloudUploadedModelChunk>(
+        "soracloud::AppendSoracloudUploadedModelChunk",
+    );
+    registry = registry.register_with_id::<soracloud::FinalizeSoracloudUploadedModelBundle>(
+        "soracloud::FinalizeSoracloudUploadedModelBundle",
+    );
+    registry = registry.register_with_id::<soracloud::AdmitSoracloudPrivateCompileProfile>(
+        "soracloud::AdmitSoracloudPrivateCompileProfile",
+    );
+    registry = registry.register_with_id::<soracloud::AllowSoracloudUploadedModel>(
+        "soracloud::AllowSoracloudUploadedModel",
+    );
+    registry = registry.register_with_id::<soracloud::StartSoracloudPrivateInference>(
+        "soracloud::StartSoracloudPrivateInference",
+    );
+    registry = registry.register_with_id::<soracloud::RecordSoracloudPrivateInferenceCheckpoint>(
+        "soracloud::RecordSoracloudPrivateInferenceCheckpoint",
     );
     registry = registry.register_with_id::<soracloud::AdvanceSoracloudRollout>(
         "soracloud::AdvanceSoracloudRollout",

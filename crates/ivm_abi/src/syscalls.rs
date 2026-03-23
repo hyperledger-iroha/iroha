@@ -335,6 +335,8 @@ pub const SYSCALL_CREATE_NFTS_FOR_ALL_USERS: u32 = 0xA2;
 pub const SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH: u32 = 0xA3;
 /// Get current authority AccountId (writes a Norito-encoded blob to INPUT and returns pointer in x10)
 pub const SYSCALL_GET_AUTHORITY: u32 = 0xA4;
+/// Get the current trusted host time in unix milliseconds.
+pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
 /// Execute subscription billing based on trigger metadata and subscription state.
 pub const SYSCALL_SUBSCRIPTION_BILL: u32 = 0xA5;
 /// Record subscription usage from trigger args payload.
@@ -539,6 +541,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
             SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
             SYSCALL_GET_AUTHORITY,
+            SYSCALL_CURRENT_TIME_MS,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
@@ -711,6 +714,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_CREATE_NFTS_FOR_ALL_USERS => "CREATE_NFTS_FOR_ALL_USERS",
         SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => "SET_SMARTCONTRACT_EXECUTION_DEPTH",
         SYSCALL_GET_AUTHORITY => "GET_AUTHORITY",
+        SYSCALL_CURRENT_TIME_MS => "CURRENT_TIME_MS",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
         SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",

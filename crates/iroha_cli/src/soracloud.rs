@@ -63,6 +63,7 @@ const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
     "fixtures/soracloud/agent_apartment_manifest_v1.json";
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 10_000;
 const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
+const AGENT_AUTONOMY_MAX_REQUEST_BYTES: usize = 16 * 1024;
 const HF_DEFAULT_RESOLVED_REVISION: &str = "main";
 const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
@@ -1074,6 +1075,20 @@ pub struct AgentAutonomyRunArgs {
     /// Human-readable run label.
     #[arg(long, value_name = "LABEL")]
     run_label: String,
+    /// Optional canonical JSON body to forward to the generated HF `/infer` handler.
+    #[arg(
+        long,
+        value_name = "JSON",
+        conflicts_with = "workflow_input_json_file"
+    )]
+    workflow_input_json: Option<String>,
+    /// Optional path to a JSON file forwarded to the generated HF `/infer` handler.
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "workflow_input_json"
+    )]
+    workflow_input_json_file: Option<PathBuf>,
     /// Torii base URL for authoritative `agent/autonomy/run`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -1092,12 +1107,25 @@ impl AgentAutonomyRunArgs {
         }
 
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let workflow_input_json = match (
+            self.workflow_input_json.as_deref(),
+            self.workflow_input_json_file.as_deref(),
+        ) {
+            (Some(raw), None) => Some(raw.to_owned()),
+            (None, Some(path)) => Some(
+                fs::read_to_string(path)
+                    .wrap_err_with(|| format!("failed to read workflow input JSON from `{}`", path.display()))?,
+            ),
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!("clap enforces workflow input exclusivity"),
+        };
         let request = signed_agent_autonomy_run_request(
             &self.apartment_name,
             &self.artifact_hash,
             self.provenance_hash.as_deref(),
             self.budget_units,
             &self.run_label,
+            workflow_input_json.as_deref(),
             authority,
             key_pair,
         )?;
@@ -2458,6 +2486,9 @@ struct AgentAutonomyRunPayload {
     provenance_hash: Option<String>,
     budget_units: u64,
     run_label: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    workflow_input_json: Option<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -3255,6 +3286,28 @@ fn validate_hash_like_value(flag_name: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn canonicalize_agent_workflow_input_json(workflow_input_json: &str) -> Result<String> {
+    let normalized = workflow_input_json.trim();
+    if normalized.is_empty() {
+        return Err(eyre!("workflow input JSON must not be empty"));
+    }
+    if normalized.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
+        return Err(eyre!(
+            "workflow input JSON exceeds max bytes ({AGENT_AUTONOMY_MAX_REQUEST_BYTES})"
+        ));
+    }
+    let parsed: norito::json::Value = json::from_str(normalized)
+        .wrap_err("workflow input JSON must be valid JSON")?;
+    let canonical =
+        json::to_json(&parsed).wrap_err("failed to canonicalize workflow input JSON")?;
+    if canonical.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
+        return Err(eyre!(
+            "workflow input JSON exceeds max bytes ({AGENT_AUTONOMY_MAX_REQUEST_BYTES}) after canonicalization"
+        ));
+    }
+    Ok(canonical)
+}
+
 fn signed_agent_artifact_allow_request(
     apartment_name: &str,
     artifact_hash: &str,
@@ -3294,6 +3347,7 @@ fn signed_agent_autonomy_run_request(
     provenance_hash: Option<&str>,
     budget_units: u64,
     run_label: &str,
+    workflow_input_json: Option<&str>,
     authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentAutonomyRunRequest> {
@@ -3311,12 +3365,16 @@ fn signed_agent_autonomy_run_request(
     if run_label.is_empty() {
         return Err(eyre!("--run-label must not be empty"));
     }
+    let workflow_input_json = workflow_input_json
+        .map(canonicalize_agent_workflow_input_json)
+        .transpose()?;
     let payload = AgentAutonomyRunPayload {
         apartment_name: apartment_name.to_owned(),
         artifact_hash: artifact_hash.to_owned(),
         provenance_hash: provenance_hash.map(ToOwned::to_owned),
         budget_units,
         run_label: run_label.to_owned(),
+        workflow_input_json,
     };
     let encoded = encode_agent_autonomy_run_signature_payload(&payload)
         .wrap_err("failed to encode agent autonomy run payload for signing")?;
@@ -3774,6 +3832,7 @@ fn encode_agent_autonomy_run_signature_payload(
         payload.provenance_hash.as_deref(),
         payload.budget_units,
         payload.run_label.as_str(),
+        payload.workflow_input_json.as_deref(),
     )
     .wrap_err("failed to encode agent autonomy run signature payload tuple")
 }
@@ -7546,6 +7605,7 @@ mod tests {
             Some("hash:PROV0001#01"),
             120,
             "nightly-train-step-1",
+            Some("{\n  \"inputs\": [\"alpha\", \"beta\"],\n  \"parameters\": {\"max_new_tokens\": 4}\n}"),
             &authority,
             &key_pair,
         )
@@ -7557,6 +7617,10 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert_eq!(
+            request.payload.workflow_input_json.as_deref(),
+            Some("{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}")
+        );
         assert_eq!(request.authority.as_ref(), Some(&authority));
         assert!(request.private_key.is_some());
     }
@@ -7930,6 +7994,7 @@ mod tests {
             provenance_hash: Some("hash:PROV0001#01".to_owned()),
             budget_units: 120,
             run_label: "nightly-train-step-1".to_owned(),
+            workflow_input_json: Some("{\"inputs\":\"nightly\"}".to_owned()),
         };
         let encoded = encode_agent_autonomy_run_signature_payload(&payload)
             .expect("encode signature payload");
@@ -7939,9 +8004,22 @@ mod tests {
             payload.provenance_hash.as_deref(),
             payload.budget_units,
             payload.run_label.as_str(),
+            payload.workflow_input_json.as_deref(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn canonicalize_agent_workflow_input_json_compacts_payload() {
+        let canonical = canonicalize_agent_workflow_input_json(
+            "{\n  \"inputs\": [\"alpha\", \"beta\"],\n  \"parameters\": {\"max_new_tokens\": 4}\n}",
+        )
+        .expect("canonicalize workflow input JSON");
+        assert_eq!(
+            canonical,
+            "{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}"
+        );
     }
 
     #[test]

@@ -5772,6 +5772,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, ptr);
                 Ok(0)
             }
+            ivm::syscalls::SYSCALL_CURRENT_TIME_MS => {
+                vm.set_register(10, self.current_block_time_ms.unwrap_or(0));
+                Ok(0)
+            }
 
             ivm::syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
             ivm::syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
@@ -9570,6 +9574,21 @@ mod tests {
             CoreHost::decode_tlv_typed(&vm, authority_ptr, PointerType::AccountId)
                 .expect("authority TLV should remain intact");
         assert_eq!(decoded, authority);
+    }
+
+    #[test]
+    fn current_time_syscall_uses_block_time() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority);
+        host.set_block_time_ms(1_717_171_717_000);
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load meta");
+
+        host.syscall(ivm::syscalls::SYSCALL_CURRENT_TIME_MS, &mut vm)
+            .expect("current time syscall");
+        assert_eq!(vm.register(10), 1_717_171_717_000);
     }
 
     #[test]

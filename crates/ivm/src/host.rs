@@ -10,6 +10,7 @@ use std::{
     any::Any,
     collections::{BTreeMap, HashSet},
     num::NonZeroU16,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use iroha_crypto::{Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
@@ -773,6 +774,15 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_ABORT => {
                 vm.set_register(10, 0);
                 vm.request_abort();
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_CURRENT_TIME_MS => {
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| VMError::DecodeError)?
+                    .as_millis();
+                let clamped = now_ms.min(u128::from(u64::MAX)) as u64;
+                vm.set_register(10, clamped);
                 Ok(0)
             }
             crate::syscalls::SYSCALL_DEBUG_LOG => {

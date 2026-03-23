@@ -3374,6 +3374,20 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::AccountId,
                     })
                 }
+                "current_time_ms" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: "current_time_ms expects no arguments".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: vec![],
+                        },
+                        ty: Type::Int,
+                    })
+                }
                 "resolve_account_alias" => {
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Name

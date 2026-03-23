@@ -11131,6 +11131,165 @@ async fn handler_post_multisig_spec(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_multisig_propose(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigProposeDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_propose"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/multisig/propose",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_propose"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_propose(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_propose"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approve(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigApproveDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approve"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/multisig/approve",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_approve"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_approve(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approve"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_cancel(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: NoritoJson<crate::routing::MultisigCancelRequestDto>,
+) -> Result<AxResponse, Error> {
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_cancel"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        None,
+        "v1/multisig/cancel",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_cancel"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_multisig_cancel(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_cancel"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16134,6 +16293,9 @@ impl Torii {
 
             #[cfg(feature = "app_api")]
             let group = group
+                .route("/v1/multisig/propose", post(handler_post_multisig_propose))
+                .route("/v1/multisig/approve", post(handler_post_multisig_approve))
+                .route("/v1/multisig/cancel", post(handler_post_multisig_cancel))
                 .route("/v1/multisig/spec", post(handler_post_multisig_spec))
                 .route(
                     "/v1/multisig/proposals/list",
@@ -16703,6 +16865,50 @@ impl Torii {
                 .route(
                     "/v1/soracloud/model/artifact/status",
                     get(soracloud::handle_model_artifact_status),
+                )
+                .route(
+                    "/v1/soracloud/model/upload/init",
+                    post(soracloud::handle_uploaded_model_init),
+                )
+                .route(
+                    "/v1/soracloud/model/upload/chunk",
+                    post(soracloud::handle_uploaded_model_chunk),
+                )
+                .route(
+                    "/v1/soracloud/model/upload/finalize",
+                    post(soracloud::handle_uploaded_model_finalize),
+                )
+                .route(
+                    "/v1/soracloud/model/upload/encryption-recipient",
+                    get(soracloud::handle_uploaded_model_encryption_recipient),
+                )
+                .route(
+                    "/v1/soracloud/model/upload/status",
+                    get(soracloud::handle_uploaded_model_status),
+                )
+                .route(
+                    "/v1/soracloud/model/compile",
+                    post(soracloud::handle_private_compile),
+                )
+                .route(
+                    "/v1/soracloud/model/compile/status",
+                    get(soracloud::handle_private_compile_status),
+                )
+                .route(
+                    "/v1/soracloud/model/allow",
+                    post(soracloud::handle_uploaded_model_allow),
+                )
+                .route(
+                    "/v1/soracloud/model/run-private",
+                    post(soracloud::handle_private_inference_run),
+                )
+                .route(
+                    "/v1/soracloud/model/run-status",
+                    get(soracloud::handle_private_inference_status),
+                )
+                .route(
+                    "/v1/soracloud/model/decrypt-output",
+                    post(soracloud::handle_private_inference_checkpoint),
                 )
                 .route("/v1/soracloud/hf/deploy", post(soracloud::handle_hf_deploy))
                 .route("/v1/soracloud/hf/status", get(soracloud::handle_hf_status))
@@ -21923,6 +22129,21 @@ pub(crate) mod tests_runtime_handlers {
                 ),
             )
         }
+
+        fn execute_private_inference(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test runtime does not implement private inference execution",
+                ),
+            )
+        }
     }
 
     #[derive(Clone)]
@@ -21983,6 +22204,21 @@ pub(crate) mod tests_runtime_handlers {
                 iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
                     "test runtime handle does not implement apartment execution",
+                ),
+            )
+        }
+
+        fn execute_private_inference(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test runtime handle does not implement private inference execution",
                 ),
             )
         }
@@ -22054,6 +22290,7 @@ pub(crate) mod tests_runtime_handlers {
             observed_block_hash: Some("hash:block".to_string()),
             services,
             apartments,
+            hf_sources: std::collections::BTreeMap::new(),
         }
     }
 

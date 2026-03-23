@@ -205,6 +205,7 @@ mod tests {
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigRegister);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigPropose);
         insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigApprove);
+        insert_into_test_map!(iroha_executor_data_model::isi::multisig::MultisigCancel);
 
         map
     }

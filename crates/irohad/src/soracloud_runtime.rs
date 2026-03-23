@@ -16,43 +16,53 @@ use std::{
     fs, io,
     num::NonZeroUsize,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     str::FromStr,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use eyre::WrapErr;
 use iroha_core::soracloud_runtime::{
+    SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
+    SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentAutonomyWorkflowStepSummaryV1,
     SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
-    SoracloudLocalReadRequest, SoracloudLocalReadResponse,
-    SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
+    SoracloudLocalReadRequest, SoracloudLocalReadResponse, SoracloudOrderedMailboxExecutionRequest,
+    SoracloudOrderedMailboxExecutionResult, SoracloudPrivateInferenceExecutionAction,
+    SoracloudPrivateInferenceExecutionRequest, SoracloudPrivateInferenceExecutionResult,
     SoracloudRuntime, SoracloudRuntimeApartmentPlan, SoracloudRuntimeArtifactPlan,
     SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
-    SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle, SoracloudRuntimeRevisionRole,
-    SoracloudRuntimeServicePlan, SoracloudRuntimeSnapshot,
+    SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus, SoracloudRuntimeMailboxPlan,
+    SoracloudRuntimeReadHandle, SoracloudRuntimeRevisionRole, SoracloudRuntimeServicePlan,
+    SoracloudRuntimeSnapshot, SoracloudUploadedModelEncryptionRecipient,
+    soracloud_hf_generated_bundle_payload_if_applicable, soracloud_hf_generated_source_binding,
 };
-use iroha_core::state::{State, StateView, WorldReadOnly};
+use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
     Encode,
     name::Name,
     soracloud::{
-        SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_RUNTIME_RECEIPT_VERSION_V1,
-        SORACLOUD_HOST_RESPONSE_VERSION_V1, SoraAgentApartmentRecordV1, SoraArtifactKindV1,
+        SORA_RUNTIME_RECEIPT_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
+        SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraDeploymentBundleV1,
-        SoraNetworkPolicyV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraServiceStateEntryV1, SoraStateBindingV1,
-        SoraStateMutationOperationV1, SoracloudAppendJournalResponseV1,
-        SoracloudEgressFetchRequestV1, SoracloudEgressFetchResponseV1,
-        SoracloudEmitMailboxMessageRequestV1, SoracloudEmitMailboxMessageResponseV1,
-        SoracloudEmitStateMutationRequestV1, SoracloudEmitStateMutationResponseV1,
-        SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1,
-        SoracloudHostRequestPayloadV1, SoracloudHostResponseEnvelopeV1,
-        SoracloudHostResponsePayloadV1, SoracloudPublishCheckpointResponseV1,
-        SoracloudReadCommittedStateResponseV1, SoracloudReadCredentialResponseV1,
-        SoracloudReadSecretResponseV1,
+        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
+        SoraModelPrivacyModeV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
+        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
+        SoraStateMutationOperationV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBundleV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoracloudAppendJournalResponseV1, SoracloudEgressFetchRequestV1,
+        SoracloudEgressFetchResponseV1, SoracloudEmitMailboxMessageRequestV1,
+        SoracloudEmitMailboxMessageResponseV1, SoracloudEmitStateMutationRequestV1,
+        SoracloudEmitStateMutationResponseV1, SoracloudHostOperationV1,
+        SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
+        SoracloudHostResponseEnvelopeV1, SoracloudHostResponsePayloadV1,
+        SoracloudPublishCheckpointResponseV1, SoracloudReadCommittedStateResponseV1,
+        SoracloudReadCredentialResponseV1, SoracloudReadSecretResponseV1,
     },
     sorafs::pin_registry::ManifestDigest,
 };
@@ -62,18 +72,24 @@ use iroha_torii::sorafs::{
     api::StorageManifestResponseDto,
 };
 use ivm::{
-    IVM, IVMHost, PointerType, VMError, verify_contract_artifact,
+    IVM, IVMHost, PointerType, VMError,
     syscalls::{
         SYSCALL_SORACLOUD_APPEND_JOURNAL, SYSCALL_SORACLOUD_EGRESS_FETCH,
         SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE, SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
         SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT, SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
         SYSCALL_SORACLOUD_READ_CREDENTIAL, SYSCALL_SORACLOUD_READ_SECRET,
     },
+    verify_contract_artifact,
 };
 use mv::storage::StorageReadOnly;
 use parking_lot::RwLock;
 use sorafs_node::store::StoredManifest;
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
+
+const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_VERSION_V1: u32 = 1;
+const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR: &str = "uploaded_model_keys";
+const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE: &str = "x25519_v1.bin";
 
 /// Runtime-manager configuration derived from the explicit Soracloud runtime settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,12 +106,16 @@ pub(crate) struct SoracloudRuntimeManagerConfig {
     pub native_process: iroha_config::parameters::actual::SoracloudRuntimeNativeProcess,
     /// Outbound egress policy for embedded runtimes.
     pub egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
+    /// Hugging Face importer and inference bridge settings.
+    pub hf: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
 }
 
 impl SoracloudRuntimeManagerConfig {
     /// Build a runtime-manager configuration from the parsed Soracloud runtime settings.
     #[must_use]
-    pub fn from_runtime_config(config: &iroha_config::parameters::actual::SoracloudRuntime) -> Self {
+    pub fn from_runtime_config(
+        config: &iroha_config::parameters::actual::SoracloudRuntime,
+    ) -> Self {
         Self {
             state_dir: config.state_dir.clone(),
             reconcile_interval: config.reconcile_interval,
@@ -103,6 +123,7 @@ impl SoracloudRuntimeManagerConfig {
             cache_budgets: config.cache_budgets.clone(),
             native_process: config.native_process.clone(),
             egress: config.egress.clone(),
+            hf: config.hf.clone(),
         }
     }
 }
@@ -130,6 +151,60 @@ impl SoracloudRuntimeManagerHandle {
     }
 }
 
+fn uploaded_model_encryption_key_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR)
+}
+
+fn uploaded_model_encryption_key_path(state_dir: &Path) -> PathBuf {
+    uploaded_model_encryption_key_dir(state_dir).join(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE)
+}
+
+fn load_or_create_uploaded_model_encryption_secret(state_dir: &Path) -> io::Result<[u8; 32]> {
+    let key_dir = uploaded_model_encryption_key_dir(state_dir);
+    fs::create_dir_all(&key_dir)?;
+    let key_path = uploaded_model_encryption_key_path(state_dir);
+    match fs::read(&key_path) {
+        Ok(bytes) => bytes.try_into().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "uploaded model encryption key at `{}` must be exactly 32 bytes",
+                    key_path.display()
+                ),
+            )
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let secret = X25519StaticSecret::from(rand::random::<[u8; 32]>());
+            let bytes = secret.to_bytes();
+            fs::write(&key_path, bytes)?;
+            Ok(bytes)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn load_or_create_uploaded_model_encryption_recipient(
+    state_dir: &Path,
+) -> io::Result<SoracloudUploadedModelEncryptionRecipient> {
+    let secret_bytes = load_or_create_uploaded_model_encryption_secret(state_dir)?;
+    let secret = X25519StaticSecret::from(secret_bytes);
+    let public_key_bytes = X25519PublicKey::from(&secret).to_bytes().to_vec();
+    let public_key_fingerprint = Hash::new(public_key_bytes.as_slice());
+    Ok(SoracloudUploadedModelEncryptionRecipient {
+        schema_version: SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+        key_id: format!(
+            "soracloud-upload-x25519:{}",
+            hex::encode(&public_key_bytes[..8])
+        ),
+        key_version: std::num::NonZeroU32::new(SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_VERSION_V1)
+            .expect("non-zero upload key version"),
+        kem: SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+        aead: SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+        public_key_bytes,
+        public_key_fingerprint,
+    })
+}
+
 impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
     fn snapshot(&self) -> SoracloudRuntimeSnapshot {
         SoracloudRuntimeManagerHandle::snapshot(self)
@@ -137,6 +212,12 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
 
     fn state_dir(&self) -> PathBuf {
         SoracloudRuntimeManagerHandle::state_dir(self)
+    }
+
+    fn uploaded_model_encryption_recipient(
+        &self,
+    ) -> Option<SoracloudUploadedModelEncryptionRecipient> {
+        load_or_create_uploaded_model_encryption_recipient(self.state_dir.as_ref().as_path()).ok()
     }
 }
 
@@ -155,7 +236,13 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 execute_asset_local_read(&request, &context, self.state_dir.as_ref())
             }
             iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query => {
-                execute_query_local_read(&view, &request, &context)
+                execute_query_local_read(
+                    &view,
+                    &request,
+                    &context,
+                    self.state_dir.as_ref(),
+                    &self.config.hf,
+                )
             }
         }
     }
@@ -289,7 +376,9 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 SoraServiceHealthStatusV1::Degraded,
             ));
         }
-        let Some(host) = vm.host_mut_any().and_then(|host| host.downcast_mut::<SoracloudIvmHost>())
+        let Some(host) = vm
+            .host_mut_any()
+            .and_then(|host| host.downcast_mut::<SoracloudIvmHost>())
         else {
             return Ok(deterministic_mailbox_failure_result(
                 request,
@@ -345,6 +434,11 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
             ));
         }
 
+        if let Some(run_id) = parse_apartment_autonomy_run_id(&request.operation).map(str::to_owned)
+        {
+            return execute_apartment_autonomy_run(self, &view, record, request, &run_id);
+        }
+
         Ok(SoracloudApartmentExecutionResult {
             status: record.status,
             checkpoint_artifact_hash: None,
@@ -357,6 +451,147 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 record.status,
             ),
         })
+    }
+
+    fn execute_private_inference(
+        &self,
+        request: SoracloudPrivateInferenceExecutionRequest,
+    ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
+        let view = self.state.view();
+        let snapshot = self.snapshot();
+        validate_private_inference_snapshot(&view, &snapshot, &request)?;
+        let world = view.world();
+        let Some(record) = world
+            .soracloud_agent_apartments()
+            .get(&request.apartment_name)
+        else {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!("unknown Soracloud apartment `{}`", request.apartment_name),
+            ));
+        };
+        if record.process_generation != request.process_generation {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "apartment `{}` process generation {} does not match committed generation {}",
+                    request.apartment_name, request.process_generation, record.process_generation
+                ),
+            ));
+        }
+
+        let session_key = (request.apartment_name.clone(), request.session_id.clone());
+        let Some(session) = world
+            .soracloud_private_inference_sessions()
+            .get(&session_key)
+            .cloned()
+        else {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "private session `{}` is not registered for apartment `{}`",
+                    request.session_id, request.apartment_name
+                ),
+            ));
+        };
+        let Some(binding) = record.uploaded_model_binding.as_ref() else {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "apartment `{}` does not have an uploaded model binding",
+                    request.apartment_name
+                ),
+            ));
+        };
+        if binding.status != SoraUploadedModelBindingStatusV1::Active {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "uploaded model binding for apartment `{}` is {:?}",
+                    request.apartment_name, binding.status
+                ),
+            ));
+        }
+        if binding.privacy_mode != SoraModelPrivacyModeV1::PrivateExecution {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "uploaded model binding for apartment `{}` is not private execution",
+                    request.apartment_name
+                ),
+            ));
+        }
+        if binding.service_name != session.service_name
+            || binding.model_id != session.model_id
+            || binding.weight_version != session.weight_version
+            || binding.bundle_root != session.bundle_root
+        {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "private session `{}` does not match apartment `{}` uploaded model binding",
+                    request.session_id, request.apartment_name
+                ),
+            ));
+        }
+
+        let bundle_key = (
+            session.service_name.as_ref().to_owned(),
+            session.model_id.clone(),
+            session.weight_version.clone(),
+        );
+        let Some(bundle) = world
+            .soracloud_uploaded_model_bundles()
+            .get(&bundle_key)
+            .cloned()
+        else {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "uploaded model bundle `{}` version `{}` is not registered for service `{}`",
+                    session.model_id, session.weight_version, session.service_name
+                ),
+            ));
+        };
+        if bundle.bundle_root != session.bundle_root
+            || bundle.compile_profile_hash != binding.compile_profile_hash
+        {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "private session `{}` no longer matches the admitted bundle manifest",
+                    request.session_id
+                ),
+            ));
+        }
+        if world
+            .soracloud_private_compile_profiles()
+            .get(&bundle.compile_profile_hash)
+            .is_none()
+        {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "private compile profile `{}` is not materialized for uploaded model `{}`",
+                    bundle.compile_profile_hash, session.model_id
+                ),
+            ));
+        }
+
+        match &request.action {
+            SoracloudPrivateInferenceExecutionAction::Start => {
+                execute_private_inference_start(&view, &bundle, &session, &request)
+            }
+            SoracloudPrivateInferenceExecutionAction::Release { decrypt_request_id } => {
+                execute_private_inference_release(
+                    &view,
+                    &bundle,
+                    &session,
+                    decrypt_request_id,
+                    &request,
+                )
+            }
+        }
     }
 }
 
@@ -501,7 +736,13 @@ impl SoracloudIvmHost {
         &mut self,
         request: SoracloudEmitStateMutationRequestV1,
     ) -> Result<SoracloudEmitStateMutationResponseV1, VMError> {
-        if !self.request.bundle.container.capabilities.allow_state_writes {
+        if !self
+            .request
+            .bundle
+            .container
+            .capabilities
+            .allow_state_writes
+        {
             return Err(VMError::PermissionDenied);
         }
         if request.state_key.trim().is_empty() || !request.state_key.starts_with('/') {
@@ -530,7 +771,11 @@ impl SoracloudIvmHost {
                 if payload_bytes > binding.max_item_bytes.get() {
                     return Err(VMError::PermissionDenied);
                 }
-                if !matches!(binding.mutability, iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly | iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite) {
+                if !matches!(
+                    binding.mutability,
+                    iroha_data_model::soracloud::SoraStateMutabilityV1::AppendOnly
+                        | iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite
+                ) {
                     return Err(VMError::PermissionDenied);
                 }
                 if binding.mutability
@@ -550,7 +795,8 @@ impl SoracloudIvmHost {
                 self.committed_entries.insert(
                     Self::state_entry_key(&request.binding_name, &request.state_key),
                     SoraServiceStateEntryV1 {
-                        schema_version: iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
                         service_name: self.request.deployment.service_name.clone(),
                         service_version: self.request.deployment.current_service_version.clone(),
                         binding_name: request.binding_name.clone(),
@@ -569,7 +815,9 @@ impl SoracloudIvmHost {
                 if request.payload_bytes.is_some() || request.payload_commitment.is_some() {
                     return Err(VMError::NoritoInvalid);
                 }
-                if binding.mutability != iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite {
+                if binding.mutability
+                    != iroha_data_model::soracloud::SoraStateMutabilityV1::ReadWrite
+                {
                     return Err(VMError::PermissionDenied);
                 }
                 let current_total = self.binding_totals.get(&binding_name).copied().unwrap_or(0);
@@ -577,8 +825,10 @@ impl SoracloudIvmHost {
                     binding_name.clone(),
                     current_total.saturating_sub(current_size),
                 );
-                self.committed_entries
-                    .remove(&Self::state_entry_key(&request.binding_name, &request.state_key));
+                self.committed_entries.remove(&Self::state_entry_key(
+                    &request.binding_name,
+                    &request.state_key,
+                ));
             }
         }
 
@@ -602,7 +852,9 @@ impl SoracloudIvmHost {
             u64::try_from(self.staged_state_mutations.len()).unwrap_or(u64::MAX),
         )));
         self.staged_state_mutations.push(mutation);
-        Ok(SoracloudEmitStateMutationResponseV1 { mutation_commitment })
+        Ok(SoracloudEmitStateMutationResponseV1 {
+            mutation_commitment,
+        })
     }
 
     fn stage_outbound_mailbox_message(
@@ -622,21 +874,22 @@ impl SoracloudIvmHost {
             request.expires_at_sequence,
             u64::try_from(self.staged_outbound_mailbox_messages.len()).unwrap_or(u64::MAX),
         )));
-        self.staged_outbound_mailbox_messages.push(SoraServiceMailboxMessageV1 {
-            schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-            message_id,
-            from_service: self.request.deployment.service_name.clone(),
-            from_handler: self.request.mailbox_message.to_handler.clone(),
-            to_service: request.to_service,
-            to_handler: request.to_handler,
-            payload_bytes: request.payload_bytes,
-            payload_commitment,
-            enqueue_sequence: self.request.execution_sequence,
-            available_after_sequence: request
-                .available_after_sequence
-                .max(self.request.execution_sequence),
-            expires_at_sequence: request.expires_at_sequence,
-        });
+        self.staged_outbound_mailbox_messages
+            .push(SoraServiceMailboxMessageV1 {
+                schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+                message_id,
+                from_service: self.request.deployment.service_name.clone(),
+                from_handler: self.request.mailbox_message.to_handler.clone(),
+                to_service: request.to_service,
+                to_handler: request.to_handler,
+                payload_bytes: request.payload_bytes,
+                payload_commitment,
+                enqueue_sequence: self.request.execution_sequence,
+                available_after_sequence: request
+                    .available_after_sequence
+                    .max(self.request.execution_sequence),
+                expires_at_sequence: request.expires_at_sequence,
+            });
         SoracloudEmitMailboxMessageResponseV1 {
             message_id,
             payload_commitment,
@@ -657,11 +910,7 @@ impl SoracloudIvmHost {
         artifact_hash
     }
 
-    fn read_material(
-        &self,
-        root_name: &str,
-        key: &str,
-    ) -> Result<Option<Vec<u8>>, VMError> {
+    fn read_material(&self, root_name: &str, key: &str) -> Result<Option<Vec<u8>>, VMError> {
         let relative = sanitized_relative_material_path(key)?;
         let path = self
             .state_dir
@@ -688,7 +937,10 @@ impl SoracloudIvmHost {
         if self.egress.default_allow {
             true
         } else {
-            self.egress.allowed_hosts.iter().any(|allowed| allowed == host)
+            self.egress
+                .allowed_hosts
+                .iter()
+                .any(|allowed| allowed == host)
         }
     }
 
@@ -706,7 +958,11 @@ impl SoracloudIvmHost {
         if !self.host_network_allows(host) {
             return Err(VMError::PermissionDenied);
         }
-        let max_requests = self.egress.rate_per_minute.map(|value| value.get()).unwrap_or(u32::MAX);
+        let max_requests = self
+            .egress
+            .rate_per_minute
+            .map(|value| value.get())
+            .unwrap_or(u32::MAX);
         if self.egress_requests >= max_requests {
             return Err(VMError::PermissionDenied);
         }
@@ -829,7 +1085,10 @@ impl IVMHost for SoracloudIvmHost {
                 };
                 let entry = self
                     .committed_entries
-                    .get(&Self::state_entry_key(&request.binding_name, &request.state_key))
+                    .get(&Self::state_entry_key(
+                        &request.binding_name,
+                        &request.state_key,
+                    ))
                     .cloned();
                 self.write_response(
                     vm,
@@ -877,8 +1136,8 @@ impl IVMHost for SoracloudIvmHost {
                 Ok(0)
             }
             SYSCALL_SORACLOUD_APPEND_JOURNAL => {
-                let SoracloudHostRequestPayloadV1::AppendJournal(request) = self
-                    .read_request_payload(vm, SoracloudHostOperationV1::AppendJournal, number)?
+                let SoracloudHostRequestPayloadV1::AppendJournal(request) =
+                    self.read_request_payload(vm, SoracloudHostOperationV1::AppendJournal, number)?
                 else {
                     return Err(VMError::NoritoInvalid);
                 };
@@ -992,12 +1251,7 @@ struct ResolvedLocalReadContext {
 }
 
 #[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 struct LocalQueryResponse {
     schema_version: u16,
@@ -1010,12 +1264,7 @@ struct LocalQueryResponse {
 }
 
 #[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::JsonSerialize,
-    norito::derive::JsonDeserialize
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
 struct LocalQueryEntry {
     binding_name: String,
@@ -1027,6 +1276,96 @@ struct LocalQueryEntry {
     last_update_sequence: u64,
     governance_tx_hash: Hash,
     source_action: SoraServiceLifecycleActionV1,
+}
+
+const HF_LOCAL_IMPORT_SCHEMA_VERSION_V1: u16 = 1;
+const HF_LOCAL_RUNNER_REQUEST_SCHEMA_VERSION_V1: u16 = 1;
+const HF_LOCAL_RUNNER_SCRIPT_V1: &str = include_str!("../resources/soracloud_hf_local_runner.py");
+const APARTMENT_AUTONOMY_OPERATION_PREFIX_V1: &str = "autonomy-run:";
+const APARTMENT_AUTONOMY_HANDLER_NAME_V1: &str = "infer";
+const APARTMENT_AUTONOMY_HANDLER_PATH_V1: &str = "/infer";
+const APARTMENT_AUTONOMY_SUMMARY_FILE_V1: &str = "execution_summary.json";
+const APARTMENT_AUTONOMY_CHECKPOINT_FILE_V1: &str = "checkpoint.bin";
+const APARTMENT_AUTONOMY_WORKFLOW_VERSION_V1: u64 = 1;
+const HF_ALLOW_BRIDGE_FALLBACK_HEADER_V1: &str = "x-soracloud-hf-allow-bridge-fallback";
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
+struct HfImportedFileV1 {
+    path: String,
+    content_length: u64,
+    payload_hash: String,
+    local_path: String,
+}
+
+#[derive(Clone, Debug)]
+struct ApartmentAutonomyWorkflowStepSpec {
+    step_index: u32,
+    step_id: Option<String>,
+    request: norito::json::Value,
+    allow_bridge_fallback: bool,
+}
+
+#[derive(Clone, Debug)]
+struct ApartmentAutonomyWorkflowExecutionError {
+    message: String,
+    workflow_steps: Vec<SoracloudApartmentAutonomyWorkflowStepSummaryV1>,
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
+struct HfLocalImportManifestV1 {
+    schema_version: u16,
+    source_id: String,
+    repo_id: String,
+    requested_revision: String,
+    resolved_commit: Option<String>,
+    model_name: String,
+    adapter_id: String,
+    pipeline_tag: Option<String>,
+    library_name: Option<String>,
+    #[norito(default)]
+    tags: Vec<String>,
+    imported_at_ms: u64,
+    #[norito(default)]
+    imported_files: Vec<HfImportedFileV1>,
+    #[norito(default)]
+    skipped_files: Vec<String>,
+    #[norito(default)]
+    raw_model_info_path: Option<String>,
+    #[norito(default)]
+    import_error: Option<String>,
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
+struct HfGeneratedMetadataResponse {
+    schema_version: u16,
+    source_id: String,
+    repo_id: String,
+    requested_revision: String,
+    resolved_commit: Option<String>,
+    model_name: String,
+    adapter_id: String,
+    pipeline_tag: Option<String>,
+    library_name: Option<String>,
+    #[norito(default)]
+    tags: Vec<String>,
+    imported: bool,
+    imported_at_ms: Option<u64>,
+    imported_file_count: u32,
+    imported_total_bytes: u64,
+    #[norito(default)]
+    imported_files: Vec<HfImportedFileV1>,
+    #[norito(default)]
+    skipped_files: Vec<String>,
+    #[norito(default)]
+    import_error: Option<String>,
+    inference_local_enabled: bool,
+    inference_bridge_enabled: bool,
 }
 
 /// Embedded `irohad` Soracloud runtime-manager actor.
@@ -1163,6 +1502,8 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.secrets_root().display()))?;
         fs::create_dir_all(self.credentials_root())
             .wrap_err_with(|| format!("create {}", self.credentials_root().display()))?;
+        fs::create_dir_all(self.hf_sources_root())
+            .wrap_err_with(|| format!("create {}", self.hf_sources_root().display()))?;
 
         let view = self.state.view();
         let bundle_registry = collect_service_revision_registry(&view);
@@ -1177,7 +1518,8 @@ impl SoracloudRuntimeManager {
         self.write_apartment_materializations(&initial_snapshot, &view)?;
         self.prune_stale_service_materializations(&initial_snapshot)?;
         self.prune_stale_apartment_materializations(&initial_snapshot)?;
-        self.hydrate_missing_artifacts(&view, &initial_snapshot)?;
+        self.import_hf_sources(&view, &initial_snapshot)?;
+        self.hydrate_missing_artifacts(&view, &initial_snapshot, &bundle_registry)?;
         self.enforce_cache_budgets(&view, &initial_snapshot)?;
         let snapshot = build_runtime_snapshot(
             &view,
@@ -1236,6 +1578,15 @@ impl SoracloudRuntimeManager {
         self.config.state_dir.join("credentials")
     }
 
+    fn hf_sources_root(&self) -> PathBuf {
+        self.config.state_dir.join("hf_sources")
+    }
+
+    fn hf_source_root(&self, source_id: &str) -> PathBuf {
+        self.hf_sources_root()
+            .join(sanitize_path_component(source_id))
+    }
+
     fn write_service_materializations(
         &self,
         snapshot: &SoracloudRuntimeSnapshot,
@@ -1278,7 +1629,10 @@ impl SoracloudRuntimeManager {
                 .soracloud_agent_apartments()
                 .get(apartment_name)
             {
-                write_json_atomic(&apartment_root.join("apartment_manifest.json"), &record.manifest)?;
+                write_json_atomic(
+                    &apartment_root.join("apartment_manifest.json"),
+                    &record.manifest,
+                )?;
             }
         }
         Ok(())
@@ -1317,10 +1671,289 @@ impl SoracloudRuntimeManager {
         Ok(())
     }
 
+    fn import_hf_sources(
+        &self,
+        view: &StateView<'_>,
+        snapshot: &SoracloudRuntimeSnapshot,
+    ) -> eyre::Result<()> {
+        let desired_sources = snapshot
+            .hf_sources
+            .iter()
+            .filter(|(_source_id, plan)| {
+                plan.active_pool_count > 0
+                    || plan.bound_service_count > 0
+                    || plan.bound_apartment_count > 0
+            })
+            .map(|(source_id, _plan)| sanitize_path_component(source_id))
+            .collect::<BTreeSet<_>>();
+        prune_flat_directory_tree(self.hf_sources_root().as_path(), &desired_sources)?;
+        if desired_sources.is_empty() {
+            return Ok(());
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(self.config.hf.request_timeout)
+            .build()
+            .wrap_err("build Hugging Face importer HTTP client")?;
+
+        for (source_hash, source) in view.world().soracloud_hf_sources().iter() {
+            let source_id = source_hash.to_string();
+            if !snapshot.hf_sources.contains_key(&source_id)
+                || !desired_sources.contains(&sanitize_path_component(&source_id))
+                || matches!(
+                    source.status,
+                    SoraHfSourceStatusV1::Failed | SoraHfSourceStatusV1::Retired
+                )
+            {
+                continue;
+            }
+
+            if let Err(error) = self.import_one_hf_source(&client, &source_id, source) {
+                iroha_logger::warn!(
+                    ?error,
+                    source_id = %source_id,
+                    repo_id = %source.repo_id,
+                    revision = %source.resolved_revision,
+                    "Soracloud HF source import failed"
+                );
+                self.write_hf_import_error_manifest(
+                    &source_id,
+                    source,
+                    error.to_string().as_str(),
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn import_one_hf_source(
+        &self,
+        client: &reqwest::blocking::Client,
+        source_id: &str,
+        source: &iroha_data_model::soracloud::SoraHfSourceRecordV1,
+    ) -> eyre::Result<()> {
+        let source_root = self.hf_source_root(source_id);
+        let manifest_path = source_root.join("import_manifest.json");
+        if let Some(existing) = read_json_optional::<HfLocalImportManifestV1>(&manifest_path)
+            .wrap_err_with(|| format!("read {}", manifest_path.display()))?
+            && existing.source_id == source_id
+            && existing.repo_id == source.repo_id
+            && existing.requested_revision == source.resolved_revision
+            && existing.model_name == source.model_name
+            && existing.adapter_id == source.adapter_id
+            && existing.import_error.is_none()
+        {
+            return Ok(());
+        }
+
+        fs::create_dir_all(source_root.join("files"))
+            .wrap_err_with(|| format!("create {}", source_root.join("files").display()))?;
+
+        let info_url = hf_model_info_url(
+            &self.config.hf.api_base_url,
+            &source.repo_id,
+            &source.resolved_revision,
+        )?;
+        let response = client
+            .get(info_url.clone())
+            .send()
+            .wrap_err_with(|| format!("fetch Hugging Face model info from {info_url}"))?;
+        if !response.status().is_success() {
+            eyre::bail!(
+                "HF model info request for `{}` revision `{}` returned {}",
+                source.repo_id,
+                source.resolved_revision,
+                response.status()
+            );
+        }
+        let model_info_bytes = response
+            .bytes()
+            .wrap_err_with(|| format!("read Hugging Face model info response from {info_url}"))?
+            .to_vec();
+        let model_info: norito::json::Value =
+            norito::json::from_slice(&model_info_bytes).wrap_err("decode HF model info JSON")?;
+        let raw_model_info_path = source_root.join("model_info.json");
+        write_bytes_atomic(&raw_model_info_path, &model_info_bytes)
+            .wrap_err_with(|| format!("write {}", raw_model_info_path.display()))?;
+
+        let resolved_commit = model_info
+            .get("sha")
+            .and_then(norito::json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let pipeline_tag = model_info
+            .get("pipeline_tag")
+            .and_then(norito::json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let library_name = model_info
+            .get("library_name")
+            .and_then(norito::json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let tags = model_info
+            .get("tags")
+            .and_then(norito::json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(norito::json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+
+        let mut imported_files = Vec::new();
+        let mut skipped_files = Vec::new();
+        let mut imported_total_bytes = 0_u64;
+        let mut sibling_paths = model_info
+            .get("siblings")
+            .and_then(norito::json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        sibling_paths.sort();
+        sibling_paths.dedup();
+
+        for path in sibling_paths {
+            if !hf_import_file_selected(&path, &self.config.hf.import_file_allowlist) {
+                continue;
+            }
+            if imported_files.len()
+                >= usize::try_from(self.config.hf.import_max_files).unwrap_or(usize::MAX)
+            {
+                skipped_files.push(format!("{path} (skipped: file limit reached)"));
+                continue;
+            }
+
+            let file_url = hf_repo_file_url(
+                &self.config.hf.hub_base_url,
+                &source.repo_id,
+                &source.resolved_revision,
+                &path,
+            )?;
+            let head = client
+                .head(file_url.clone())
+                .send()
+                .wrap_err_with(|| format!("query HF file headers from {file_url}"))?;
+            if !head.status().is_success() {
+                skipped_files.push(format!("{path} (skipped: HEAD returned {})", head.status()));
+                continue;
+            }
+            let Some(content_length) = head
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+            else {
+                skipped_files.push(format!("{path} (skipped: missing Content-Length)"));
+                continue;
+            };
+            if content_length > self.config.hf.import_max_file_bytes {
+                skipped_files.push(format!(
+                    "{path} (skipped: {content_length} bytes exceeds per-file cap {})",
+                    self.config.hf.import_max_file_bytes
+                ));
+                continue;
+            }
+            let next_total = imported_total_bytes.saturating_add(content_length);
+            if next_total > self.config.hf.import_max_total_bytes {
+                skipped_files.push(format!(
+                    "{path} (skipped: aggregate import cap {} bytes reached)",
+                    self.config.hf.import_max_total_bytes
+                ));
+                continue;
+            }
+
+            let body = client
+                .get(file_url.clone())
+                .send()
+                .wrap_err_with(|| format!("download HF file from {file_url}"))?
+                .bytes()
+                .wrap_err_with(|| format!("read HF file response from {file_url}"))?
+                .to_vec();
+            let actual_len = u64::try_from(body.len()).unwrap_or(u64::MAX);
+            if actual_len != content_length {
+                skipped_files.push(format!(
+                    "{path} (skipped: body length {actual_len} bytes did not match HEAD length {content_length})"
+                ));
+                continue;
+            }
+
+            let relative_path = sanitized_relative_material_path(&path)
+                .map_err(|error| eyre::eyre!("sanitize HF repo path `{path}`: {error}"))?;
+            let local_path = source_root.join("files").join(&relative_path);
+            if let Some(parent) = local_path.parent() {
+                fs::create_dir_all(parent)
+                    .wrap_err_with(|| format!("create {}", parent.display()))?;
+            }
+            write_bytes_atomic(&local_path, &body)
+                .wrap_err_with(|| format!("write {}", local_path.display()))?;
+            imported_total_bytes = next_total;
+            imported_files.push(HfImportedFileV1 {
+                path,
+                content_length: actual_len,
+                payload_hash: Hash::new(&body).to_string(),
+                local_path: local_path.display().to_string(),
+            });
+        }
+
+        let manifest = HfLocalImportManifestV1 {
+            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+            source_id: source_id.to_owned(),
+            repo_id: source.repo_id.clone(),
+            requested_revision: source.resolved_revision.clone(),
+            resolved_commit,
+            model_name: source.model_name.clone(),
+            adapter_id: source.adapter_id.clone(),
+            pipeline_tag,
+            library_name,
+            tags,
+            imported_at_ms: source.updated_at_ms,
+            imported_files,
+            skipped_files,
+            raw_model_info_path: Some(raw_model_info_path.display().to_string()),
+            import_error: None,
+        };
+        write_json_atomic(&manifest_path, &manifest)
+            .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
+        Ok(())
+    }
+
+    fn write_hf_import_error_manifest(
+        &self,
+        source_id: &str,
+        source: &iroha_data_model::soracloud::SoraHfSourceRecordV1,
+        error: &str,
+    ) -> eyre::Result<()> {
+        let source_root = self.hf_source_root(source_id);
+        fs::create_dir_all(&source_root)
+            .wrap_err_with(|| format!("create {}", source_root.display()))?;
+        let manifest = HfLocalImportManifestV1 {
+            schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+            source_id: source_id.to_owned(),
+            repo_id: source.repo_id.clone(),
+            requested_revision: source.resolved_revision.clone(),
+            resolved_commit: None,
+            model_name: source.model_name.clone(),
+            adapter_id: source.adapter_id.clone(),
+            pipeline_tag: None,
+            library_name: None,
+            tags: Vec::new(),
+            imported_at_ms: source.updated_at_ms,
+            imported_files: Vec::new(),
+            skipped_files: Vec::new(),
+            raw_model_info_path: None,
+            import_error: Some(error.to_owned()),
+        };
+        let manifest_path = source_root.join("import_manifest.json");
+        write_json_atomic(&manifest_path, &manifest)
+            .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
+        Ok(())
+    }
+
     fn hydrate_missing_artifacts(
         &self,
         view: &StateView<'_>,
         snapshot: &SoracloudRuntimeSnapshot,
+        bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
     ) -> eyre::Result<()> {
         let stored_manifests = if let Some(sorafs_node) = self.sorafs_node.as_ref() {
             if sorafs_node.is_enabled() {
@@ -1336,15 +1969,25 @@ impl SoracloudRuntimeManager {
         let remote_sources = collect_remote_hydration_sources(view, &self.state);
         let mut missing = BTreeMap::<String, (Hash, String)>::new();
         let mut hydrated_payloads = BTreeMap::<Hash, Option<Vec<u8>>>::new();
-        for versions in snapshot.services.values() {
-            for plan in versions.values() {
+        for (service_name, versions) in &snapshot.services {
+            for (service_version, plan) in versions {
+                if let Some(bundle) =
+                    bundle_registry.get(&(service_name.clone(), service_version.clone()))
+                    && let Some(payload) =
+                        soracloud_hf_generated_bundle_payload_if_applicable(bundle)
+                {
+                    hydrated_payloads
+                        .entry(bundle.container.bundle_hash)
+                        .or_insert(Some(payload));
+                }
                 for artifact in &plan.artifacts {
                     if artifact.available_locally {
                         continue;
                     }
-                    let artifact_hash = Hash::from_str(&artifact.artifact_hash).wrap_err_with(|| {
-                        format!("parse Soracloud artifact hash `{}`", artifact.artifact_hash)
-                    })?;
+                    let artifact_hash =
+                        Hash::from_str(&artifact.artifact_hash).wrap_err_with(|| {
+                            format!("parse Soracloud artifact hash `{}`", artifact.artifact_hash)
+                        })?;
                     missing
                         .entry(artifact.local_cache_path.clone())
                         .or_insert((artifact_hash, artifact.artifact_path.clone()));
@@ -1404,7 +2047,8 @@ impl SoracloudRuntimeManager {
                     continue;
                 };
                 let payload =
-                    match sorafs_node.read_payload_range(manifest.manifest_id(), 0, content_length) {
+                    match sorafs_node.read_payload_range(manifest.manifest_id(), 0, content_length)
+                    {
                         Ok(payload) => payload,
                         Err(error) => {
                             iroha_logger::warn!(
@@ -1483,7 +2127,8 @@ impl SoracloudRuntimeManager {
                 }
 
                 let client_id = "soracloud-runtime-hydration";
-                let nonce = remote_hydration_nonce(&source.manifest_cid_hex, provider_id, expected_hash);
+                let nonce =
+                    remote_hydration_nonce(&source.manifest_cid_hex, provider_id, expected_hash);
                 let Some(stream_token) = self.fetch_remote_stream_token(
                     &client,
                     &base_url,
@@ -1551,12 +2196,10 @@ impl SoracloudRuntimeManager {
         let guard = cache.try_read().ok()?;
         let record = guard.record_by_provider(provider_id)?;
         let advert = record.advert();
-        let supports_torii_http_range = advert
-            .body
-            .transport_hints
-            .as_ref()
-            .map_or(true, |hints| {
-                hints.iter()
+        let supports_torii_http_range =
+            advert.body.transport_hints.as_ref().map_or(true, |hints| {
+                hints
+                    .iter()
                     .any(|hint| hint.protocol == TransportProtocol::ToriiHttpRange)
             });
         if !supports_torii_http_range {
@@ -1672,13 +2315,15 @@ impl SoracloudRuntimeManager {
                 return None;
             }
         };
-        parse_remote_hydration_plan(manifest_id_hex, &body).inspect_err(|error| {
-            iroha_logger::debug!(
-                ?error,
-                url = %url,
-                "failed to decode remote Soracloud hydration plan response"
-            );
-        }).ok()
+        parse_remote_hydration_plan(manifest_id_hex, &body)
+            .inspect_err(|error| {
+                iroha_logger::debug!(
+                    ?error,
+                    url = %url,
+                    "failed to decode remote Soracloud hydration plan response"
+                );
+            })
+            .ok()
     }
 
     fn fetch_remote_stream_token(
@@ -1856,10 +2501,13 @@ impl SoracloudRuntimeManager {
         snapshot: &SoracloudRuntimeSnapshot,
     ) -> eyre::Result<()> {
         let artifact_observations = collect_artifact_cache_observations(view, snapshot);
-        let artifact_candidates =
-            collect_artifact_cache_candidates(self.artifacts_root().as_path(), &artifact_observations)?;
-        let journal_sequences =
-            collect_runtime_receipt_artifact_sequences(view, |receipt| receipt.journal_artifact_hash);
+        let artifact_candidates = collect_artifact_cache_candidates(
+            self.artifacts_root().as_path(),
+            &artifact_observations,
+        )?;
+        let journal_sequences = collect_runtime_receipt_artifact_sequences(view, |receipt| {
+            receipt.journal_artifact_hash
+        });
         let checkpoint_sequences = collect_runtime_receipt_artifact_sequences(view, |receipt| {
             receipt.checkpoint_artifact_hash
         });
@@ -2002,7 +2650,9 @@ fn collect_artifact_cache_observations(
             &mut observations,
             hash_cache_name(record.weight_artifact_hash),
             RuntimeCacheBucket::ModelWeight,
-            record.promoted_sequence.unwrap_or(record.registered_sequence),
+            record
+                .promoted_sequence
+                .unwrap_or(record.registered_sequence),
         );
     }
 
@@ -2038,8 +2688,7 @@ fn upsert_cache_observation(
     match observations.entry(key) {
         std::collections::btree_map::Entry::Occupied(mut entry) => {
             let existing = entry.get_mut();
-            existing.observation_sequence =
-                existing.observation_sequence.max(observation_sequence);
+            existing.observation_sequence = existing.observation_sequence.max(observation_sequence);
             if bucket.priority() > existing.bucket.priority() {
                 existing.bucket = bucket;
             }
@@ -2068,13 +2717,14 @@ fn collect_artifact_cache_candidates(
             continue;
         }
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        let observation = observations
-            .get(&file_name)
-            .copied()
-            .unwrap_or(CacheObservationMetadata {
-                bucket: RuntimeCacheBucket::StaticAsset,
-                observation_sequence: 0,
-            });
+        let observation =
+            observations
+                .get(&file_name)
+                .copied()
+                .unwrap_or(CacheObservationMetadata {
+                    bucket: RuntimeCacheBucket::StaticAsset,
+                    observation_sequence: 0,
+                });
         candidates
             .bucket_mut(observation.bucket)
             .push(CachePruneCandidate {
@@ -2135,7 +2785,10 @@ fn collect_fixed_bucket_candidates(
     Ok(candidates)
 }
 
-fn prune_cache_bucket(mut candidates: Vec<CachePruneCandidate>, budget_bytes: u64) -> eyre::Result<()> {
+fn prune_cache_bucket(
+    mut candidates: Vec<CachePruneCandidate>,
+    budget_bytes: u64,
+) -> eyre::Result<()> {
     let mut retained_bytes = candidates.iter().fold(0u64, |total, candidate| {
         total.saturating_add(candidate.bytes)
     });
@@ -2153,8 +2806,9 @@ fn prune_cache_bucket(mut candidates: Vec<CachePruneCandidate>, budget_bytes: u6
         if retained_bytes <= budget_bytes {
             break;
         }
-        fs::remove_file(&candidate.path)
-            .wrap_err_with(|| format!("prune Soracloud runtime cache {}", candidate.path.display()))?;
+        fs::remove_file(&candidate.path).wrap_err_with(|| {
+            format!("prune Soracloud runtime cache {}", candidate.path.display())
+        })?;
         retained_bytes = retained_bytes.saturating_sub(candidate.bytes);
     }
 
@@ -2166,7 +2820,8 @@ fn execute_asset_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
-    let Some(artifact) = resolve_asset_artifact(&context.bundle, &context.handler, &request.handler_path)
+    let Some(artifact) =
+        resolve_asset_artifact(&context.bundle, &context.handler, &request.handler_path)
     else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::InvalidRequest,
@@ -2223,7 +2878,15 @@ fn execute_query_local_read(
     view: &StateView<'_>,
     request: &SoracloudLocalReadRequest,
     context: &ResolvedLocalReadContext,
+    state_dir: &Path,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+    if let Some(binding) =
+        iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(&context.bundle)
+    {
+        return execute_generated_hf_local_read(request, context, state_dir, hf_config, &binding);
+    }
+
     let filters = parse_query_params(request.request_query.as_deref());
     let binding_filter = filters.get("binding").map(String::as_str);
     let key_filter = filters.get("key").map(String::as_str);
@@ -2284,10 +2947,7 @@ fn execute_query_local_read(
                 format!("serialize Soracloud query response: {error}"),
             )
         })?;
-    let bindings = rows
-        .iter()
-        .map(state_entry_binding)
-        .collect::<Vec<_>>();
+    let bindings = rows.iter().map(state_entry_binding).collect::<Vec<_>>();
     let result_commitment = Hash::new(&response_bytes);
     let runtime_receipt = match context.handler.certified_response {
         SoraCertifiedResponsePolicyV1::AuditReceipt => Some(local_read_receipt(
@@ -2322,6 +2982,508 @@ fn execute_query_local_read(
     })
 }
 
+fn execute_generated_hf_local_read(
+    request: &SoracloudLocalReadRequest,
+    context: &ResolvedLocalReadContext,
+    state_dir: &Path,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
+) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+    match context.handler.handler_name.as_ref() {
+        "metadata" => execute_generated_hf_metadata_local_read(
+            request, context, state_dir, hf_config, binding,
+        ),
+        "infer" => {
+            execute_generated_hf_infer_local_read(request, context, state_dir, hf_config, binding)
+        }
+        other => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!("unsupported generated HF handler `{other}`"),
+        )),
+    }
+}
+
+fn execute_generated_hf_metadata_local_read(
+    request: &SoracloudLocalReadRequest,
+    context: &ResolvedLocalReadContext,
+    state_dir: &Path,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
+) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+    let import_manifest =
+        read_hf_import_manifest(state_dir, &binding.source_id).map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "read generated HF import manifest for source `{}`: {error}",
+                    binding.source_id
+                ),
+            )
+        })?;
+    let imported_total_bytes = import_manifest.as_ref().map_or(0, |manifest| {
+        manifest.imported_files.iter().fold(0_u64, |total, file| {
+            total.saturating_add(file.content_length)
+        })
+    });
+    let response = HfGeneratedMetadataResponse {
+        schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+        source_id: binding.source_id.clone(),
+        repo_id: binding.repo_id.clone(),
+        requested_revision: binding.resolved_revision.clone(),
+        resolved_commit: import_manifest
+            .as_ref()
+            .and_then(|manifest| manifest.resolved_commit.clone()),
+        model_name: binding.model_name.clone(),
+        adapter_id: import_manifest
+            .as_ref()
+            .map(|manifest| manifest.adapter_id.clone())
+            .unwrap_or_else(|| "hf.shared.v1".to_owned()),
+        pipeline_tag: import_manifest
+            .as_ref()
+            .and_then(|manifest| manifest.pipeline_tag.clone()),
+        library_name: import_manifest
+            .as_ref()
+            .and_then(|manifest| manifest.library_name.clone()),
+        tags: import_manifest
+            .as_ref()
+            .map(|manifest| manifest.tags.clone())
+            .unwrap_or_default(),
+        imported: import_manifest.is_some(),
+        imported_at_ms: import_manifest
+            .as_ref()
+            .map(|manifest| manifest.imported_at_ms),
+        imported_file_count: import_manifest
+            .as_ref()
+            .map(|manifest| u32::try_from(manifest.imported_files.len()).unwrap_or(u32::MAX))
+            .unwrap_or(0),
+        imported_total_bytes,
+        imported_files: import_manifest
+            .as_ref()
+            .map(|manifest| manifest.imported_files.clone())
+            .unwrap_or_default(),
+        skipped_files: import_manifest
+            .as_ref()
+            .map(|manifest| manifest.skipped_files.clone())
+            .unwrap_or_default(),
+        import_error: import_manifest
+            .as_ref()
+            .and_then(|manifest| manifest.import_error.clone()),
+        inference_local_enabled: hf_config.local_execution_enabled,
+        inference_bridge_enabled: hf_config
+            .inference_token
+            .as_ref()
+            .is_some_and(|token| !token.trim().is_empty()),
+    };
+    let response_bytes = norito::json::to_vec(&response).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!("serialize generated HF metadata response: {error}"),
+        )
+    })?;
+    let result_commitment = Hash::new(&response_bytes);
+    Ok(SoracloudLocalReadResponse {
+        response_bytes,
+        content_type: Some("application/json".to_owned()),
+        content_encoding: None,
+        cache_control: Some("no-store".to_owned()),
+        bindings: Vec::new(),
+        result_commitment,
+        certified_by: context.handler.certified_response,
+        runtime_receipt: Some(local_read_receipt(
+            request,
+            &context.deployment,
+            &context.handler,
+            result_commitment,
+            context.handler.certified_response,
+            None,
+        )),
+    })
+}
+
+fn execute_generated_hf_infer_local_read(
+    request: &SoracloudLocalReadRequest,
+    context: &ResolvedLocalReadContext,
+    state_dir: &Path,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
+) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+    if !request.request_method.eq_ignore_ascii_case("POST") {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            "generated HF `/infer` only supports POST requests",
+        ));
+    }
+    let bridge_fallback_opt_in = request
+        .request_headers
+        .get(HF_ALLOW_BRIDGE_FALLBACK_HEADER_V1)
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("1")
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+        });
+    let local_error = if hf_config.local_execution_enabled {
+        match execute_generated_hf_local_runner(request, context, state_dir, hf_config, binding) {
+            Ok(response) => return Ok(response),
+            Err(error) => Some(error),
+        }
+    } else {
+        None
+    };
+
+    let bridge_response = if hf_config.allow_inference_bridge_fallback && bridge_fallback_opt_in {
+        Some(execute_generated_hf_inference_bridge_local_read(
+            request, context, hf_config, binding,
+        ))
+    } else {
+        None
+    };
+
+    match (local_error, bridge_response) {
+        (_, Some(Ok(response))) => Ok(response),
+        (Some(local_error), Some(Err(bridge_error))) => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF local execution for source `{}` failed: {}; bridge fallback also failed: {}",
+                binding.source_id, local_error.message, bridge_error.message
+            ),
+        )),
+        (Some(local_error), None) => Err(local_error),
+        (None, Some(Err(bridge_error))) => Err(bridge_error),
+        (None, None) => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF inference for source `{}` has no enabled runtime backend",
+                binding.source_id
+            ),
+        )),
+    }
+}
+
+fn execute_generated_hf_local_runner(
+    request: &SoracloudLocalReadRequest,
+    context: &ResolvedLocalReadContext,
+    state_dir: &Path,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
+) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+    let Some(import_manifest) = read_hf_import_manifest(state_dir, &binding.source_id).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "read generated HF import manifest for source `{}` before local execution: {error}",
+                binding.source_id
+            ),
+        )
+    })? else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF source `{}` is not imported into the local cache yet",
+                binding.source_id
+            ),
+        ));
+    };
+    if let Some(import_error) = import_manifest.import_error.as_ref() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF source `{}` is blocked by a local import error: {import_error}",
+                binding.source_id
+            ),
+        ));
+    }
+
+    let request_body = if request.request_body.is_empty() {
+        norito::json::Value::Object(norito::json::Map::new())
+    } else {
+        norito::json::from_slice::<norito::json::Value>(&request.request_body).map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!("generated HF local inference expects a JSON request body: {error}"),
+            )
+        })?
+    };
+
+    let runner_script_path = ensure_hf_local_runner_script(state_dir).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "materialize embedded HF local runner for source `{}`: {error}",
+                binding.source_id
+            ),
+        )
+    })?;
+    let source_files_dir = hf_local_source_files_root(state_dir, &binding.source_id);
+    let mut runner_request = norito::json::Map::new();
+    runner_request.insert(
+        "schema_version".to_owned(),
+        norito::json::Value::from(HF_LOCAL_RUNNER_REQUEST_SCHEMA_VERSION_V1),
+    );
+    runner_request.insert(
+        "source_id".to_owned(),
+        norito::json::Value::from(binding.source_id.clone()),
+    );
+    runner_request.insert(
+        "repo_id".to_owned(),
+        norito::json::Value::from(binding.repo_id.clone()),
+    );
+    runner_request.insert(
+        "resolved_revision".to_owned(),
+        norito::json::Value::from(binding.resolved_revision.clone()),
+    );
+    runner_request.insert(
+        "model_name".to_owned(),
+        norito::json::Value::from(binding.model_name.clone()),
+    );
+    runner_request.insert(
+        "adapter_id".to_owned(),
+        norito::json::Value::from(import_manifest.adapter_id.clone()),
+    );
+    runner_request.insert(
+        "pipeline_tag".to_owned(),
+        import_manifest
+            .pipeline_tag
+            .clone()
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+    runner_request.insert(
+        "library_name".to_owned(),
+        import_manifest
+            .library_name
+            .clone()
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+    runner_request.insert(
+        "source_files_dir".to_owned(),
+        norito::json::Value::from(source_files_dir.display().to_string()),
+    );
+    runner_request.insert(
+        "request_method".to_owned(),
+        norito::json::Value::from(request.request_method.clone()),
+    );
+    runner_request.insert(
+        "request_path".to_owned(),
+        norito::json::Value::from(request.request_path.clone()),
+    );
+    runner_request.insert(
+        "request_query".to_owned(),
+        request
+            .request_query
+            .clone()
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+    let request_headers = request
+        .request_headers
+        .iter()
+        .map(|(key, value)| (key.clone(), norito::json::Value::from(value.clone())))
+        .collect::<norito::json::Map>();
+    runner_request.insert(
+        "request_headers".to_owned(),
+        norito::json::Value::Object(request_headers),
+    );
+    runner_request.insert("request_body".to_owned(), request_body);
+    let runner_request = norito::json::Value::Object(runner_request);
+    let runner_request_bytes = norito::json::to_vec(&runner_request).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "serialize local HF runner request for source `{}`: {error}",
+                binding.source_id
+            ),
+        )
+    })?;
+    let output = run_hf_local_runner(
+        &hf_config.local_runner_program,
+        &runner_script_path,
+        hf_config.local_runner_timeout,
+        &runner_request_bytes,
+    )?;
+    let runner_response: norito::json::Value =
+        norito::json::from_slice(&output).map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "decode local HF runner response for source `{}` as JSON: {error}",
+                    binding.source_id
+                ),
+            )
+        })?;
+    let ok = runner_response
+        .get("ok")
+        .and_then(norito::json::Value::as_bool)
+        .unwrap_or(false);
+    if !ok {
+        let message = runner_response
+            .get("error")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|error| error.get("message"))
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or("local HF runner failed without an error message");
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF local execution for source `{}` failed: {message}",
+                binding.source_id
+            ),
+        ));
+    }
+    let response_json = runner_response
+        .get("response_json")
+        .cloned()
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "local HF runner for source `{}` did not return `response_json`",
+                    binding.source_id
+                ),
+            )
+        })?;
+    let response_bytes = norito::json::to_vec(&response_json).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "serialize local HF runner JSON response for source `{}`: {error}",
+                binding.source_id
+            ),
+        )
+    })?;
+    let result_commitment = Hash::new(&response_bytes);
+    Ok(SoracloudLocalReadResponse {
+        response_bytes,
+        content_type: runner_response
+            .get("content_type")
+            .and_then(norito::json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| Some("application/json".to_owned())),
+        content_encoding: None,
+        cache_control: Some("no-store".to_owned()),
+        bindings: Vec::new(),
+        result_commitment,
+        certified_by: context.handler.certified_response,
+        runtime_receipt: Some(local_read_receipt(
+            request,
+            &context.deployment,
+            &context.handler,
+            result_commitment,
+            context.handler.certified_response,
+            None,
+        )),
+    })
+}
+
+fn execute_generated_hf_inference_bridge_local_read(
+    request: &SoracloudLocalReadRequest,
+    context: &ResolvedLocalReadContext,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
+) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+    let Some(token) = hf_config
+        .inference_token
+        .as_ref()
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+    else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF inference for source `{}` requires `soracloud_runtime.hf.inference_token`",
+                binding.source_id
+            ),
+        ));
+    };
+    let mut url =
+        hf_inference_url(&hf_config.inference_base_url, &binding.repo_id).map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!("build generated HF inference URL: {error}"),
+            )
+        })?;
+    url.set_query(request.request_query.as_deref());
+    let client = reqwest::blocking::Client::builder()
+        .timeout(hf_config.request_timeout)
+        .build()
+        .map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!("build generated HF inference HTTP client: {error}"),
+            )
+        })?;
+    let mut builder = client
+        .post(url.clone())
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+    if let Some(content_type) = request.request_headers.get("content-type") {
+        builder = builder.header(reqwest::header::CONTENT_TYPE, content_type);
+    } else {
+        builder = builder.header(reqwest::header::CONTENT_TYPE, "application/json");
+    }
+    if let Some(accept) = request.request_headers.get("accept") {
+        builder = builder.header(reqwest::header::ACCEPT, accept);
+    }
+    let response = builder
+        .body(request.request_body.clone())
+        .send()
+        .map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!("forward generated HF inference request to {url}: {error}"),
+            )
+        })?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let content_encoding = response
+        .headers()
+        .get(reqwest::header::CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let response_bytes = response.bytes().map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!("read generated HF inference response from {url}: {error}"),
+        )
+    })?;
+    if !status.is_success() {
+        let detail = String::from_utf8_lossy(&response_bytes).into_owned();
+        return Err(SoracloudRuntimeExecutionError::new(
+            if status.is_client_error() {
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest
+            } else {
+                SoracloudRuntimeExecutionErrorKind::Unavailable
+            },
+            format!(
+                "generated HF inference request for `{}` failed with {}: {}",
+                binding.repo_id, status, detail
+            ),
+        ));
+    }
+    let response_bytes = response_bytes.to_vec();
+    let result_commitment = Hash::new(&response_bytes);
+    Ok(SoracloudLocalReadResponse {
+        response_bytes,
+        content_type,
+        content_encoding,
+        cache_control: Some("no-store".to_owned()),
+        bindings: Vec::new(),
+        result_commitment,
+        certified_by: context.handler.certified_response,
+        runtime_receipt: Some(local_read_receipt(
+            request,
+            &context.deployment,
+            &context.handler,
+            result_commitment,
+            context.handler.certified_response,
+            None,
+        )),
+    })
+}
+
 fn validate_local_runtime_snapshot(
     view: &StateView<'_>,
     snapshot: &SoracloudRuntimeSnapshot,
@@ -2329,7 +3491,8 @@ fn validate_local_runtime_snapshot(
 ) -> Result<(), SoracloudRuntimeExecutionError> {
     let committed_height = committed_height(view);
     let committed_block_hash = committed_block_hash(view);
-    if request.observed_height != committed_height || request.observed_block_hash != committed_block_hash
+    if request.observed_height != committed_height
+        || request.observed_block_hash != committed_block_hash
     {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -2390,7 +3553,8 @@ fn validate_apartment_snapshot(
 ) -> Result<(), SoracloudRuntimeExecutionError> {
     let committed_height = committed_height(view);
     let committed_block_hash = committed_block_hash(view);
-    if request.observed_height != committed_height || request.observed_block_hash != committed_block_hash
+    if request.observed_height != committed_height
+        || request.observed_block_hash != committed_block_hash
     {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -2426,19 +3590,1402 @@ fn validate_apartment_snapshot(
     Ok(())
 }
 
+fn validate_private_inference_snapshot(
+    view: &StateView<'_>,
+    snapshot: &SoracloudRuntimeSnapshot,
+    request: &SoracloudPrivateInferenceExecutionRequest,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let committed_height = committed_height(view);
+    let committed_block_hash = committed_block_hash(view);
+    if request.observed_height != committed_height
+        || request.observed_block_hash != committed_block_hash
+    {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "private inference snapshot is stale: request observed height/hash {:?}/{:?}, committed {:?}/{:?}",
+                request.observed_height,
+                request.observed_block_hash,
+                committed_height,
+                committed_block_hash
+            ),
+        ));
+    }
+    if snapshot.observed_height != committed_height
+        || parse_snapshot_hash(snapshot.observed_block_hash.as_deref())? != committed_block_hash
+    {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "runtime-manager apartment snapshot is behind committed state for `{}`",
+                request.apartment_name
+            ),
+        ));
+    }
+    if !snapshot.apartments.contains_key(&request.apartment_name) {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "apartment `{}` is not materialized in the node-local runtime snapshot",
+                request.apartment_name
+            ),
+        ));
+    }
+    Ok(())
+}
+
+const PRIVATE_INFERENCE_MAX_COMPUTE_UNITS_V1: u64 = 16;
+
+fn private_inference_compute_units(session: &SoraPrivateInferenceSessionV1) -> u64 {
+    u64::from(session.token_budget)
+        .max(1)
+        .min(PRIVATE_INFERENCE_MAX_COMPUTE_UNITS_V1)
+}
+
+fn private_inference_updated_at_ms(view: &StateView<'_>) -> u64 {
+    view.latest_block()
+        .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn private_inference_ciphertext_state_root(
+    session: &SoraPrivateInferenceSessionV1,
+    bundle: &SoraUploadedModelBundleV1,
+    step: u32,
+    request_commitment: Hash,
+) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud.private.ciphertext_state.v1",
+        session.session_id.as_str(),
+        session.apartment.as_ref(),
+        session.service_name.as_ref(),
+        session.model_id.as_str(),
+        session.weight_version.as_str(),
+        bundle.bundle_root,
+        bundle.compile_profile_hash,
+        (
+            session.input_commitments.clone(),
+            session.token_budget,
+            session.image_budget,
+            step,
+            request_commitment,
+        ),
+    )))
+}
+
+fn private_inference_receipt_hash(
+    session_id: &str,
+    step: u32,
+    phase: &str,
+    request_commitment: Hash,
+    ciphertext_state_root: Hash,
+    released_token: Option<&str>,
+) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud.private.receipt.v1",
+        session_id,
+        step,
+        phase,
+        request_commitment,
+        ciphertext_state_root,
+        released_token,
+    )))
+}
+
+fn private_inference_receipt_root(
+    session_id: &str,
+    step: u32,
+    status: SoraPrivateInferenceSessionStatusV1,
+    xor_cost_nanos: u128,
+    receipt_hash: Hash,
+) -> Hash {
+    Hash::new(Encode::encode(&(
+        "soracloud.private.receipt_root.v1",
+        session_id,
+        step,
+        status,
+        xor_cost_nanos,
+        receipt_hash,
+    )))
+}
+
+fn private_inference_result_commitment(
+    session_id: &str,
+    action: &SoracloudPrivateInferenceExecutionAction,
+    status: SoraPrivateInferenceSessionStatusV1,
+    receipt_root: Hash,
+    xor_cost_nanos: u128,
+    checkpoint: &SoraPrivateInferenceCheckpointV1,
+) -> Hash {
+    let (action_label, decrypt_request_id) = match action {
+        SoracloudPrivateInferenceExecutionAction::Start => ("start", None),
+        SoracloudPrivateInferenceExecutionAction::Release { decrypt_request_id } => {
+            ("release", Some(decrypt_request_id.as_str()))
+        }
+    };
+    Hash::new(Encode::encode(&(
+        "soracloud.private.result.v1",
+        session_id,
+        action_label,
+        decrypt_request_id,
+        status,
+        receipt_root,
+        xor_cost_nanos,
+        checkpoint.clone(),
+    )))
+}
+
+fn latest_private_inference_checkpoint(
+    view: &StateView<'_>,
+    session_id: &str,
+) -> Option<SoraPrivateInferenceCheckpointV1> {
+    view.world()
+        .soracloud_private_inference_checkpoints()
+        .iter()
+        .filter_map(|((stored_session_id, _step), checkpoint)| {
+            (stored_session_id == session_id).then(|| checkpoint.clone())
+        })
+        .max_by_key(|checkpoint| checkpoint.step)
+}
+
+fn private_inference_released_token(
+    session: &SoraPrivateInferenceSessionV1,
+    checkpoint: &SoraPrivateInferenceCheckpointV1,
+    request_commitment: Hash,
+) -> String {
+    Hash::new(Encode::encode(&(
+        "soracloud.private.released_token.v1",
+        session.session_id.as_str(),
+        session.model_id.as_str(),
+        session.weight_version.as_str(),
+        checkpoint.step,
+        checkpoint.receipt_hash,
+        request_commitment,
+    )))
+    .to_string()
+    .chars()
+    .take(24)
+    .collect()
+}
+
+fn execute_private_inference_start(
+    view: &StateView<'_>,
+    bundle: &SoraUploadedModelBundleV1,
+    session: &SoraPrivateInferenceSessionV1,
+    request: &SoracloudPrivateInferenceExecutionRequest,
+) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
+    if !matches!(
+        session.status,
+        SoraPrivateInferenceSessionStatusV1::Admitted
+            | SoraPrivateInferenceSessionStatusV1::Running
+    ) {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "private session `{}` is {:?}, expected Admitted or Running before runtime start",
+                session.session_id, session.status
+            ),
+        ));
+    }
+    if latest_private_inference_checkpoint(view, &session.session_id).is_some() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "private session `{}` already has a recorded checkpoint",
+                session.session_id
+            ),
+        ));
+    }
+
+    let step = 1;
+    let compute_units = private_inference_compute_units(session);
+    let ciphertext_state_root =
+        private_inference_ciphertext_state_root(session, bundle, step, request.request_commitment);
+    let receipt_hash = private_inference_receipt_hash(
+        &session.session_id,
+        step,
+        "start",
+        request.request_commitment,
+        ciphertext_state_root,
+        None,
+    );
+    let xor_cost_nanos = session.xor_cost_nanos.saturating_add(
+        bundle
+            .pricing_policy
+            .runtime_step_xor_nanos
+            .saturating_mul(u128::from(compute_units)),
+    );
+    let receipt_root = private_inference_receipt_root(
+        &session.session_id,
+        step,
+        SoraPrivateInferenceSessionStatusV1::AwaitingDecryption,
+        xor_cost_nanos,
+        receipt_hash,
+    );
+    let checkpoint = SoraPrivateInferenceCheckpointV1 {
+        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
+        session_id: session.session_id.clone(),
+        step,
+        ciphertext_state_root,
+        receipt_hash,
+        decrypt_request_id: format!("{}:decrypt:{step}", session.session_id),
+        released_token: None,
+        compute_units,
+        updated_at_ms: private_inference_updated_at_ms(view),
+    };
+    Ok(SoracloudPrivateInferenceExecutionResult {
+        status: SoraPrivateInferenceSessionStatusV1::AwaitingDecryption,
+        receipt_root,
+        xor_cost_nanos,
+        result_commitment: private_inference_result_commitment(
+            &session.session_id,
+            &request.action,
+            SoraPrivateInferenceSessionStatusV1::AwaitingDecryption,
+            receipt_root,
+            xor_cost_nanos,
+            &checkpoint,
+        ),
+        checkpoint,
+    })
+}
+
+fn execute_private_inference_release(
+    view: &StateView<'_>,
+    bundle: &SoraUploadedModelBundleV1,
+    session: &SoraPrivateInferenceSessionV1,
+    decrypt_request_id: &str,
+    request: &SoracloudPrivateInferenceExecutionRequest,
+) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
+    if session.status != SoraPrivateInferenceSessionStatusV1::AwaitingDecryption {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "private session `{}` is {:?}, expected AwaitingDecryption before output release",
+                session.session_id, session.status
+            ),
+        ));
+    }
+    let Some(pending_checkpoint) = latest_private_inference_checkpoint(view, &session.session_id)
+    else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "private session `{}` does not have an awaiting-decryption checkpoint",
+                session.session_id
+            ),
+        ));
+    };
+    if pending_checkpoint.decrypt_request_id != decrypt_request_id {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "private session `{}` checkpoint decrypt_request_id `{}` does not match requested `{}`",
+                session.session_id, pending_checkpoint.decrypt_request_id, decrypt_request_id
+            ),
+        ));
+    }
+    if pending_checkpoint.released_token.is_some() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "private session `{}` checkpoint step {} already released output",
+                session.session_id, pending_checkpoint.step
+            ),
+        ));
+    }
+
+    let released_token =
+        private_inference_released_token(session, &pending_checkpoint, request.request_commitment);
+    let receipt_hash = private_inference_receipt_hash(
+        &session.session_id,
+        pending_checkpoint.step,
+        "release",
+        request.request_commitment,
+        pending_checkpoint.ciphertext_state_root,
+        Some(released_token.as_str()),
+    );
+    let xor_cost_nanos = session
+        .xor_cost_nanos
+        .saturating_add(bundle.pricing_policy.decrypt_release_xor_nanos);
+    let receipt_root = private_inference_receipt_root(
+        &session.session_id,
+        pending_checkpoint.step,
+        SoraPrivateInferenceSessionStatusV1::Completed,
+        xor_cost_nanos,
+        receipt_hash,
+    );
+    let checkpoint = SoraPrivateInferenceCheckpointV1 {
+        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
+        session_id: session.session_id.clone(),
+        step: pending_checkpoint.step,
+        ciphertext_state_root: pending_checkpoint.ciphertext_state_root,
+        receipt_hash,
+        decrypt_request_id: pending_checkpoint.decrypt_request_id,
+        released_token: Some(released_token),
+        compute_units: pending_checkpoint.compute_units,
+        updated_at_ms: private_inference_updated_at_ms(view),
+    };
+    Ok(SoracloudPrivateInferenceExecutionResult {
+        status: SoraPrivateInferenceSessionStatusV1::Completed,
+        receipt_root,
+        xor_cost_nanos,
+        result_commitment: private_inference_result_commitment(
+            &session.session_id,
+            &request.action,
+            SoraPrivateInferenceSessionStatusV1::Completed,
+            receipt_root,
+            xor_cost_nanos,
+            &checkpoint,
+        ),
+        checkpoint,
+    })
+}
+
+fn parse_apartment_autonomy_run_id(operation: &str) -> Option<&str> {
+    let run_id = operation.strip_prefix(APARTMENT_AUTONOMY_OPERATION_PREFIX_V1)?;
+    (!run_id.trim().is_empty()).then_some(run_id)
+}
+
+fn apartment_declares_hf_infer(record: &SoraAgentApartmentRecordV1) -> bool {
+    record
+        .manifest
+        .tool_capabilities
+        .iter()
+        .any(|capability| capability.tool == "soracloud.hf.infer")
+}
+
+fn execute_apartment_autonomy_run(
+    handle: &SoracloudRuntimeManagerHandle,
+    view: &StateView<'_>,
+    record: &SoraAgentApartmentRecordV1,
+    request: SoracloudApartmentExecutionRequest,
+    run_id: &str,
+) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError> {
+    if !apartment_declares_hf_infer(record) {
+        return Ok(SoracloudApartmentExecutionResult {
+            status: record.status,
+            checkpoint_artifact_hash: None,
+            journal_artifact_hash: None,
+            result_commitment: apartment_result_commitment(
+                &request.apartment_name,
+                request.process_generation,
+                &request.operation,
+                request.request_commitment,
+                record.status,
+            ),
+        });
+    }
+
+    if let Some((summary, journal_hash)) = read_apartment_autonomy_execution_summary(
+        &handle.state_dir,
+        &request.apartment_name,
+        run_id,
+    )? && summary.succeeded
+    {
+        return Ok(apartment_execution_result_from_summary(
+            record.status,
+            summary,
+            journal_hash,
+        ));
+    }
+
+    let run = record
+        .autonomy_run_history
+        .iter()
+        .find(|run| run.run_id == run_id)
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!(
+                    "apartment `{}` does not have approved autonomy run `{run_id}`",
+                    request.apartment_name
+                ),
+            )
+        })?;
+
+    let resolved_service = resolve_generated_hf_apartment_service(view, record);
+    let summary = if let Some((service_name, service_version)) = resolved_service {
+        match execute_apartment_autonomy_service_request(
+            handle,
+            &request,
+            run,
+            &service_name,
+            &service_version,
+        ) {
+            Ok((response, workflow_steps)) => successful_apartment_autonomy_summary(
+                &request.apartment_name,
+                run_id,
+                &service_name,
+                &service_version,
+                response,
+                request.process_generation,
+                request.request_commitment,
+                workflow_steps,
+            ),
+            Err(error) => failed_apartment_autonomy_summary(
+                &request.apartment_name,
+                run_id,
+                Some(service_name),
+                Some(service_version),
+                error.message,
+                request.process_generation,
+                request.request_commitment,
+                error.workflow_steps,
+            ),
+        }
+    } else {
+        failed_apartment_autonomy_summary(
+            &request.apartment_name,
+            run_id,
+            None,
+            None,
+            "generated HF apartment does not have a locally resolved bound inference service"
+                .to_owned(),
+            request.process_generation,
+            request.request_commitment,
+            Vec::new(),
+        )
+    };
+
+    let (summary, journal_hash) =
+        persist_apartment_autonomy_execution_summary(&handle.state_dir, &summary)?;
+    Ok(apartment_execution_result_from_summary(
+        record.status,
+        summary,
+        journal_hash,
+    ))
+}
+
+fn resolve_generated_hf_apartment_service(
+    view: &StateView<'_>,
+    record: &SoraAgentApartmentRecordV1,
+) -> Option<(String, String)> {
+    let SoraNetworkPolicyV1::Allowlist(allowed_hosts) = &record.manifest.network_egress else {
+        return None;
+    };
+    let world = view.world();
+    world
+        .soracloud_service_deployments()
+        .iter()
+        .find_map(|(service_name, deployment)| {
+            let service_label = service_name.to_string();
+            let bundle = world.soracloud_service_revisions().get(&(
+                service_label.clone(),
+                deployment.current_service_version.clone(),
+            ))?;
+            let route = bundle.service.route.as_ref()?;
+            if !allowed_hosts
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(&route.host))
+            {
+                return None;
+            }
+            if bundle.container_manifest_hash() != record.manifest.container.manifest_hash {
+                return None;
+            }
+            soracloud_hf_generated_source_binding(bundle)?;
+            Some((service_label, deployment.current_service_version.clone()))
+        })
+}
+
+fn apartment_autonomy_local_read_request_with_value(
+    request: &SoracloudApartmentExecutionRequest,
+    service_name: &str,
+    service_version: &str,
+    request_value: &norito::json::Value,
+    allow_bridge_fallback: bool,
+) -> SoracloudLocalReadRequest {
+    let request_body = norito::json::to_vec(request_value)
+        .expect("Soracloud apartment request JSON encoding should be infallible");
+    let request_headers = BTreeMap::from([
+        ("accept".to_owned(), "application/json".to_owned()),
+        ("content-type".to_owned(), "application/json".to_owned()),
+        (
+            HF_ALLOW_BRIDGE_FALLBACK_HEADER_V1.to_owned(),
+            if allow_bridge_fallback {
+                "1".to_owned()
+            } else {
+                "0".to_owned()
+            },
+        ),
+    ]);
+    let mut local_read = SoracloudLocalReadRequest {
+        observed_height: request.observed_height,
+        observed_block_hash: request.observed_block_hash,
+        service_name: service_name.to_owned(),
+        service_version: service_version.to_owned(),
+        handler_name: APARTMENT_AUTONOMY_HANDLER_NAME_V1.to_owned(),
+        handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+        request_method: "POST".to_owned(),
+        request_path: APARTMENT_AUTONOMY_HANDLER_PATH_V1.to_owned(),
+        handler_path: APARTMENT_AUTONOMY_HANDLER_PATH_V1.to_owned(),
+        request_query: None,
+        request_headers,
+        request_body,
+        request_commitment: Hash::new(b""),
+    };
+    local_read.request_commitment = apartment_autonomy_local_read_request_commitment(&local_read);
+    local_read
+}
+
+fn apartment_autonomy_request_value(
+    apartment_name: &str,
+    run: &iroha_data_model::soracloud::SoraAgentAutonomyRunRecordV1,
+) -> Result<norito::json::Value, norito::json::Error> {
+    if let Some(workflow_input_json) = run.workflow_input_json.as_deref() {
+        return norito::json::from_str::<norito::json::Value>(workflow_input_json);
+    }
+    let mut parameters = norito::json::Map::new();
+    parameters.insert(
+        "artifact_hash".to_owned(),
+        norito::json::Value::String(run.artifact_hash.clone()),
+    );
+    if let Some(provenance_hash) = run.provenance_hash.as_ref() {
+        parameters.insert(
+            "provenance_hash".to_owned(),
+            norito::json::Value::String(provenance_hash.clone()),
+        );
+    }
+    parameters.insert(
+        "budget_units".to_owned(),
+        norito::json::Value::from(run.budget_units),
+    );
+    parameters.insert(
+        "run_id".to_owned(),
+        norito::json::Value::String(run.run_id.clone()),
+    );
+    parameters.insert(
+        "apartment_name".to_owned(),
+        norito::json::Value::String(apartment_name.to_owned()),
+    );
+
+    let mut payload = norito::json::Map::new();
+    payload.insert(
+        "inputs".to_owned(),
+        norito::json::Value::String(run.run_label.clone()),
+    );
+    payload.insert(
+        "parameters".to_owned(),
+        norito::json::Value::Object(parameters),
+    );
+    Ok(norito::json::Value::Object(payload))
+}
+
+fn parse_apartment_autonomy_workflow_spec(
+    request_value: &norito::json::Value,
+) -> Result<Option<Vec<ApartmentAutonomyWorkflowStepSpec>>, SoracloudRuntimeExecutionError> {
+    let Some(object) = request_value.as_object() else {
+        return Ok(None);
+    };
+    if !object.contains_key("workflow_version") && !object.contains_key("steps") {
+        return Ok(None);
+    }
+    let workflow_version = object
+        .get("workflow_version")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "apartment autonomy workflow requires integer `workflow_version`",
+            )
+        })?;
+    if workflow_version != APARTMENT_AUTONOMY_WORKFLOW_VERSION_V1 {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "unsupported apartment autonomy workflow_version `{workflow_version}`; expected {APARTMENT_AUTONOMY_WORKFLOW_VERSION_V1}"
+            ),
+        ));
+    }
+    let steps = object
+        .get("steps")
+        .and_then(norito::json::Value::as_array)
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                "apartment autonomy workflow requires `steps` to be a JSON array",
+            )
+        })?;
+    if steps.is_empty() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            "apartment autonomy workflow requires at least one step",
+        ));
+    }
+    let mut seen_step_ids = BTreeSet::new();
+    let mut parsed = Vec::with_capacity(steps.len());
+    for (step_index, step) in steps.iter().enumerate() {
+        let step_object = step.as_object().ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!("workflow step {step_index} must be a JSON object"),
+            )
+        })?;
+        let step_id = match step_object.get("step_id") {
+            Some(value) => {
+                let step_id = value.as_str().ok_or_else(|| {
+                    SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                        format!("workflow step {step_index} field `step_id` must be a string"),
+                    )
+                })?;
+                let normalized = step_id.trim();
+                if normalized.is_empty() {
+                    return Err(SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                        format!("workflow step {step_index} field `step_id` must not be empty"),
+                    ));
+                }
+                if !seen_step_ids.insert(normalized.to_owned()) {
+                    return Err(SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                        format!("workflow step_id `{normalized}` is duplicated"),
+                    ));
+                }
+                Some(normalized.to_owned())
+            }
+            None => None,
+        };
+        let request = step_object.get("request").cloned().ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                format!("workflow step {step_index} must define `request`"),
+            )
+        })?;
+        let allow_bridge_fallback = step_object
+            .get("allow_bridge_fallback")
+            .and_then(norito::json::Value::as_bool)
+            .unwrap_or(false);
+        parsed.push(ApartmentAutonomyWorkflowStepSpec {
+            step_index: u32::try_from(step_index).unwrap_or(u32::MAX),
+            step_id,
+            request,
+            allow_bridge_fallback,
+        });
+    }
+    Ok(Some(parsed))
+}
+
+fn resolve_apartment_autonomy_workflow_placeholder(
+    placeholder: &str,
+    apartment_name: &str,
+    run: &iroha_data_model::soracloud::SoraAgentAutonomyRunRecordV1,
+    workflow_steps: &[SoracloudApartmentAutonomyWorkflowStepSummaryV1],
+) -> Result<norito::json::Value, SoracloudRuntimeExecutionError> {
+    fn workflow_step_text(
+        step: &SoracloudApartmentAutonomyWorkflowStepSummaryV1,
+    ) -> Option<String> {
+        step.response_json
+            .as_ref()
+            .and_then(|value| value.get("text"))
+            .and_then(norito::json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| step.response_text.clone())
+    }
+
+    let parts = placeholder.split('.').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["run", "apartment_name"] => Ok(norito::json::Value::String(apartment_name.to_owned())),
+        ["run", "run_id"] => Ok(norito::json::Value::String(run.run_id.clone())),
+        ["run", "run_label"] => Ok(norito::json::Value::String(run.run_label.clone())),
+        ["run", "artifact_hash"] => Ok(norito::json::Value::String(run.artifact_hash.clone())),
+        ["run", "provenance_hash"] => Ok(run
+            .provenance_hash
+            .clone()
+            .map(norito::json::Value::String)
+            .unwrap_or(norito::json::Value::Null)),
+        ["run", "budget_units"] => Ok(norito::json::Value::from(run.budget_units)),
+        ["previous", "text"] => workflow_steps
+            .last()
+            .and_then(workflow_step_text)
+            .map(norito::json::Value::String)
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    format!("workflow placeholder `{placeholder}` is unavailable"),
+                )
+            }),
+        ["previous", "json"] => workflow_steps
+            .last()
+            .and_then(|step| step.response_json.clone())
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    format!("workflow placeholder `{placeholder}` is unavailable"),
+                )
+            }),
+        ["previous", "result_commitment"] => workflow_steps
+            .last()
+            .map(|step| norito::json::Value::String(step.result_commitment.to_string()))
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    format!("workflow placeholder `{placeholder}` is unavailable"),
+                )
+            }),
+        ["steps", step_id, "text"] => workflow_steps
+            .iter()
+            .find(|step| step.step_id.as_deref() == Some(*step_id))
+            .and_then(workflow_step_text)
+            .map(norito::json::Value::String)
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    format!("workflow placeholder `{placeholder}` is unavailable"),
+                )
+            }),
+        ["steps", step_id, "json"] => workflow_steps
+            .iter()
+            .find(|step| step.step_id.as_deref() == Some(*step_id))
+            .and_then(|step| step.response_json.clone())
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    format!("workflow placeholder `{placeholder}` is unavailable"),
+                )
+            }),
+        ["steps", step_id, "result_commitment"] => workflow_steps
+            .iter()
+            .find(|step| step.step_id.as_deref() == Some(*step_id))
+            .map(|step| norito::json::Value::String(step.result_commitment.to_string()))
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+                    format!("workflow placeholder `{placeholder}` is unavailable"),
+                )
+            }),
+        _ => Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!("unsupported workflow placeholder `{placeholder}`"),
+        )),
+    }
+}
+
+fn resolve_apartment_autonomy_workflow_template(
+    value: &norito::json::Value,
+    apartment_name: &str,
+    run: &iroha_data_model::soracloud::SoraAgentAutonomyRunRecordV1,
+    workflow_steps: &[SoracloudApartmentAutonomyWorkflowStepSummaryV1],
+) -> Result<norito::json::Value, SoracloudRuntimeExecutionError> {
+    match value {
+        norito::json::Value::String(raw)
+            if raw.starts_with("${") && raw.ends_with('}') && raw.len() > 3 =>
+        {
+            resolve_apartment_autonomy_workflow_placeholder(
+                &raw[2..raw.len() - 1],
+                apartment_name,
+                run,
+                workflow_steps,
+            )
+        }
+        norito::json::Value::Array(items) => Ok(norito::json::Value::Array(
+            items
+                .iter()
+                .map(|item| {
+                    resolve_apartment_autonomy_workflow_template(
+                        item,
+                        apartment_name,
+                        run,
+                        workflow_steps,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        norito::json::Value::Object(object) => {
+            let mut resolved = norito::json::Map::new();
+            for (key, item) in object {
+                resolved.insert(
+                    key.clone(),
+                    resolve_apartment_autonomy_workflow_template(
+                        item,
+                        apartment_name,
+                        run,
+                        workflow_steps,
+                    )?,
+                );
+            }
+            Ok(norito::json::Value::Object(resolved))
+        }
+        _ => Ok(value.clone()),
+    }
+}
+
+fn apartment_autonomy_workflow_response_json(
+    apartment_name: &str,
+    run_id: &str,
+    workflow_steps: &[SoracloudApartmentAutonomyWorkflowStepSummaryV1],
+) -> norito::json::Value {
+    let final_response = workflow_steps
+        .last()
+        .map_or(norito::json::Value::Null, |step| {
+            step.response_json
+                .clone()
+                .or_else(|| {
+                    step.response_text
+                        .as_ref()
+                        .map(|text| norito::json::Value::String(text.clone()))
+                })
+                .unwrap_or(norito::json::Value::Null)
+        });
+    let steps = workflow_steps
+        .iter()
+        .map(|step| {
+            let mut entry = norito::json::Map::new();
+            entry.insert(
+                "step_index".to_owned(),
+                norito::json::Value::from(step.step_index),
+            );
+            entry.insert(
+                "request_commitment".to_owned(),
+                norito::json::Value::String(step.request_commitment.to_string()),
+            );
+            entry.insert(
+                "result_commitment".to_owned(),
+                norito::json::Value::String(step.result_commitment.to_string()),
+            );
+            entry.insert(
+                "step_id".to_owned(),
+                step.step_id
+                    .clone()
+                    .map(norito::json::Value::String)
+                    .unwrap_or(norito::json::Value::Null),
+            );
+            entry.insert(
+                "content_type".to_owned(),
+                step.content_type
+                    .clone()
+                    .map(norito::json::Value::String)
+                    .unwrap_or(norito::json::Value::Null),
+            );
+            entry.insert(
+                "response_json".to_owned(),
+                step.response_json
+                    .clone()
+                    .unwrap_or(norito::json::Value::Null),
+            );
+            entry.insert(
+                "response_text".to_owned(),
+                step.response_text
+                    .clone()
+                    .map(norito::json::Value::String)
+                    .unwrap_or(norito::json::Value::Null),
+            );
+            if let Some(runtime_receipt) = step.runtime_receipt.as_ref() {
+                entry.insert(
+                    "runtime_receipt_id".to_owned(),
+                    norito::json::Value::String(runtime_receipt.receipt_id.to_string()),
+                );
+            }
+            norito::json::Value::Object(entry)
+        })
+        .collect::<Vec<_>>();
+
+    let mut payload = norito::json::Map::new();
+    payload.insert(
+        "workflow_version".to_owned(),
+        norito::json::Value::from(APARTMENT_AUTONOMY_WORKFLOW_VERSION_V1),
+    );
+    payload.insert(
+        "apartment_name".to_owned(),
+        norito::json::Value::String(apartment_name.to_owned()),
+    );
+    payload.insert(
+        "run_id".to_owned(),
+        norito::json::Value::String(run_id.to_owned()),
+    );
+    payload.insert(
+        "step_count".to_owned(),
+        norito::json::Value::from(u64::try_from(workflow_steps.len()).unwrap_or(u64::MAX)),
+    );
+    payload.insert("steps".to_owned(), norito::json::Value::Array(steps));
+    payload.insert("final_response".to_owned(), final_response);
+    norito::json::Value::Object(payload)
+}
+
+fn execute_apartment_autonomy_service_request(
+    handle: &SoracloudRuntimeManagerHandle,
+    request: &SoracloudApartmentExecutionRequest,
+    run: &iroha_data_model::soracloud::SoraAgentAutonomyRunRecordV1,
+    service_name: &str,
+    service_version: &str,
+) -> Result<
+    (
+        SoracloudLocalReadResponse,
+        Vec<SoracloudApartmentAutonomyWorkflowStepSummaryV1>,
+    ),
+    ApartmentAutonomyWorkflowExecutionError,
+> {
+    let request_value =
+        apartment_autonomy_request_value(&request.apartment_name, run).map_err(|error| {
+            ApartmentAutonomyWorkflowExecutionError {
+                message: format!(
+                    "failed to decode autonomy request body for apartment `{}` run `{}`: {error}",
+                    request.apartment_name, run.run_id
+                ),
+                workflow_steps: Vec::new(),
+            }
+        })?;
+    let Some(workflow_steps) =
+        parse_apartment_autonomy_workflow_spec(&request_value).map_err(|error| {
+            ApartmentAutonomyWorkflowExecutionError {
+                message: error.message,
+                workflow_steps: Vec::new(),
+            }
+        })?
+    else {
+        let local_read_request = apartment_autonomy_local_read_request_with_value(
+            request,
+            service_name,
+            service_version,
+            &request_value,
+            false,
+        );
+        return handle
+            .execute_local_read(local_read_request)
+            .map(|response| (response, Vec::new()))
+            .map_err(|error| ApartmentAutonomyWorkflowExecutionError {
+                message: error.message,
+                workflow_steps: Vec::new(),
+            });
+    };
+
+    let mut executed_steps = Vec::with_capacity(workflow_steps.len());
+    let mut final_response: Option<SoracloudLocalReadResponse> = None;
+    for step in workflow_steps {
+        let resolved_request = resolve_apartment_autonomy_workflow_template(
+            &step.request,
+            &request.apartment_name,
+            run,
+            &executed_steps,
+        )
+        .map_err(|error| ApartmentAutonomyWorkflowExecutionError {
+            message: format!(
+                "workflow step {}{} template resolution failed: {}",
+                step.step_index,
+                step.step_id
+                    .as_ref()
+                    .map(|step_id| format!(" (`{step_id}`)"))
+                    .unwrap_or_default(),
+                error.message
+            ),
+            workflow_steps: executed_steps.clone(),
+        })?;
+        let local_read_request = apartment_autonomy_local_read_request_with_value(
+            request,
+            service_name,
+            service_version,
+            &resolved_request,
+            step.allow_bridge_fallback,
+        );
+        let response = handle
+            .execute_local_read(local_read_request.clone())
+            .map_err(|error| ApartmentAutonomyWorkflowExecutionError {
+                message: format!(
+                    "workflow step {}{} failed: {}",
+                    step.step_index,
+                    step.step_id
+                        .as_ref()
+                        .map(|step_id| format!(" (`{step_id}`)"))
+                        .unwrap_or_default(),
+                    error.message
+                ),
+                workflow_steps: executed_steps.clone(),
+            })?;
+        let (response_json, response_text) = decode_apartment_autonomy_response_body(
+            response.content_type.as_deref(),
+            &response.response_bytes,
+        );
+        executed_steps.push(SoracloudApartmentAutonomyWorkflowStepSummaryV1 {
+            step_index: step.step_index,
+            step_id: step.step_id,
+            request_commitment: local_read_request.request_commitment,
+            result_commitment: response.result_commitment,
+            runtime_receipt: response.runtime_receipt.clone(),
+            content_type: response.content_type.clone(),
+            response_json,
+            response_text,
+        });
+        final_response = Some(response);
+    }
+    let final_response = final_response.expect("workflow steps are not empty");
+    let response_json = apartment_autonomy_workflow_response_json(
+        &request.apartment_name,
+        &run.run_id,
+        &executed_steps,
+    );
+    let response_bytes = norito::json::to_vec(&response_json).map_err(|error| {
+        ApartmentAutonomyWorkflowExecutionError {
+            message: format!(
+                "serialize workflow response for apartment `{}` run `{}`: {error}",
+                request.apartment_name, run.run_id
+            ),
+            workflow_steps: executed_steps.clone(),
+        }
+    })?;
+    Ok((
+        SoracloudLocalReadResponse {
+            response_bytes: response_bytes.clone(),
+            content_type: Some("application/json".to_owned()),
+            content_encoding: None,
+            cache_control: Some("no-store".to_owned()),
+            bindings: Vec::new(),
+            result_commitment: Hash::new(&response_bytes),
+            certified_by: final_response.certified_by,
+            runtime_receipt: final_response.runtime_receipt,
+        },
+        executed_steps,
+    ))
+}
+
+fn apartment_autonomy_local_read_request_commitment(request: &SoracloudLocalReadRequest) -> Hash {
+    Hash::new(
+        norito::to_bytes(&(
+            request.observed_height,
+            request.observed_block_hash,
+            request.service_name.as_str(),
+            request.service_version.as_str(),
+            request.handler_name.as_str(),
+            request.handler_class.handler_class(),
+            request.request_method.as_str(),
+            request.request_path.as_str(),
+            request.handler_path.as_str(),
+            request.request_query.clone(),
+            request.request_headers.clone(),
+            request.request_body.clone(),
+        ))
+        .expect("Soracloud apartment local-read commitment encoding should be infallible"),
+    )
+}
+
+fn successful_apartment_autonomy_summary(
+    apartment_name: &str,
+    run_id: &str,
+    service_name: &str,
+    service_version: &str,
+    response: SoracloudLocalReadResponse,
+    process_generation: u64,
+    request_commitment: Hash,
+    workflow_steps: Vec<SoracloudApartmentAutonomyWorkflowStepSummaryV1>,
+) -> SoracloudApartmentAutonomyExecutionSummaryV1 {
+    let checkpoint_artifact_hash = Some(Hash::new(&response.response_bytes));
+    let (response_json, response_text) = decode_apartment_autonomy_response_body(
+        response.content_type.as_deref(),
+        &response.response_bytes,
+    );
+    let runtime_receipt = response.runtime_receipt.clone();
+    SoracloudApartmentAutonomyExecutionSummaryV1 {
+        schema_version: SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
+        apartment_name: apartment_name.to_owned(),
+        run_id: run_id.to_owned(),
+        service_name: Some(service_name.to_owned()),
+        service_version: Some(service_version.to_owned()),
+        handler_name: Some(APARTMENT_AUTONOMY_HANDLER_NAME_V1.to_owned()),
+        succeeded: true,
+        result_commitment: apartment_autonomy_result_commitment(
+            apartment_name,
+            process_generation,
+            run_id,
+            request_commitment,
+            checkpoint_artifact_hash,
+            response_text.as_deref(),
+            response_json.as_ref(),
+            &workflow_steps,
+            None,
+        ),
+        checkpoint_artifact_hash,
+        runtime_receipt,
+        workflow_steps,
+        content_type: response.content_type,
+        response_json,
+        response_text,
+        error: None,
+    }
+}
+
+fn failed_apartment_autonomy_summary(
+    apartment_name: &str,
+    run_id: &str,
+    service_name: Option<String>,
+    service_version: Option<String>,
+    error: String,
+    process_generation: u64,
+    request_commitment: Hash,
+    workflow_steps: Vec<SoracloudApartmentAutonomyWorkflowStepSummaryV1>,
+) -> SoracloudApartmentAutonomyExecutionSummaryV1 {
+    SoracloudApartmentAutonomyExecutionSummaryV1 {
+        schema_version: SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
+        apartment_name: apartment_name.to_owned(),
+        run_id: run_id.to_owned(),
+        service_name,
+        service_version,
+        handler_name: Some(APARTMENT_AUTONOMY_HANDLER_NAME_V1.to_owned()),
+        succeeded: false,
+        result_commitment: apartment_autonomy_result_commitment(
+            apartment_name,
+            process_generation,
+            run_id,
+            request_commitment,
+            None,
+            None,
+            None,
+            &workflow_steps,
+            Some(error.as_str()),
+        ),
+        checkpoint_artifact_hash: None,
+        runtime_receipt: None,
+        workflow_steps,
+        content_type: None,
+        response_json: None,
+        response_text: None,
+        error: Some(error),
+    }
+}
+
+fn decode_apartment_autonomy_response_body(
+    content_type: Option<&str>,
+    response_bytes: &[u8],
+) -> (Option<norito::json::Value>, Option<String>) {
+    let response_text = std::str::from_utf8(response_bytes)
+        .ok()
+        .map(ToOwned::to_owned);
+    if content_type.is_some_and(|content_type| {
+        content_type
+            .split(';')
+            .next()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+    }) {
+        if let Ok(value) = norito::json::from_slice(response_bytes) {
+            return (Some(value), response_text);
+        }
+    }
+    (None, response_text)
+}
+
+fn apartment_autonomy_result_commitment(
+    apartment_name: &str,
+    process_generation: u64,
+    run_id: &str,
+    request_commitment: Hash,
+    checkpoint_artifact_hash: Option<Hash>,
+    response_text: Option<&str>,
+    response_json: Option<&norito::json::Value>,
+    workflow_steps: &[SoracloudApartmentAutonomyWorkflowStepSummaryV1],
+    error: Option<&str>,
+) -> Hash {
+    let workflow_steps_commitment = workflow_steps
+        .iter()
+        .map(|step| {
+            (
+                step.step_index,
+                step.step_id.as_deref(),
+                step.request_commitment,
+                step.result_commitment,
+                step.content_type.as_deref(),
+                step.response_text.as_deref(),
+                step.response_json
+                    .as_ref()
+                    .map(norito::json::to_string)
+                    .transpose()
+                    .ok()
+                    .flatten(),
+            )
+        })
+        .collect::<Vec<_>>();
+    Hash::new(Encode::encode(&(
+        "soracloud.apartment.autonomy.v1",
+        apartment_name,
+        process_generation,
+        run_id,
+        request_commitment,
+        checkpoint_artifact_hash,
+        response_text,
+        response_json
+            .map(norito::json::to_string)
+            .transpose()
+            .ok()
+            .flatten(),
+        workflow_steps_commitment,
+        error,
+    )))
+}
+
+fn read_apartment_autonomy_execution_summary(
+    state_dir: &Path,
+    apartment_name: &str,
+    run_id: &str,
+) -> Result<
+    Option<(SoracloudApartmentAutonomyExecutionSummaryV1, Hash)>,
+    SoracloudRuntimeExecutionError,
+> {
+    let summary_path = apartment_autonomy_summary_path(state_dir, apartment_name, run_id);
+    let Some(summary_bytes) = fs::read(&summary_path)
+        .ok()
+        .filter(|bytes| !bytes.is_empty())
+    else {
+        return Ok(None);
+    };
+    let summary =
+        norito::json::from_slice::<SoracloudApartmentAutonomyExecutionSummaryV1>(&summary_bytes)
+            .map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "failed to decode autonomy execution summary at {}: {error}",
+                        summary_path.display()
+                    ),
+                )
+            })?;
+    Ok(Some((summary, Hash::new(&summary_bytes))))
+}
+
+fn persist_apartment_autonomy_execution_summary(
+    state_dir: &Path,
+    summary: &SoracloudApartmentAutonomyExecutionSummaryV1,
+) -> Result<(SoracloudApartmentAutonomyExecutionSummaryV1, Hash), SoracloudRuntimeExecutionError> {
+    let run_root = apartment_autonomy_run_root(state_dir, &summary.apartment_name, &summary.run_id);
+    fs::create_dir_all(&run_root).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "failed to create autonomy run root {}: {error}",
+                run_root.display()
+            ),
+        )
+    })?;
+
+    if summary.succeeded {
+        if let Some(checkpoint_hash) = summary.checkpoint_artifact_hash {
+            let checkpoint_path = apartment_autonomy_checkpoint_path(
+                state_dir,
+                &summary.apartment_name,
+                &summary.run_id,
+            );
+            let checkpoint_bytes = if let Some(response_text) = summary.response_text.as_ref() {
+                response_text.as_bytes().to_vec()
+            } else if let Some(response_json) = summary.response_json.as_ref() {
+                norito::json::to_vec(response_json).map_err(|error| {
+                    SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Internal,
+                        format!(
+                            "failed to encode autonomy checkpoint JSON for apartment `{}` run `{}`: {error}",
+                            summary.apartment_name, summary.run_id
+                        ),
+                    )
+                })?
+            } else {
+                Vec::new()
+            };
+            if Hash::new(&checkpoint_bytes) != checkpoint_hash {
+                return Err(SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "autonomy checkpoint bytes hash mismatch for apartment `{}` run `{}`",
+                        summary.apartment_name, summary.run_id
+                    ),
+                ));
+            }
+            write_bytes_atomic(&checkpoint_path, &checkpoint_bytes).map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "failed to persist autonomy checkpoint {}: {error}",
+                        checkpoint_path.display()
+                    ),
+                )
+            })?;
+        }
+    } else {
+        let checkpoint_path =
+            apartment_autonomy_checkpoint_path(state_dir, &summary.apartment_name, &summary.run_id);
+        if checkpoint_path.exists() {
+            fs::remove_file(&checkpoint_path).map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "failed to clear stale autonomy checkpoint {}: {error}",
+                        checkpoint_path.display()
+                    ),
+                )
+            })?;
+        }
+    }
+
+    let summary_path =
+        apartment_autonomy_summary_path(state_dir, &summary.apartment_name, &summary.run_id);
+    let summary_bytes = norito::json::to_vec_pretty(summary).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "failed to encode autonomy execution summary for apartment `{}` run `{}`: {error}",
+                summary.apartment_name, summary.run_id
+            ),
+        )
+    })?;
+    write_bytes_atomic(&summary_path, &summary_bytes).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "failed to persist autonomy execution summary {}: {error}",
+                summary_path.display()
+            ),
+        )
+    })?;
+    Ok((summary.clone(), Hash::new(&summary_bytes)))
+}
+
+fn apartment_execution_result_from_summary(
+    status: SoraAgentRuntimeStatusV1,
+    summary: SoracloudApartmentAutonomyExecutionSummaryV1,
+    journal_hash: Hash,
+) -> SoracloudApartmentExecutionResult {
+    SoracloudApartmentExecutionResult {
+        status,
+        checkpoint_artifact_hash: summary.checkpoint_artifact_hash,
+        journal_artifact_hash: Some(journal_hash),
+        result_commitment: summary.result_commitment,
+    }
+}
+
+fn apartment_autonomy_run_root(state_dir: &Path, apartment_name: &str, run_id: &str) -> PathBuf {
+    state_dir
+        .join("apartments")
+        .join(sanitize_path_component(apartment_name))
+        .join("runs")
+        .join(sanitize_path_component(run_id))
+}
+
+fn apartment_autonomy_summary_path(
+    state_dir: &Path,
+    apartment_name: &str,
+    run_id: &str,
+) -> PathBuf {
+    apartment_autonomy_run_root(state_dir, apartment_name, run_id)
+        .join(APARTMENT_AUTONOMY_SUMMARY_FILE_V1)
+}
+
+fn apartment_autonomy_checkpoint_path(
+    state_dir: &Path,
+    apartment_name: &str,
+    run_id: &str,
+) -> PathBuf {
+    apartment_autonomy_run_root(state_dir, apartment_name, run_id)
+        .join(APARTMENT_AUTONOMY_CHECKPOINT_FILE_V1)
+}
+
 fn resolve_local_read_context(
     view: &StateView<'_>,
     request: &SoracloudLocalReadRequest,
 ) -> Result<ResolvedLocalReadContext, SoracloudRuntimeExecutionError> {
-    let service_id: Name = request
-        .service_name
-        .parse()
-        .map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::InvalidRequest,
-                format!("invalid Soracloud service name `{}`: {error}", request.service_name),
-            )
-        })?;
+    let service_id: Name = request.service_name.parse().map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "invalid Soracloud service name `{}`: {error}",
+                request.service_name
+            ),
+        )
+    })?;
     let Some(deployment) = view
         .world()
         .soracloud_service_deployments()
@@ -2455,16 +5002,17 @@ fn resolve_local_read_context(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
                 "service `{}` active version `{}` does not match requested local-read version `{}`",
-                request.service_name,
-                deployment.current_service_version,
-                request.service_version
+                request.service_name, deployment.current_service_version, request.service_version
             ),
         ));
     }
     let Some(bundle) = view
         .world()
         .soracloud_service_revisions()
-        .get(&(request.service_name.clone(), request.service_version.clone()))
+        .get(&(
+            request.service_name.clone(),
+            request.service_version.clone(),
+        ))
         .cloned()
     else {
         return Err(SoracloudRuntimeExecutionError::new(
@@ -2565,7 +5113,10 @@ fn read_and_verify_cached_artifact(
     let response_bytes = fs::read(cache_path).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!("read hydrated Soracloud artifact cache {}: {error}", cache_path.display()),
+            format!(
+                "read hydrated Soracloud artifact cache {}: {error}",
+                cache_path.display()
+            ),
         )
     })?;
     let actual_hash = Hash::new(&response_bytes);
@@ -2609,20 +5160,21 @@ fn local_read_receipt(
     certified_by: SoraCertifiedResponsePolicyV1,
     mailbox_message_id: Option<Hash>,
 ) -> SoraRuntimeReceiptV1 {
-    let emitted_sequence = next_authoritative_observation_sequence_from_view(deployment.service_name.as_ref(), request.observed_height);
+    let emitted_sequence = next_authoritative_observation_sequence_from_view(
+        deployment.service_name.as_ref(),
+        request.observed_height,
+    );
     SoraRuntimeReceiptV1 {
         schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-        receipt_id: Hash::new(
-            Encode::encode(&(
-                "soracloud:local-read",
-                deployment.service_name.as_ref(),
-                deployment.current_service_version.as_str(),
-                handler.handler_name.as_ref(),
-                request.request_commitment,
-                result_commitment,
-                certified_by,
-            )),
-        ),
+        receipt_id: Hash::new(Encode::encode(&(
+            "soracloud:local-read",
+            deployment.service_name.as_ref(),
+            deployment.current_service_version.as_str(),
+            handler.handler_name.as_ref(),
+            request.request_commitment,
+            result_commitment,
+            certified_by,
+        ))),
         service_name: deployment.service_name.clone(),
         service_version: deployment.current_service_version.clone(),
         handler_name: handler.handler_name.clone(),
@@ -2637,7 +5189,10 @@ fn local_read_receipt(
     }
 }
 
-fn next_authoritative_observation_sequence_from_view(_service_name: &str, observed_height: u64) -> u64 {
+fn next_authoritative_observation_sequence_from_view(
+    _service_name: &str,
+    observed_height: u64,
+) -> u64 {
     observed_height.max(1)
 }
 
@@ -2755,12 +5310,15 @@ fn build_runtime_snapshot(
                 .join("services")
                 .join(sanitize_path_component(&service_name))
                 .join(sanitize_path_component(&service_version));
-            let bundle_cache_path = artifacts_root.join(hash_cache_name(bundle.container.bundle_hash));
+            let bundle_cache_path =
+                artifacts_root.join(hash_cache_name(bundle.container.bundle_hash));
             let active_runtime_state = runtime_state
                 .as_ref()
                 .filter(|state| state.active_service_version == service_version);
             let artifact_plans = build_artifact_plans(bundle, &artifacts_root);
-            let hydration_complete = artifact_plans.iter().all(|artifact| artifact.available_locally);
+            let hydration_complete = artifact_plans
+                .iter()
+                .all(|artifact| artifact.available_locally);
             let plan = SoracloudRuntimeServicePlan {
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
@@ -2797,13 +5355,16 @@ fn build_runtime_snapshot(
                     .handlers
                     .iter()
                     .filter_map(|handler| {
-                        handler.mailbox.as_ref().map(|mailbox| SoracloudRuntimeMailboxPlan {
-                            handler_name: handler.handler_name.to_string(),
-                            queue_name: mailbox.queue_name.to_string(),
-                            max_pending_messages: mailbox.max_pending_messages.get(),
-                            max_message_bytes: mailbox.max_message_bytes.get(),
-                            retention_blocks: mailbox.retention_blocks.get(),
-                        })
+                        handler
+                            .mailbox
+                            .as_ref()
+                            .map(|mailbox| SoracloudRuntimeMailboxPlan {
+                                handler_name: handler.handler_name.to_string(),
+                                queue_name: mailbox.queue_name.to_string(),
+                                max_pending_messages: mailbox.max_pending_messages.get(),
+                                max_message_bytes: mailbox.max_message_bytes.get(),
+                                retention_blocks: mailbox.retention_blocks.get(),
+                            })
                     })
                     .collect(),
                 artifacts: artifact_plans,
@@ -2823,6 +5384,7 @@ fn build_runtime_snapshot(
             )
         })
         .collect();
+    let hf_sources = build_hf_source_plans(world, &services, &apartments, state_dir);
 
     Ok(SoracloudRuntimeSnapshot {
         schema_version: SoracloudRuntimeSnapshot::default().schema_version,
@@ -2830,7 +5392,223 @@ fn build_runtime_snapshot(
         observed_block_hash: view.latest_block_hash().map(|hash| hash.to_string()),
         services,
         apartments,
+        hf_sources,
     })
+}
+
+fn build_hf_source_plans(
+    world: &impl WorldReadOnly,
+    services: &BTreeMap<String, BTreeMap<String, SoracloudRuntimeServicePlan>>,
+    apartments: &BTreeMap<String, SoracloudRuntimeApartmentPlan>,
+    state_dir: &Path,
+) -> BTreeMap<String, SoracloudRuntimeHfSourcePlan> {
+    let mut plans = BTreeMap::new();
+
+    for (source_id, source) in world.soracloud_hf_sources().iter() {
+        let source_id_string = source_id.to_string();
+        let import_manifest = match read_hf_import_manifest(state_dir, &source_id_string) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                iroha_logger::warn!(
+                    ?error,
+                    source_id = %source_id_string,
+                    "failed to read local HF import manifest while building runtime snapshot"
+                );
+                None
+            }
+        };
+        let pool_records = world
+            .soracloud_hf_shared_lease_pools()
+            .iter()
+            .filter_map(|(_pool_id, pool)| (pool.source_id == *source_id).then_some(pool))
+            .collect::<Vec<_>>();
+
+        let pool_count = u32::try_from(pool_records.len()).unwrap_or(u32::MAX);
+        let active_pool_count = u32::try_from(
+            pool_records
+                .iter()
+                .filter(|pool| {
+                    matches!(
+                        pool.status,
+                        SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+                    )
+                })
+                .count(),
+        )
+        .unwrap_or(u32::MAX);
+        let mut active_member_count = 0_u32;
+        let mut queued_window_count = 0_u32;
+        let mut bound_service_names = BTreeSet::new();
+        let mut bound_apartment_names = BTreeSet::new();
+
+        for pool in &pool_records {
+            active_member_count = active_member_count.saturating_add(pool.active_member_count);
+            if let Some(next_window) = pool.queued_next_window.as_ref() {
+                queued_window_count = queued_window_count.saturating_add(1);
+                bound_service_names.insert(next_window.service_name.to_string());
+                if let Some(apartment_name) = next_window.apartment_name.as_ref() {
+                    bound_apartment_names.insert(apartment_name.to_string());
+                }
+            }
+
+            let pool_key = pool.pool_id.to_string();
+            for ((member_pool_id, _account_id), member) in
+                world.soracloud_hf_shared_lease_members().iter()
+            {
+                if member_pool_id != &pool_key
+                    || member.status != SoraHfSharedLeaseMemberStatusV1::Active
+                {
+                    continue;
+                }
+                bound_service_names.extend(member.service_bindings.iter().cloned());
+                bound_apartment_names.extend(member.apartment_bindings.iter().cloned());
+            }
+        }
+
+        let bound_service_names = bound_service_names.into_iter().collect::<Vec<_>>();
+        let bound_apartment_names = bound_apartment_names.into_iter().collect::<Vec<_>>();
+        let mut materialized_service_names = Vec::new();
+        let mut materialized_apartment_names = Vec::new();
+        let mut hydrating_service_count = 0_u32;
+        let mut bundle_cache_miss_count = 0_u32;
+        let mut artifact_cache_miss_count = 0_u32;
+
+        for service_name in &bound_service_names {
+            let Some(version_plans) = services.get(service_name) else {
+                continue;
+            };
+            materialized_service_names.push(service_name.clone());
+
+            let mut service_hydrating = false;
+            for plan in version_plans.values() {
+                if !plan.bundle_available_locally {
+                    service_hydrating = true;
+                    bundle_cache_miss_count = bundle_cache_miss_count.saturating_add(1);
+                }
+                for artifact in &plan.artifacts {
+                    if artifact.available_locally {
+                        continue;
+                    }
+                    service_hydrating = true;
+                    artifact_cache_miss_count = artifact_cache_miss_count.saturating_add(1);
+                }
+            }
+            if service_hydrating {
+                hydrating_service_count = hydrating_service_count.saturating_add(1);
+            }
+        }
+
+        for apartment_name in &bound_apartment_names {
+            if apartments.contains_key(apartment_name) {
+                materialized_apartment_names.push(apartment_name.clone());
+            }
+        }
+
+        let bound_service_count = u32::try_from(bound_service_names.len()).unwrap_or(u32::MAX);
+        let materialized_service_count =
+            u32::try_from(materialized_service_names.len()).unwrap_or(u32::MAX);
+        let bound_apartment_count = u32::try_from(bound_apartment_names.len()).unwrap_or(u32::MAX);
+        let materialized_apartment_count =
+            u32::try_from(materialized_apartment_names.len()).unwrap_or(u32::MAX);
+        let import_complete = import_manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.import_error.is_none());
+        let import_failed = import_manifest
+            .as_ref()
+            .is_some_and(|manifest| manifest.import_error.is_some());
+
+        let runtime_status = derive_hf_runtime_status(
+            source.status,
+            import_complete,
+            import_failed,
+            bound_service_count,
+            materialized_service_count,
+            hydrating_service_count,
+            bound_apartment_count,
+            materialized_apartment_count,
+            bundle_cache_miss_count,
+            artifact_cache_miss_count,
+        );
+
+        plans.insert(
+            source_id_string,
+            SoracloudRuntimeHfSourcePlan {
+                source_id: source_id.to_string(),
+                repo_id: source.repo_id.clone(),
+                resolved_revision: source.resolved_revision.clone(),
+                model_name: source.model_name.clone(),
+                adapter_id: source.adapter_id.clone(),
+                authoritative_status: source.status,
+                runtime_status,
+                pool_count,
+                active_pool_count,
+                active_member_count,
+                queued_window_count,
+                bound_service_count,
+                bound_service_names,
+                materialized_service_count,
+                materialized_service_names,
+                hydrating_service_count,
+                bound_apartment_count,
+                bound_apartment_names,
+                materialized_apartment_count,
+                materialized_apartment_names,
+                bundle_cache_miss_count,
+                artifact_cache_miss_count,
+                last_error: import_manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest.import_error.clone())
+                    .or_else(|| source.last_error.clone()),
+            },
+        );
+    }
+
+    plans
+}
+
+fn derive_hf_runtime_status(
+    authoritative_status: SoraHfSourceStatusV1,
+    import_complete: bool,
+    import_failed: bool,
+    bound_service_count: u32,
+    materialized_service_count: u32,
+    hydrating_service_count: u32,
+    bound_apartment_count: u32,
+    materialized_apartment_count: u32,
+    bundle_cache_miss_count: u32,
+    artifact_cache_miss_count: u32,
+) -> SoracloudRuntimeHfSourceStatus {
+    match authoritative_status {
+        SoraHfSourceStatusV1::Failed => SoracloudRuntimeHfSourceStatus::Failed,
+        SoraHfSourceStatusV1::Retired => SoracloudRuntimeHfSourceStatus::Retired,
+        SoraHfSourceStatusV1::PendingImport | SoraHfSourceStatusV1::Ready => {
+            if import_failed {
+                return SoracloudRuntimeHfSourceStatus::Failed;
+            }
+            let has_runtime_bindings = bound_service_count > 0 || bound_apartment_count > 0;
+            let deployment_missing = materialized_service_count < bound_service_count
+                || materialized_apartment_count < bound_apartment_count;
+            let hydration_missing = hydrating_service_count > 0
+                || bundle_cache_miss_count > 0
+                || artifact_cache_miss_count > 0;
+
+            if !import_complete {
+                SoracloudRuntimeHfSourceStatus::PendingImport
+            } else if !has_runtime_bindings {
+                if authoritative_status == SoraHfSourceStatusV1::Ready {
+                    SoracloudRuntimeHfSourceStatus::Ready
+                } else {
+                    SoracloudRuntimeHfSourceStatus::PendingDeployment
+                }
+            } else if deployment_missing {
+                SoracloudRuntimeHfSourceStatus::PendingDeployment
+            } else if hydration_missing {
+                SoracloudRuntimeHfSourceStatus::Hydrating
+            } else {
+                SoracloudRuntimeHfSourceStatus::Ready
+            }
+        }
+    }
 }
 
 fn build_apartment_plan(
@@ -2896,7 +5674,10 @@ fn collect_service_revision_registry(
         .soracloud_service_revisions()
         .iter()
         .map(|((service_name, service_version), bundle)| {
-            ((service_name.clone(), service_version.clone()), bundle.clone())
+            (
+                (service_name.clone(), service_version.clone()),
+                bundle.clone(),
+            )
         })
         .collect()
 }
@@ -3208,7 +5989,10 @@ fn persist_staged_runtime_artifact(
     fs::create_dir_all(&root).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
-            format!("create Soracloud runtime artifact root {}: {error}", root.display()),
+            format!(
+                "create Soracloud runtime artifact root {}: {error}",
+                root.display()
+            ),
         )
     })?;
     let path = root.join(hash_cache_name(artifact.artifact_hash));
@@ -3247,11 +6031,7 @@ fn url_host(url: &str) -> Option<&str> {
         .strip_prefix('[')
         .and_then(|value| value.split_once(']').map(|(host, _)| host))
         .unwrap_or_else(|| authority.split(':').next().unwrap_or(authority));
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
-    }
+    if host.is_empty() { None } else { Some(host) }
 }
 
 fn hash_cache_name(hash: Hash) -> String {
@@ -3275,6 +6055,227 @@ fn normalize_provider_base_url(raw: &str) -> Option<reqwest::Url> {
     };
     url.set_path(&normalized_path);
     Some(url)
+}
+
+fn normalize_hf_base_url(raw: &str) -> eyre::Result<reqwest::Url> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        eyre::bail!("empty Hugging Face base URL");
+    }
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        format!("https://{trimmed}")
+    };
+    let mut url = reqwest::Url::parse(&with_scheme).wrap_err("parse Hugging Face base URL")?;
+    let normalized_path = match url.path().trim_end_matches('/') {
+        "" => "/".to_owned(),
+        path => path.to_owned(),
+    };
+    url.set_path(&normalized_path);
+    Ok(url)
+}
+
+fn hf_model_info_url(
+    api_base_url: &str,
+    repo_id: &str,
+    requested_revision: &str,
+) -> eyre::Result<reqwest::Url> {
+    let mut url = normalize_hf_base_url(api_base_url)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre::eyre!("Hugging Face API base URL cannot be a base"))?;
+        for component in ["models"]
+            .into_iter()
+            .chain(repo_id.split('/'))
+            .chain(["revision", requested_revision].into_iter())
+        {
+            segments.push(component);
+        }
+    }
+    Ok(url)
+}
+
+fn hf_repo_file_url(
+    hub_base_url: &str,
+    repo_id: &str,
+    requested_revision: &str,
+    file_path: &str,
+) -> eyre::Result<reqwest::Url> {
+    let mut url = normalize_hf_base_url(hub_base_url)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre::eyre!("Hugging Face Hub base URL cannot be a base"))?;
+        for component in repo_id
+            .split('/')
+            .chain(["resolve", requested_revision].into_iter())
+            .chain(file_path.split('/'))
+        {
+            segments.push(component);
+        }
+    }
+    Ok(url)
+}
+
+fn hf_inference_url(inference_base_url: &str, repo_id: &str) -> eyre::Result<reqwest::Url> {
+    let mut url = normalize_hf_base_url(inference_base_url)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre::eyre!("HF inference base URL cannot be a base"))?;
+        for component in repo_id.split('/') {
+            segments.push(component);
+        }
+    }
+    Ok(url)
+}
+
+fn hf_import_file_selected(path: &str, allowlist: &[String]) -> bool {
+    let normalized_path = path.trim().to_ascii_lowercase();
+    allowlist.iter().any(|pattern| {
+        if let Some(suffix) = pattern.strip_prefix("*.") {
+            normalized_path.ends_with(&format!(".{suffix}"))
+        } else {
+            normalized_path == *pattern
+        }
+    })
+}
+
+fn read_hf_import_manifest(
+    state_dir: &Path,
+    source_id: &str,
+) -> io::Result<Option<HfLocalImportManifestV1>> {
+    let path = hf_local_import_manifest_path(state_dir, source_id);
+    read_json_optional(&path)
+}
+
+fn hf_local_source_root(state_dir: &Path, source_id: &str) -> PathBuf {
+    state_dir
+        .join("hf_sources")
+        .join(sanitize_path_component(source_id))
+}
+
+fn hf_local_source_files_root(state_dir: &Path, source_id: &str) -> PathBuf {
+    hf_local_source_root(state_dir, source_id).join("files")
+}
+
+fn hf_local_import_manifest_path(state_dir: &Path, source_id: &str) -> PathBuf {
+    hf_local_source_root(state_dir, source_id).join("import_manifest.json")
+}
+
+fn hf_local_runner_script_path(state_dir: &Path) -> PathBuf {
+    state_dir
+        .join("hf_runtime")
+        .join("soracloud_hf_local_runner.py")
+}
+
+fn ensure_hf_local_runner_script(state_dir: &Path) -> io::Result<PathBuf> {
+    let path = hf_local_runner_script_path(state_dir);
+    match fs::read_to_string(&path) {
+        Ok(current) if current == HF_LOCAL_RUNNER_SCRIPT_V1 => Ok(path),
+        Ok(_) | Err(_) => {
+            write_bytes_atomic(&path, HF_LOCAL_RUNNER_SCRIPT_V1.as_bytes())?;
+            Ok(path)
+        }
+    }
+}
+
+fn run_hf_local_runner(
+    program: &str,
+    script_path: &Path,
+    timeout: Duration,
+    request_payload: &[u8],
+) -> Result<Vec<u8>, SoracloudRuntimeExecutionError> {
+    let program = program.trim();
+    if program.is_empty() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "generated HF local execution requires a non-empty `soracloud_runtime.hf.local_runner_program`",
+        ));
+    }
+
+    let mut child = Command::new(program)
+        .arg(script_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "spawn local HF runner `{program}` for script {}: {error}",
+                    script_path.display()
+                ),
+            )
+        })?;
+
+    {
+        use io::Write as _;
+
+        let mut stdin = child.stdin.take().ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                "local HF runner stdin pipe is unavailable",
+            )
+        })?;
+        stdin.write_all(request_payload).map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!("write local HF runner request payload: {error}"),
+            )
+        })?;
+    }
+
+    let started_at = Instant::now();
+    loop {
+        if started_at.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "local HF runner `{program}` exceeded timeout of {} ms",
+                    timeout.as_millis()
+                ),
+            ));
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let output = child.wait_with_output().map_err(|error| {
+                    SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        format!("collect local HF runner output: {error}"),
+                    )
+                })?;
+                if !status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+                    return Err(SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        format!(
+                            "local HF runner `{program}` exited with {}{}",
+                            status,
+                            if stderr.is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {stderr}")
+                            }
+                        ),
+                    ));
+                }
+                return Ok(output.stdout);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                return Err(SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    format!("poll local HF runner `{program}`: {error}"),
+                ));
+            }
+        }
+    }
 }
 
 fn remote_hydration_nonce(
@@ -3427,11 +6428,7 @@ fn collect_remote_hydration_sources(
     sources.into_values().collect()
 }
 
-fn manifest_is_committed(
-    view: &StateView<'_>,
-    state: &State,
-    manifest_digest: &[u8; 32],
-) -> bool {
+fn manifest_is_committed(view: &StateView<'_>, state: &State, manifest_digest: &[u8; 32]) -> bool {
     let digest = ManifestDigest::new(*manifest_digest);
     let has_active_pin = view
         .world()
@@ -3469,8 +6466,8 @@ fn prune_nested_directory_tree(
                 .wrap_err_with(|| format!("remove stale {}", service_path.display()))?;
             continue;
         };
-        for version_entry in
-            fs::read_dir(&service_path).wrap_err_with(|| format!("read {}", service_path.display()))?
+        for version_entry in fs::read_dir(&service_path)
+            .wrap_err_with(|| format!("read {}", service_path.display()))?
         {
             let version_entry = version_entry?;
             if !version_entry.file_type()?.is_dir() {
@@ -3564,31 +6561,34 @@ mod tests {
         io::{Read as _, Write as _},
         net::TcpListener,
         num::NonZeroU64,
-        sync::{Arc, mpsc},
+        sync::{Arc, Mutex, mpsc},
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
 
     use eyre::Result;
-    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
     use iroha_data_model::{
         block::BlockHeader,
         metadata::Metadata,
         smart_contract::manifest::EntryPointKind,
-        sorafs::pin_registry::{
-            ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy,
-            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
-        },
         soracloud::{
             AgentApartmentManifestV1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-            SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
-            SORA_SERVICE_RUNTIME_STATE_VERSION_V1, SoraAgentPersistentStateV1,
-            SoraAgentRuntimeStatusV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-            SoraRolloutStageV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
-            SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
-            SoraServiceRuntimeStateV1,
+            SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+            SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+            SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+            SORA_SERVICE_RUNTIME_STATE_VERSION_V1, SoraAgentArtifactAllowRuleV1,
+            SoraAgentAutonomyRunRecordV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
+            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfSharedLeaseMemberStatusV1,
+            SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
+            SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraRolloutStageV1,
+            SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
+            SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+        },
+        sorafs::pin_registry::{
+            ChunkerProfileHandle, ManifestDigest, PinManifestRecord, PinPolicy, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus,
         },
     };
     use iroha_test_samples::ALICE_ID;
@@ -3596,15 +6596,15 @@ mod tests {
     use sorafs_car::CarBuildPlan;
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{
-        BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder,
-        PinPolicy as ManifestPinPolicy, PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
-        PROVIDER_ADMISSION_PROPOSAL_VERSION_V1, PROVIDER_ADVERT_VERSION_V1, AdvertEndpoint,
-        AvailabilityTier, CapabilityTlv, CapabilityType, CouncilSignature,
-        EndpointAdmissionV1, EndpointAttestationKind, EndpointAttestationV1, EndpointMetadata,
-        EndpointMetadataKey, PathDiversityPolicy, ProviderAdmissionEnvelopeV1,
-        ProviderAdmissionProposalV1, ProviderAdvertBodyV1, ProviderAdvertV1,
-        ProviderCapabilityRangeV1, QosHints, RendezvousTopic, SignatureAlgorithm, StakePointer,
-        StreamBudgetV1, TransportHintV1, compute_advert_body_digest, compute_proposal_digest,
+        AdvertEndpoint, AvailabilityTier, BLAKE3_256_MULTIHASH_CODE, CapabilityTlv, CapabilityType,
+        CouncilSignature, DagCodecId, EndpointAdmissionV1, EndpointAttestationKind,
+        EndpointAttestationV1, EndpointMetadata, EndpointMetadataKey, ManifestBuilder,
+        PROVIDER_ADMISSION_ENVELOPE_VERSION_V1, PROVIDER_ADMISSION_PROPOSAL_VERSION_V1,
+        PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy as ManifestPinPolicy,
+        ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
+        ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic, SignatureAlgorithm,
+        StakePointer, StreamBudgetV1, TransportHintV1, compute_advert_body_digest,
+        compute_proposal_digest,
     };
     use sorafs_node::{NodeHandle, config::StorageConfig};
 
@@ -3656,6 +6656,7 @@ mod tests {
             mailbox_queue: Vec::new(),
             autonomy_budget_ceiling_units: 500,
             autonomy_budget_remaining_units: 325,
+            uploaded_model_binding: None,
             artifact_allowlist: BTreeMap::new(),
             autonomy_run_history: Vec::new(),
             manifest,
@@ -3691,10 +6692,7 @@ mod tests {
         }
     }
 
-    fn soracloud_entrypoint(
-        name: &str,
-        entry_pc: u64,
-    ) -> ivm::EmbeddedEntrypointDescriptor {
+    fn soracloud_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDescriptor {
         ivm::EmbeddedEntrypointDescriptor {
             name: name.to_owned(),
             kind: EntryPointKind::Public,
@@ -3826,6 +6824,8 @@ mod tests {
         status_code: u16,
         content_type: &'static str,
         body: Vec<u8>,
+        content_length_override: Option<u64>,
+        extra_headers: Vec<(String, String)>,
     }
 
     impl HttpFixtureResponse {
@@ -3834,6 +6834,8 @@ mod tests {
                 status_code: 200,
                 content_type: "application/json",
                 body,
+                content_length_override: None,
+                extra_headers: Vec::new(),
             }
         }
 
@@ -3842,6 +6844,33 @@ mod tests {
                 status_code: 200,
                 content_type: "application/octet-stream",
                 body,
+                content_length_override: None,
+                extra_headers: Vec::new(),
+            }
+        }
+
+        fn head_ok(content_type: &'static str, content_length: u64) -> Self {
+            Self {
+                status_code: 200,
+                content_type,
+                body: Vec::new(),
+                content_length_override: Some(content_length),
+                extra_headers: Vec::new(),
+            }
+        }
+
+        fn with_header(mut self, key: &str, value: &str) -> Self {
+            self.extra_headers.push((key.to_owned(), value.to_owned()));
+            self
+        }
+
+        fn text(status_code: u16, body: &str) -> Self {
+            Self {
+                status_code,
+                content_type: "text/plain; charset=utf-8",
+                body: body.as_bytes().to_vec(),
+                content_length_override: None,
+                extra_headers: Vec::new(),
             }
         }
 
@@ -3850,8 +6879,18 @@ mod tests {
                 status_code: 404,
                 content_type: "text/plain; charset=utf-8",
                 body: b"not found".to_vec(),
+                content_length_override: None,
+                extra_headers: Vec::new(),
             }
         }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CapturedHttpRequest {
+        method: String,
+        path: String,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
     }
 
     struct HttpRouteFixture {
@@ -3930,9 +6969,7 @@ mod tests {
         );
         plan.insert(
             "chunk_digests_blake3".into(),
-            norito::json::Value::Array(vec![norito::json::Value::from(
-                chunk_digest_hex.clone(),
-            )]),
+            norito::json::Value::Array(vec![norito::json::Value::from(chunk_digest_hex.clone())]),
         );
         plan.insert(
             "chunks".into(),
@@ -3944,8 +6981,7 @@ mod tests {
             norito::json::Value::from(manifest_id_hex.clone()),
         );
         plan_response.insert("plan".into(), norito::json::Value::Object(plan));
-        let plan_response_body =
-            norito::json::to_vec(&norito::json::Value::Object(plan_response))?;
+        let plan_response_body = norito::json::to_vec(&norito::json::Value::Object(plan_response))?;
         let order_id = ReplicationOrderId::new([order_seed; 32]);
         let canonical_order = norito::to_bytes(&ReplicationOrderV1 {
             order_id: *order_id.as_bytes(),
@@ -3963,9 +6999,7 @@ mod tests {
             manifest_id_hex: manifest_id_hex.clone(),
             manifest_response_body,
             plan_response_body,
-            chunk_path: format!(
-                "/v1/sorafs/storage/chunk/{manifest_id_hex}/{chunk_digest_hex}"
-            ),
+            chunk_path: format!("/v1/sorafs/storage/chunk/{manifest_id_hex}/{chunk_digest_hex}"),
             payload: payload.to_vec(),
         })
     }
@@ -4009,22 +7043,170 @@ mod tests {
     ) -> Result<()> {
         let reason = match response.status_code {
             200 => "OK",
+            400 => "Bad Request",
+            401 => "Unauthorized",
             404 => "Not Found",
-            _ => "Error",
+            500 => "Internal Server Error",
+            _ => "Response",
         };
-        let headers = format!(
-            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
-            response.status_code,
-            reason,
-            response.body.len(),
-            response.content_type,
+        let content_length = response
+            .content_length_override
+            .unwrap_or_else(|| u64::try_from(response.body.len()).unwrap_or(u64::MAX));
+        let mut headers = format!(
+            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n",
+            response.status_code, reason, content_length, response.content_type,
         );
+        for (key, value) in &response.extra_headers {
+            headers.push_str(key);
+            headers.push_str(": ");
+            headers.push_str(value);
+            headers.push_str("\r\n");
+        }
+        headers.push_str("\r\n");
         stream.write_all(headers.as_bytes())?;
         stream.write_all(&response.body)?;
         Ok(())
     }
 
-    fn spawn_remote_hydration_fixture(fixtures: &[RemoteManifestFixture]) -> Result<HttpRouteFixture> {
+    fn parse_http_request(buffer: &[u8]) -> Result<CapturedHttpRequest> {
+        let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") else {
+            return Err(eyre::eyre!(
+                "HTTP fixture request missing header terminator"
+            ));
+        };
+        let header_bytes = &buffer[..header_end];
+        let request = String::from_utf8_lossy(header_bytes);
+        let mut lines = request.lines();
+        let request_line = lines.next().unwrap_or_default();
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or_default().to_owned();
+        let path = parts.next().unwrap_or_default().to_owned();
+        let mut headers = BTreeMap::new();
+        let mut content_length = 0_usize;
+        for line in lines {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let key = key.trim().to_ascii_lowercase();
+            let value = value.trim().to_owned();
+            if key == "content-length" {
+                content_length = value.parse::<usize>().unwrap_or(0);
+            }
+            headers.insert(key, value);
+        }
+        let body_start = header_end + 4;
+        if buffer.len() < body_start.saturating_add(content_length) {
+            return Err(eyre::eyre!(
+                "HTTP fixture request body shorter than declared Content-Length"
+            ));
+        }
+        Ok(CapturedHttpRequest {
+            method,
+            path,
+            headers,
+            body: buffer[body_start..body_start + content_length].to_vec(),
+        })
+    }
+
+    fn read_http_request_full(stream: &mut std::net::TcpStream) -> Result<CapturedHttpRequest> {
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        let mut expected_total_len = None;
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    buffer.extend_from_slice(&chunk[..read]);
+                    if expected_total_len.is_none()
+                        && let Some(header_end) =
+                            buffer.windows(4).position(|window| window == b"\r\n\r\n")
+                    {
+                        let header_text = String::from_utf8_lossy(&buffer[..header_end]);
+                        let content_length = header_text
+                            .lines()
+                            .skip(1)
+                            .find_map(|line| {
+                                let (key, value) = line.split_once(':')?;
+                                key.trim()
+                                    .eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        expected_total_len = Some(header_end + 4 + content_length);
+                    }
+                    if expected_total_len.is_some_and(|expected| buffer.len() >= expected) {
+                        break;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        parse_http_request(&buffer)
+    }
+
+    fn spawn_recording_http_route_fixture(
+        routes: BTreeMap<(String, String), HttpFixtureResponse>,
+    ) -> Result<(HttpRouteFixture, Arc<Mutex<Vec<CapturedHttpRequest>>>)> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        listener.set_nonblocking(true)?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let captured_requests = Arc::clone(&captured);
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || {
+            loop {
+                if stop_rx.try_recv().is_ok() {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let response = match read_http_request_full(&mut stream) {
+                            Ok(request) => {
+                                let key = (request.method.clone(), request.path.clone());
+                                captured_requests
+                                    .lock()
+                                    .expect("fixture capture mutex")
+                                    .push(request);
+                                routes
+                                    .get(&key)
+                                    .cloned()
+                                    .unwrap_or_else(HttpFixtureResponse::not_found)
+                            }
+                            Err(_) => HttpFixtureResponse::not_found(),
+                        };
+                        let _ = write_http_response(&mut stream, &response);
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok((
+            HttpRouteFixture {
+                base_url,
+                stop_tx,
+                handle: Some(handle),
+            },
+            captured,
+        ))
+    }
+
+    fn spawn_remote_hydration_fixture(
+        fixtures: &[RemoteManifestFixture],
+    ) -> Result<HttpRouteFixture> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
         let base_url = format!("http://{}", listener.local_addr()?);
@@ -4044,10 +7226,7 @@ mod tests {
             routes.insert(
                 (
                     "GET".to_owned(),
-                    format!(
-                        "/v1/sorafs/storage/manifest/{}",
-                        fixture.manifest_id_hex
-                    ),
+                    format!("/v1/sorafs/storage/manifest/{}", fixture.manifest_id_hex),
                 ),
                 HttpFixtureResponse::json(fixture.manifest_response_body.clone()),
             );
@@ -4148,10 +7327,7 @@ mod tests {
         let body = ProviderAdvertBodyV1 {
             provider_id,
             profile_id: "sorafs.sf1@1.0.0".to_owned(),
-            profile_aliases: Some(vec![
-                "sorafs.sf1@1.0.0".to_owned(),
-                "sorafs-sf1".to_owned(),
-            ]),
+            profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: StakePointer {
                 pool_id: [0x21; 32],
                 stake_amount: 1_000,
@@ -4334,6 +7510,106 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct GeneratedHfServiceFixture {
+        source_id: Hash,
+        bundle: SoraDeploymentBundleV1,
+    }
+
+    fn insert_generated_hf_service_fixture(
+        state: &mut Arc<State>,
+        service_name: &str,
+        repo_id: &str,
+        resolved_revision: &str,
+        model_name: &str,
+    ) -> Result<GeneratedHfServiceFixture> {
+        let source_id = Hash::new(format!("generated-hf-source:{service_name}").as_bytes());
+        let pool_id = Hash::new(format!("generated-hf-pool:{service_name}").as_bytes());
+        let lease_asset_definition_id = "aid:550e8400e29b41d4a716446655440009"
+            .parse()
+            .expect("fixture asset definition");
+        let bundle = iroha_core::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
+            service_name.parse().expect("valid generated service name"),
+            &source_id.to_string(),
+            repo_id,
+            resolved_revision,
+            model_name,
+        );
+
+        let world = &mut Arc::get_mut(state).expect("unique test state").world;
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                bundle.service.service_name.clone(),
+                sample_deployment_state(&bundle),
+            );
+        world.soracloud_hf_sources_mut_for_testing().insert(
+            source_id,
+            SoraHfSourceRecordV1 {
+                schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
+                source_id,
+                repo_id: repo_id.to_owned(),
+                resolved_revision: resolved_revision.to_owned(),
+                model_name: model_name.to_owned(),
+                adapter_id: "hf.shared.v1".to_owned(),
+                normalized_runtime_hash: Hash::new(
+                    format!("generated-hf-runtime:{service_name}").as_bytes(),
+                ),
+                status: SoraHfSourceStatusV1::PendingImport,
+                created_at_ms: 10,
+                updated_at_ms: 20,
+                last_error: None,
+            },
+        );
+        world
+            .soracloud_hf_shared_lease_pools_mut_for_testing()
+            .insert(
+                pool_id,
+                SoraHfSharedLeasePoolV1 {
+                    schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                    pool_id,
+                    source_id,
+                    storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                    lease_asset_definition_id,
+                    base_fee_nanos: 10_000,
+                    lease_term_ms: 60_000,
+                    window_started_at_ms: 10,
+                    window_expires_at_ms: 60_010,
+                    active_member_count: 1,
+                    status: SoraHfSharedLeaseStatusV1::Active,
+                    queued_next_window: None,
+                },
+            );
+        world
+            .soracloud_hf_shared_lease_members_mut_for_testing()
+            .insert(
+                (pool_id.to_string(), ALICE_ID.to_string()),
+                SoraHfSharedLeaseMemberV1 {
+                    schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                    pool_id,
+                    source_id,
+                    account_id: ALICE_ID.clone(),
+                    status: SoraHfSharedLeaseMemberStatusV1::Active,
+                    joined_at_ms: 10,
+                    updated_at_ms: 20,
+                    total_paid_nanos: 10_000,
+                    total_refunded_nanos: 0,
+                    last_charge_nanos: 10_000,
+                    service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
+                    apartment_bindings: BTreeSet::new(),
+                },
+            );
+
+        Ok(GeneratedHfServiceFixture { source_id, bundle })
+    }
+
     fn assign_fixture_artifact_hashes(
         bundle: &mut SoraDeploymentBundleV1,
         bundle_bytes: &[u8],
@@ -4343,11 +7619,8 @@ mod tests {
         bundle.container.bundle_hash = Hash::new(bundle_bytes);
         let mut payloads = Vec::with_capacity(bundle.service.artifacts.len());
         for (index, artifact) in bundle.service.artifacts.iter_mut().enumerate() {
-            let payload = format!(
-                "{label}:{service_name}:{index}:{}",
-                artifact.artifact_path
-            )
-            .into_bytes();
+            let payload =
+                format!("{label}:{service_name}:{index}:{}", artifact.artifact_path).into_bytes();
             artifact.artifact_hash = Hash::new(&payload);
             payloads.push(payload);
         }
@@ -4361,7 +7634,10 @@ mod tests {
         artifact_hashes_and_bytes: impl IntoIterator<Item = (Hash, Vec<u8>)>,
     ) -> Result<()> {
         fs::create_dir_all(artifacts_root)?;
-        fs::write(artifacts_root.join(hash_cache_name(bundle_hash)), bundle_bytes)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle_hash)),
+            bundle_bytes,
+        )?;
         for (artifact_hash, payload) in artifact_hashes_and_bytes {
             fs::write(artifacts_root.join(hash_cache_name(artifact_hash)), payload)?;
         }
@@ -4377,7 +7653,9 @@ mod tests {
         )
     }
 
-    fn build_sorafs_manifest(payload: &[u8]) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1)> {
+    fn build_sorafs_manifest(
+        payload: &[u8],
+    ) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1)> {
         let plan = CarBuildPlan::single_file(payload)?;
         let digest = blake3::hash(payload);
         let manifest = ManifestBuilder::new()
@@ -4399,10 +7677,7 @@ mod tests {
         node.manifest_metadata(&manifest_id).map_err(Into::into)
     }
 
-    fn approve_sorafs_manifests(
-        state: &Arc<State>,
-        manifests: &[StoredManifest],
-    ) -> Result<()> {
+    fn approve_sorafs_manifests(state: &Arc<State>, manifests: &[StoredManifest]) -> Result<()> {
         let view = state.view();
         let next_height = NonZeroU64::new(
             u64::try_from(view.height())
@@ -4475,6 +7750,21 @@ mod tests {
                 rate_per_minute: std::num::NonZeroU32::new(120),
                 max_bytes_per_minute: std::num::NonZeroU64::new(262_144),
             },
+            hf: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace {
+                hub_base_url: "https://models.sora.test".to_owned(),
+                api_base_url: "https://models.sora.test/api".to_owned(),
+                inference_base_url: "https://inference.sora.test/models".to_owned(),
+                request_timeout: Duration::from_secs(9),
+                local_execution_enabled: false,
+                local_runner_program: "python3.12".to_owned(),
+                local_runner_timeout: Duration::from_secs(45),
+                allow_inference_bridge_fallback: false,
+                import_max_files: 12,
+                import_max_file_bytes: 32 * 1024 * 1024,
+                import_max_total_bytes: 256 * 1024 * 1024,
+                import_file_allowlist: vec!["config.json".to_owned(), "*.safetensors".to_owned()],
+                inference_token: Some("fixture-token".to_owned()),
+            },
         };
 
         let manager = SoracloudRuntimeManagerConfig::from_runtime_config(&runtime);
@@ -4484,6 +7774,75 @@ mod tests {
         assert_eq!(manager.cache_budgets, runtime.cache_budgets);
         assert_eq!(manager.native_process, runtime.native_process);
         assert_eq!(manager.egress, runtime.egress);
+        assert_eq!(manager.hf, runtime.hf);
+    }
+
+    #[test]
+    fn derive_hf_runtime_status_distinguishes_pending_deployment_and_ready() {
+        assert_eq!(
+            derive_hf_runtime_status(
+                SoraHfSourceStatusV1::PendingImport,
+                false,
+                false,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            SoracloudRuntimeHfSourceStatus::PendingImport
+        );
+        assert_eq!(
+            derive_hf_runtime_status(
+                SoraHfSourceStatusV1::PendingImport,
+                true,
+                false,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            SoracloudRuntimeHfSourceStatus::Ready
+        );
+        assert_eq!(
+            derive_hf_runtime_status(
+                SoraHfSourceStatusV1::PendingImport,
+                true,
+                false,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            SoracloudRuntimeHfSourceStatus::PendingDeployment
+        );
+        assert_eq!(
+            derive_hf_runtime_status(
+                SoraHfSourceStatusV1::Failed,
+                true,
+                false,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            SoracloudRuntimeHfSourceStatus::Failed
+        );
+        assert_eq!(
+            derive_hf_runtime_status(SoraHfSourceStatusV1::Ready, true, true, 1, 1, 0, 0, 0, 0, 0,),
+            SoracloudRuntimeHfSourceStatus::Failed
+        );
     }
 
     #[test]
@@ -4498,15 +7857,13 @@ mod tests {
         let apartment = sample_agent_record()?;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(bundle.service.service_name.clone(), deployment);
@@ -4555,34 +7912,1067 @@ mod tests {
                 .process_generation,
             7
         );
-        assert!(temp_dir
-            .path()
-            .join("runtime_snapshot.json")
-            .exists());
-        assert!(temp_dir
-            .path()
-            .join("services/web_portal/2026.02.0/runtime_plan.json")
-            .exists());
-        assert!(temp_dir
-            .path()
-            .join("services/web_portal/2026.02.0/deployment_bundle.json")
-            .exists());
+        assert!(temp_dir.path().join("runtime_snapshot.json").exists());
+        assert!(
+            temp_dir
+                .path()
+                .join("services/web_portal/2026.02.0/runtime_plan.json")
+                .exists()
+        );
+        assert!(
+            temp_dir
+                .path()
+                .join("services/web_portal/2026.02.0/deployment_bundle.json")
+                .exists()
+        );
         assert!(temp_dir.path().join("journals").exists());
         assert!(temp_dir.path().join("checkpoints").exists());
         assert!(temp_dir.path().join("secrets").exists());
-        assert!(temp_dir
-            .path()
-            .join("apartments/ops_agent/runtime_plan.json")
-            .exists());
-        assert!(temp_dir
-            .path()
-            .join("apartments/ops_agent/apartment_manifest.json")
-            .exists());
+        assert!(
+            temp_dir
+                .path()
+                .join("apartments/ops_agent/runtime_plan.json")
+                .exists()
+        );
+        assert!(
+            temp_dir
+                .path()
+                .join("apartments/ops_agent/apartment_manifest.json")
+                .exists()
+        );
         Ok(())
     }
 
     #[test]
-    fn reconcile_once_prunes_stale_materializations_and_reports_missing_bundle_cache() -> Result<()> {
+    fn reconcile_once_projects_hf_source_runtime_readiness_from_bound_services() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let bundle_bytes = simple_soracloud_contract_artifact(&["update", "query"]);
+        let artifact_payloads =
+            assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "hf-runtime-ready");
+        let source_id = Hash::new(b"hf-source");
+        let pool_id = Hash::new(b"hf-pool");
+        let lease_asset_definition_id = "aid:550e8400e29b41d4a716446655440000"
+            .parse()
+            .expect("asset definition");
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
+            world.soracloud_hf_sources_mut_for_testing().insert(
+                source_id,
+                SoraHfSourceRecordV1 {
+                    schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
+                    source_id,
+                    repo_id: "openai/gpt-oss".to_owned(),
+                    resolved_revision: "main".to_owned(),
+                    model_name: "gpt_oss_20b".to_owned(),
+                    adapter_id: "hf.shared.v1".to_owned(),
+                    normalized_runtime_hash: Hash::new(b"hf-runtime"),
+                    status: SoraHfSourceStatusV1::PendingImport,
+                    created_at_ms: 10,
+                    updated_at_ms: 20,
+                    last_error: None,
+                },
+            );
+            world
+                .soracloud_hf_shared_lease_pools_mut_for_testing()
+                .insert(
+                    pool_id,
+                    SoraHfSharedLeasePoolV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                        lease_asset_definition_id,
+                        base_fee_nanos: 10_000,
+                        lease_term_ms: 60_000,
+                        window_started_at_ms: 10,
+                        window_expires_at_ms: 60_010,
+                        active_member_count: 1,
+                        status: SoraHfSharedLeaseStatusV1::Active,
+                        queued_next_window: None,
+                    },
+                );
+            world
+                .soracloud_hf_shared_lease_members_mut_for_testing()
+                .insert(
+                    (pool_id.to_string(), ALICE_ID.to_string()),
+                    SoraHfSharedLeaseMemberV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        account_id: ALICE_ID.clone(),
+                        status: SoraHfSharedLeaseMemberStatusV1::Active,
+                        joined_at_ms: 10,
+                        updated_at_ms: 20,
+                        total_paid_nanos: 10_000,
+                        total_refunded_nanos: 0,
+                        last_charge_nanos: 10_000,
+                        service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
+                        apartment_bindings: BTreeSet::new(),
+                    },
+                );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        seed_local_artifact_cache(
+            &temp_dir.path().join("artifacts"),
+            bundle.container.bundle_hash,
+            &bundle_bytes,
+            bundle
+                .service
+                .artifacts
+                .iter()
+                .zip(artifact_payloads)
+                .map(|(artifact, payload)| (artifact.artifact_hash, payload)),
+        )?;
+        let source_root = temp_dir
+            .path()
+            .join("hf_sources")
+            .join(sanitize_path_component(&source_id.to_string()));
+        fs::create_dir_all(source_root.join("files"))?;
+        write_json_atomic(
+            &source_root.join("import_manifest.json"),
+            &HfLocalImportManifestV1 {
+                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+                source_id: source_id.to_string(),
+                repo_id: "openai/gpt-oss".to_owned(),
+                requested_revision: "main".to_owned(),
+                resolved_commit: Some("fixture-commit".to_owned()),
+                model_name: "gpt_oss_20b".to_owned(),
+                adapter_id: "hf.shared.v1".to_owned(),
+                pipeline_tag: Some("text-generation".to_owned()),
+                library_name: Some("transformers".to_owned()),
+                tags: vec!["text-generation".to_owned()],
+                imported_at_ms: 20,
+                imported_files: Vec::new(),
+                skipped_files: Vec::new(),
+                raw_model_info_path: None,
+                import_error: None,
+            },
+        )?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+
+        let projection = manager
+            .snapshot
+            .read()
+            .hf_sources
+            .get(&source_id.to_string())
+            .cloned()
+            .expect("hf runtime projection");
+        assert_eq!(
+            projection.runtime_status,
+            SoracloudRuntimeHfSourceStatus::Ready
+        );
+        assert_eq!(
+            projection.bound_service_names,
+            vec!["web_portal".to_owned()]
+        );
+        assert_eq!(
+            projection.materialized_service_names,
+            vec!["web_portal".to_owned()]
+        );
+        assert_eq!(projection.bundle_cache_miss_count, 0);
+        assert_eq!(projection.artifact_cache_miss_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_synthesizes_generated_hf_bundle_without_sorafs_importer() -> Result<()> {
+        let mut state = test_state()?;
+        let source_id = Hash::new(b"generated-hf-source");
+        let pool_id = Hash::new(b"generated-hf-pool");
+        let lease_asset_definition_id = "aid:550e8400e29b41d4a716446655440001"
+            .parse()
+            .expect("asset definition");
+        let bundle = iroha_core::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
+            "hf_generated_service"
+                .parse()
+                .expect("valid generated service name"),
+            &source_id.to_string(),
+            "openai/gpt-oss",
+            "main",
+            "gpt-oss",
+        );
+        let apartment_manifest =
+            iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
+                "hf_generated_agent"
+                    .parse()
+                    .expect("valid generated apartment name"),
+                &bundle,
+            );
+
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    bundle.service.service_name.clone(),
+                    sample_deployment_state(&bundle),
+                );
+            world.soracloud_agent_apartments_mut_for_testing().insert(
+                apartment_manifest.apartment_name.to_string(),
+                SoraAgentApartmentRecordV1 {
+                    schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+                    manifest_hash: Hash::new(Encode::encode(&apartment_manifest)),
+                    manifest: apartment_manifest.clone(),
+                    status: SoraAgentRuntimeStatusV1::Running,
+                    deployed_sequence: 1,
+                    lease_started_sequence: 1,
+                    lease_expires_sequence: 128,
+                    last_renewed_sequence: 1,
+                    restart_count: 0,
+                    last_restart_sequence: None,
+                    last_restart_reason: None,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    last_active_sequence: 1,
+                    last_checkpoint_sequence: None,
+                    checkpoint_count: 0,
+                    persistent_state: SoraAgentPersistentStateV1 {
+                        total_bytes: 0,
+                        key_sizes: BTreeMap::new(),
+                    },
+                    revoked_policy_capabilities: BTreeSet::new(),
+                    pending_wallet_requests: BTreeMap::new(),
+                    wallet_daily_spend: BTreeMap::new(),
+                    mailbox_queue: Vec::new(),
+                    autonomy_budget_ceiling_units: 1_000,
+                    autonomy_budget_remaining_units: 1_000,
+                    artifact_allowlist: BTreeMap::new(),
+                    autonomy_run_history: Vec::new(),
+                    uploaded_model_binding: None,
+                },
+            );
+            world.soracloud_hf_sources_mut_for_testing().insert(
+                source_id,
+                SoraHfSourceRecordV1 {
+                    schema_version: SORA_HF_SOURCE_RECORD_VERSION_V1,
+                    source_id,
+                    repo_id: "openai/gpt-oss".to_owned(),
+                    resolved_revision: "main".to_owned(),
+                    model_name: "gpt-oss".to_owned(),
+                    adapter_id: "hf.shared.v1".to_owned(),
+                    normalized_runtime_hash: Hash::new(b"generated-hf-runtime"),
+                    status: SoraHfSourceStatusV1::PendingImport,
+                    created_at_ms: 10,
+                    updated_at_ms: 20,
+                    last_error: None,
+                },
+            );
+            world
+                .soracloud_hf_shared_lease_pools_mut_for_testing()
+                .insert(
+                    pool_id,
+                    SoraHfSharedLeasePoolV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                        lease_asset_definition_id,
+                        base_fee_nanos: 10_000,
+                        lease_term_ms: 60_000,
+                        window_started_at_ms: 10,
+                        window_expires_at_ms: 60_010,
+                        active_member_count: 1,
+                        status: SoraHfSharedLeaseStatusV1::Active,
+                        queued_next_window: None,
+                    },
+                );
+            world
+                .soracloud_hf_shared_lease_members_mut_for_testing()
+                .insert(
+                    (pool_id.to_string(), ALICE_ID.to_string()),
+                    SoraHfSharedLeaseMemberV1 {
+                        schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
+                        pool_id,
+                        source_id,
+                        account_id: ALICE_ID.clone(),
+                        status: SoraHfSharedLeaseMemberStatusV1::Active,
+                        joined_at_ms: 10,
+                        updated_at_ms: 20,
+                        total_paid_nanos: 10_000,
+                        total_refunded_nanos: 0,
+                        last_charge_nanos: 10_000,
+                        service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
+                        apartment_bindings: BTreeSet::from([apartment_manifest
+                            .apartment_name
+                            .to_string()]),
+                    },
+                );
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir
+            .path()
+            .join("hf_sources")
+            .join(sanitize_path_component(&source_id.to_string()));
+        fs::create_dir_all(source_root.join("files"))?;
+        write_json_atomic(
+            &source_root.join("import_manifest.json"),
+            &HfLocalImportManifestV1 {
+                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+                source_id: source_id.to_string(),
+                repo_id: "openai/gpt-oss".to_owned(),
+                requested_revision: "main".to_owned(),
+                resolved_commit: Some("fixture-commit".to_owned()),
+                model_name: "gpt-oss".to_owned(),
+                adapter_id: "hf.shared.v1".to_owned(),
+                pipeline_tag: Some("text-generation".to_owned()),
+                library_name: Some("transformers".to_owned()),
+                tags: vec!["text-generation".to_owned()],
+                imported_at_ms: 20,
+                imported_files: Vec::new(),
+                skipped_files: Vec::new(),
+                raw_model_info_path: None,
+                import_error: None,
+            },
+        )?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+
+        let snapshot = manager.snapshot.read().clone();
+        let service_plan = snapshot
+            .services
+            .get("hf_generated_service")
+            .and_then(|versions| versions.get("hf.generated.v1"))
+            .expect("generated service plan");
+        assert!(service_plan.bundle_available_locally);
+        assert_eq!(service_plan.artifacts.len(), 1);
+
+        let projection = snapshot
+            .hf_sources
+            .get(&source_id.to_string())
+            .cloned()
+            .expect("generated hf projection");
+        assert_eq!(
+            projection.runtime_status,
+            SoracloudRuntimeHfSourceStatus::Ready
+        );
+        assert_eq!(
+            projection.materialized_service_names,
+            vec!["hf_generated_service".to_owned()]
+        );
+        assert_eq!(
+            projection.materialized_apartment_names,
+            vec!["hf_generated_agent".to_owned()]
+        );
+
+        let cached_bundle = temp_dir
+            .path()
+            .join("artifacts")
+            .join(hash_cache_name(bundle.container.bundle_hash));
+        assert!(cached_bundle.exists());
+        assert_eq!(
+            fs::read(cached_bundle)?,
+            iroha_core::soracloud_runtime::soracloud_hf_generated_service_contract_artifact()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn hf_import_file_selected_matches_exact_and_suffix_patterns() {
+        let allowlist = vec![
+            "config.json".to_owned(),
+            "*.safetensors".to_owned(),
+            "tokenizer.json".to_owned(),
+        ];
+        assert!(hf_import_file_selected("config.json", &allowlist));
+        assert!(hf_import_file_selected("MODEL.SAFETENSORS", &allowlist));
+        assert!(hf_import_file_selected("tokenizer.json", &allowlist));
+        assert!(!hf_import_file_selected("README.md", &allowlist));
+        assert!(!hf_import_file_selected("config.yaml", &allowlist));
+    }
+
+    #[test]
+    fn hf_url_helpers_build_expected_routes() -> Result<()> {
+        let info = hf_model_info_url("huggingface.co/api", "openai-community/gpt2", "main")?;
+        let file = hf_repo_file_url(
+            "https://huggingface.co",
+            "openai-community/gpt2",
+            "main",
+            "config.json",
+        )?;
+        let inference = hf_inference_url(
+            "router.huggingface.co/hf-inference/models",
+            "openai-community/gpt2",
+        )?;
+        assert_eq!(
+            info.as_str(),
+            "https://huggingface.co/api/models/openai-community/gpt2/revision/main"
+        );
+        assert_eq!(
+            file.as_str(),
+            "https://huggingface.co/openai-community/gpt2/resolve/main/config.json"
+        );
+        assert_eq!(
+            inference.as_str(),
+            "https://router.huggingface.co/hf-inference/models/openai-community/gpt2"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_imports_hf_source_into_shared_local_cache() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_import_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
+        let tokenizer_json = br#"{"version":"1.0"}"#.to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation", "causal-lm"],
+            "siblings": [
+                {"rfilename": "config.json"},
+                {"rfilename": "tokenizer.json"},
+                {"rfilename": "weights.safetensors"},
+                {"rfilename": "README.md"}
+            ]
+        });
+        let model_info_body = norito::json::to_vec(&model_info)?;
+
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(model_info_body),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json.clone()),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/tokenizer.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(tokenizer_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/tokenizer.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(tokenizer_json.clone()),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/weights.safetensors".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok("application/octet-stream", 1_024),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec![
+            "config.json".to_owned(),
+            "tokenizer.json".to_owned(),
+            "*.safetensors".to_owned(),
+        ];
+        config.hf.import_max_file_bytes = 128;
+        config.hf.import_max_total_bytes = 512;
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+
+        let source_id = fixture.source_id.to_string();
+        let manifest = read_hf_import_manifest(temp_dir.path(), &source_id)?
+            .expect("reconcile should write an HF import manifest");
+        assert_eq!(manifest.source_id, source_id);
+        assert_eq!(manifest.repo_id, "openai-community/gpt2");
+        assert_eq!(manifest.requested_revision, "main");
+        assert_eq!(manifest.resolved_commit.as_deref(), Some("commit-123"));
+        assert_eq!(manifest.pipeline_tag.as_deref(), Some("text-generation"));
+        assert_eq!(manifest.library_name.as_deref(), Some("transformers"));
+        assert_eq!(manifest.imported_files.len(), 2);
+        assert_eq!(
+            manifest
+                .imported_files
+                .iter()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>(),
+            vec!["config.json".to_owned(), "tokenizer.json".to_owned()]
+        );
+        assert!(
+            manifest
+                .skipped_files
+                .iter()
+                .any(|entry| entry.contains("weights.safetensors"))
+        );
+        assert_eq!(
+            fs::read(&manifest.imported_files[0].local_path)?,
+            config_json
+        );
+        assert_eq!(
+            fs::read(&manifest.imported_files[1].local_path)?,
+            tokenizer_json
+        );
+        let projection = manager
+            .snapshot
+            .read()
+            .hf_sources
+            .get(&fixture.source_id.to_string())
+            .cloned()
+            .expect("runtime snapshot should include the imported HF source");
+        assert_eq!(
+            projection.runtime_status,
+            SoracloudRuntimeHfSourceStatus::Ready
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_records_hf_import_error_manifest_on_failure() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_import_failure_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::text(500, "boom"),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+
+        let manifest = read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?
+            .expect("failed imports should still leave an HF error manifest");
+        assert!(manifest.imported_files.is_empty());
+        assert!(manifest.import_error.is_some());
+        assert!(
+            manifest
+                .import_error
+                .as_deref()
+                .is_some_and(|message| message.contains("returned 500"))
+        );
+        let projection = manager
+            .snapshot
+            .read()
+            .hf_sources
+            .get(&fixture.source_id.to_string())
+            .cloned()
+            .expect("runtime snapshot should include the failed HF source");
+        assert_eq!(
+            projection.runtime_status,
+            SoracloudRuntimeHfSourceStatus::Failed
+        );
+        assert!(
+            projection
+                .last_error
+                .as_deref()
+                .is_some_and(|message| message.contains("returned 500"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_generated_hf_metadata_reports_import_manifest() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_metadata_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-456",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json.clone()),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+        config.hf.inference_token = Some("hf-runtime-token".to_owned());
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let response = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "metadata".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "GET".to_owned(),
+                request_path: "/metadata".to_owned(),
+                handler_path: "/metadata".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::new(),
+                request_body: Vec::new(),
+                request_commitment: Hash::new(b"hf-metadata-request"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        let decoded: HfGeneratedMetadataResponse =
+            norito::json::from_slice(&response.response_bytes)?;
+        assert!(decoded.imported);
+        assert_eq!(decoded.repo_id, "openai-community/gpt2");
+        assert_eq!(decoded.requested_revision, "main");
+        assert_eq!(decoded.resolved_commit.as_deref(), Some("commit-456"));
+        assert_eq!(decoded.imported_file_count, 1);
+        assert_eq!(decoded.imported_total_bytes, config_json.len() as u64);
+        assert_eq!(decoded.imported_files[0].path, "config.json");
+        assert!(decoded.inference_local_enabled);
+        assert!(decoded.inference_bridge_enabled);
+        assert_eq!(
+            response.certified_by,
+            SoraCertifiedResponsePolicyV1::AuditReceipt
+        );
+        assert!(response.runtime_receipt.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_generated_hf_infer_requires_configured_token() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_infer_requires_token",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let (server, _captured) = spawn_recording_http_route_fixture(BTreeMap::new())?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
+        config.hf.local_execution_enabled = false;
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let error = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::from([(
+                    HF_ALLOW_BRIDGE_FALLBACK_HEADER_V1.to_owned(),
+                    "1".to_owned(),
+                )]),
+                request_body: br#"{"inputs":"hello"}"#.to_vec(),
+                request_commitment: Hash::new(b"hf-infer-no-token"),
+            })
+            .expect_err("generated HF inference should require a configured token");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+        assert!(
+            error
+                .message
+                .contains("requires `soracloud_runtime.hf.inference_token`")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_generated_hf_infer_does_not_bridge_without_explicit_opt_in() -> Result<()>
+    {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_infer_no_bridge_opt_in",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let (server, _captured) = spawn_recording_http_route_fixture(BTreeMap::new())?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
+        config.hf.local_execution_enabled = false;
+        config.hf.allow_inference_bridge_fallback = true;
+        config.hf.inference_token = Some("hf-test-token".to_owned());
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let error = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::new(),
+                request_body: br#"{"inputs":"hello"}"#.to_vec(),
+                request_commitment: Hash::new(b"hf-infer-no-bridge-opt-in"),
+            })
+            .expect_err("generated HF inference should fail closed without bridge opt-in");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+        assert!(error.message.contains("has no enabled runtime backend"));
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_generated_hf_infer_executes_imported_model_locally() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_local_infer_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let config_json =
+            br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"local:"}}"#
+                .to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-local-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+        config.hf.allow_inference_bridge_fallback = false;
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let request_body =
+            br#"{"inputs":"Hello from Soracloud","parameters":{"max_new_tokens":4}}"#.to_vec();
+        let response = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: Some("wait_for_model=true".to_owned()),
+                request_headers: BTreeMap::from([(
+                    "content-type".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                request_body,
+                request_commitment: Hash::new(b"hf-local-infer-request"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        let decoded: norito::json::Value = norito::json::from_slice(&response.response_bytes)?;
+        assert_eq!(
+            decoded.get("backend").and_then(norito::json::Value::as_str),
+            Some("local_fixture")
+        );
+        assert_eq!(
+            decoded.get("repo_id").and_then(norito::json::Value::as_str),
+            Some("openai-community/gpt2")
+        );
+        assert_eq!(
+            decoded.get("inputs").and_then(norito::json::Value::as_str),
+            Some("Hello from Soracloud")
+        );
+        assert_eq!(
+            decoded.get("text").and_then(norito::json::Value::as_str),
+            Some("local:Hello from Soracloud")
+        );
+        assert_eq!(response.content_type.as_deref(), Some("application/json"));
+        assert_eq!(
+            response.certified_by,
+            SoraCertifiedResponsePolicyV1::AuditReceipt
+        );
+        assert!(response.runtime_receipt.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_generated_hf_infer_forwards_request_to_inference_bridge() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_infer_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-789",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let inference_body = br#"{"generated_text":"hello from hf"}"#.to_vec();
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        routes.insert(
+            (
+                "POST".to_owned(),
+                "/hf-inference/models/openai-community/gpt2?wait_for_model=true".to_owned(),
+            ),
+            HttpFixtureResponse::json(inference_body.clone())
+                .with_header("Content-Encoding", "identity"),
+        );
+        let (server, captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.inference_base_url = format!("{}/hf-inference/models", server.base_url);
+        config.hf.local_execution_enabled = false;
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+        config.hf.inference_token = Some("hf-test-token".to_owned());
+
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let request_body = br#"{"inputs":"Hello from Soracloud"}"#.to_vec();
+        let response = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: Some("wait_for_model=true".to_owned()),
+                request_headers: BTreeMap::from([
+                    ("content-type".to_owned(), "application/json".to_owned()),
+                    ("accept".to_owned(), "application/json".to_owned()),
+                    (
+                        HF_ALLOW_BRIDGE_FALLBACK_HEADER_V1.to_owned(),
+                        "1".to_owned(),
+                    ),
+                ]),
+                request_body: request_body.clone(),
+                request_commitment: Hash::new(b"hf-infer-request"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        assert_eq!(response.response_bytes, inference_body);
+        assert_eq!(response.content_type.as_deref(), Some("application/json"));
+        assert_eq!(response.content_encoding.as_deref(), Some("identity"));
+        assert_eq!(
+            response.certified_by,
+            SoraCertifiedResponsePolicyV1::AuditReceipt
+        );
+        assert!(response.runtime_receipt.is_some());
+
+        let captured = captured.lock().expect("fixture capture mutex").clone();
+        let inference_request = captured
+            .iter()
+            .find(|request| {
+                request.method == "POST"
+                    && request.path
+                        == "/hf-inference/models/openai-community/gpt2?wait_for_model=true"
+            })
+            .cloned()
+            .expect("fixture should capture the forwarded inference request");
+        assert_eq!(
+            inference_request
+                .headers
+                .get("authorization")
+                .map(String::as_str),
+            Some("Bearer hf-test-token")
+        );
+        assert_eq!(
+            inference_request
+                .headers
+                .get("content-type")
+                .map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(
+            inference_request.headers.get("accept").map(String::as_str),
+            Some("application/json")
+        );
+        assert_eq!(inference_request.body, request_body);
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_prunes_stale_materializations_and_reports_missing_bundle_cache() -> Result<()>
+    {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
@@ -4590,24 +8980,23 @@ mod tests {
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "missing-bundle");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
                     sample_deployment_state(&bundle),
                 );
-            world
-                .soracloud_service_runtime_mut_for_testing()
-                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
         }
 
         let temp_dir = tempfile::tempdir()?;
@@ -4628,11 +9017,17 @@ mod tests {
             .and_then(|versions| versions.get("2026.02.0"))
             .expect("bundle plan present");
         assert!(!bundle_plan.bundle_available_locally);
-        assert_eq!(bundle_plan.health_status, SoraServiceHealthStatusV1::Hydrating);
-        assert!(bundle_plan
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.kind == SoraArtifactKindV1::Bundle && !artifact.available_locally));
+        assert_eq!(
+            bundle_plan.health_status,
+            SoraServiceHealthStatusV1::Hydrating
+        );
+        assert!(
+            bundle_plan
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.kind == SoraArtifactKindV1::Bundle
+                    && !artifact.available_locally)
+        );
         assert!(!temp_dir.path().join("services/stale_service").exists());
         Ok(())
     }
@@ -4644,15 +9039,13 @@ mod tests {
         bundle.container.runtime = SoraContainerRuntimeV1::NativeProcess;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
@@ -4677,8 +9070,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_once_prunes_cache_buckets_by_authoritative_sequence_and_refreshes_snapshot(
-    ) -> Result<()> {
+    fn reconcile_once_prunes_cache_buckets_by_authoritative_sequence_and_refreshes_snapshot()
+    -> Result<()> {
         let mut state = test_state()?;
         let mut active_bundle = load_deployment_bundle_fixture()?;
         let mut canary_bundle = active_bundle.clone();
@@ -4720,24 +9113,20 @@ mod tests {
 
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        active_bundle.service.service_name.to_string(),
-                        active_bundle.service.service_version.clone(),
-                    ),
-                    active_bundle.clone(),
-                );
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        canary_bundle.service.service_name.to_string(),
-                        canary_bundle.service.service_version.clone(),
-                    ),
-                    canary_bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    active_bundle.service.service_name.to_string(),
+                    active_bundle.service.service_version.clone(),
+                ),
+                active_bundle.clone(),
+            );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    canary_bundle.service.service_name.to_string(),
+                    canary_bundle.service.service_version.clone(),
+                ),
+                canary_bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(active_bundle.service.service_name.clone(), deployment);
@@ -4758,27 +9147,29 @@ mod tests {
             &canary_bundle_bytes,
         )?;
         fs::write(
-            artifacts_root.join(hash_cache_name(active_bundle.service.artifacts[0].artifact_hash)),
+            artifacts_root.join(hash_cache_name(
+                active_bundle.service.artifacts[0].artifact_hash,
+            )),
             &active_asset_bytes,
         )?;
         fs::write(
-            artifacts_root.join(hash_cache_name(canary_bundle.service.artifacts[0].artifact_hash)),
+            artifacts_root.join(hash_cache_name(
+                canary_bundle.service.artifacts[0].artifact_hash,
+            )),
             &canary_asset_bytes,
         )?;
 
         let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
-        config.cache_budgets.bundle_bytes =
-            std::num::NonZeroU64::new(
-                u64::try_from(active_bundle_bytes.len().max(canary_bundle_bytes.len()))
-                    .expect("bundle size fits in u64"),
-            )
-            .expect("nonzero bundle budget");
-        config.cache_budgets.static_asset_bytes =
-            std::num::NonZeroU64::new(
-                u64::try_from(active_asset_bytes.len().max(canary_asset_bytes.len()))
-                    .expect("asset size fits in u64"),
-            )
-            .expect("nonzero asset budget");
+        config.cache_budgets.bundle_bytes = std::num::NonZeroU64::new(
+            u64::try_from(active_bundle_bytes.len().max(canary_bundle_bytes.len()))
+                .expect("bundle size fits in u64"),
+        )
+        .expect("nonzero bundle budget");
+        config.cache_budgets.static_asset_bytes = std::num::NonZeroU64::new(
+            u64::try_from(active_asset_bytes.len().max(canary_asset_bytes.len()))
+                .expect("asset size fits in u64"),
+        )
+        .expect("nonzero asset budget");
 
         let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
         manager.reconcile_once()?;
@@ -4821,12 +9212,16 @@ mod tests {
         );
         assert!(
             !artifacts_root
-                .join(hash_cache_name(active_bundle.service.artifacts[0].artifact_hash))
+                .join(hash_cache_name(
+                    active_bundle.service.artifacts[0].artifact_hash
+                ))
                 .exists()
         );
         assert!(
             artifacts_root
-                .join(hash_cache_name(canary_bundle.service.artifacts[0].artifact_hash))
+                .join(hash_cache_name(
+                    canary_bundle.service.artifacts[0].artifact_hash
+                ))
                 .exists()
         );
         Ok(())
@@ -4876,24 +9271,23 @@ mod tests {
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "hydrated-from-sorafs");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
                     sample_deployment_state(&bundle),
                 );
-            world
-                .soracloud_service_runtime_mut_for_testing()
-                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
         }
 
         let temp_dir = tempfile::tempdir()?;
@@ -4919,14 +9313,28 @@ mod tests {
             .expect("hydrated service plan");
         assert!(plan.bundle_available_locally);
         assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Healthy);
-        assert!(plan.artifacts.iter().all(|artifact| artifact.available_locally));
+        assert!(
+            plan.artifacts
+                .iter()
+                .all(|artifact| artifact.available_locally)
+        );
         assert_eq!(
-            fs::read(temp_dir.path().join("artifacts").join(hash_cache_name(bundle.container.bundle_hash)))?,
+            fs::read(
+                temp_dir
+                    .path()
+                    .join("artifacts")
+                    .join(hash_cache_name(bundle.container.bundle_hash))
+            )?,
             bundle_bytes
         );
         for (artifact, payload) in bundle.service.artifacts.iter().zip(artifact_payloads) {
             assert_eq!(
-                fs::read(temp_dir.path().join("artifacts").join(hash_cache_name(artifact.artifact_hash)))?,
+                fs::read(
+                    temp_dir
+                        .path()
+                        .join("artifacts")
+                        .join(hash_cache_name(artifact.artifact_hash))
+                )?,
                 payload
             );
         }
@@ -4934,8 +9342,8 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_once_hydrates_missing_artifacts_from_committed_remote_sorafs_provider(
-    ) -> Result<()> {
+    fn reconcile_once_hydrates_missing_artifacts_from_committed_remote_sorafs_provider()
+    -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.service.artifacts.truncate(1);
@@ -4944,24 +9352,23 @@ mod tests {
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "remote-provider");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
                     sample_deployment_state(&bundle),
                 );
-            world
-                .soracloud_service_runtime_mut_for_testing()
-                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
         }
 
         let provider_id = [0x11; 32];
@@ -5000,7 +9407,11 @@ mod tests {
             .expect("hydrated service plan");
         assert!(plan.bundle_available_locally);
         assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Healthy);
-        assert!(plan.artifacts.iter().all(|artifact| artifact.available_locally));
+        assert!(
+            plan.artifacts
+                .iter()
+                .all(|artifact| artifact.available_locally)
+        );
         assert_eq!(
             fs::read(
                 temp_dir
@@ -5033,29 +9444,27 @@ mod tests {
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
                     sample_deployment_state(&bundle),
                 );
-            world
-                .soracloud_service_runtime_mut_for_testing()
-                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
         }
 
         let provider_id = [0x11; 32];
-        let remote_fixture =
-            build_remote_manifest_fixture(b"wrong-remote-bundle", provider_id, 1)?;
+        let remote_fixture = build_remote_manifest_fixture(b"wrong-remote-bundle", provider_id, 1)?;
         approve_remote_hydration_sources(&state, std::slice::from_ref(&remote_fixture))?;
 
         let server = spawn_remote_hydration_fixture(std::slice::from_ref(&remote_fixture))?;
@@ -5077,16 +9486,19 @@ mod tests {
             .expect("service plan");
         assert!(!plan.bundle_available_locally);
         assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Hydrating);
-        assert!(!temp_dir
-            .path()
-            .join("artifacts")
-            .join(hash_cache_name(bundle.container.bundle_hash))
-            .exists());
+        assert!(
+            !temp_dir
+                .path()
+                .join("artifacts")
+                .join(hash_cache_name(bundle.container.bundle_hash))
+                .exists()
+        );
         Ok(())
     }
 
     #[test]
-    fn reconcile_once_skips_uncommitted_sorafs_artifacts_and_keeps_service_hydrating() -> Result<()> {
+    fn reconcile_once_skips_uncommitted_sorafs_artifacts_and_keeps_service_hydrating() -> Result<()>
+    {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         let bundle_bytes = simple_soracloud_contract_artifact(&["update"]);
@@ -5094,24 +9506,23 @@ mod tests {
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "uncommitted-sorafs");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
                     sample_deployment_state(&bundle),
                 );
-            world
-                .soracloud_service_runtime_mut_for_testing()
-                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
         }
 
         let temp_dir = tempfile::tempdir()?;
@@ -5136,18 +9547,24 @@ mod tests {
             .expect("service plan");
         assert!(!plan.bundle_available_locally);
         assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Hydrating);
-        assert!(plan.artifacts.iter().all(|artifact| !artifact.available_locally));
-        assert!(!temp_dir
-            .path()
-            .join("artifacts")
-            .join(hash_cache_name(bundle.container.bundle_hash))
-            .exists());
+        assert!(
+            plan.artifacts
+                .iter()
+                .all(|artifact| !artifact.available_locally)
+        );
+        assert!(
+            !temp_dir
+                .path()
+                .join("artifacts")
+                .join(hash_cache_name(bundle.container.bundle_hash))
+                .exists()
+        );
         Ok(())
     }
 
     #[test]
-    fn restore_persisted_snapshot_rehydrates_missing_artifacts_from_committed_sorafs_store(
-    ) -> Result<()> {
+    fn restore_persisted_snapshot_rehydrates_missing_artifacts_from_committed_sorafs_store()
+    -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         let bundle_bytes = simple_soracloud_contract_artifact(&["update", "private_update"]);
@@ -5155,24 +9572,23 @@ mod tests {
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "restart-rehydrate");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
                     sample_deployment_state(&bundle),
                 );
-            world
-                .soracloud_service_runtime_mut_for_testing()
-                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
         }
 
         let temp_dir = tempfile::tempdir()?;
@@ -5225,7 +9641,11 @@ mod tests {
             .and_then(|versions| versions.get("2026.02.0"))
             .expect("restarted service plan");
         assert!(plan.bundle_available_locally);
-        assert!(plan.artifacts.iter().all(|artifact| artifact.available_locally));
+        assert!(
+            plan.artifacts
+                .iter()
+                .all(|artifact| artifact.available_locally)
+        );
         assert_eq!(fs::read(bundle_cache_path)?, bundle_bytes);
         for (path, payload) in artifact_cache_paths.iter().zip(artifact_payloads) {
             assert_eq!(fs::read(path)?, payload);
@@ -5288,6 +9708,7 @@ mod tests {
                 )]),
             )]),
             apartments: BTreeMap::new(),
+            hf_sources: BTreeMap::new(),
         };
         write_json_atomic(
             temp_dir.path().join("runtime_snapshot.json").as_path(),
@@ -5335,15 +9756,13 @@ mod tests {
         )?;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(bundle.service.service_name.clone(), deployment);
@@ -5359,29 +9778,33 @@ mod tests {
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
-        let response = handle.execute_local_read(SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: bundle.service.service_name.to_string(),
-            service_version: bundle.service.service_version.clone(),
-            handler_name: "assets".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Asset,
-            request_method: "GET".to_owned(),
-            request_path: "/app/assets".to_owned(),
-            handler_path: "/".to_owned(),
-            request_query: None,
-            request_headers: BTreeMap::new(),
-            request_body: Vec::new(),
-            request_commitment: Hash::new(b"asset-request"),
-        })
-        .map_err(|error| eyre::eyre!("{error:?}"))?;
+        let response = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: bundle.service.service_name.to_string(),
+                service_version: bundle.service.service_version.clone(),
+                handler_name: "assets".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Asset,
+                request_method: "GET".to_owned(),
+                request_path: "/app/assets".to_owned(),
+                handler_path: "/".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::new(),
+                request_body: Vec::new(),
+                request_commitment: Hash::new(b"asset-request"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
 
         assert_eq!(response.response_bytes, asset_bytes);
         assert_eq!(
             response.content_type.as_deref(),
             Some("text/html; charset=utf-8")
         );
-        assert_eq!(response.certified_by, SoraCertifiedResponsePolicyV1::StateCommitment);
+        assert_eq!(
+            response.certified_by,
+            SoraCertifiedResponsePolicyV1::StateCommitment
+        );
         assert!(response.runtime_receipt.is_none());
         assert_eq!(response.bindings.len(), 1);
         assert_eq!(
@@ -5408,15 +9831,13 @@ mod tests {
         )?;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(bundle.service.service_name.clone(), deployment);
@@ -5438,7 +9859,8 @@ mod tests {
                         service_version: bundle.service.service_version.clone(),
                         binding_name: "session_store".parse().expect("valid binding"),
                         state_key: "/state/session/alice".to_owned(),
-                        encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext,
+                        encryption:
+                            iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext,
                         payload_bytes: std::num::NonZeroU64::new(64).expect("nonzero"),
                         payload_commitment: Hash::new(b"alice-session"),
                         last_update_sequence: 4,
@@ -5455,28 +9877,32 @@ mod tests {
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
-        let response = handle.execute_local_read(SoracloudLocalReadRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            service_name: bundle.service.service_name.to_string(),
-            service_version: bundle.service.service_version.clone(),
-            handler_name: "query".to_owned(),
-            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
-            request_method: "GET".to_owned(),
-            request_path: "/app/query".to_owned(),
-            handler_path: "/".to_owned(),
-            request_query: Some("binding=session_store".to_owned()),
-            request_headers: BTreeMap::new(),
-            request_body: Vec::new(),
-            request_commitment: Hash::new(b"query-request"),
-        })
-        .map_err(|error| eyre::eyre!("{error:?}"))?;
+        let response = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: bundle.service.service_name.to_string(),
+                service_version: bundle.service.service_version.clone(),
+                handler_name: "query".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "GET".to_owned(),
+                request_path: "/app/query".to_owned(),
+                handler_path: "/".to_owned(),
+                request_query: Some("binding=session_store".to_owned()),
+                request_headers: BTreeMap::new(),
+                request_body: Vec::new(),
+                request_commitment: Hash::new(b"query-request"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
 
         let decoded: LocalQueryResponse = norito::json::from_slice(&response.response_bytes)?;
         assert_eq!(decoded.entries.len(), 1);
         assert_eq!(decoded.entries[0].binding_name, "session_store");
         assert_eq!(decoded.entries[0].state_key, "/state/session/alice");
-        assert_eq!(response.certified_by, SoraCertifiedResponsePolicyV1::AuditReceipt);
+        assert_eq!(
+            response.certified_by,
+            SoraCertifiedResponsePolicyV1::AuditReceipt
+        );
         assert!(response.runtime_receipt.is_some());
         assert_eq!(response.bindings.len(), 1);
         assert_eq!(
@@ -5519,7 +9945,10 @@ mod tests {
         assert!(result.state_mutations.is_empty());
         assert!(result.outbound_mailbox_messages.is_empty());
         let runtime_state = result.runtime_state.expect("runtime state");
-        assert_eq!(runtime_state.health_status, SoraServiceHealthStatusV1::Healthy);
+        assert_eq!(
+            runtime_state.health_status,
+            SoraServiceHealthStatusV1::Healthy
+        );
         assert_eq!(runtime_state.pending_mailbox_message_count, 0);
         assert_eq!(
             result.runtime_receipt.handler_class,
@@ -5533,12 +9962,16 @@ mod tests {
             result.runtime_receipt.mailbox_message_id,
             Some(request.mailbox_message.message_id)
         );
-        assert_ne!(result.runtime_receipt.result_commitment, Hash::prehashed([0; Hash::LENGTH]));
+        assert_ne!(
+            result.runtime_receipt.result_commitment,
+            Hash::prehashed([0; Hash::LENGTH])
+        );
         Ok(())
     }
 
     #[test]
-    fn execute_ordered_mailbox_runs_private_update_handler_from_admitted_ivm_bundle() -> Result<()> {
+    fn execute_ordered_mailbox_runs_private_update_handler_from_admitted_ivm_bundle() -> Result<()>
+    {
         let state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         let artifact_bytes =
@@ -5733,7 +10166,8 @@ mod tests {
     }
 
     #[test]
-    fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cache() -> Result<()> {
+    fn execute_ordered_mailbox_returns_deterministic_failure_for_missing_bundle_cache() -> Result<()>
+    {
         let state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         let artifact_bytes = simple_soracloud_contract_artifact(&["apply_update"]);
@@ -5781,24 +10215,23 @@ mod tests {
         )?;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_service_revisions_mut_for_testing()
-                .insert(
-                    (
-                        bundle.service.service_name.to_string(),
-                        bundle.service.service_version.clone(),
-                    ),
-                    bundle.clone(),
-                );
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
             world
                 .soracloud_service_deployments_mut_for_testing()
                 .insert(
                     bundle.service.service_name.clone(),
                     sample_deployment_state(&bundle),
                 );
-            world
-                .soracloud_service_runtime_mut_for_testing()
-                .insert(bundle.service.service_name.clone(), sample_runtime_state(&bundle));
+            world.soracloud_service_runtime_mut_for_testing().insert(
+                bundle.service.service_name.clone(),
+                sample_runtime_state(&bundle),
+            );
         }
         let manager = SoracloudRuntimeManager::new(
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
@@ -5835,9 +10268,10 @@ mod tests {
         let apartment = sample_agent_record()?;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
-            world
-                .soracloud_agent_apartments_mut_for_testing()
-                .insert(apartment.manifest.apartment_name.to_string(), apartment.clone());
+            world.soracloud_agent_apartments_mut_for_testing().insert(
+                apartment.manifest.apartment_name.to_string(),
+                apartment.clone(),
+            );
         }
         let temp_dir = tempfile::tempdir()?;
         let manager = SoracloudRuntimeManager::new(
@@ -5847,20 +10281,425 @@ mod tests {
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
-        let result = handle.execute_apartment(SoracloudApartmentExecutionRequest {
-            observed_height: 0,
-            observed_block_hash: None,
-            apartment_name: apartment.manifest.apartment_name.to_string(),
-            process_generation: apartment.process_generation,
-            operation: "checkpoint".to_owned(),
-            request_commitment: Hash::new(b"checkpoint-request"),
-        })
-        .map_err(|error| eyre::eyre!("{error:?}"))?;
+        let result = handle
+            .execute_apartment(SoracloudApartmentExecutionRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                apartment_name: apartment.manifest.apartment_name.to_string(),
+                process_generation: apartment.process_generation,
+                operation: "checkpoint".to_owned(),
+                request_commitment: Hash::new(b"checkpoint-request"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
 
         assert_eq!(result.status, apartment.status);
         assert!(result.checkpoint_artifact_hash.is_none());
         assert!(result.journal_artifact_hash.is_none());
         assert_ne!(result.result_commitment, Hash::new(b"checkpoint-request"));
+        Ok(())
+    }
+
+    #[test]
+    fn execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_summary()
+    -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_agent_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let apartment_name: Name = "hf_agent".parse().expect("valid apartment name");
+        let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
+            apartment_name.clone(),
+            &fixture.bundle,
+        );
+        let run = SoraAgentAutonomyRunRecordV1 {
+            run_id: "hf_agent:autonomy:42".to_owned(),
+            artifact_hash: "hash:HFAGENT#01".to_owned(),
+            provenance_hash: Some("hash:HFPROV#01".to_owned()),
+            budget_units: 75,
+            run_label: "fallback label".to_owned(),
+            workflow_input_json: Some(
+                "{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}"
+                    .to_owned(),
+            ),
+            approved_process_generation: 1,
+            request_commitment: Hash::new(b"hf-agent-run"),
+            approved_sequence: 42,
+        };
+        let apartment = SoraAgentApartmentRecordV1 {
+            schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+            manifest_hash: Hash::new(Encode::encode(&manifest)),
+            status: SoraAgentRuntimeStatusV1::Running,
+            deployed_sequence: 1,
+            lease_started_sequence: 1,
+            lease_expires_sequence: 400,
+            last_renewed_sequence: 1,
+            restart_count: 0,
+            last_restart_sequence: None,
+            last_restart_reason: None,
+            process_generation: 1,
+            process_started_sequence: 1,
+            last_active_sequence: 42,
+            last_checkpoint_sequence: Some(42),
+            checkpoint_count: 1,
+            persistent_state: SoraAgentPersistentStateV1 {
+                total_bytes: 128,
+                key_sizes: BTreeMap::from([("/autonomy/hf_agent:autonomy:42".to_owned(), 128)]),
+            },
+            revoked_policy_capabilities: BTreeSet::new(),
+            pending_wallet_requests: BTreeMap::new(),
+            wallet_daily_spend: BTreeMap::new(),
+            mailbox_queue: Vec::new(),
+            autonomy_budget_ceiling_units: 1_000,
+            autonomy_budget_remaining_units: 925,
+            uploaded_model_binding: None,
+            artifact_allowlist: BTreeMap::from([(
+                run.artifact_hash.clone(),
+                SoraAgentArtifactAllowRuleV1 {
+                    artifact_hash: run.artifact_hash.clone(),
+                    provenance_hash: run.provenance_hash.clone(),
+                    added_sequence: 41,
+                },
+            )]),
+            autonomy_run_history: vec![run.clone()],
+            manifest,
+        };
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_agent_apartments_mut_for_testing()
+                .insert(apartment_name.to_string(), apartment.clone());
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir
+            .path()
+            .join("hf_sources")
+            .join(sanitize_path_component(&fixture.source_id.to_string()));
+        let files_root = source_root.join("files");
+        fs::create_dir_all(&files_root)?;
+        let config_json = br#"{
+  "model_type": "gpt2",
+  "_soracloud_fixture": {
+    "mode": "echo",
+    "prefix": "agent:"
+  }
+}"#;
+        let config_path = files_root.join("config.json");
+        write_bytes_atomic(&config_path, config_json)?;
+        write_json_atomic(
+            &source_root.join("import_manifest.json"),
+            &HfLocalImportManifestV1 {
+                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+                source_id: fixture.source_id.to_string(),
+                repo_id: "openai-community/gpt2".to_owned(),
+                requested_revision: "main".to_owned(),
+                resolved_commit: Some("main".to_owned()),
+                model_name: "gpt2".to_owned(),
+                adapter_id: "hf.shared.v1".to_owned(),
+                pipeline_tag: Some("text-generation".to_owned()),
+                library_name: Some("transformers".to_owned()),
+                tags: vec!["text-generation".to_owned()],
+                imported_at_ms: 20,
+                imported_files: vec![HfImportedFileV1 {
+                    path: "config.json".to_owned(),
+                    content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
+                    payload_hash: Hash::new(config_json).to_string(),
+                    local_path: config_path.display().to_string(),
+                }],
+                skipped_files: Vec::new(),
+                raw_model_info_path: None,
+                import_error: None,
+            },
+        )?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let request = SoracloudApartmentExecutionRequest {
+            observed_height: 0,
+            observed_block_hash: None,
+            apartment_name: apartment_name.to_string(),
+            process_generation: apartment.process_generation,
+            operation: format!("autonomy-run:{}", run.run_id),
+            request_commitment: run.request_commitment,
+        };
+        let result = handle
+            .execute_apartment(request.clone())
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+        assert_eq!(result.status, SoraAgentRuntimeStatusV1::Running);
+        assert!(result.checkpoint_artifact_hash.is_some());
+        assert!(result.journal_artifact_hash.is_some());
+
+        let (summary, journal_hash) = read_apartment_autonomy_execution_summary(
+            temp_dir.path(),
+            apartment_name.as_ref(),
+            &run.run_id,
+        )
+        .map_err(|error| eyre::eyre!("{error:?}"))?
+        .expect("persisted autonomy execution summary");
+        assert!(summary.succeeded);
+        assert!(summary.workflow_steps.is_empty());
+        assert_eq!(
+            summary.service_name.as_deref(),
+            Some(fixture.bundle.service.service_name.as_ref())
+        );
+        let runtime_receipt = summary
+            .runtime_receipt
+            .as_ref()
+            .expect("runtime receipt persisted");
+        assert_eq!(
+            runtime_receipt.service_name.as_ref(),
+            fixture.bundle.service.service_name.as_ref()
+        );
+        assert_eq!(runtime_receipt.handler_name.as_ref(), "infer");
+        let response_json = summary.response_json.as_ref().expect("response json");
+        assert_eq!(
+            response_json
+                .get("backend")
+                .and_then(norito::json::Value::as_str),
+            Some("local_fixture")
+        );
+        assert_eq!(
+            response_json
+                .get("inputs")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|inputs| inputs.first())
+                .and_then(norito::json::Value::as_str),
+            Some("alpha")
+        );
+        assert_eq!(
+            response_json
+                .get("inputs")
+                .and_then(norito::json::Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            response_json
+                .get("parameters")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|parameters| parameters.get("max_new_tokens"))
+                .and_then(norito::json::Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            response_json
+                .get("text")
+                .and_then(norito::json::Value::as_str),
+            Some("agent:['alpha', 'beta']")
+        );
+        assert_eq!(result.journal_artifact_hash, Some(journal_hash));
+        assert_eq!(
+            result.checkpoint_artifact_hash,
+            summary.checkpoint_artifact_hash
+        );
+
+        let second = handle
+            .execute_apartment(request)
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+        assert_eq!(second.result_commitment, result.result_commitment);
+        assert_eq!(second.journal_artifact_hash, result.journal_artifact_hash);
+        assert_eq!(
+            second.checkpoint_artifact_hash,
+            result.checkpoint_artifact_hash
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn execute_apartment_generated_hf_autonomy_workflow_executes_multiple_steps_locally()
+    -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_agent_workflow_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let apartment_name: Name = "hf_workflow_agent".parse().expect("valid apartment name");
+        let manifest = iroha_core::soracloud_runtime::build_soracloud_hf_generated_agent_manifest(
+            apartment_name.clone(),
+            &fixture.bundle,
+        );
+        let run = SoraAgentAutonomyRunRecordV1 {
+            run_id: "hf_workflow_agent:autonomy:9".to_owned(),
+            artifact_hash: "hash:HFAGENT#WF".to_owned(),
+            provenance_hash: Some("hash:HFPROV#WF".to_owned()),
+            budget_units: 90,
+            run_label: "workflow".to_owned(),
+            workflow_input_json: Some(
+                "{\"workflow_version\":1,\"steps\":[{\"step_id\":\"draft\",\"request\":{\"inputs\":\"alpha\"}},{\"step_id\":\"refine\",\"request\":{\"inputs\":\"${steps.draft.text}\",\"parameters\":{\"max_new_tokens\":2}}}]}"
+                    .to_owned(),
+            ),
+            approved_process_generation: 1,
+            request_commitment: Hash::new(b"hf-agent-workflow-run"),
+            approved_sequence: 9,
+        };
+        let apartment = SoraAgentApartmentRecordV1 {
+            schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+            manifest_hash: Hash::new(Encode::encode(&manifest)),
+            status: SoraAgentRuntimeStatusV1::Running,
+            deployed_sequence: 1,
+            lease_started_sequence: 1,
+            lease_expires_sequence: 400,
+            last_renewed_sequence: 1,
+            restart_count: 0,
+            last_restart_sequence: None,
+            last_restart_reason: None,
+            process_generation: 1,
+            process_started_sequence: 1,
+            last_active_sequence: 9,
+            last_checkpoint_sequence: Some(9),
+            checkpoint_count: 1,
+            persistent_state: SoraAgentPersistentStateV1 {
+                total_bytes: 128,
+                key_sizes: BTreeMap::from([(
+                    "/autonomy/hf_workflow_agent:autonomy:9".to_owned(),
+                    128,
+                )]),
+            },
+            revoked_policy_capabilities: BTreeSet::new(),
+            pending_wallet_requests: BTreeMap::new(),
+            wallet_daily_spend: BTreeMap::new(),
+            mailbox_queue: Vec::new(),
+            autonomy_budget_ceiling_units: 1_000,
+            autonomy_budget_remaining_units: 910,
+            uploaded_model_binding: None,
+            artifact_allowlist: BTreeMap::from([(
+                run.artifact_hash.clone(),
+                SoraAgentArtifactAllowRuleV1 {
+                    artifact_hash: run.artifact_hash.clone(),
+                    provenance_hash: run.provenance_hash.clone(),
+                    added_sequence: 8,
+                },
+            )]),
+            autonomy_run_history: vec![run.clone()],
+            manifest,
+        };
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world
+                .soracloud_agent_apartments_mut_for_testing()
+                .insert(apartment_name.to_string(), apartment.clone());
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir
+            .path()
+            .join("hf_sources")
+            .join(sanitize_path_component(&fixture.source_id.to_string()));
+        let files_root = source_root.join("files");
+        fs::create_dir_all(&files_root)?;
+        let config_json = br#"{
+  "model_type": "gpt2",
+  "_soracloud_fixture": {
+    "mode": "echo",
+    "prefix": "wf:"
+  }
+}"#;
+        let config_path = files_root.join("config.json");
+        write_bytes_atomic(&config_path, config_json)?;
+        write_json_atomic(
+            &source_root.join("import_manifest.json"),
+            &HfLocalImportManifestV1 {
+                schema_version: HF_LOCAL_IMPORT_SCHEMA_VERSION_V1,
+                source_id: fixture.source_id.to_string(),
+                repo_id: "openai-community/gpt2".to_owned(),
+                requested_revision: "main".to_owned(),
+                resolved_commit: Some("main".to_owned()),
+                model_name: "gpt2".to_owned(),
+                adapter_id: "hf.shared.v1".to_owned(),
+                pipeline_tag: Some("text-generation".to_owned()),
+                library_name: Some("transformers".to_owned()),
+                tags: vec!["text-generation".to_owned()],
+                imported_at_ms: 20,
+                imported_files: vec![HfImportedFileV1 {
+                    path: "config.json".to_owned(),
+                    content_length: u64::try_from(config_json.len()).unwrap_or(u64::MAX),
+                    payload_hash: Hash::new(config_json).to_string(),
+                    local_path: config_path.display().to_string(),
+                }],
+                skipped_files: Vec::new(),
+                raw_model_info_path: None,
+                import_error: None,
+            },
+        )?;
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let result = handle
+            .execute_apartment(SoracloudApartmentExecutionRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                apartment_name: apartment_name.to_string(),
+                process_generation: apartment.process_generation,
+                operation: format!("autonomy-run:{}", run.run_id),
+                request_commitment: run.request_commitment,
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        let (summary, _journal_hash) = read_apartment_autonomy_execution_summary(
+            temp_dir.path(),
+            apartment_name.as_ref(),
+            &run.run_id,
+        )
+        .map_err(|error| eyre::eyre!("{error:?}"))?
+        .expect("persisted workflow summary");
+        assert!(summary.succeeded);
+        assert_eq!(summary.workflow_steps.len(), 2);
+        assert_eq!(summary.workflow_steps[0].step_id.as_deref(), Some("draft"));
+        assert_eq!(
+            summary.workflow_steps[0]
+                .response_json
+                .as_ref()
+                .and_then(|value| value.get("text"))
+                .and_then(norito::json::Value::as_str),
+            Some("wf:alpha")
+        );
+        assert_eq!(summary.workflow_steps[1].step_id.as_deref(), Some("refine"));
+        assert_eq!(
+            summary.workflow_steps[1]
+                .response_json
+                .as_ref()
+                .and_then(|value| value.get("inputs"))
+                .and_then(norito::json::Value::as_str),
+            Some("wf:alpha")
+        );
+        let response_json = summary
+            .response_json
+            .as_ref()
+            .expect("workflow response json");
+        assert_eq!(
+            response_json
+                .get("step_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            response_json
+                .get("final_response")
+                .and_then(|value| value.get("text"))
+                .and_then(norito::json::Value::as_str),
+            Some("wf:wf:alpha")
+        );
+        assert_eq!(
+            result.checkpoint_artifact_hash,
+            summary.checkpoint_artifact_hash
+        );
         Ok(())
     }
 }

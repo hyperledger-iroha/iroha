@@ -32,6 +32,10 @@ fn approver_is_authorized(
     has_multisig_role || approver == multisig_account || spec.signatories.contains_key(approver)
 }
 
+fn canceler_is_authorized(multisig_account: &AccountId, canceler: &AccountId) -> bool {
+    canceler.subject_id() == multisig_account.subject_id()
+}
+
 impl VisitExecute for MultisigPropose {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         let host = executor.host();
@@ -333,6 +337,59 @@ impl VisitExecute for MultisigApprove {
     }
 }
 
+impl VisitExecute for MultisigCancel {
+    fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
+        let canceler = executor.context().authority.clone();
+        let multisig_account = self.account.clone();
+        let instructions_hash = self.instructions_hash;
+
+        let spec = match multisig_spec(&multisig_account, executor) {
+            Ok(spec) => spec,
+            Err(err) => deny!(executor, err),
+        };
+
+        if !canceler_is_authorized(&multisig_account, &canceler) {
+            deny!(
+                executor,
+                "multisig cancel must execute as the multisig account"
+            );
+        }
+
+        if let Err(err) = ensure_not_derived_multisig_account(&multisig_account, &spec) {
+            deny!(executor, err);
+        }
+
+        if let Err(err) = proposal_value(&multisig_account, instructions_hash, executor) {
+            deny!(executor, err);
+        }
+    }
+
+    fn execute<V: Execute + Visit + ?Sized>(self, executor: &mut V) -> Result<(), ValidationFail> {
+        let canceler = executor.context().authority.clone();
+        let multisig_account = self.account;
+        let instructions_hash = self.instructions_hash;
+
+        let spec = multisig_spec(&multisig_account, executor)?;
+        if !canceler_is_authorized(&multisig_account, &canceler) {
+            return Err(ValidationFail::NotPermitted(
+                "multisig cancel must execute as the multisig account".to_owned(),
+            ));
+        }
+        ensure_not_derived_multisig_account(&multisig_account, &spec)?;
+
+        prune_expired(multisig_account.clone(), instructions_hash, executor)?;
+
+        let proposal_value = proposal_value(&multisig_account, instructions_hash, executor)?;
+        if let Some(true) = proposal_value.is_relayed {
+            return Err(ValidationFail::NotPermitted(
+                "cannot cancel an executed relayed approval".to_owned(),
+            ));
+        }
+
+        prune_down(multisig_account, instructions_hash, executor)
+    }
+}
+
 /// Remove an expired proposal and relevant entries, switching the executor authority to this multisig account
 fn prune_expired<V: Execute + Visit + ?Sized>(
     multisig_account: AccountId,
@@ -470,6 +527,23 @@ mod tests {
         assert!(
             approver_is_authorized(&multisig, &other, &spec, true),
             "role-based authorization should allow approver"
+        );
+    }
+
+    #[test]
+    fn canceler_must_be_the_multisig_subject() {
+        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let multisig = account(10, &domain);
+        let same_subject = multisig.clone();
+        let other = account(11, &domain);
+
+        assert!(
+            canceler_is_authorized(&multisig, &same_subject),
+            "the multisig account itself should be allowed to execute cancel"
+        );
+        assert!(
+            !canceler_is_authorized(&multisig, &other),
+            "signers must not be able to execute cancel directly outside multisig"
         );
     }
 

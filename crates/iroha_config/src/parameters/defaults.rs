@@ -206,6 +206,57 @@ pub mod soracloud_runtime {
     /// Default outbound byte budget per service/minute. `None` means budget is unset.
     pub const EGRESS_MAX_BYTES_PER_MINUTE: Option<u64> = None;
 
+    /// Hugging Face integration defaults for the embedded runtime manager.
+    pub mod hf {
+        /// Default Hugging Face Hub base URL used for repo file downloads.
+        pub const HUB_BASE_URL: &str = "https://huggingface.co";
+        /// Default Hugging Face Hub API base URL used for model metadata lookups.
+        pub const API_BASE_URL: &str = "https://huggingface.co/api";
+        /// Default HF Inference base URL used for `/infer` forwarding when bridge fallback is enabled.
+        pub const INFERENCE_BASE_URL: &str = "https://router.huggingface.co/hf-inference/models";
+        /// Default per-request timeout when talking to Hugging Face surfaces.
+        pub const REQUEST_TIMEOUT_MS: u64 = 15_000;
+        /// Whether generated HF services should prefer local on-node execution by default.
+        pub const LOCAL_EXECUTION_ENABLED: bool = true;
+        /// Default local runner program used to execute the embedded HF adapter.
+        pub const LOCAL_RUNNER_PROGRAM: &str = "python3";
+        /// Default timeout applied to one local runner invocation.
+        pub const LOCAL_RUNNER_TIMEOUT_MS: u64 = 120_000;
+        /// Whether generated HF services may fall back to the HF Inference bridge.
+        pub const ALLOW_INFERENCE_BRIDGE_FALLBACK: bool = true;
+        /// Default maximum number of Hub files imported into the shared local cache for one source.
+        pub const IMPORT_MAX_FILES: u32 = 32;
+        /// Default maximum size of one imported Hub file.
+        pub const IMPORT_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+        /// Default aggregate import budget for one Hub source.
+        pub const IMPORT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+        /// Default file-selection allowlist used by the HF importer.
+        pub fn import_file_allowlist() -> Vec<String> {
+            vec![
+                "config.json".to_owned(),
+                "generation_config.json".to_owned(),
+                "tokenizer.json".to_owned(),
+                "tokenizer_config.json".to_owned(),
+                "special_tokens_map.json".to_owned(),
+                "merges.txt".to_owned(),
+                "vocab.json".to_owned(),
+                "vocab.txt".to_owned(),
+                "tokenizer.model".to_owned(),
+                "sentencepiece.bpe.model".to_owned(),
+                "preprocessor_config.json".to_owned(),
+                "processor_config.json".to_owned(),
+                "chat_template.jinja".to_owned(),
+                "*.gguf".to_owned(),
+                "*.safetensors".to_owned(),
+                "*.safetensors.index.json".to_owned(),
+                "pytorch_model.bin".to_owned(),
+                "pytorch_model.bin.index.json".to_owned(),
+                "rust_model.ot".to_owned(),
+            ]
+        }
+    }
+
     /// Default root directory for Soracloud runtime-manager state.
     pub fn state_dir() -> PathBuf {
         PathBuf::from(STATE_DIR)
@@ -1979,6 +2030,28 @@ pub mod nexus {
 
         /// Poll interval for refreshing manifests and governance bundles.
         pub const POLL_INTERVAL: Duration = Duration::from_mins(1);
+    }
+
+    /// Shared Hugging Face lease defaults.
+    pub mod hf_shared_leases {
+        /// Drain grace window after the last member leaves a shared HF lease pool (milliseconds).
+        pub const DRAIN_GRACE_MS: u64 = 5_000;
+    }
+
+    /// Uploaded private-model admission defaults.
+    pub mod uploaded_models {
+        /// Plaintext chunk size admitted before envelope encryption.
+        pub const CHUNK_PLAINTEXT_BYTES: u64 = 4 * 1024 * 1024;
+        /// Maximum plaintext bytes admitted for one uploaded model.
+        pub const MAX_PLAINTEXT_BYTES_PER_MODEL: u64 = 64 * 1024 * 1024 * 1024;
+        /// Maximum encrypted chunk count admitted for one uploaded model.
+        pub const MAX_CHUNK_COUNT_PER_MODEL: u32 = 16_384;
+        /// Maximum concurrent private sessions admitted for one apartment.
+        pub const MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT: u32 = 4;
+        /// Maximum text token budget admitted for one private session.
+        pub const MAX_SESSION_TOKEN_BUDGET: u32 = 16_384;
+        /// Maximum image budget admitted for one private session.
+        pub const MAX_SESSION_IMAGE_BUDGET: u16 = 8;
     }
 
     /// Lane compliance configuration defaults.

@@ -10786,6 +10786,12 @@ pub struct Nexus {
     /// Universal Nexus fee schedule.
     #[config(nested)]
     pub fees: NexusFees,
+    /// Shared Hugging Face lease policy.
+    #[config(nested)]
+    pub hf_shared_leases: NexusHfSharedLeases,
+    /// Uploaded private-model quota policy.
+    #[config(nested)]
+    pub uploaded_models: NexusUploadedModels,
     /// Domain endorsement controls.
     #[config(nested)]
     pub endorsement: NexusEndorsement,
@@ -10831,6 +10837,8 @@ impl Default for Nexus {
             dataspace_catalog: Vec::new(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
+            hf_shared_leases: NexusHfSharedLeases::default(),
+            uploaded_models: NexusUploadedModels::default(),
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
             lane_relay_emergency: LaneRelayEmergency::default(),
@@ -11210,6 +11218,88 @@ pub struct NexusFees {
     /// Maximum fee a sponsor can cover per transaction (asset base units, 0 = unlimited).
     #[config(default = "defaults::nexus::fees::SPONSOR_MAX_FEE")]
     pub sponsor_max_fee: u64,
+}
+
+/// User-level configuration container for shared Hugging Face lease policy.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct NexusHfSharedLeases {
+    /// Drain grace window after the last member leaves a shared HF lease pool (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS))"
+    )]
+    pub drain_grace_ms: DurationMs,
+}
+
+impl Default for NexusHfSharedLeases {
+    fn default() -> Self {
+        Self {
+            drain_grace_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS,
+            )),
+        }
+    }
+}
+
+impl NexusHfSharedLeases {
+    fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusHfSharedLeases> {
+        Some(actual::NexusHfSharedLeases {
+            drain_grace: self.drain_grace_ms.get(),
+        })
+    }
+}
+
+/// User-level configuration container for uploaded private-model quotas.
+#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+pub struct NexusUploadedModels {
+    /// Plaintext chunk size admitted before envelope encryption.
+    #[config(default = "defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES")]
+    pub chunk_plaintext_bytes: u64,
+    /// Maximum plaintext bytes admitted for one uploaded model.
+    #[config(default = "defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL")]
+    pub max_plaintext_bytes_per_model: u64,
+    /// Maximum encrypted chunk count admitted for one uploaded model.
+    #[config(default = "defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL")]
+    pub max_chunk_count_per_model: u32,
+    /// Maximum concurrent private sessions admitted for one apartment.
+    #[config(
+        default = "defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT"
+    )]
+    pub max_active_private_sessions_per_apartment: u32,
+    /// Maximum token budget admitted for one private session.
+    #[config(default = "defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET")]
+    pub max_session_token_budget: u32,
+    /// Maximum image budget admitted for one private session.
+    #[config(default = "defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET")]
+    pub max_session_image_budget: u16,
+}
+
+impl Default for NexusUploadedModels {
+    fn default() -> Self {
+        Self {
+            chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
+            max_plaintext_bytes_per_model:
+                defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
+            max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
+            max_active_private_sessions_per_apartment:
+                defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
+            max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
+            max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
+        }
+    }
+}
+
+impl NexusUploadedModels {
+    fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusUploadedModels> {
+        Some(actual::NexusUploadedModels {
+            chunk_plaintext_bytes: self.chunk_plaintext_bytes,
+            max_plaintext_bytes_per_model: self.max_plaintext_bytes_per_model,
+            max_chunk_count_per_model: self.max_chunk_count_per_model,
+            max_active_private_sessions_per_apartment: self
+                .max_active_private_sessions_per_apartment,
+            max_session_token_budget: self.max_session_token_budget,
+            max_session_image_budget: self.max_session_image_budget,
+        })
+    }
 }
 
 /// User-level configuration container for domain endorsements.
@@ -12358,6 +12448,8 @@ impl Nexus {
             dataspace_catalog,
             staking,
             fees,
+            hf_shared_leases,
+            uploaded_models,
             endorsement: endorsement_cfg,
             axt,
             lane_relay_emergency,
@@ -12389,6 +12481,8 @@ impl Nexus {
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
+        let hf_shared_leases = hf_shared_leases.parse(emitter)?;
+        let uploaded_models = uploaded_models.parse(emitter)?;
         let endorsement = endorsement_cfg.parse(emitter)?;
         let lane_config = actual::LaneConfig::from_catalog(&lane_catalog);
         let has_multilane = lane_catalog.lane_count().get() > 1
@@ -12429,6 +12523,8 @@ impl Nexus {
             storage,
             staking,
             fees,
+            hf_shared_leases,
+            uploaded_models,
             endorsement,
             lane_catalog,
             lane_config,
@@ -13477,6 +13573,9 @@ pub struct SoracloudRuntime {
     /// Outbound egress policy for embedded runtimes.
     #[config(nested)]
     pub egress: SoracloudRuntimeEgress,
+    /// Hugging Face importer and inference-bridge settings.
+    #[config(nested)]
+    pub hf: SoracloudRuntimeHuggingFace,
 }
 
 impl SoracloudRuntime {
@@ -13488,6 +13587,7 @@ impl SoracloudRuntime {
             cache_budgets: self.cache_budgets.parse(),
             native_process: self.native_process.parse(),
             egress: self.egress.parse(),
+            hf: self.hf.parse(),
         }
     }
 }
@@ -13608,6 +13708,122 @@ impl SoracloudRuntimeEgress {
             allowed_hosts,
             rate_per_minute: self.rate_per_minute.and_then(NonZeroU32::new),
             max_bytes_per_minute: self.max_bytes_per_minute.and_then(NonZeroU64::new),
+        }
+    }
+}
+
+/// User-level Hugging Face importer/inference settings for the embedded Soracloud runtime manager.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct SoracloudRuntimeHuggingFace {
+    /// Base URL used to resolve repo files from the Hub.
+    #[config(default = "defaults::soracloud_runtime::hf::HUB_BASE_URL.to_string()")]
+    pub hub_base_url: String,
+    /// Base URL used to fetch model metadata from the Hub API.
+    #[config(default = "defaults::soracloud_runtime::hf::API_BASE_URL.to_string()")]
+    pub api_base_url: String,
+    /// Base URL used to forward `/infer` calls to HF Inference.
+    #[config(default = "defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_string()")]
+    pub inference_base_url: String,
+    /// Timeout applied to Hugging Face API and file requests (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS))"
+    )]
+    pub request_timeout_ms: DurationMs,
+    /// Whether generated HF services should prefer the on-node local runner path.
+    #[config(default = "defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED")]
+    pub local_execution_enabled: bool,
+    /// Program used to invoke the embedded local HF runner script.
+    #[config(default = "defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string()")]
+    pub local_runner_program: String,
+    /// Timeout applied to one local runner invocation (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS))"
+    )]
+    pub local_runner_timeout_ms: DurationMs,
+    /// Whether the runtime may fall back to HF Inference when local execution fails.
+    #[config(default = "defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK")]
+    pub allow_inference_bridge_fallback: bool,
+    /// Maximum number of imported Hub files retained per shared source.
+    #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_FILES")]
+    pub import_max_files: u32,
+    /// Maximum size of one imported Hub file.
+    #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES")]
+    pub import_max_file_bytes: u64,
+    /// Maximum aggregate size imported per shared source.
+    #[config(default = "defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES")]
+    pub import_max_total_bytes: u64,
+    /// File-selection allowlist used by the importer.
+    #[config(default = "defaults::soracloud_runtime::hf::import_file_allowlist()")]
+    pub import_file_allowlist: Vec<String>,
+    /// Optional bearer token used for HF Inference requests.
+    pub inference_token: Option<String>,
+}
+
+impl Default for SoracloudRuntimeHuggingFace {
+    fn default() -> Self {
+        Self {
+            hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL.to_string(),
+            api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL.to_string(),
+            inference_base_url: defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_string(),
+            request_timeout_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
+            )),
+            local_execution_enabled: defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
+            local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string(),
+            local_runner_timeout_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
+            )),
+            allow_inference_bridge_fallback:
+                defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
+            import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
+            import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
+            import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
+            import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
+            inference_token: None,
+        }
+    }
+}
+
+impl SoracloudRuntimeHuggingFace {
+    fn parse(self) -> actual::SoracloudRuntimeHuggingFace {
+        let mut import_file_allowlist = self
+            .import_file_allowlist
+            .into_iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        import_file_allowlist.sort();
+        import_file_allowlist.dedup();
+        let local_runner_program = {
+            let trimmed = self.local_runner_program.trim();
+            if trimmed.is_empty() {
+                defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_owned()
+            } else {
+                trimmed.to_owned()
+            }
+        };
+
+        actual::SoracloudRuntimeHuggingFace {
+            hub_base_url: self.hub_base_url.trim().trim_end_matches('/').to_owned(),
+            api_base_url: self.api_base_url.trim().trim_end_matches('/').to_owned(),
+            inference_base_url: self
+                .inference_base_url
+                .trim()
+                .trim_end_matches('/')
+                .to_owned(),
+            request_timeout: self.request_timeout_ms.get().max(MIN_TIMER_INTERVAL),
+            local_execution_enabled: self.local_execution_enabled,
+            local_runner_program,
+            local_runner_timeout: self.local_runner_timeout_ms.get().max(MIN_TIMER_INTERVAL),
+            allow_inference_bridge_fallback: self.allow_inference_bridge_fallback,
+            import_max_files: self.import_max_files.max(1),
+            import_max_file_bytes: self.import_max_file_bytes.max(1),
+            import_max_total_bytes: self.import_max_total_bytes.max(1),
+            import_file_allowlist,
+            inference_token: self
+                .inference_token
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
         }
     }
 }
@@ -17371,6 +17587,23 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual.soracloud_runtime.egress.default_allow,
             defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW
         );
+        assert_eq!(
+            actual.soracloud_runtime.hf.hub_base_url,
+            defaults::soracloud_runtime::hf::HUB_BASE_URL
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.local_execution_enabled,
+            defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.local_runner_program,
+            defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.import_max_files,
+            defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
+        );
+        assert!(actual.soracloud_runtime.hf.inference_token.is_none());
     }
 
     #[test]
@@ -17421,6 +17654,47 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         egress.insert("rate_per_minute".into(), Value::Integer(120));
         egress.insert("max_bytes_per_minute".into(), Value::Integer(262_144));
         runtime.insert("egress".into(), Value::Table(egress));
+
+        let mut hf = Table::new();
+        hf.insert(
+            "hub_base_url".into(),
+            Value::String(" https://mirror.hf.test/ ".to_string()),
+        );
+        hf.insert(
+            "api_base_url".into(),
+            Value::String("https://mirror.hf.test/api/".to_string()),
+        );
+        hf.insert(
+            "inference_base_url".into(),
+            Value::String("https://router.hf.test/hf-inference/models/".to_string()),
+        );
+        hf.insert("request_timeout_ms".into(), Value::Integer(21_000));
+        hf.insert("local_execution_enabled".into(), Value::Boolean(false));
+        hf.insert(
+            "local_runner_program".into(),
+            Value::String(" python3.12 ".to_string()),
+        );
+        hf.insert("local_runner_timeout_ms".into(), Value::Integer(45_000));
+        hf.insert(
+            "allow_inference_bridge_fallback".into(),
+            Value::Boolean(false),
+        );
+        hf.insert("import_max_files".into(), Value::Integer(48));
+        hf.insert("import_max_file_bytes".into(), Value::Integer(777_777));
+        hf.insert("import_max_total_bytes".into(), Value::Integer(9_999_999));
+        hf.insert(
+            "import_file_allowlist".into(),
+            Value::Array(vec![
+                Value::String(" config.json ".to_string()),
+                Value::String("*.safetensors".to_string()),
+                Value::String("CONFIG.JSON".to_string()),
+            ]),
+        );
+        hf.insert(
+            "inference_token".into(),
+            Value::String("  secret-token  ".to_string()),
+        );
+        runtime.insert("hf".into(), Value::Table(hf));
 
         let actual = load_root(table);
         assert!(
@@ -17484,6 +17758,119 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .get(),
             262_144
         );
+        assert_eq!(
+            actual.soracloud_runtime.hf.hub_base_url,
+            "https://mirror.hf.test"
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.api_base_url,
+            "https://mirror.hf.test/api"
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.inference_base_url,
+            "https://router.hf.test/hf-inference/models"
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.request_timeout,
+            StdDuration::from_millis(21_000)
+        );
+        assert!(!actual.soracloud_runtime.hf.local_execution_enabled);
+        assert_eq!(
+            actual.soracloud_runtime.hf.local_runner_program,
+            "python3.12"
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.local_runner_timeout,
+            StdDuration::from_millis(45_000)
+        );
+        assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
+        assert_eq!(actual.soracloud_runtime.hf.import_max_files, 48);
+        assert_eq!(actual.soracloud_runtime.hf.import_max_file_bytes, 777_777);
+        assert_eq!(
+            actual.soracloud_runtime.hf.import_max_total_bytes,
+            9_999_999
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.import_file_allowlist,
+            vec!["*.safetensors".to_string(), "config.json".to_string()]
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.inference_token.as_deref(),
+            Some("secret-token")
+        );
+    }
+
+    #[test]
+    fn nexus_hf_shared_leases_defaults_apply() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.nexus.hf_shared_leases.drain_grace,
+            StdDuration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS)
+        );
+    }
+
+    #[test]
+    fn nexus_hf_shared_leases_parse_applies_explicit_overrides() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut hf_shared_leases = Table::new();
+        hf_shared_leases.insert("drain_grace_ms".into(), Value::Integer(12_345));
+        nexus.insert("hf_shared_leases".into(), Value::Table(hf_shared_leases));
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.nexus.hf_shared_leases.drain_grace,
+            StdDuration::from_millis(12_345)
+        );
+    }
+
+    #[test]
+    fn nexus_uploaded_models_defaults_apply() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.nexus.uploaded_models.chunk_plaintext_bytes,
+            defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES
+        );
+        assert_eq!(
+            actual.nexus.uploaded_models.max_session_token_budget,
+            defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET
+        );
+    }
+
+    #[test]
+    fn nexus_uploaded_models_parse_applies_explicit_overrides() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut uploaded_models = Table::new();
+        uploaded_models.insert("chunk_plaintext_bytes".into(), Value::Integer(2_097_152));
+        uploaded_models.insert(
+            "max_active_private_sessions_per_apartment".into(),
+            Value::Integer(6),
+        );
+        uploaded_models.insert("max_session_token_budget".into(), Value::Integer(4_096));
+        nexus.insert("uploaded_models".into(), Value::Table(uploaded_models));
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.nexus.uploaded_models.chunk_plaintext_bytes,
+            2_097_152
+        );
+        assert_eq!(
+            actual
+                .nexus
+                .uploaded_models
+                .max_active_private_sessions_per_apartment,
+            6
+        );
+        assert_eq!(actual.nexus.uploaded_models.max_session_token_budget, 4_096);
     }
 
     #[test]

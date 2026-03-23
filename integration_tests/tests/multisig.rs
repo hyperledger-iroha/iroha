@@ -24,6 +24,12 @@ use iroha_test_network::*;
 use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in, load_sample_ivm,
 };
+use iroha_torii::routing::{
+    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
+    MultisigProposalsListRequestDto,
+};
+use norito::json::Value as JsonValue;
+use reqwest::header::CONTENT_TYPE;
 use tokio::runtime::Runtime;
 
 fn start_network(
@@ -70,6 +76,26 @@ fn canonical_multisig_account_id(spec: &MultisigSpec) -> AccountId {
     AccountId::new_multisig(policy)
 }
 
+fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
+    rt: &Runtime,
+    endpoint: &str,
+    body: &T,
+) -> Result<JsonValue> {
+    let payload = norito::json::to_vec(body)?;
+    let response_body = rt.block_on(async {
+        reqwest::Client::new()
+            .post(endpoint)
+            .header(CONTENT_TYPE, "application/json")
+            .body(payload)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await
+    })?;
+    norito::json::from_str(&response_body).map_err(Into::into)
+}
+
 #[test]
 fn multisig_normal() -> Result<()> {
     multisig_base(TestSuite::normal(), stringify!(multisig_normal))
@@ -101,6 +127,162 @@ fn multisig_recursion_unauthorized() -> Result<()> {
 #[test]
 fn multisig_recursion_expires() -> Result<()> {
     multisig_recursion_base(TestSuite::expires(), stringify!(multisig_recursion_expires))
+}
+
+#[test]
+fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
+    let context = stringify!(multisig_cancel_route_persists_canceled_terminal_state);
+    let builder = NetworkBuilder::new();
+    let Some((network, rt)) = start_network(builder, context) else {
+        return Ok(());
+    };
+    let test_client = network.client();
+    if !multisig_supported(&test_client) {
+        eprintln!("skipping {context}: executor does not support multisig");
+        return Ok(());
+    }
+
+    let domain: DomainId = "multisig_cancel_terminal".parse().unwrap();
+    test_client
+        .submit_blocking(Register::domain(Domain::new(domain.clone())))
+        .wrap_err("register multisig cancel test domain")?;
+
+    let spec = MultisigSpec::new(
+        BTreeMap::from([(ALICE_ID.clone(), 1), (BOB_ID.clone(), 1)]),
+        NonZeroU16::new(2).unwrap(),
+        NonZeroU64::new(60_000).unwrap(),
+    );
+    let multisig_seed_account_id = AccountId::new(KeyPair::random().public_key().clone());
+    test_client
+        .submit_blocking::<InstructionBox>(
+            MultisigRegister::with_account(multisig_seed_account_id, domain, spec.clone()).into(),
+        )
+        .wrap_err("register multisig account for cancel test")?;
+    let multisig_account_id = canonical_multisig_account_id(&spec);
+
+    let proposal_key: Name = "cancel_marker".parse().unwrap();
+    let instructions = vec![
+        SetKeyValue::account(
+            multisig_account_id.clone(),
+            proposal_key,
+            "still-pending".parse::<Json>().unwrap(),
+        )
+        .into(),
+    ];
+    let instructions_hash = HashOf::new(&instructions).to_string();
+    test_client
+        .submit_blocking::<InstructionBox>(
+            MultisigPropose::new(multisig_account_id.clone(), instructions, None).into(),
+        )
+        .wrap_err("submit target multisig proposal")?;
+
+    let selector = MultisigAccountSelectorDto {
+        multisig_account_id: Some(multisig_account_id.clone()),
+        multisig_account_alias: None,
+    };
+    let torii_base = network
+        .peers()
+        .first()
+        .expect("network should expose at least one peer")
+        .torii_url()
+        .to_string();
+
+    let propose_cancel = post_torii_app_json(
+        &rt,
+        &format!("{torii_base}/v1/multisig/cancel"),
+        &MultisigCancelRequestDto {
+            selector: selector.clone(),
+            signer_account_id: BOB_ID.clone(),
+            private_key: Some(ExposedPrivateKey(BOB_KEYPAIR.private_key().clone())),
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: None,
+            proposal_id: Some(instructions_hash.clone()),
+            instructions_hash: None,
+        },
+    )?;
+    assert_eq!(
+        propose_cancel.get("action").and_then(JsonValue::as_str),
+        Some("PROPOSE")
+    );
+    assert_eq!(
+        propose_cancel
+            .get("target_proposal_id")
+            .and_then(JsonValue::as_str),
+        Some(instructions_hash.as_str())
+    );
+
+    let approve_cancel = post_torii_app_json(
+        &rt,
+        &format!("{torii_base}/v1/multisig/cancel"),
+        &MultisigCancelRequestDto {
+            selector: selector.clone(),
+            signer_account_id: ALICE_ID.clone(),
+            private_key: Some(ExposedPrivateKey(
+                test_client.key_pair.private_key().clone(),
+            )),
+            public_key_hex: None,
+            signature_b64: None,
+            creation_time_ms: None,
+            proposal_id: Some(instructions_hash.clone()),
+            instructions_hash: None,
+        },
+    )?;
+    assert_eq!(
+        approve_cancel.get("action").and_then(JsonValue::as_str),
+        Some("APPROVE")
+    );
+    assert!(
+        approve_cancel
+            .get("executed_tx_hash_hex")
+            .and_then(JsonValue::as_str)
+            .is_some(),
+        "cancel approval should execute the target cancellation"
+    );
+
+    let canceled = post_torii_app_json(
+        &rt,
+        &format!("{torii_base}/v1/multisig/proposals/get"),
+        &MultisigProposalsGetRequestDto {
+            selector: selector.clone(),
+            proposal_id: Some(instructions_hash.clone()),
+            instructions_hash: None,
+        },
+    )?;
+    assert_eq!(
+        canceled.get("status").and_then(JsonValue::as_str),
+        Some("CANCELED")
+    );
+    assert!(
+        canceled
+            .get("terminal_at_ms")
+            .and_then(JsonValue::as_u64)
+            .is_some(),
+        "terminal proposal state should expose cancellation time"
+    );
+
+    let canceled_list = post_torii_app_json(
+        &rt,
+        &format!("{torii_base}/v1/multisig/proposals/list"),
+        &MultisigProposalsListRequestDto {
+            selector,
+            status: vec!["CANCELED".to_owned()],
+        },
+    )?;
+    let proposals = canceled_list
+        .get("proposals")
+        .and_then(JsonValue::as_array)
+        .expect("canceled proposals array");
+    assert!(
+        proposals.iter().any(|proposal| {
+            proposal.get("proposal_id").and_then(JsonValue::as_str)
+                == Some(instructions_hash.as_str())
+                && proposal.get("status").and_then(JsonValue::as_str) == Some("CANCELED")
+        }),
+        "canceled proposal should remain visible in terminal proposal listings"
+    );
+
+    Ok(())
 }
 
 #[test]

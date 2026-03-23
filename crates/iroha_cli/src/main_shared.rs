@@ -3152,6 +3152,8 @@ mod multisig {
         Propose(Propose),
         /// Approve a multisig transaction
         Approve(Approve),
+        /// Propose cancellation of an existing multisig transaction
+        Cancel(Cancel),
         /// Inspect a multisig account controller and print the CTAP2 payload + digest
         Inspect(Inspect),
     }
@@ -3164,6 +3166,7 @@ mod multisig {
                 Register(cmd) => cmd.run(context),
                 Propose(cmd) => cmd.run(context),
                 Approve(cmd) => cmd.run(context),
+                Cancel(cmd) => cmd.run(context),
                 Inspect(cmd) => cmd.run(context),
             }
         }
@@ -3315,6 +3318,54 @@ mod multisig {
                     approve_multisig_transaction,
                 )])
                 .wrap_err("Failed to approve transaction")
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Cancel {
+        /// Multisig authority of the transaction
+        #[arg(short, long)]
+        pub account: String,
+        /// Hash of the target proposal instructions to cancel
+        #[arg(short, long)]
+        pub instructions_hash: ProposalKey,
+        /// Overrides the default time-to-live for the cancel proposal itself.
+        #[arg(short, long)]
+        pub transaction_ttl: Option<humantime::Duration>,
+    }
+
+    impl Run for Cancel {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let transaction_ttl_ms = self.transaction_ttl.map(|duration| {
+                duration
+                    .as_millis()
+                    .try_into()
+                    .ok()
+                    .and_then(NonZeroU64::new)
+                    .expect("ttl should be between 1 ms and 584942417 years")
+            });
+            let account = resolve_account_id(context, &self.account)
+                .wrap_err("failed to resolve --account")?;
+
+            if !context.output_instructions() {
+                surface_policy_ttl(context, &account, transaction_ttl_ms)?;
+            }
+
+            let cancel_instructions = vec![InstructionBox::from(MultisigCancel::new(
+                account.clone(),
+                self.instructions_hash,
+            ))];
+            let cancel_hash = HashOf::new(&cancel_instructions);
+            if matches!(context.output_format(), CliOutputFormat::Text) {
+                context.println(format_args!("cancel_proposal_hash: {cancel_hash}"))?;
+            }
+
+            let propose_cancel =
+                MultisigPropose::new(account, cancel_instructions, transaction_ttl_ms);
+
+            context
+                .finish([iroha::data_model::isi::InstructionBox::from(propose_cancel)])
+                .wrap_err("Failed to propose cancellation")
         }
     }
 

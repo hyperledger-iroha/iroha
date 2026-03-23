@@ -10406,13 +10406,24 @@ public extension ToriiTransactionSubmitting where Self: Sendable {
 }
 
 public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable {
+    private struct ObservedServerClock: Sendable {
+        let serverEpochMs: UInt64
+        let observedLocalEpochMs: UInt64
+    }
+
+    private static let sharedServerClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.shared-server-clock")
+    private static var sharedObservedServerClocks: [String: ObservedServerClock] = [:]
+
     /// Base URL for all requests. Normalized to directory URL (ends with "/") to ensure
     /// correct relative URL resolution per RFC 3986.
     public let baseURL: URL
     private let session: URLSession
+    private let serverClockCacheKey: String
     private var statusState = ToriiStatusState()
     private var dataModelCompatibility = ToriiDataModelCompatibility.unknown
     private let dataModelQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.data-model")
+    private let serverClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.server-clock")
+    private var observedServerClock: ObservedServerClock?
     private var cachedOfflineSettlementStatusByBundleIdHex: [String: ToriiSettlementExecutionStatus] = [:]
     private let offlineSettlementStatusQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.offline-settlement-status")
     private static let defaultListPageSize = 100
@@ -10425,6 +10436,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         // Without trailing slash, URL(string:relativeTo:) replaces the last path component
         // instead of appending (per RFC 3986).
         self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
+        self.serverClockCacheKey = Self.serverClockCacheKey(for: self.baseURL)
         self.session = session
     }
 
@@ -10432,6 +10444,31 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     /// Call this method when you are done using the client to release resources.
     public func invalidateAndCancel() {
         session.invalidateAndCancel()
+    }
+
+    /// Returns a creation timestamp that tracks observed server time when available and
+    /// otherwise falls back to the local wall clock. A small safety margin keeps locally
+    /// built transactions from being rejected when the device clock is slightly ahead.
+    public func recommendedCreationTimeMs(safetyMarginMs: UInt64 = 10_000,
+                                          maxObservedLagMs: UInt64 = 20_000) -> UInt64 {
+        let localNowMs = Self.currentEpochMs()
+        let baseMs = serverClockQueue.sync { () -> UInt64 in
+            let clock = observedServerClock ?? Self.sharedObservedServerClock(for: serverClockCacheKey)
+            guard let clock else { return localNowMs }
+            let elapsedSinceObservation = localNowMs >= clock.observedLocalEpochMs
+                ? localNowMs - clock.observedLocalEpochMs
+                : 0
+            let (estimatedServerNow, overflow) = clock.serverEpochMs.addingReportingOverflow(elapsedSinceObservation)
+            let clampedEstimatedServerNow = overflow ? UInt64.max : estimatedServerNow
+            let observedLagMs = localNowMs >= clampedEstimatedServerNow
+                ? localNowMs - clampedEstimatedServerNow
+                : 0
+            guard observedLagMs <= maxObservedLagMs else {
+                return localNowMs
+            }
+            return min(localNowMs, clampedEstimatedServerNow)
+        }
+        return baseMs > safetyMarginMs ? baseMs - safetyMarginMs : 0
     }
 
     // MARK: - Public completion-based API
@@ -14639,10 +14676,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         do {
+            let observedAtLocalMs = Self.currentEpochMs()
             let (data, response) = try await session.data(for: request, delegate: nil)
             guard let http = response as? HTTPURLResponse else {
                 throw ToriiClientError.invalidResponse
             }
+            recordObservedServerClock(from: http, observedAtLocalMs: observedAtLocalMs)
             return (data, http)
         } catch {
             if error is CancellationError || Self.isCancelledTransportError(error) {
@@ -14658,6 +14697,74 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private func recordObservedServerClock(from response: HTTPURLResponse, observedAtLocalMs: UInt64) {
+        guard let rawDateHeader = response.value(forHTTPHeaderField: "Date"),
+              let parsedDate = Self.parseHTTPDate(rawDateHeader)
+        else {
+            return
+        }
+        let serverEpochMs = Self.epochMs(for: parsedDate)
+        serverClockQueue.sync {
+            let clock = ObservedServerClock(
+                serverEpochMs: serverEpochMs,
+                observedLocalEpochMs: observedAtLocalMs
+            )
+            observedServerClock = clock
+            Self.setSharedObservedServerClock(clock, for: serverClockCacheKey)
+        }
+    }
+
+    private static func parseHTTPDate(_ rawValue: String) -> Date? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let formats = [
+            "EEE',' dd MMM yyyy HH':'mm':'ss zzz",
+            "EEEE',' dd-MMM-yy HH':'mm':'ss zzz",
+            "EEE MMM d HH':'mm':'ss yyyy"
+        ]
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let parsed = formatter.date(from: trimmed) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    private static func currentEpochMs() -> UInt64 {
+        epochMs(for: Date())
+    }
+
+    private static func epochMs(for date: Date) -> UInt64 {
+        let millis = date.timeIntervalSince1970 * 1_000
+        if millis < 0 {
+            return 0
+        }
+        return UInt64(millis.rounded())
+    }
+
+    private static func serverClockCacheKey(for baseURL: URL) -> String {
+        let scheme = baseURL.scheme?.lowercased() ?? "https"
+        let host = baseURL.host?.lowercased() ?? baseURL.absoluteString.lowercased()
+        if let port = baseURL.port {
+            return "\(scheme)://\(host):\(port)"
+        }
+        return "\(scheme)://\(host)"
+    }
+
+    private static func sharedObservedServerClock(for key: String) -> ObservedServerClock? {
+        sharedServerClockQueue.sync { sharedObservedServerClocks[key] }
+    }
+
+    private static func setSharedObservedServerClock(_ clock: ObservedServerClock, for key: String) {
+        sharedServerClockQueue.sync {
+            sharedObservedServerClocks[key] = clock
+        }
     }
 
     private func rejectCode(from response: HTTPURLResponse) -> String? {
@@ -14737,6 +14844,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             if !detail.isEmpty {
                 return detail
             }
+        }
+        let byteLimit = 256
+        let hex = responseBody.prefix(byteLimit).map { String(format: "%02x", $0) }.joined()
+        if !hex.isEmpty {
+            return responseBody.count > byteLimit ? "body_hex=\(hex)..." : "body_hex=\(hex)"
         }
         return fallback
     }

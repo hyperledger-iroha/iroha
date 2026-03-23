@@ -70,6 +70,44 @@ pub mod isi {
             .insert(label.clone(), record);
     }
 
+    fn purge_stale_account_label_state(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        label: &AccountLabel,
+    ) {
+        if let Some(existing_owner) = state_transaction.world.account_aliases.get(label).cloned()
+            && state_transaction.world.account(&existing_owner).is_err()
+        {
+            warn!(
+                "purging stale account alias binding label={:?} missing_owner={}",
+                label, existing_owner
+            );
+            state_transaction
+                .world
+                .account_aliases
+                .remove(label.clone());
+        }
+
+        if let Some(record) = state_transaction
+            .world
+            .account_rekey_records
+            .get(label)
+            .cloned()
+            && state_transaction
+                .world
+                .account(&record.active_account_id)
+                .is_err()
+        {
+            warn!(
+                "purging stale account rekey record label={:?} missing_owner={}",
+                label, record.active_account_id
+            );
+            state_transaction
+                .world
+                .account_rekey_records
+                .remove(label.clone());
+        }
+    }
+
     fn ensure_asset_definition_human_fields(
         asset_definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
@@ -708,6 +746,7 @@ pub mod isi {
                             .into(),
                     ));
                 }
+                purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
                         .world
@@ -2426,6 +2465,7 @@ pub mod isi {
                 .into());
             }
 
+            purge_stale_account_label_state(state_transaction, &label);
             state_transaction.world.account(&account)?;
             let existing_alias_binding =
                 state_transaction.world.account_aliases.get(&label).cloned();
@@ -2540,6 +2580,7 @@ pub mod isi {
                 .into());
             }
 
+            purge_stale_account_label_state(state_transaction, &label);
             let existing_label = state_transaction.world.account(&account)?.label().cloned();
             let existing_alias_owner = state_transaction.world.account_aliases.get(&label).cloned();
             if let Some(existing_owner) = existing_alias_owner.as_ref() {
@@ -3302,6 +3343,57 @@ mod tests {
     }
 
     #[test]
+    fn set_account_label_reclaims_stale_alias_binding_with_missing_owner() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let label = AccountLabel::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let stale_owner = AccountId::new(KeyPair::random().public_key().clone());
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world
+            .account_aliases
+            .insert(label.clone(), stale_owner.clone());
+        tx.world.account_rekey_records.insert(
+            label.clone(),
+            AccountRekeyRecord::new(label.clone(), stale_owner),
+        );
+        Register::account(Account::new(
+            account_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&authority, &mut tx)
+        .expect("register account");
+
+        SetAccountLabel {
+            account: account_id.clone(),
+            label: label.clone(),
+        }
+        .execute(&authority, &mut tx)
+        .expect("set label should reclaim stale binding");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&label),
+            Some(&account_id),
+            "label should resolve to the live account"
+        );
+        assert_eq!(
+            tx.world
+                .account_rekey_records
+                .get(&label)
+                .expect("rekey record should exist")
+                .active_account_id,
+            account_id,
+            "rekey record should be repointed to the live account"
+        );
+    }
+
+    #[test]
     fn set_account_label_binds_existing_multisig_account_with_rekey_record() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
@@ -3608,6 +3700,57 @@ mod tests {
                 .label()
                 .is_none(),
             "binding extra aliases should not overwrite the account's canonical label"
+        );
+    }
+
+    #[test]
+    fn bind_account_alias_reclaims_stale_binding_with_missing_owner() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let alias = AccountLabel::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let stale_owner = AccountId::new(KeyPair::random().public_key().clone());
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world
+            .account_aliases
+            .insert(alias.clone(), stale_owner.clone());
+        tx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), stale_owner),
+        );
+        Register::account(Account::new(
+            account_id.clone().to_account_id(domain_id.clone()),
+        ))
+        .execute(&authority, &mut tx)
+        .expect("register account");
+
+        BindAccountAlias {
+            account: account_id.clone(),
+            label: alias.clone(),
+        }
+        .execute(&authority, &mut tx)
+        .expect("bind should reclaim stale alias");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&alias),
+            Some(&account_id),
+            "alias should resolve to the live account"
+        );
+        assert_eq!(
+            tx.world
+                .account_rekey_records
+                .get(&alias)
+                .expect("rekey record should exist")
+                .active_account_id,
+            account_id,
+            "rekey record should be repointed to the live account"
         );
     }
 

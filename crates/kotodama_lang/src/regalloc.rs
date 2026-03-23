@@ -366,6 +366,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | SubscriptionRecordUsage
         | DataRef { .. }
         | GetAuthority { .. }
+        | CurrentTimeMs { .. }
         | GetTriggerEvent { .. }
         | TransferBatchBegin
         | TransferBatchEnd => {}
@@ -781,6 +782,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Valcom { dest, .. }
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
+        | Instr::CurrentTimeMs { dest }
         | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
         | Instr::Copy { dest, .. }

@@ -76,6 +76,8 @@ pub mod multisig {
         Propose(MultisigPropose),
         /// Approve a certain multisig transaction
         Approve(MultisigApprove),
+        /// Cancel a certain multisig transaction before it reaches quorum
+        Cancel(MultisigCancel),
     }
 
     impl JsonSerialize for MultisigInstructionBox {
@@ -94,6 +96,11 @@ pub mod multisig {
                 }
                 Self::Approve(value) => {
                     norito::json::write_json_string("Approve", out);
+                    out.push(':');
+                    value.json_serialize(out);
+                }
+                Self::Cancel(value) => {
+                    norito::json::write_json_string("Cancel", out);
                     out.push(':');
                     value.json_serialize(out);
                 }
@@ -133,6 +140,14 @@ pub mod multisig {
                         }
                         let value = visitor.parse_value::<MultisigApprove>()?;
                         variant = Some(Self::Approve(value));
+                    }
+                    "Cancel" => {
+                        if variant.is_some() {
+                            visitor.skip_value()?;
+                            return Err(json::Error::duplicate_field(name));
+                        }
+                        let value = visitor.parse_value::<MultisigCancel>()?;
+                        variant = Some(Self::Cancel(value));
                     }
                     other => {
                         visitor.skip_value()?;
@@ -293,9 +308,31 @@ pub mod multisig {
         pub instructions_hash: HashOf<Vec<InstructionBox>>,
     }
 
+    /// Cancel a certain multisig transaction before it reaches quorum
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Constructor,
+        DeriveJsonSerialize,
+        DeriveJsonDeserialize,
+    )]
+    pub struct MultisigCancel {
+        /// Multisig account that owns the target proposal
+        pub account: AccountId,
+        /// Proposal to cancel
+        pub instructions_hash: HashOf<Vec<InstructionBox>>,
+    }
+
     impl_custom_instruction!(
         MultisigInstructionBox,
-        MultisigRegister | MultisigPropose | MultisigApprove
+        MultisigRegister | MultisigPropose | MultisigApprove | MultisigCancel
     );
 
     impl TryFrom<&InstructionBox> for MultisigInstructionBox {
@@ -359,6 +396,42 @@ pub mod multisig {
         pub approvals: BTreeSet<AccountId>,
         /// In case this proposal is some relaying approval, indicates if it has executed or not.
         pub is_relayed: Option<bool>,
+    }
+
+    /// Terminal lifecycle states persisted for top-level multisig proposals.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
+    )]
+    pub enum MultisigProposalTerminalStatus {
+        /// Proposal executed after reaching quorum.
+        Finalized,
+        /// Proposal was canceled by a separate multisig action.
+        Canceled,
+        /// Proposal expired before reaching quorum.
+        Expired,
+    }
+
+    /// Native ledger value for a persisted terminal multisig proposal entry.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
+    )]
+    pub struct MultisigProposalTerminalState {
+        /// Canonical multisig account id that owns this proposal.
+        pub multisig_account_id: AccountId,
+        /// Hash of the proposed instruction list.
+        pub instructions_hash: HashOf<Vec<InstructionBox>>,
+        /// Proposal contents and collected approvals at the time it became terminal.
+        pub proposal: MultisigProposalValue,
+        /// Terminal lifecycle state.
+        pub status: MultisigProposalTerminalStatus,
+        /// Time in milliseconds at which the proposal became terminal.
+        pub terminal_at_ms: u64,
     }
 
     /// Metadata value for a multisig account specification
@@ -700,6 +773,57 @@ pub mod multisig {
                 first.account, second.account,
                 "from_spec should randomize the controller id for each call"
             );
+        }
+
+        #[test]
+        fn multisig_cancel_instruction_roundtrip_preserves_target_hash() {
+            let canceler = KeyPair::from_seed(vec![11; 32], Algorithm::Ed25519);
+            let multisig_account = AccountId::of(canceler.public_key().clone());
+            let instructions_hash = HashOf::new(&vec![sample_instruction_box()]);
+            let cancel = MultisigCancel::new(multisig_account.clone(), instructions_hash);
+            let instruction_box = InstructionBox::from(cancel.clone());
+
+            let decoded = MultisigInstructionBox::try_from(&instruction_box)
+                .expect("decode multisig cancel instruction");
+            match decoded {
+                MultisigInstructionBox::Cancel(decoded_cancel) => {
+                    assert_eq!(decoded_cancel.account, multisig_account);
+                    assert_eq!(decoded_cancel.instructions_hash, cancel.instructions_hash);
+                }
+                _ => panic!("expected cancel variant"),
+            }
+        }
+
+        #[test]
+        fn multisig_terminal_state_roundtrip_preserves_status() {
+            let controller = KeyPair::from_seed(vec![12; 32], Algorithm::Ed25519);
+            let multisig_account = AccountId::of(controller.public_key().clone());
+            let instructions = vec![sample_instruction_box()];
+            let instructions_hash = HashOf::new(&instructions);
+            let proposal = MultisigProposalValue::new(
+                instructions,
+                1_700_000_000_000,
+                1_700_000_060_000,
+                BTreeSet::from([multisig_account.clone()]),
+                None,
+            );
+            let terminal = MultisigProposalTerminalState::new(
+                multisig_account.clone(),
+                instructions_hash,
+                proposal.clone(),
+                MultisigProposalTerminalStatus::Canceled,
+                1_700_000_010_000,
+            );
+
+            let bytes = norito::to_bytes(&terminal).expect("encode terminal state");
+            let decoded = norito::decode_from_bytes::<MultisigProposalTerminalState>(&bytes)
+                .expect("decode terminal state");
+
+            assert_eq!(decoded.multisig_account_id, multisig_account);
+            assert_eq!(decoded.instructions_hash, instructions_hash);
+            assert_eq!(decoded.proposal, proposal);
+            assert_eq!(decoded.status, MultisigProposalTerminalStatus::Canceled);
+            assert_eq!(decoded.terminal_at_ms, 1_700_000_010_000);
         }
     }
 }

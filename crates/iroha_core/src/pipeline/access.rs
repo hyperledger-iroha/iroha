@@ -664,6 +664,7 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
             | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
@@ -717,6 +718,7 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
             | ivm::syscalls::SYSCALL_SM4_GCM_SEAL

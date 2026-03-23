@@ -344,6 +344,12 @@ impl From<crate::isi::soracloud::RunSoracloudAgentAutonomy> for InstructionBox {
     }
 }
 
+impl From<crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::StartSoracloudTrainingJob> for InstructionBox {
     fn from(i: crate::isi::soracloud::StartSoracloudTrainingJob) -> Self {
         InstructionBox(Box::new(i))
@@ -382,6 +388,48 @@ impl From<crate::isi::soracloud::PromoteSoracloudModelWeight> for InstructionBox
 
 impl From<crate::isi::soracloud::RollbackSoracloudModelWeight> for InstructionBox {
     fn from(i: crate::isi::soracloud::RollbackSoracloudModelWeight) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RegisterSoracloudUploadedModelBundle> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RegisterSoracloudUploadedModelBundle) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AppendSoracloudUploadedModelChunk> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AppendSoracloudUploadedModelChunk) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle> for InstructionBox {
+    fn from(i: crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AdmitSoracloudPrivateCompileProfile> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdmitSoracloudPrivateCompileProfile) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AllowSoracloudUploadedModel> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AllowSoracloudUploadedModel) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::StartSoracloudPrivateInference> for InstructionBox {
+    fn from(i: crate::isi::soracloud::StartSoracloudPrivateInference) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2388,9 +2436,9 @@ pub mod prelude {
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         soracloud::{
             AdvanceSoracloudRollout, DeploySoracloudService, MutateSoracloudState,
-            RecordSoracloudDecryptionRequest, RecordSoracloudMailboxMessage,
-            RecordSoracloudRuntimeReceipt, RollbackSoracloudService, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, UpgradeSoracloudService,
+            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
+            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt, RollbackSoracloudService,
+            RunSoracloudFheJob, SetSoracloudRuntimeState, UpgradeSoracloudService,
         },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,

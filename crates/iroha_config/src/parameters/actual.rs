@@ -178,6 +178,8 @@ pub struct SoracloudRuntime {
     pub native_process: SoracloudRuntimeNativeProcess,
     /// Outbound egress policy enforced by the embedded runtime manager.
     pub egress: SoracloudRuntimeEgress,
+    /// Hugging Face importer and inference bridge settings.
+    pub hf: SoracloudRuntimeHuggingFace,
 }
 
 impl Default for SoracloudRuntime {
@@ -191,6 +193,7 @@ impl Default for SoracloudRuntime {
             cache_budgets: SoracloudRuntimeCacheBudgets::default(),
             native_process: SoracloudRuntimeNativeProcess::default(),
             egress: SoracloudRuntimeEgress::default(),
+            hf: SoracloudRuntimeHuggingFace::default(),
         }
     }
 }
@@ -289,6 +292,62 @@ impl Default for SoracloudRuntimeEgress {
                 .and_then(NonZeroU32::new),
             max_bytes_per_minute: defaults::soracloud_runtime::EGRESS_MAX_BYTES_PER_MINUTE
                 .and_then(NonZeroU64::new),
+        }
+    }
+}
+
+/// Hugging Face importer/inference settings for the embedded Soracloud runtime manager.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SoracloudRuntimeHuggingFace {
+    /// Base URL used to resolve repo files from the Hub.
+    pub hub_base_url: String,
+    /// Base URL used to fetch model metadata from the Hub API.
+    pub api_base_url: String,
+    /// Base URL used to forward `/infer` requests to HF Inference when bridge fallback is enabled.
+    pub inference_base_url: String,
+    /// Timeout applied to Hugging Face API and file requests.
+    pub request_timeout: Duration,
+    /// Whether generated HF services should prefer the on-node local adapter path.
+    pub local_execution_enabled: bool,
+    /// Program used to invoke the embedded local HF runner script.
+    pub local_runner_program: String,
+    /// Timeout applied to one local runner invocation.
+    pub local_runner_timeout: Duration,
+    /// Whether the runtime may fall back to HF Inference when local execution fails.
+    pub allow_inference_bridge_fallback: bool,
+    /// Maximum number of files imported into the node-local shared cache for one source.
+    pub import_max_files: u32,
+    /// Maximum size of one imported Hub file.
+    pub import_max_file_bytes: u64,
+    /// Maximum aggregate size imported for one Hub source.
+    pub import_max_total_bytes: u64,
+    /// File-selection allowlist used by the local importer.
+    pub import_file_allowlist: Vec<String>,
+    /// Optional bearer token used for the HF Inference bridge.
+    pub inference_token: Option<String>,
+}
+
+impl Default for SoracloudRuntimeHuggingFace {
+    fn default() -> Self {
+        Self {
+            hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL.to_owned(),
+            api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL.to_owned(),
+            inference_base_url: defaults::soracloud_runtime::hf::INFERENCE_BASE_URL.to_owned(),
+            request_timeout: Duration::from_millis(
+                defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
+            ),
+            local_execution_enabled: defaults::soracloud_runtime::hf::LOCAL_EXECUTION_ENABLED,
+            local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_owned(),
+            local_runner_timeout: Duration::from_millis(
+                defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
+            ),
+            allow_inference_bridge_fallback:
+                defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
+            import_max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
+            import_max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
+            import_max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
+            import_file_allowlist: defaults::soracloud_runtime::hf::import_file_allowlist(),
+            inference_token: None,
         }
     }
 }
@@ -2208,6 +2267,53 @@ impl Default for NexusFees {
     }
 }
 
+/// Shared Hugging Face lease policy for Soracloud pool draining.
+#[derive(Debug, Clone, Copy)]
+pub struct NexusHfSharedLeases {
+    /// Drain grace window applied after the last member leaves a shared lease pool.
+    pub drain_grace: Duration,
+}
+
+impl Default for NexusHfSharedLeases {
+    fn default() -> Self {
+        Self {
+            drain_grace: Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS),
+        }
+    }
+}
+
+/// Uploaded private-model quota policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NexusUploadedModels {
+    /// Plaintext chunk size admitted before envelope encryption.
+    pub chunk_plaintext_bytes: u64,
+    /// Maximum plaintext bytes admitted for one uploaded model.
+    pub max_plaintext_bytes_per_model: u64,
+    /// Maximum encrypted chunk count admitted for one uploaded model.
+    pub max_chunk_count_per_model: u32,
+    /// Maximum concurrent private sessions admitted for one apartment.
+    pub max_active_private_sessions_per_apartment: u32,
+    /// Maximum token budget admitted for one private session.
+    pub max_session_token_budget: u32,
+    /// Maximum image budget admitted for one private session.
+    pub max_session_image_budget: u16,
+}
+
+impl Default for NexusUploadedModels {
+    fn default() -> Self {
+        Self {
+            chunk_plaintext_bytes: defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES,
+            max_plaintext_bytes_per_model:
+                defaults::nexus::uploaded_models::MAX_PLAINTEXT_BYTES_PER_MODEL,
+            max_chunk_count_per_model: defaults::nexus::uploaded_models::MAX_CHUNK_COUNT_PER_MODEL,
+            max_active_private_sessions_per_apartment:
+                defaults::nexus::uploaded_models::MAX_ACTIVE_PRIVATE_SESSIONS_PER_APARTMENT,
+            max_session_token_budget: defaults::nexus::uploaded_models::MAX_SESSION_TOKEN_BUDGET,
+            max_session_image_budget: defaults::nexus::uploaded_models::MAX_SESSION_IMAGE_BUDGET,
+        }
+    }
+}
+
 /// Committee and quorum settings for protected-domain endorsements.
 #[derive(Debug, Clone)]
 pub struct NexusEndorsement {
@@ -2355,6 +2461,10 @@ pub struct Nexus {
     pub staking: NexusStaking,
     /// Universal fee schedule for Nexus transactions.
     pub fees: NexusFees,
+    /// Shared Hugging Face lease policy.
+    pub hf_shared_leases: NexusHfSharedLeases,
+    /// Uploaded private-model quota policy.
+    pub uploaded_models: NexusUploadedModels,
     /// Domain endorsement controls.
     pub endorsement: NexusEndorsement,
     /// AXT execution and expiry configuration.
@@ -2393,6 +2503,8 @@ impl Default for Nexus {
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
+            hf_shared_leases: NexusHfSharedLeases::default(),
+            uploaded_models: NexusUploadedModels::default(),
             endorsement: NexusEndorsement::default(),
             axt: NexusAxt::default(),
             lane_relay_emergency: LaneRelayEmergency::default(),

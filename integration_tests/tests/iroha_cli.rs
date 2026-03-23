@@ -1577,12 +1577,18 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         deploy_payload
             .get("importer_pending")
             .and_then(Value::as_bool),
-        Some(true)
+        Some(false)
     );
     let deploy_source = deploy_payload
         .get("source")
         .and_then(Value::as_object)
         .expect("hf-deploy source object");
+    assert_eq!(
+        deploy_source
+            .get("status")
+            .and_then(|value| tagged_enum_label(value, "status")),
+        Some("Ready")
+    );
     assert_eq!(
         deploy_source.get("model_name").and_then(Value::as_str),
         Some("gpt-oss")
@@ -1602,6 +1608,66 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
             .get("last_charge_nanos")
             .and_then(Value::as_u64),
         Some(10_000)
+    );
+
+    let service_status = run_soracloud_command(
+        dir.path(),
+        &config,
+        &["status", "--torii-url", torii_url.as_str()],
+    )
+    .await?;
+    assert!(
+        service_status.status.success(),
+        "soracloud status after hf-deploy failed with status {} and stderr: {}",
+        service_status.status,
+        String::from_utf8_lossy(&service_status.stderr)
+    );
+    let service_status_payload: Value =
+        json::from_slice(&service_status.stdout).expect("soracloud status json");
+    let services = service_status_payload
+        .get("network_status")
+        .and_then(Value::as_object)
+        .and_then(|network_status| network_status.get("control_plane"))
+        .and_then(Value::as_object)
+        .and_then(|control_plane| control_plane.get("services"))
+        .and_then(Value::as_array)
+        .expect("soracloud services array");
+    assert!(
+        services.iter().any(|service| {
+            service.get("service_name").and_then(Value::as_str) == Some(service_name_a)
+        }),
+        "hf-deploy should auto-deploy service `{service_name_a}`"
+    );
+
+    let agent_status = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "agent-status",
+            "--apartment-name",
+            apartment_name,
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        agent_status.status.success(),
+        "agent status after hf-deploy failed with status {} and stderr: {}",
+        agent_status.status,
+        String::from_utf8_lossy(&agent_status.stderr)
+    );
+    let agent_status_payload: Value =
+        json::from_slice(&agent_status.stdout).expect("agent status after hf-deploy json");
+    let apartments = agent_status_payload
+        .get("apartments")
+        .and_then(Value::as_array)
+        .expect("apartments array");
+    assert!(
+        apartments.iter().any(|apartment| {
+            apartment.get("apartment_name").and_then(Value::as_str) == Some(apartment_name)
+        }),
+        "hf-deploy should auto-deploy apartment `{apartment_name}`"
     );
 
     let rebind = run_soracloud_command(
@@ -1848,6 +1914,307 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .expect("hf renewed service bindings");
     assert_eq!(renewed_services.len(), 1);
     assert_eq!(renewed_services[0].as_str(), Some(service_name_renew));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
+    let builder = NetworkBuilder::new()
+        .with_min_peers(4)
+        .with_config_layer(|layer| {
+            layer
+                .write("telemetry_enabled", true)
+                .write("telemetry_profile", "full");
+        });
+    let Some(network) = sandbox::start_network_async_or_skip(
+        builder,
+        stringify!(soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let config = ProgramConfig::from(&network.client());
+    let dir = tempfile::tempdir()?;
+    tokio::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )
+    .await?;
+
+    let repo_id = "openai/gpt-oss";
+    let initial_service_name = "hf_queue_a";
+    let queued_service_name = "hf_queue_next";
+    let promoted_service_name = "hf_queue_promoted";
+    let renewed_model_name = "gpt-oss-renewed";
+    let lease_term_ms_value = 10_000_u64;
+    let lease_term_ms = lease_term_ms_value.to_string();
+    let base_fee_nanos = "10000".to_string();
+    let renewed_fee_nanos = "12000".to_string();
+    let lease_asset_definition = soracloud_hf_lease_asset_definition().to_string();
+    let torii_url = network.client().torii_url.to_string();
+    let account_id = network.client().account.to_string();
+
+    let deploy = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            repo_id,
+            "--service-name",
+            initial_service_name,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            base_fee_nanos.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        deploy.status.success(),
+        "initial hf-deploy failed with status {} and stderr: {}",
+        deploy.status,
+        String::from_utf8_lossy(&deploy.stderr)
+    );
+    let deploy_payload: Value = json::from_slice(&deploy.stdout).expect("initial deploy json");
+    assert_eq!(
+        deploy_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("CreateWindow")
+    );
+
+    let renew = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-lease-renew",
+            "--repo-id",
+            repo_id,
+            "--model-name",
+            renewed_model_name,
+            "--service-name",
+            queued_service_name,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            renewed_fee_nanos.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        renew.status.success(),
+        "pre-expiry hf-lease-renew failed with status {} and stderr: {}",
+        renew.status,
+        String::from_utf8_lossy(&renew.stderr)
+    );
+    let renew_payload: Value = json::from_slice(&renew.stdout).expect("renew json");
+    assert_eq!(
+        renew_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Renew")
+    );
+    let renew_pool = renew_payload
+        .get("pool")
+        .and_then(Value::as_object)
+        .expect("renew pool");
+    assert_eq!(
+        renew_pool
+            .get("status")
+            .and_then(|value| tagged_enum_label(value, "status")),
+        Some("Active")
+    );
+    let queued_next_window = renew_pool
+        .get("queued_next_window")
+        .and_then(Value::as_object)
+        .expect("queued next window");
+    assert_eq!(
+        queued_next_window.get("model_name").and_then(Value::as_str),
+        Some(renewed_model_name)
+    );
+    assert_eq!(
+        queued_next_window
+            .get("service_name")
+            .and_then(Value::as_str),
+        Some(queued_service_name)
+    );
+    assert_eq!(
+        queued_next_window
+            .get("base_fee_nanos")
+            .and_then(Value::as_u64),
+        Some(12_000)
+    );
+    assert_eq!(
+        renew_payload
+            .get("member")
+            .and_then(Value::as_object)
+            .and_then(|member| member.get("last_charge_nanos"))
+            .and_then(Value::as_u64),
+        Some(12_000)
+    );
+
+    let blocked_leave = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-lease-leave",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--service-name",
+            initial_service_name,
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        !blocked_leave.status.success(),
+        "queued sponsor leave unexpectedly succeeded with stdout: {}",
+        String::from_utf8_lossy(&blocked_leave.stdout)
+    );
+    let blocked_leave_stderr = String::from_utf8_lossy(&blocked_leave.stderr);
+    assert!(
+        blocked_leave_stderr.contains("cannot leave before it activates"),
+        "unexpected queued sponsor leave stderr: {blocked_leave_stderr}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(
+        lease_term_ms_value.saturating_add(1_500),
+    ))
+    .await;
+
+    let promote = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-deploy",
+            "--repo-id",
+            repo_id,
+            "--model-name",
+            renewed_model_name,
+            "--service-name",
+            promoted_service_name,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--lease-asset-definition",
+            lease_asset_definition.as_str(),
+            "--base-fee-nanos",
+            renewed_fee_nanos.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        promote.status.success(),
+        "promotion hf-deploy failed with status {} and stderr: {}",
+        promote.status,
+        String::from_utf8_lossy(&promote.stderr)
+    );
+    let promote_payload: Value = json::from_slice(&promote.stdout).expect("promote json");
+    assert_eq!(
+        promote_payload
+            .get("action")
+            .and_then(|value| tagged_enum_label(value, "action")),
+        Some("Join")
+    );
+    assert_eq!(
+        promote_payload
+            .get("member")
+            .and_then(Value::as_object)
+            .and_then(|member| member.get("last_charge_nanos"))
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+
+    let status = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms.as_str(),
+            "--account-id",
+            account_id.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        status.status.success(),
+        "post-promotion hf-status failed with status {} and stderr: {}",
+        status.status,
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_payload: Value = json::from_slice(&status.stdout).expect("status json");
+    let status_source = status_payload
+        .get("source")
+        .and_then(Value::as_object)
+        .expect("status source");
+    assert_eq!(
+        status_source.get("model_name").and_then(Value::as_str),
+        Some(renewed_model_name)
+    );
+    let status_pool = status_payload
+        .get("pool")
+        .and_then(Value::as_object)
+        .expect("status pool");
+    assert_eq!(
+        status_pool
+            .get("active_member_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(
+        status_pool
+            .get("queued_next_window")
+            .is_none_or(Value::is_null),
+        "queued next window should be cleared after promotion: {status_pool:?}"
+    );
+    assert_eq!(
+        status_pool.get("base_fee_nanos").and_then(Value::as_u64),
+        Some(12_000)
+    );
+    let status_member = status_payload
+        .get("member")
+        .and_then(Value::as_object)
+        .expect("status member");
+    let status_services = status_member
+        .get("service_bindings")
+        .and_then(Value::as_array)
+        .expect("status service bindings");
+    assert!(
+        status_services
+            .iter()
+            .any(|value| value.as_str() == Some(initial_service_name))
+    );
+    assert!(
+        status_services
+            .iter()
+            .any(|value| value.as_str() == Some(queued_service_name))
+    );
+    assert!(
+        status_services
+            .iter()
+            .any(|value| value.as_str() == Some(promoted_service_name))
+    );
 
     Ok(())
 }

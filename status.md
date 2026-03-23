@@ -1,6 +1,443 @@
 # Status
 
-Last updated: 2026-03-22
+Last updated: 2026-03-23
+
+## 2026-03-23 Follow-up: Generated HF autonomy workflows now emit authoritative apartment execution audits and fail closed by default
+- Extended the generated-HF agent slice across
+  `crates/iroha_data_model/src/{isi/soracloud.rs,soracloud.rs,visit/mod.rs,visit/visit_instruction.rs}`,
+  `crates/iroha_core/src/{block.rs,smartcontracts/isi/mod.rs,smartcontracts/isi/soracloud.rs,soracloud_runtime.rs}`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_torii/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`
+  so the remaining generated-HF autonomy gaps are closed:
+  - generated HF autonomy runs now persist a dedicated authoritative
+    `AutonomyRunExecuted` apartment audit event in addition to the previously
+    recorded service runtime receipt, and Torii exposes that execution audit on
+    both mutation responses and recent-run status;
+  - approved `workflow_input_json` bodies can now opt into a deterministic
+    `workflow_version = 1` sequential step list, with `${run.*}`,
+    `${previous.*}`, and `${steps.<step_id>.*}` placeholder resolution across
+    earlier step outputs;
+  - workflow `*.text` placeholders now prefer a semantic JSON `"text"` field
+    when present before falling back to the raw response body, which makes
+    chained generated-HF text workflows deterministic and useful out of the
+    box; and
+  - generated HF bridge fallback is now explicit opt-in per request instead of
+    silent: even when the node allows bridge fallback globally, the generated
+    `/infer` path only uses it when the caller also sets the
+    `x-soracloud-hf-allow-bridge-fallback` header.
+- This closes the previously open apartment-level audit gap and the earlier
+  “single-step only” autonomy limitation for linear workflows. Remaining HF
+  agent work is now narrower: broader adapter/runtime coverage beyond the
+  current generic local runner, and richer non-linear/tool-using orchestration
+  beyond sequential step lists.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_hf_gapfix_check cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p irohad` (pass)
+  - `CARGO_TARGET_DIR=target_hf_gapfix_dm cargo test -p iroha_data_model agent_apartment_audit_event_validation_requires_execution_fields -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_gapfix_core2 cargo test -p iroha_core record_agent_autonomy_execution_records_authoritative_audit_state -- --nocapture` (targeted test passed before Cargo continued across zero-match package test targets)
+  - `CARGO_TARGET_DIR=target_hf_gapfix_torii cargo test -p iroha_torii --lib authoritative_agent_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_gapfix_had cargo test -p irohad execute_local_read_generated_hf_infer_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_gapfix_had2 cargo test -p irohad execute_apartment_generated_hf_autonomy_ -- --nocapture` (pass)
+
+## 2026-03-23 Follow-up: Generated HF autonomy runs now persist authoritative runtime receipts
+- Extended the generated-HF agent receipt path across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/iroha_core/src/{smartcontracts/isi/soracloud.rs,soracloud_runtime.rs}`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_torii/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`
+  so a successful generated-HF autonomy run no longer leaves its execution
+  receipt only in node-local runtime state:
+  - approved autonomy runs now persist the approved process generation plus a
+    canonical `request_commitment`, so later service receipts bind back to the
+    exact authoritative approval tuple;
+  - `irohad` now preserves the generated service `SoraRuntimeReceiptV1`
+    alongside the existing node-local autonomy execution summary;
+  - Torii now records that service receipt into authoritative
+    `soracloud_runtime_receipts` after a successful generated-HF autonomy
+    execution and returns it on both the mutation response and
+    `agent-autonomy-status`; and
+  - recent run status now shows both the node-local execution summary and the
+    authoritative recorded receipt, so callers can verify the generated
+    service `/infer` execution without reading the runtime state directory.
+- This closes the earlier “promote node-local autonomy execution summaries into
+  an authoritative audit/receipt record” gap for generated HF agent runs.
+  Remaining HF agent work is narrower: whether to add a dedicated
+  apartment-level audit event on top of that service receipt, and broader
+  multi-step orchestration beyond a single `/infer` request.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_hf_receipt_check cargo check -p iroha_data_model -p iroha_core -p irohad -p iroha_torii` (pass)
+  - `CARGO_TARGET_DIR=target_hf_receipt_dm cargo test -p iroha_data_model agent_autonomy_request_commitment_uses_canonical_tuple -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_receipt_torii cargo test -p iroha_torii --lib authoritative_agent_autonomy_status_includes_runtime_recent_runs -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_receipt_torii2 cargo test -p iroha_torii --lib authoritative_agent_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_receipt_had2 cargo test -p irohad execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_summary -- --nocapture` (pass)
+
+## 2026-03-22 Follow-up: Generated HF apartment autonomy runs now persist structured workflow JSON
+- Extended the generated-HF autonomy path across
+  `crates/iroha_data_model/src/{isi/soracloud.rs,soracloud.rs}`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_torii/src/soracloud.rs`,
+  `crates/iroha_cli/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`
+  so approved runs no longer have to collapse everything into `run_label`:
+  - the on-chain autonomy instruction/record plus the signed Torii/CLI request
+    now carry an optional canonical `workflow_input_json` body;
+  - core admission canonicalizes that JSON, charges it against deterministic
+    apartment persistent-state accounting, and records its hash on the
+    authoritative audit event when present;
+  - `irohad` now forwards that persisted JSON verbatim to the generated HF
+    `/infer` handler and only falls back to the older `run_label`-as-`inputs`
+    envelope when no structured body was approved; and
+  - Torii status/mutation responses now surface the stored workflow JSON so
+    callers can correlate authoritative approvals with the node-local runtime
+    execution summary.
+- This closes the earlier “workflow input coverage” gap for single-request HF
+  agent runs. The remaining HF agent work is broader orchestration beyond a
+  single `/infer` request, not the lack of a structured persisted request body.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_cli -p irohad` (pass)
+  - `cargo test -p irohad execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_summary -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib authoritative_agent_autonomy_status_includes_runtime_recent_runs -- --nocapture` (pass)
+  - `cargo test -p iroha_cli signed_agent_autonomy_run_request_uses_verifiable_signature -- --nocapture` (pass)
+  - `cargo test -p iroha_cli canonicalize_agent_workflow_input_json_compacts_payload -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model agent_apartment_record_validation_rejects_invalid_workflow_input_json -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model agent_autonomy_run_provenance_payload_encodes_canonical_tuple -- --nocapture` (pass)
+
+## 2026-03-22 Follow-up: Generated HF apartments now execute approved autonomy runs through the local HF runtime
+- Extended the generated-HF agent slice across
+  `crates/iroha_core/src/soracloud_runtime.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_torii/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`
+  so the generated apartment path no longer stops at approval bookkeeping:
+  - the shared runtime surface now includes a stable node-local autonomy-run
+    execution summary format for generated apartments;
+  - `irohad` now recognizes `autonomy-run:<run_id>` apartment executions for
+    generated HF apartments, invokes the bound generated HF `/infer` service
+    through the already-materialized local runtime path, and persists
+    node-local checkpoint / execution-summary artifacts under the apartment
+    materialization directory;
+  - Torii `agent-autonomy-run` now executes that approved HF run immediately
+    after the authoritative mutation commits and returns the runtime summary in
+    the mutation response when the node-local runtime is available; and
+  - `agent-autonomy-status` now includes recent node-local runtime execution
+    summaries, so callers can inspect the last successful or failed generated
+    HF agent runs without scraping the runtime materialization directory.
+- The remaining gap is richer workflow input coverage rather than bare
+  execution: generated HF apartments now call the local HF runtime, but the
+  default autonomy payload still feeds `run_label` as the request input rather
+  than a persisted multi-step artifact body.
+
+## 2026-03-22 Follow-up: Soracloud HF runtime now imports shared Hub files and serves real local metadata/inference bridges
+## 2026-03-22 Follow-up: Soracloud HF runtime now executes imported shared models locally
+- Extended the HF runtime slice across
+  `crates/iroha_config/src/parameters/{defaults,actual,user}.rs`,
+  `crates/irohad/resources/soracloud_hf_local_runner.py`,
+  `crates/irohad/src/soracloud_runtime.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`
+  so generated HF deployments no longer depend on the remote inference bridge
+  as the primary runtime path:
+  - `soracloud_runtime.hf` now exposes explicit local-execution settings:
+    `local_execution_enabled`, `local_runner_program`,
+    `local_runner_timeout_ms`, and `allow_inference_bridge_fallback`,
+    alongside the existing Hub/API/import/bridge settings;
+  - `irohad` now materializes an embedded Python HF runner under the local
+    Soracloud runtime state directory and invokes it through the configured
+    interpreter program;
+  - generated HF `infer` local reads now prefer on-node execution against the
+    imported shared source directory, using a deterministic local fixture path
+    for tests and otherwise loading the imported model through
+    `transformers.pipeline(..., local_files_only=True)` so the node runs the
+    already-imported HF bytes instead of fetching fresh Hub content; and
+  - the old HF Inference forwarding path is still available as controlled
+    fallback when `allow_inference_bridge_fallback = true` and
+    `inference_token` is configured, so operators can keep a degraded-but-live
+    path if local adapter dependencies are unavailable.
+- Generated HF `metadata` responses now also report whether local execution is
+  enabled for the node, not only whether the bridge token is configured.
+- The remaining gap has shifted from model execution to agent execution:
+  generated HF services can now run imported models locally, but generated HF
+  apartments still stop at admission/status and do not yet consume autonomy
+  runs through a node-local agent workflow.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config soracloud_runtime_ -- --nocapture` (pass)
+  - `cargo test -p irohad hf_ -- --nocapture` (pass)
+
+## 2026-03-22 Follow-up: Soracloud HF runtime now imports shared Hub files and serves real local metadata/inference bridges
+- Extended the HF runtime slice across
+  `crates/iroha_config/src/parameters/{defaults,actual,user}.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`
+  so generated HF deployments now do real runtime work instead of only
+  materializing the deterministic placeholder bundle:
+  - `iroha_config` now exposes explicit `soracloud_runtime.hf` settings for
+    Hub/API/inference base URLs, request timeout, import limits, an allowlisted
+    file set, and the optional inference bearer token;
+  - the embedded runtime manager now imports allowlisted Hugging Face repo
+    files into `state_dir/hf_sources/<source_id>/files/`, writes a local
+    `import_manifest.json`, and records importer failures locally instead of
+    only logging them;
+  - generated HF `metadata` local reads now serve that local import manifest,
+    including resolved commit, imported/skipped file lists, and whether the
+    inference bridge is enabled for the node;
+  - generated HF `infer` local reads now forward the request body plus content
+    negotiation headers to the configured HF Inference base URL when
+    `soracloud_runtime.hf.inference_token` is set; and
+  - runtime HF source projections now stay `PendingImport` until a successful
+    local import manifest exists, and importer failures surface as runtime
+    `Failed` with `last_error` instead of incorrectly reporting `Ready`.
+- While verifying the slice, a fresh-build break in
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs` surfaced and was
+  fixed by restoring the missing `SecretEnvelopeV1` import for uploaded-model
+  ciphertext hashing.
+- The remaining HF gap is now narrower again:
+  - imported HF bytes are shared and queryable locally, but model execution is
+    still bridged through HF Inference rather than running adapters against the
+    imported weights on-node; and
+  - generated HF apartments can now target a working inference route, but the
+    repo still needs richer agent-side workflows beyond status/admission.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config soracloud_runtime_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_runtime cargo test -p irohad hf_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_runtime cargo test -p irohad manager_config_uses_explicit_soracloud_runtime_settings -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib authoritative_hf_shared_lease_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=target_hf_runtime cargo check -p iroha_config -p iroha_core -p iroha_torii -p irohad` (pass)
+
+## 2026-03-22 Follow-up: Soracloud HF generated deploys now promote sources to authoritative `Ready`
+- Extended the HF shared-lease/runtime path across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `integration_tests/tests/iroha_cli.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md` so the generated HF
+  scaffolding behaves consistently in fresh builds and live CLI flows:
+  - the shared-lease join/renew path now inspects the already-admitted
+    generated HF service in the same transaction and promotes the canonical HF
+    source record from `PendingImport` to authoritative `Ready` when the
+    generated bundle matches the requested source/model binding,
+  - live `hf-deploy` responses now surface `importer_pending = false` and
+    `source.status = Ready` once the deterministic HF-generated service is
+    admitted, and the CLI integration test now asserts that behavior in
+    addition to the earlier service/apartment auto-deploy checks,
+  - the `irohad` runtime-manager test scaffolding now initializes the newer
+    `uploaded_model_binding` field everywhere, so the generated-bundle
+    synthesis coverage builds cleanly in fresh targets, and
+  - the uploaded-model / private-inference provenance helpers now encode their
+    single value payloads directly instead of trying to serialize unsupported
+    one-element tuples, with dedicated layout tests added for those payloads.
+- The remaining HF gap is still the real async Hub importer plus real
+  model-adapter execution. Generated HF services are now admitted, hydrated,
+  and reported as ready consistently, but they still execute the deterministic
+  placeholder contract rather than a full Hugging Face runtime.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model --lib uploaded_model_ -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model --lib private_inference_start_provenance_payload_encodes_session_value -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib ensure_hf_generated_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-hf-verify cargo test -p iroha_core --lib join_hf_shared_lease_marks_source_ready_when_generated_service_is_already_deployed -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-hf-verify cargo test -p irohad reconcile_once_synthesizes_generated_hf_bundle_without_sorafs_importer -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-hf-verify cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture` (pass)
+
+## 2026-03-22 Follow-up: Native multisig cancel is now a first-class on-chain instruction
+- Extended the native multisig instruction model across
+  `crates/iroha_executor_data_model/src/isi.rs`,
+  `crates/iroha_executor/src/default/isi/multisig/{mod.rs,transaction.rs}`,
+  `crates/iroha_core/src/smartcontracts/isi/multisig.rs`,
+  `crates/iroha_torii/src/routing.rs`,
+  `crates/iroha_js_host/src/lib.rs`, and
+  `crates/iroha_schema_gen/src/lib.rs`
+  so `MultisigCancel` is now a real instruction instead of an app-side fiction:
+  - the executor data model now exposes `MultisigInstructionBox::Cancel`
+    with Norito/JSON/schema coverage,
+  - both executor paths now reject direct signer-side cancel execution and only
+    allow cancel once it is itself executed as the multisig account after
+    quorum, which means cancel is governed by the same multisig policy as any
+    other proposal action,
+  - built-in core multisig execution now handles nested authenticated
+    multisig instructions directly, so a cancel proposal can execute the inner
+    `MultisigCancel` instead of tripping the generic custom-instruction
+    upgrade guard,
+  - Torii transaction-account filtering now recognizes multisig cancel
+    instructions, and
+  - the JS host alias layer now accepts `MultisigCancel` and maps it to the
+    native `Custom.payload.Cancel` representation.
+- Current behavior prunes the canceled proposal tree after quorum; this lands
+  signed on-chain cancellation now, but it does not yet persist a separate
+  durable `CANCELED` tombstone/status for history queries.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcancel-schema cargo check -p iroha_schema_gen` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcancel-dm cargo test -p iroha_executor_data_model multisig_cancel_instruction_roundtrip_preserves_target_hash -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcancel-exec cargo test -p iroha_executor canceler_must_be_the_multisig_subject -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcancel-core cargo test -p iroha_core --lib multisig_cancel_requires_quorum_and_prunes_target_proposal -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcancel-js cargo test -p iroha_js_host multisig_alias_payloads_decode_as_custom_instruction -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcancel-torii cargo test -p iroha_torii --lib instruction_matches_account_id_matches_multisig_custom_cancel_account -- --nocapture` (pass)
+
+## 2026-03-22 Follow-up: Soracloud HF deploy now auto-admits generated services and apartments
+- Extended the HF control-plane path across
+  `crates/iroha_core/src/soracloud_runtime.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_torii/src/soracloud.rs`, and
+  `integration_tests/tests/iroha_cli.rs` so `hf-deploy` / `hf-lease-renew`
+  no longer stop at shared-lease membership:
+  - Torii now synthesizes a deterministic HF inference-service bundle with
+    `allow_model_inference = true`, signs the usual Soracloud bundle
+    provenance, and auto-submits `DeploySoracloudService` before the lease
+    join/renew when the named service is not already the matching generated HF
+    deployment.
+  - When `apartment_name` is requested, Torii also synthesizes a deterministic
+    HF apartment manifest tied to that generated service and auto-submits
+    `DeploySoracloudAgentApartment` before the lease join/renew unless the
+    apartment already matches the expected generated manifest.
+  - Reuse is fail-closed: if the requested service/apartment name already
+    exists but does not match the deterministic HF-generated shape for the same
+    canonical source, the HF mutation is rejected instead of binding the lease
+    to unrelated infrastructure.
+- The embedded runtime manager now recognizes those generated HF bundles and
+  can synthesize the shared stub IVM bundle directly into the local artifact
+  cache without waiting for a committed SoraFS payload, which means the
+  runtime-backed HF source projection can advance to `Ready` once the service
+  and apartment are materialized.
+- The remaining HF gap is now narrower again:
+  - the real async Hugging Face importer still needs to fetch, normalize, and
+    lease canonical Hub bytes instead of leaving authoritative sources in the
+    control-plane `PendingImport` skeleton by default, and
+  - the generated service still uses a deterministic stub contract, so real
+    model-adapter execution and agent inference calls are not wired yet.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core generated_hf_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-hf-verify cargo test -p irohad reconcile_once_synthesizes_generated_hf_bundle_without_sorafs_importer -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib ensure_hf_generated_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-hf-verify cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture` (pass)
+  - `cargo check -p iroha_core -p irohad -p iroha_torii` (pass)
+
+## 2026-03-22 Follow-up: Soracloud HF status now includes runtime-backed source projections
+- Extended the shared runtime snapshot in
+  `crates/iroha_core/src/soracloud_runtime.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`, and
+  `crates/iroha_torii/src/soracloud.rs`
+  so canonical HF sources are no longer visible only as static authoritative
+  records:
+  - the embedded runtime manager now persists `hf_sources` projections keyed by
+    canonical source id,
+  - each projection summarizes bound services/apartments, queued windows,
+    materialized bindings, and local bundle/artifact cache misses, and
+  - the runtime status distinguishes `PendingImport`, `PendingDeployment`,
+    `Hydrating`, `Ready`, `Failed`, and `Retired`.
+- Torii `hf-status` / HF mutation responses now expose that runtime projection
+  alongside the authoritative `SoraHfSourceRecordV1`, and `importer_pending`
+  now tracks the runtime projection when available instead of treating every
+  non-`Ready` authoritative source as still importing forever.
+- The remaining HF gap is now narrower and more concrete:
+  - the real async Hub importer still needs to hydrate canonical bytes and
+    advance authoritative source records beyond the current lease-control-plane
+    skeleton, and
+  - the generated inference service/apartment bring-up still needs to create
+    the deployments that the new runtime projection is now prepared to report.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p irohad derive_hf_runtime_status_distinguishes_pending_deployment_and_ready -- --nocapture` (pass)
+  - `cargo test -p irohad reconcile_once_projects_hf_source_runtime_readiness_from_bound_services -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib authoritative_hf_shared_lease_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib hf_importer_pending_false_for_failed_sources_without_runtime -- --nocapture` (pass)
+  - `cargo check -p iroha_core -p iroha_torii -p irohad` (pass)
+
+## 2026-03-22 Follow-up: Soracloud HF leases now support pre-expiry next-window sponsorship
+- Extended the HF shared-lease pool model across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/iroha_torii/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`:
+  - active shared-lease pools can now persist an optional queued next-window
+    sponsor with the next window’s asset, fee, model label, timing, and
+    target service/apartment bindings,
+  - `RenewSoracloudHfSharedLease` now supports both modes: immediate renewal
+    after expiry/drain, and pre-expiry sponsorship by an already-active member
+    who fronts the next window while the current one is still live,
+  - later HF mutations now promote that queued next window once the current
+    term has expired, while non-sponsor members are expired out of the old
+    window at the rollover boundary, and
+  - queued sponsors are blocked from leaving early so the funded next window
+    cannot disappear out from under the pool.
+- Added focused validation and runtime coverage:
+  - data-model validation now checks that queued next-window metadata lines up
+    exactly with the current pool expiry and lease term,
+  - core unit tests cover pre-expiry sponsorship, queued-window promotion on a
+    later join, sponsor-leave rejection, and the earlier configurable
+    drain-grace path, and
+  - Torii authoritative status coverage now returns queued next-window state
+    from committed world state, and a new 4-peer CLI integration test drives
+    the live `hf-lease-renew` pre-expiry path through queued sponsorship,
+    sponsor-leave rejection, and rollover promotion on a later `hf-deploy`.
+- This closes the pre-expiry next-window sponsorship gap for HF shared leases.
+  Remaining HF work is now the async importer/runtime hydration plus generated
+  inference service + apartment bring-up.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model hf_shared_lease_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib hf_shared_lease -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib authoritative_hf_shared_lease_ -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --nocapture` (pass)
+
+## 2026-03-22 Follow-up: Soracloud uploaded-model design now layers onto the existing model plane instead of inventing a parallel runtime
+- Updated
+  `docs/source/soracloud/{uploaded_private_models.md,cli_local_control_plane.md,manifest_schemas.md}`
+  so the next Soracloud AI-model slice is explicit about how user-uploaded
+  private models fit the current implementation:
+  - uploaded models extend the existing
+    `SoraModelRegistryV1` / `SoraModelWeightVersionRecordV1` /
+    `SoraModelArtifactRecordV1` surfaces instead of replacing them,
+  - HF shared-lease routes remain the shared source/import membership path and
+    are now documented as distinct from the private uploaded-model path,
+  - encrypted uploaded-model bytes are planned as first-class chunk/bundle
+    state built on `SecretEnvelopeV1` / `CiphertextStateRecordV1`, and
+  - `ram_lfe` is explicitly kept separate from private transformer execution,
+    which should reuse Soracloud FHE/decryption governance plus the existing
+    `allow_model_inference` capability flag.
+- The new design note also fixes the missing cross-cutting picture for the next
+  implementation slice: HF-style safetensors admission only, fixed 4 MiB
+  plaintext sharding, BFV-backed deterministic compiled inference, new
+  upload/compile/private-run routes, XOR pricing, and the records needed for
+  bundle roots, compile profiles, sessions, and checkpoints.
+- Follow-up doc tightening also spells out the main implementation edges that
+  still matter before code lands: explicit apartment model-binding semantics,
+  authoritative upload/compile/run/decrypt status and audit surfaces, and the
+  quota/state-growth rules required for literal encrypted model bytes on-chain.
+- This closes the design-coherence gap between the current Soracloud model
+  registry features and the planned So Ra user-uploaded private-runtime flow.
+  Remaining work is still the actual data-model, Torii, CLI, world-state, and
+  runtime implementation.
+- Validation:
+  - not run (documentation-only changes)
+
+## 2026-03-22 Follow-up: Soracloud HF shared-lease pools now honor configurable drain grace after the last member leaves
+- Extended the Nexus config surface and Soracloud lease executor across
+  `crates/iroha_config/src/parameters/{defaults.rs,actual.rs,user.rs}` and
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`:
+  - added `nexus.hf_shared_leases.drain_grace_ms`, with a default of 5 seconds,
+    so operators can control how long an empty shared HF lease pool remains in
+    `Draining` before expiry instead of relying on the old hard-coded
+    immediate clamp,
+  - wired that policy into `LeaveSoracloudHfSharedLease`, so the last-member
+    leave path now sets `window_expires_at_ms = now + drain_grace` and keeps
+    the record self-consistent even when leave happens in the same block as
+    window creation, and
+  - added focused config + core coverage for the new setting and the
+    authoritative pool expiry behavior.
+- This closes the configurable drain-grace part of the HF shared-lease
+  roadmap. Remaining HF work is still the async importer/runtime hydration,
+  generated inference service + apartment bring-up.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config nexus_hf_shared_leases_ -- --nocapture` (pass)
+  - `cargo test -p iroha_core leave_hf_shared_lease_last_member_uses_configured_drain_grace -- --nocapture` (pass)
 
 ## 2026-03-22 Follow-up: NPoS RBC chunk-loss backlog regression is green again
 - Fixed the flaky `npos_rbc_chunk_loss_fault_reports_backlog` harness in
@@ -65,7 +502,7 @@ Last updated: 2026-03-22
 - This closes the live multi-account refund/proration coverage gap for the
   current shared-lease substrate. The remaining HF work is still the async
   importer/runtime hydration, generated inference service + apartment bring-up,
-  and pre-expiry next-window sponsorship/drain-grace behavior.
+  and the then-open drain-grace follow-up.
 - Validation:
   - `cargo fmt --all` (pass)
   - `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture` (pass)
@@ -89,8 +526,8 @@ Last updated: 2026-03-22
     explicitly before reading authoritative world state.
 - This closes the CLI/live-coverage gap for the current shared-lease
   substrate, but the async HF importer/runtime hydration, generated inference
-  services, optional one-click apartment bootstrap, and pre-expiry
-  next-window sponsorship are still open follow-up work.
+  services, and optional one-click apartment bootstrap were still open at that
+  point.
 - Validation:
   - `cargo fmt --all` (pass)
   - `cargo test -p iroha_cli hf_ -- --nocapture` (pass)
@@ -122,8 +559,8 @@ Last updated: 2026-03-22
     lease mutations.
 - This slice intentionally stops at the shared-lease/control-plane substrate:
   the async HF importer/runtime hydration, generated inference services,
-  optional one-click apartment bootstrap, CLI wrappers, and pre-expiry
-  next-window sponsorship are still open follow-up work.
+  optional one-click apartment bootstrap, and CLI wrappers were still open at
+  that point.
 - Validation:
   - `cargo fmt --all` (pass)
   - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii` (pass)

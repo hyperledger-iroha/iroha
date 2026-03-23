@@ -3020,6 +3020,26 @@ fn multisig_post_operation(
 fn multisig_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/multisig/propose".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Propose a multisig instruction batch.",
+            "Resolve a multisig selector, wrap an instruction batch in a multisig proposal envelope, and optionally submit it.",
+            "#/components/schemas/MultisigProposeRequest",
+            "#/components/schemas/MultisigResponse",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approve".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Approve a multisig proposal.",
+            "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
+            "#/components/schemas/MultisigApproveRequest",
+            "#/components/schemas/MultisigResponse",
+            "Multisig alias or referenced proposal not found.",
+        )),
+    );
+    paths.insert(
         "/v1/contracts/call/multisig/propose".to_owned(),
         Value::Object(multisig_post_operation(
             "Propose a multisig contract call.",
@@ -3036,6 +3056,16 @@ fn multisig_paths() -> Map {
             "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
             "#/components/schemas/MultisigContractCallApproveRequest",
             "#/components/schemas/MultisigContractCallResponse",
+            "Multisig alias or referenced proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/cancel".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Cancel a multisig proposal.",
+            "Resolve a multisig selector, target an active proposal by `proposal_id` or `instructions_hash`, and either propose or approve the corresponding cancel action.",
+            "#/components/schemas/MultisigCancelRequest",
+            "#/components/schemas/MultisigCancelResponse",
             "Multisig alias or referenced proposal not found.",
         )),
     );
@@ -11290,6 +11320,71 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "MultisigProposeRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id", "instructions"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "private_key": { "type": "object" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "instructions": {
+                            "type": "array",
+                            "items": { "type": "object" }
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigApproveRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "private_key": { "type": "object" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "resolved_multisig_account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "resolved_multisig_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "tx_hash_hex": { "type": "string" },
+                "executed_tx_hash_hex": { "type": "string" },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "signing_message_b64": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
         "MultisigContractCallProposeRequest".to_owned(),
         norito::json!({
             "allOf": [
@@ -11350,6 +11445,7 @@ fn openapi_schemas() -> Map {
                 "submitted": { "type": "boolean" },
                 "proposal_id": { "type": "string" },
                 "instructions_hash": { "type": "string" },
+                "tx_hash_hex": { "type": "string" },
                 "executed_tx_hash_hex": { "type": "string" },
                 "creation_time_ms": { "type": "integer", "format": "uint64" },
                 "signing_message_b64": { "type": "string" }
@@ -11566,8 +11662,11 @@ mod tests {
         assert!(paths.contains_key("/v1/connect/session"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
+        assert!(paths.contains_key("/v1/multisig/propose"));
+        assert!(paths.contains_key("/v1/multisig/approve"));
         assert!(paths.contains_key("/v1/contracts/call/multisig/propose"));
         assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
+        assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/list"));
         assert!(paths.contains_key("/v1/multisig/proposals/get"));

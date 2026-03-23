@@ -9696,9 +9696,10 @@ pub(crate) mod valid {
             soracloud_runtime::{
                 SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
                 SoracloudDeterministicStateMutation, SoracloudLocalReadRequest,
-                SoracloudLocalReadResponse, SoracloudRuntime, SoracloudRuntimeExecutionError,
-                SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeReadHandle,
-                SoracloudRuntimeSnapshot,
+                SoracloudLocalReadResponse, SoracloudPrivateInferenceExecutionRequest,
+                SoracloudPrivateInferenceExecutionResult, SoracloudRuntime,
+                SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
+                SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
             },
             state::{State, World},
             sumeragi::network_topology::{Topology, test_topology_with_keys},
@@ -9785,6 +9786,17 @@ pub(crate) mod valid {
                 Err(SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
                     "local reads are not used in this test runtime",
+                ))
+            }
+
+            fn execute_private_inference(
+                &self,
+                _request: SoracloudPrivateInferenceExecutionRequest,
+            ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError>
+            {
+                Err(SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "private inference is not used in this test runtime",
                 ))
             }
 

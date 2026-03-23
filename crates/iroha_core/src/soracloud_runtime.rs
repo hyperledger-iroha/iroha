@@ -1,19 +1,322 @@
-//! Shared Soracloud runtime snapshot types and execution traits.
+//! Shared Soracloud runtime snapshot types, generated HF manifests, and execution traits.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU16, NonZeroU32, NonZeroU64},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
     isi::InstructionBox,
+    name::Name,
+    smart_contract::manifest::EntryPointKind,
     soracloud::{
-        SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCertifiedResponsePolicyV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentToolCapabilityV1,
+        AgentUpgradePolicyV1, SORA_CONTAINER_MANIFEST_VERSION_V1,
+        SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
+        SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCapabilityPolicyV1,
+        SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
+        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfSourceStatusV1, SoraLifecycleHooksV1,
+        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1,
+        SoraServiceManifestV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
+        SoraStateMutationOperationV1, SoraTlsModeV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraUploadedModelKeyWrapAeadV1,
     },
 };
-use norito::derive::{JsonDeserialize, JsonSerialize};
+use norito::{
+    codec::Encode,
+    derive::{JsonDeserialize, JsonSerialize},
+};
+
+const HF_GENERATED_SERVICE_VERSION_V1: &str = "hf.generated.v1";
+const HF_GENERATED_SERVICE_MARKER_ENV: &str = "SORACLOUD_HF_GENERATED";
+const HF_GENERATED_SOURCE_ID_ENV: &str = "SORACLOUD_HF_SOURCE_ID";
+const HF_GENERATED_REPO_ID_ENV: &str = "SORACLOUD_HF_REPO_ID";
+const HF_GENERATED_REVISION_ENV: &str = "SORACLOUD_HF_REVISION";
+const HF_GENERATED_MODEL_NAME_ENV: &str = "SORACLOUD_HF_MODEL_NAME";
+const HF_GENERATED_ROUTE_SUFFIX: &str = ".hf.soracloud.internal";
+const HF_GENERATED_ENTRYPOINT_INFER: &str = "infer";
+const HF_GENERATED_ENTRYPOINT_METADATA: &str = "metadata";
+
+/// Canonical Hugging Face source markers embedded into generated Soracloud service bundles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudHfGeneratedSourceBinding {
+    /// Stable canonical source identifier.
+    pub source_id: String,
+    /// Hugging Face repository identifier.
+    pub repo_id: String,
+    /// Exact pinned revision resolved by the control plane.
+    pub resolved_revision: String,
+    /// Normalized Soracloud model name.
+    pub model_name: String,
+}
+
+fn hf_generated_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypointDescriptor {
+    ivm::EmbeddedEntrypointDescriptor {
+        name: name.to_owned(),
+        kind: EntryPointKind::Public,
+        permission: None,
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        access_hints_complete: Some(true),
+        access_hints_skipped: Vec::new(),
+        triggers: Vec::new(),
+        entry_pc,
+    }
+}
+
+fn hf_generated_internal_host(service_name: &Name) -> String {
+    format!(
+        "{}{HF_GENERATED_ROUTE_SUFFIX}",
+        service_name.as_ref().replace('_', "-")
+    )
+}
+
+/// Return the deterministic shared IVM artifact used by generated HF services.
+#[must_use]
+pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
+    let metadata = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 0,
+        abi_version: 1,
+    };
+    let contract_interface = ivm::EmbeddedContractInterfaceV1 {
+        compiler_fingerprint: "iroha-soracloud-hf-generated".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: [
+            hf_generated_entrypoint(HF_GENERATED_ENTRYPOINT_INFER, 0),
+            hf_generated_entrypoint(HF_GENERATED_ENTRYPOINT_METADATA, 0),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let mut bytes = metadata.encode();
+    bytes.extend_from_slice(&contract_interface.encode_section());
+    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    bytes
+}
+
+/// Build the canonical generated Soracloud service bundle used for HF-backed deployments.
+#[must_use]
+pub fn build_soracloud_hf_generated_service_bundle(
+    service_name: Name,
+    source_id: &str,
+    repo_id: &str,
+    resolved_revision: &str,
+    model_name: &str,
+) -> SoraDeploymentBundleV1 {
+    let bundle_bytes = soracloud_hf_generated_service_contract_artifact();
+    let bundle_hash = Hash::new(&bundle_bytes);
+    let mut env = BTreeMap::new();
+    env.insert(HF_GENERATED_SERVICE_MARKER_ENV.to_owned(), "1".to_owned());
+    env.insert(HF_GENERATED_SOURCE_ID_ENV.to_owned(), source_id.to_owned());
+    env.insert(HF_GENERATED_REPO_ID_ENV.to_owned(), repo_id.to_owned());
+    env.insert(
+        HF_GENERATED_REVISION_ENV.to_owned(),
+        resolved_revision.to_owned(),
+    );
+    env.insert(
+        HF_GENERATED_MODEL_NAME_ENV.to_owned(),
+        model_name.to_owned(),
+    );
+
+    let container = SoraContainerManifestV1 {
+        schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
+        runtime: SoraContainerRuntimeV1::Ivm,
+        bundle_hash,
+        bundle_path: "/bundles/hf_generated_inference.to".to_owned(),
+        entrypoint: HF_GENERATED_ENTRYPOINT_INFER.to_owned(),
+        args: Vec::new(),
+        env,
+        capabilities: SoraCapabilityPolicyV1 {
+            network: SoraNetworkPolicyV1::Isolated,
+            allow_wallet_signing: false,
+            allow_state_writes: false,
+            allow_model_inference: true,
+            allow_model_training: false,
+        },
+        resources: SoraResourceLimitsV1 {
+            cpu_millis: NonZeroU32::new(500).expect("non-zero cpu budget"),
+            memory_bytes: NonZeroU64::new(256 * 1024 * 1024).expect("non-zero memory budget"),
+            ephemeral_storage_bytes: NonZeroU64::new(128 * 1024 * 1024)
+                .expect("non-zero storage budget"),
+            max_open_files: NonZeroU32::new(256).expect("non-zero open-file cap"),
+            max_tasks: NonZeroU16::new(32).expect("non-zero task cap"),
+        },
+        lifecycle: SoraLifecycleHooksV1 {
+            start_grace_secs: NonZeroU32::new(15).expect("non-zero start grace"),
+            stop_grace_secs: NonZeroU32::new(10).expect("non-zero stop grace"),
+            healthcheck_path: Some("/healthz".to_owned()),
+        },
+    };
+    let container_manifest_hash = Hash::new(Encode::encode(&container));
+    let route_host = hf_generated_internal_host(&service_name);
+    let service = SoraServiceManifestV1 {
+        schema_version: SORA_SERVICE_MANIFEST_VERSION_V1,
+        service_name,
+        service_version: HF_GENERATED_SERVICE_VERSION_V1.to_owned(),
+        container: SoraContainerManifestRefV1 {
+            manifest_hash: container_manifest_hash,
+            expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
+        },
+        replicas: NonZeroU16::new(1).expect("non-zero replicas"),
+        route: Some(SoraRouteTargetV1 {
+            host: route_host,
+            path_prefix: "/".to_owned(),
+            service_port: NonZeroU16::new(8080).expect("non-zero port"),
+            visibility: SoraRouteVisibilityV1::Internal,
+            tls_mode: SoraTlsModeV1::Disabled,
+        }),
+        rollout: SoraRolloutPolicyV1 {
+            canary_percent: 0,
+            max_unavailable_replicas: 0,
+            health_window_secs: NonZeroU32::new(30).expect("non-zero health window"),
+            automatic_rollback_failures: NonZeroU32::new(1).expect("non-zero rollback failures"),
+        },
+        state_bindings: Vec::new(),
+        handlers: vec![
+            SoraServiceHandlerV1 {
+                handler_name: "infer".parse().expect("valid literal handler name"),
+                class: SoraServiceHandlerClassV1::Query,
+                entrypoint: HF_GENERATED_ENTRYPOINT_INFER.to_owned(),
+                route_path: Some("/infer".to_owned()),
+                certified_response: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                mailbox: None,
+            },
+            SoraServiceHandlerV1 {
+                handler_name: "metadata".parse().expect("valid literal handler name"),
+                class: SoraServiceHandlerClassV1::Query,
+                entrypoint: HF_GENERATED_ENTRYPOINT_METADATA.to_owned(),
+                route_path: Some("/metadata".to_owned()),
+                certified_response: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                mailbox: None,
+            },
+        ],
+        artifacts: Vec::new(),
+    };
+
+    SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    }
+}
+
+/// Build the canonical generated agent apartment manifest used for HF-bound agents.
+#[must_use]
+pub fn build_soracloud_hf_generated_agent_manifest(
+    apartment_name: Name,
+    service_bundle: &SoraDeploymentBundleV1,
+) -> AgentApartmentManifestV1 {
+    let service_host = service_bundle
+        .service
+        .route
+        .as_ref()
+        .map(|route| route.host.clone())
+        .unwrap_or_else(|| hf_generated_internal_host(&service_bundle.service.service_name));
+
+    AgentApartmentManifestV1 {
+        schema_version: AGENT_APARTMENT_MANIFEST_VERSION_V1,
+        apartment_name,
+        container: SoraContainerManifestRefV1 {
+            manifest_hash: service_bundle.container_manifest_hash(),
+            expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
+        },
+        tool_capabilities: vec![
+            AgentToolCapabilityV1 {
+                tool: "soracloud.hf.infer".to_owned(),
+                max_invocations_per_epoch: NonZeroU32::new(10_000)
+                    .expect("non-zero infer invocation limit"),
+                allow_network: true,
+                allow_filesystem_write: false,
+            },
+            AgentToolCapabilityV1 {
+                tool: "soracloud.hf.metadata".to_owned(),
+                max_invocations_per_epoch: NonZeroU32::new(10_000)
+                    .expect("non-zero metadata invocation limit"),
+                allow_network: true,
+                allow_filesystem_write: false,
+            },
+        ],
+        policy_capabilities: vec![
+            "agent.autonomy.allow"
+                .parse()
+                .expect("valid literal policy capability"),
+            "agent.autonomy.run"
+                .parse()
+                .expect("valid literal policy capability"),
+        ],
+        spend_limits: Vec::new(),
+        state_quota_bytes: NonZeroU64::new(16 * 1024 * 1024).expect("non-zero state quota"),
+        network_egress: SoraNetworkPolicyV1::Allowlist(vec![service_host]),
+        upgrade_policy: AgentUpgradePolicyV1::Governed,
+    }
+}
+
+/// Extract canonical HF source markers from a generated Soracloud service bundle.
+#[must_use]
+pub fn soracloud_hf_generated_source_binding(
+    bundle: &SoraDeploymentBundleV1,
+) -> Option<SoracloudHfGeneratedSourceBinding> {
+    if bundle.service.service_version != HF_GENERATED_SERVICE_VERSION_V1 {
+        return None;
+    }
+    if bundle.container.runtime != SoraContainerRuntimeV1::Ivm
+        || !bundle.container.capabilities.allow_model_inference
+        || bundle.container.capabilities.allow_state_writes
+        || bundle.container.capabilities.allow_model_training
+    {
+        return None;
+    }
+    if bundle.container.bundle_hash != Hash::new(soracloud_hf_generated_service_contract_artifact())
+    {
+        return None;
+    }
+
+    let source_id = bundle
+        .container
+        .env
+        .get(HF_GENERATED_SOURCE_ID_ENV)?
+        .clone();
+    let repo_id = bundle.container.env.get(HF_GENERATED_REPO_ID_ENV)?.clone();
+    let resolved_revision = bundle.container.env.get(HF_GENERATED_REVISION_ENV)?.clone();
+    let model_name = bundle
+        .container
+        .env
+        .get(HF_GENERATED_MODEL_NAME_ENV)?
+        .clone();
+    let marker = bundle.container.env.get(HF_GENERATED_SERVICE_MARKER_ENV)?;
+    if marker != "1" {
+        return None;
+    }
+
+    Some(SoracloudHfGeneratedSourceBinding {
+        source_id,
+        repo_id,
+        resolved_revision,
+        model_name,
+    })
+}
+
+/// Return the synthesized HF bundle bytes when a service bundle is one of the canonical generated
+/// HF service bundles.
+#[must_use]
+pub fn soracloud_hf_generated_bundle_payload_if_applicable(
+    bundle: &SoraDeploymentBundleV1,
+) -> Option<Vec<u8>> {
+    soracloud_hf_generated_source_binding(bundle)
+        .map(|_binding| soracloud_hf_generated_service_contract_artifact())
+}
 
 /// Distinguishes the local runtime role of a materialized service revision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
@@ -131,6 +434,170 @@ pub struct SoracloudRuntimeApartmentPlan {
     pub revoked_policy_capability_count: u32,
 }
 
+/// Schema version for [`SoracloudApartmentAutonomyExecutionSummaryV1`].
+pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
+
+/// One successful service step executed inside a generated apartment autonomy workflow.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudApartmentAutonomyWorkflowStepSummaryV1 {
+    /// Zero-based workflow step index.
+    pub step_index: u32,
+    /// Optional stable workflow step identifier.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<String>,
+    /// Deterministic commitment over the local-read request for this step.
+    pub request_commitment: Hash,
+    /// Deterministic commitment over the step result.
+    pub result_commitment: Hash,
+    /// Optional certified runtime receipt emitted by the bound service query.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub runtime_receipt: Option<SoraRuntimeReceiptV1>,
+    /// Response content type reported by the bound service, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    /// Parsed JSON response body for successful JSON results, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub response_json: Option<norito::json::Value>,
+    /// UTF-8 response text for non-JSON results, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub response_text: Option<String>,
+}
+
+/// Node-local execution summary for one approved apartment autonomy run.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudApartmentAutonomyExecutionSummaryV1 {
+    /// Schema version; must equal
+    /// [`SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1`].
+    pub schema_version: u16,
+    /// Apartment that executed the run.
+    pub apartment_name: String,
+    /// Stable authoritative autonomy-run identifier.
+    pub run_id: String,
+    /// Bound service name used for execution, when one was resolved locally.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
+    /// Bound service version used for execution, when one was resolved locally.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub service_version: Option<String>,
+    /// Service handler used for execution, when one was resolved locally.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub handler_name: Option<String>,
+    /// Whether the runtime obtained a successful inference result.
+    pub succeeded: bool,
+    /// Deterministic commitment over the execution outcome.
+    pub result_commitment: Hash,
+    /// Optional raw checkpoint artifact hash produced by the run.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub checkpoint_artifact_hash: Option<Hash>,
+    /// Optional certified runtime receipt emitted by the bound service query.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub runtime_receipt: Option<SoraRuntimeReceiptV1>,
+    /// Successful workflow steps executed before the final response was produced.
+    #[norito(default)]
+    pub workflow_steps: Vec<SoracloudApartmentAutonomyWorkflowStepSummaryV1>,
+    /// Response content type reported by the bound service, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    /// Parsed JSON response body for successful JSON results, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub response_json: Option<norito::json::Value>,
+    /// UTF-8 response text for non-JSON results, when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub response_text: Option<String>,
+    /// Human-readable execution error, when the run failed locally.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Runtime-manager materialization state for a canonical Hugging Face source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "status", content = "value")]
+pub enum SoracloudRuntimeHfSourceStatus {
+    /// The canonical import has no runtime-visible bindings yet.
+    PendingImport,
+    /// A shared lease is bound, but no runtime service/apartment is materialized yet.
+    PendingDeployment,
+    /// Runtime materialization exists, but local artifact hydration is incomplete.
+    Hydrating,
+    /// The runtime can serve the source from the local materialized snapshot.
+    Ready,
+    /// The canonical source is blocked on a recorded failure.
+    Failed,
+    /// The canonical source was retired and should not accept fresh joins.
+    Retired,
+}
+
+/// Runtime-manager projection for one canonical Hugging Face source.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudRuntimeHfSourcePlan {
+    /// Stable canonical source identifier.
+    pub source_id: String,
+    /// Hugging Face repository identifier.
+    pub repo_id: String,
+    /// Exact pinned revision resolved by the control plane.
+    pub resolved_revision: String,
+    /// Normalized Soracloud model name.
+    pub model_name: String,
+    /// Runtime adapter selected for the source.
+    pub adapter_id: String,
+    /// Authoritative world-state lifecycle status.
+    pub authoritative_status: SoraHfSourceStatusV1,
+    /// Runtime-manager materialization status for the source.
+    pub runtime_status: SoracloudRuntimeHfSourceStatus,
+    /// Number of shared-lease pools currently tracked for the source.
+    pub pool_count: u32,
+    /// Number of active or draining pools still visible to the runtime manager.
+    pub active_pool_count: u32,
+    /// Aggregate active shared-lease membership count across tracked pools.
+    pub active_member_count: u32,
+    /// Number of queued next-window sponsors for the source.
+    pub queued_window_count: u32,
+    /// Number of distinct bound Soracloud services.
+    pub bound_service_count: u32,
+    /// Bound Soracloud service names in deterministic order.
+    #[norito(default)]
+    pub bound_service_names: Vec<String>,
+    /// Number of bound services already present in the runtime snapshot.
+    pub materialized_service_count: u32,
+    /// Materialized service names in deterministic order.
+    #[norito(default)]
+    pub materialized_service_names: Vec<String>,
+    /// Number of materialized services still hydrating their artifacts.
+    pub hydrating_service_count: u32,
+    /// Number of distinct bound Soracloud apartments.
+    pub bound_apartment_count: u32,
+    /// Bound apartment names in deterministic order.
+    #[norito(default)]
+    pub bound_apartment_names: Vec<String>,
+    /// Number of bound apartments already present in the runtime snapshot.
+    pub materialized_apartment_count: u32,
+    /// Materialized apartment names in deterministic order.
+    #[norito(default)]
+    pub materialized_apartment_names: Vec<String>,
+    /// Number of missing bundle cache entries across bound services.
+    pub bundle_cache_miss_count: u32,
+    /// Number of missing non-bundle artifact cache entries across bound services.
+    pub artifact_cache_miss_count: u32,
+    /// Latest authoritative failure string, when present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 /// Persisted snapshot of node-local Soracloud runtime materialization state.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SoracloudRuntimeSnapshot {
@@ -144,6 +611,9 @@ pub struct SoracloudRuntimeSnapshot {
     pub services: BTreeMap<String, BTreeMap<String, SoracloudRuntimeServicePlan>>,
     /// Materialized active agent apartments keyed by apartment name.
     pub apartments: BTreeMap<String, SoracloudRuntimeApartmentPlan>,
+    /// Runtime-manager Hugging Face source projections keyed by canonical source id.
+    #[norito(default)]
+    pub hf_sources: BTreeMap<String, SoracloudRuntimeHfSourcePlan>,
 }
 
 impl Default for SoracloudRuntimeSnapshot {
@@ -154,6 +624,7 @@ impl Default for SoracloudRuntimeSnapshot {
             observed_block_hash: None,
             services: BTreeMap::new(),
             apartments: BTreeMap::new(),
+            hf_sources: BTreeMap::new(),
         }
     }
 }
@@ -165,6 +636,32 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
 
     /// Return the local runtime-manager state directory.
     fn state_dir(&self) -> PathBuf;
+
+    /// Return the Soracloud-upload recipient advertised for user model uploads, when available.
+    fn uploaded_model_encryption_recipient(
+        &self,
+    ) -> Option<SoracloudUploadedModelEncryptionRecipient> {
+        None
+    }
+}
+
+/// Node-local uploaded-model encryption recipient descriptor exposed by the runtime handle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudUploadedModelEncryptionRecipient {
+    /// Schema version used for the advertised recipient record.
+    pub schema_version: u16,
+    /// Stable recipient key identifier.
+    pub key_id: String,
+    /// Recipient key version under the same `key_id`.
+    pub key_version: NonZeroU32,
+    /// Key-encapsulation suite expected by the recipient.
+    pub kem: SoraUploadedModelKeyEncapsulationV1,
+    /// AEAD suite expected by the recipient.
+    pub aead: SoraUploadedModelKeyWrapAeadV1,
+    /// Raw public key bytes used for upload-time envelope encryption.
+    pub public_key_bytes: Vec<u8>,
+    /// Commitment over the public key bytes.
+    pub public_key_fingerprint: Hash,
 }
 
 /// Shared Soracloud runtime handle type used across crate boundaries.
@@ -359,6 +856,52 @@ pub struct SoracloudApartmentExecutionResult {
     pub result_commitment: Hash,
 }
 
+/// Runtime-owned private-inference action executed against authoritative Soracloud state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SoracloudPrivateInferenceExecutionAction {
+    /// Start deterministic private execution and produce an awaiting-decryption checkpoint.
+    Start,
+    /// Release output for an already materialized awaiting-decryption checkpoint.
+    Release {
+        /// Decryption request that authorizes release of the checkpoint output.
+        decrypt_request_id: String,
+    },
+}
+
+/// Shared request envelope for deterministic uploaded-model private inference execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudPrivateInferenceExecutionRequest {
+    /// Authoritative height pinned for the private execution.
+    pub observed_height: u64,
+    /// Latest committed block hash visible to the runtime.
+    pub observed_block_hash: Option<Hash>,
+    /// Apartment targeted by the private execution.
+    pub apartment_name: String,
+    /// Expected apartment process generation.
+    pub process_generation: u64,
+    /// Stable private session identifier.
+    pub session_id: String,
+    /// Requested runtime action.
+    pub action: SoracloudPrivateInferenceExecutionAction,
+    /// Deterministic commitment over the private-runtime request.
+    pub request_commitment: Hash,
+}
+
+/// Shared result for deterministic uploaded-model private inference execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoracloudPrivateInferenceExecutionResult {
+    /// Terminal or intermediate session status produced by the runtime.
+    pub status: SoraPrivateInferenceSessionStatusV1,
+    /// Updated session receipt root.
+    pub receipt_root: Hash,
+    /// Updated cumulative XOR nanos charged for the session.
+    pub xor_cost_nanos: u128,
+    /// Deterministic checkpoint emitted by the runtime.
+    pub checkpoint: SoraPrivateInferenceCheckpointV1,
+    /// Deterministic commitment over the runtime outcome.
+    pub result_commitment: Hash,
+}
+
 /// Shared execution interface for the embedded Soracloud runtime.
 pub trait SoracloudRuntime: SoracloudRuntimeReadHandle {
     /// Execute a deterministic local read against the committed runtime snapshot.
@@ -378,6 +921,12 @@ pub trait SoracloudRuntime: SoracloudRuntimeReadHandle {
         &self,
         request: SoracloudApartmentExecutionRequest,
     ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError>;
+
+    /// Execute deterministic private uploaded-model runtime progression.
+    fn execute_private_inference(
+        &self,
+        request: SoracloudPrivateInferenceExecutionRequest,
+    ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError>;
 }
 
 /// Shared Soracloud runtime trait object used by the core replicated execution path.
@@ -441,5 +990,97 @@ impl SoracloudRuntimeInstruction {
             Self::RecordMailboxMessage(isi) => InstructionBox::from(isi),
             Self::RecordRuntimeReceipt(isi) => InstructionBox::from(isi),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_hf_service_bundle_is_admissible_and_tagged() {
+        let bundle = build_soracloud_hf_generated_service_bundle(
+            "hf_service".parse().expect("valid service name"),
+            "hash:1111111111111111111111111111111111111111111111111111111111111111#0001",
+            "openai/gpt-oss",
+            "main",
+            "gpt-oss",
+        );
+
+        bundle
+            .validate_for_admission()
+            .expect("generated HF bundle should validate");
+        assert!(bundle.container.capabilities.allow_model_inference);
+        assert!(!bundle.container.capabilities.allow_state_writes);
+        assert_eq!(
+            bundle.service.service_version,
+            HF_GENERATED_SERVICE_VERSION_V1
+        );
+        assert_eq!(
+            bundle
+                .service
+                .route
+                .as_ref()
+                .expect("generated route")
+                .visibility,
+            SoraRouteVisibilityV1::Internal
+        );
+
+        let binding = soracloud_hf_generated_source_binding(&bundle)
+            .expect("generated bundle should expose HF markers");
+        assert_eq!(binding.repo_id, "openai/gpt-oss");
+        assert_eq!(binding.resolved_revision, "main");
+        assert_eq!(binding.model_name, "gpt-oss");
+    }
+
+    #[test]
+    fn generated_hf_bundle_payload_matches_declared_bundle_hash() {
+        let bundle = build_soracloud_hf_generated_service_bundle(
+            "hf_service".parse().expect("valid service name"),
+            "hash:2222222222222222222222222222222222222222222222222222222222222222#0002",
+            "meta/llama",
+            "1234abcd",
+            "llama",
+        );
+
+        let payload = soracloud_hf_generated_bundle_payload_if_applicable(&bundle)
+            .expect("generated HF bundle should synthesize payload");
+        assert_eq!(Hash::new(&payload), bundle.container.bundle_hash);
+    }
+
+    #[test]
+    fn generated_hf_agent_manifest_tracks_service_container_and_host() {
+        let bundle = build_soracloud_hf_generated_service_bundle(
+            "hf_agent_service".parse().expect("valid service name"),
+            "hash:3333333333333333333333333333333333333333333333333333333333333333#0003",
+            "huggingface/smol",
+            "rev-a",
+            "smol",
+        );
+        let manifest = build_soracloud_hf_generated_agent_manifest(
+            "hf_agent".parse().expect("valid apartment name"),
+            &bundle,
+        );
+
+        manifest
+            .validate()
+            .expect("generated HF apartment manifest should validate");
+        assert_eq!(
+            manifest.container.manifest_hash,
+            bundle.container_manifest_hash()
+        );
+        assert_eq!(
+            manifest.network_egress,
+            SoraNetworkPolicyV1::Allowlist(vec![
+                bundle
+                    .service
+                    .route
+                    .as_ref()
+                    .expect("generated service route")
+                    .host
+                    .clone()
+            ])
+        );
+        assert_eq!(manifest.tool_capabilities.len(), 2);
     }
 }

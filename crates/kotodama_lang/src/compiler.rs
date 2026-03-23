@@ -43,8 +43,7 @@ use super::{
     },
     i18n::{self, Language, Message},
     ir::{self, Instr, Terminator},
-    parser, policy,
-    regalloc::{self, ARG_REGS},
+    parser, policy, regalloc,
     semantic::{self, TypedItem, TypedProgram},
 };
 use crate::{
@@ -2967,8 +2966,11 @@ impl Compiler {
             saved_regs.sort_unstable();
             saved_regs.dedup();
             let saved_size = saved_regs.len() * 8;
-            let local_frame = alloc.frame_size + 8 + saved_size;
+            let param_home_count = usize::min(func.params.len(), regalloc::ARG_REGS.len());
+            let param_home_size = param_home_count * 8;
+            let local_frame = alloc.frame_size + 8 + saved_size + param_home_size;
             let save_base = 8 + alloc.frame_size;
+            let param_home_base = save_base + saved_size;
             // Determine if this function is the entry (no caller)
             let is_entry = func.name == entry_name;
             let mut uses_zk = false;
@@ -3041,15 +3043,26 @@ impl Compiler {
                     // Reserve space for spills + RA slot so entry functions can spill safely.
                     let sp = regalloc::SP_REG as u8;
                     emit_addi_inplace(&mut code, sp, -(local_frame as i64));
+                    let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
                     if !is_entry {
                         // Save RA (x1) at [SP+0] and callee-saved registers for non-entry calls.
                         let ra = 1u8;
-                        let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
                         emit_store64(&mut code, sp, ra, 0, scratch_base)?;
                         for (idx, reg) in saved_regs.iter().copied().enumerate() {
                             let offset = (save_base + idx * 8) as i64;
                             emit_store64(&mut code, sp, reg, offset, scratch_base)?;
                         }
+                    }
+                    // Home incoming arguments in the callee frame so later LoadVar reads
+                    // remain stable after syscalls clobber the argument registers.
+                    for (idx, reg) in regalloc::ARG_REGS
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .take(param_home_count)
+                    {
+                        let offset = (param_home_base + idx * 8) as i64;
+                        emit_store64(&mut code, sp, reg as u8, offset, scratch_base)?;
                     }
                 }
                 for instr in &bb.instrs {
@@ -3462,9 +3475,9 @@ impl Compiler {
                                     name
                                 ));
                             }
-                            let src = ARG_REGS[idx] as u8;
-                            // RV-compatible move: ADDI rd, src, 0
-                            push_word(&mut code, encode_addi(rd, src, 0)?);
+                            let scratch_base = if sp != scratch1 { scratch1 } else { scratch2 };
+                            let offset = (param_home_base + idx * 8) as i64;
+                            emit_load64(&mut code, rd, sp, offset, Some(scratch_base))?;
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
                         Instr::Poseidon2 { dest, a, b } => {
@@ -4671,6 +4684,16 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_GET_AUTHORITY as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::CurrentTimeMs { dest } => {
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_CURRENT_TIME_MS as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);

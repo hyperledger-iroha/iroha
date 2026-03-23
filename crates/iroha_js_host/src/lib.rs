@@ -5936,6 +5936,23 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 )));
             }
 
+            if let Some(cancel_value) = remove_case_insensitive(&mut map, "MultisigCancel") {
+                let cancel_fields = match cancel_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigCancel payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Cancel".to_owned(), json::Value::Object(cancel_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
             if let Some(register_value) = remove_case_insensitive(&mut map, "MultisigRegister") {
                 let register_fields = match register_value {
                     json::Value::Object(map) => map,
@@ -7751,6 +7768,34 @@ mod tests {
                 .and_then(|value| value.get("Propose"))
                 .is_some(),
             "MultisigPropose alias must map to Custom.payload.Propose"
+        );
+
+        let mut cancel_fields = json::Map::new();
+        cancel_fields.insert(
+            "account".to_owned(),
+            json::Value::String(account_literal.clone()),
+        );
+        cancel_fields.insert(
+            "instructions_hash".to_owned(),
+            json::Value::String(hash_literal(0xBB)),
+        );
+        let mut cancel_outer = json::Map::new();
+        cancel_outer.insert(
+            "MultisigCancel".to_owned(),
+            json::Value::Object(cancel_fields),
+        );
+        let cancel_instruction = value_to_instruction(json::Value::Object(cancel_outer))
+            .expect("parse MultisigCancel alias");
+        let cancel_rendered =
+            instruction_to_json_value(&cancel_instruction).expect("render MultisigCancel alias");
+        assert!(
+            cancel_rendered
+                .get("Custom")
+                .and_then(|value| value.get("payload"))
+                .and_then(|value| value.get("Cancel"))
+                .and_then(|value| value.get("instructions_hash"))
+                .is_some(),
+            "MultisigCancel alias must map to Custom.payload.Cancel"
         );
 
         let mut approve_fields = json::Map::new();

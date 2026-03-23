@@ -101,9 +101,11 @@ use iroha_data_model::{
         SoraDeploymentBundleV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberV1,
         SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1, SoraModelArtifactAuditEventV1,
         SoraModelArtifactRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
-        SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1,
+        SoraTrainingJobRecordV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
     },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
@@ -431,6 +433,15 @@ macro_rules! build_world_block {
             soracloud_model_artifact_audit_events: $state
                 .soracloud_model_artifact_audit_events
                 .$method(),
+            soracloud_private_compile_profiles: $state.soracloud_private_compile_profiles.$method(),
+            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.$method(),
+            soracloud_uploaded_model_chunks: $state.soracloud_uploaded_model_chunks.$method(),
+            soracloud_private_inference_sessions: $state
+                .soracloud_private_inference_sessions
+                .$method(),
+            soracloud_private_inference_checkpoints: $state
+                .soracloud_private_inference_checkpoints
+                .$method(),
             soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
             soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
@@ -594,6 +605,17 @@ macro_rules! build_world_transaction {
             soracloud_model_artifacts: $state.soracloud_model_artifacts.transaction(),
             soracloud_model_artifact_audit_events: $state
                 .soracloud_model_artifact_audit_events
+                .transaction(),
+            soracloud_private_compile_profiles: $state
+                .soracloud_private_compile_profiles
+                .transaction(),
+            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.transaction(),
+            soracloud_uploaded_model_chunks: $state.soracloud_uploaded_model_chunks.transaction(),
+            soracloud_private_inference_sessions: $state
+                .soracloud_private_inference_sessions
+                .transaction(),
+            soracloud_private_inference_checkpoints: $state
+                .soracloud_private_inference_checkpoints
                 .transaction(),
             soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
@@ -1553,6 +1575,19 @@ pub struct World {
     pub(crate) soracloud_model_artifacts: Storage<(String, String), SoraModelArtifactRecordV1>,
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events: Storage<u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles: Storage<Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        Storage<(String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by canonical `<service>:<model>:<version>:<ordinal>` literal.
+    pub(crate) soracloud_uploaded_model_chunks: Storage<String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        Storage<(String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        Storage<(String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: Storage<Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -1932,6 +1967,21 @@ pub struct WorldBlock<'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageBlock<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles:
+        StorageBlock<'world, Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        StorageBlock<'world, (String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
+    pub(crate) soracloud_uploaded_model_chunks:
+        StorageBlock<'world, String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        StorageBlock<'world, (String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        StorageBlock<'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageBlock<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -2470,6 +2520,21 @@ pub struct WorldTransaction<'block, 'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageTransaction<'block, 'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles:
+        StorageTransaction<'block, 'world, Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        StorageTransaction<'block, 'world, (String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
+    pub(crate) soracloud_uploaded_model_chunks:
+        StorageTransaction<'block, 'world, String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        StorageTransaction<'block, 'world, (String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        StorageTransaction<'block, 'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageTransaction<'block, 'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -3070,6 +3135,21 @@ pub struct WorldView<'world> {
     /// Model-artifact audit events keyed by deterministic sequence.
     pub(crate) soracloud_model_artifact_audit_events:
         StorageView<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles:
+        StorageView<'world, Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        StorageView<'world, (String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
+    pub(crate) soracloud_uploaded_model_chunks:
+        StorageView<'world, String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        StorageView<'world, (String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        StorageView<'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageView<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -10003,6 +10083,41 @@ impl World {
         &mut self.soracloud_model_artifact_audit_events
     }
 
+    /// Returns mutable access to private compile profiles for testing.
+    pub fn soracloud_private_compile_profiles_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraPrivateCompileProfileV1> {
+        &mut self.soracloud_private_compile_profiles
+    }
+
+    /// Returns mutable access to uploaded-model bundles for testing.
+    pub fn soracloud_uploaded_model_bundles_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraUploadedModelBundleV1> {
+        &mut self.soracloud_uploaded_model_bundles
+    }
+
+    /// Returns mutable access to uploaded-model chunks for testing.
+    pub fn soracloud_uploaded_model_chunks_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<String, SoraUploadedModelChunkV1> {
+        &mut self.soracloud_uploaded_model_chunks
+    }
+
+    /// Returns mutable access to private inference sessions for testing.
+    pub fn soracloud_private_inference_sessions_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraPrivateInferenceSessionV1> {
+        &mut self.soracloud_private_inference_sessions
+    }
+
+    /// Returns mutable access to private inference checkpoints for testing.
+    pub fn soracloud_private_inference_checkpoints_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, u32), SoraPrivateInferenceCheckpointV1> {
+        &mut self.soracloud_private_inference_checkpoints
+    }
+
     /// Provides mutable access to canonical Hugging Face sources for tests and API scaffolding.
     pub fn soracloud_hf_sources_mut_for_testing(
         &mut self,
@@ -10753,6 +10868,13 @@ impl World {
             soracloud_model_artifact_audit_events: self
                 .soracloud_model_artifact_audit_events
                 .view(),
+            soracloud_private_compile_profiles: self.soracloud_private_compile_profiles.view(),
+            soracloud_uploaded_model_bundles: self.soracloud_uploaded_model_bundles.view(),
+            soracloud_uploaded_model_chunks: self.soracloud_uploaded_model_chunks.view(),
+            soracloud_private_inference_sessions: self.soracloud_private_inference_sessions.view(),
+            soracloud_private_inference_checkpoints: self
+                .soracloud_private_inference_checkpoints
+                .view(),
             soracloud_hf_sources: self.soracloud_hf_sources.view(),
             soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
             soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
@@ -11137,6 +11259,26 @@ pub trait WorldReadOnly {
     fn soracloud_model_artifact_audit_events(
         &self,
     ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1>;
+    /// Private compile profiles keyed by compile-profile hash (read-only).
+    fn soracloud_private_compile_profiles(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraPrivateCompileProfileV1>;
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)` (read-only).
+    fn soracloud_uploaded_model_bundles(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1>;
+    /// Uploaded-model chunks keyed by canonical `<service>:<model>:<version>:<ordinal>` literal (read-only).
+    fn soracloud_uploaded_model_chunks(
+        &self,
+    ) -> &impl StorageReadOnly<String, SoraUploadedModelChunkV1>;
+    /// Private inference sessions keyed by `(apartment, session_id)` (read-only).
+    fn soracloud_private_inference_sessions(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraPrivateInferenceSessionV1>;
+    /// Private inference checkpoints keyed by `(session_id, step)` (read-only).
+    fn soracloud_private_inference_checkpoints(
+        &self,
+    ) -> &impl StorageReadOnly<(String, u32), SoraPrivateInferenceCheckpointV1>;
     /// Canonical Hugging Face sources keyed by source identifier (read-only).
     fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1>;
     /// HF shared-lease pools keyed by canonical pool identifier (read-only).
@@ -12036,6 +12178,31 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1> {
                 &self.soracloud_model_artifact_audit_events
             }
+            fn soracloud_private_compile_profiles(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraPrivateCompileProfileV1> {
+                &self.soracloud_private_compile_profiles
+            }
+            fn soracloud_uploaded_model_bundles(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1> {
+                &self.soracloud_uploaded_model_bundles
+            }
+            fn soracloud_uploaded_model_chunks(
+                &self,
+            ) -> &impl StorageReadOnly<String, SoraUploadedModelChunkV1> {
+                &self.soracloud_uploaded_model_chunks
+            }
+            fn soracloud_private_inference_sessions(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraPrivateInferenceSessionV1> {
+                &self.soracloud_private_inference_sessions
+            }
+            fn soracloud_private_inference_checkpoints(
+                &self,
+            ) -> &impl StorageReadOnly<(String, u32), SoraPrivateInferenceCheckpointV1> {
+                &self.soracloud_private_inference_checkpoints
+            }
             fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1> {
                 &self.soracloud_hf_sources
             }
@@ -12482,6 +12649,11 @@ impl<'world> WorldBlock<'world> {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
+            soracloud_private_compile_profiles,
+            soracloud_uploaded_model_bundles,
+            soracloud_uploaded_model_chunks,
+            soracloud_private_inference_sessions,
+            soracloud_private_inference_checkpoints,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
@@ -12580,6 +12752,11 @@ impl<'world> WorldBlock<'world> {
         soracloud_model_weight_audit_events.commit();
         soracloud_model_artifacts.commit();
         soracloud_model_artifact_audit_events.commit();
+        soracloud_private_compile_profiles.commit();
+        soracloud_uploaded_model_bundles.commit();
+        soracloud_uploaded_model_chunks.commit();
+        soracloud_private_inference_sessions.commit();
+        soracloud_private_inference_checkpoints.commit();
         soracloud_hf_sources.commit();
         soracloud_hf_shared_lease_pools.commit();
         soracloud_hf_shared_lease_members.commit();
@@ -13513,6 +13690,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
+            soracloud_private_compile_profiles,
+            soracloud_uploaded_model_bundles,
+            soracloud_uploaded_model_chunks,
+            soracloud_private_inference_sessions,
+            soracloud_private_inference_checkpoints,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
@@ -13597,6 +13779,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_model_weight_audit_events.apply();
         soracloud_model_artifacts.apply();
         soracloud_model_artifact_audit_events.apply();
+        soracloud_private_compile_profiles.apply();
+        soracloud_uploaded_model_bundles.apply();
+        soracloud_uploaded_model_chunks.apply();
+        soracloud_private_inference_sessions.apply();
+        soracloud_private_inference_checkpoints.apply();
         soracloud_hf_sources.apply();
         soracloud_hf_shared_lease_pools.apply();
         soracloud_hf_shared_lease_members.apply();
@@ -25803,6 +25990,16 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_model_artifacts")?;
         let soracloud_model_artifact_audit_events =
             take_optional_default(&mut map, "soracloud_model_artifact_audit_events")?;
+        let soracloud_private_compile_profiles =
+            take_optional_default(&mut map, "soracloud_private_compile_profiles")?;
+        let soracloud_uploaded_model_bundles =
+            take_optional_default(&mut map, "soracloud_uploaded_model_bundles")?;
+        let soracloud_uploaded_model_chunks =
+            take_optional_default(&mut map, "soracloud_uploaded_model_chunks")?;
+        let soracloud_private_inference_sessions =
+            take_optional_default(&mut map, "soracloud_private_inference_sessions")?;
+        let soracloud_private_inference_checkpoints =
+            take_optional_default(&mut map, "soracloud_private_inference_checkpoints")?;
         let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
         let soracloud_hf_shared_lease_pools =
             take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
@@ -25929,6 +26126,11 @@ pub(crate) mod deserialize {
             soracloud_model_weight_audit_events,
             soracloud_model_artifacts,
             soracloud_model_artifact_audit_events,
+            soracloud_private_compile_profiles,
+            soracloud_uploaded_model_bundles,
+            soracloud_uploaded_model_chunks,
+            soracloud_private_inference_sessions,
+            soracloud_private_inference_checkpoints,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
@@ -41464,7 +41666,9 @@ mod tests {
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
                 model_name: "vision_model".to_string(),
+                artifact_id: "job-1".to_string(),
                 training_job_id: "job-1".to_string(),
+                weight_version: Some("v2".to_string()),
                 source_provenance: Some(iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
                     kind: iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
                     id: "job-1".to_string(),
@@ -41476,6 +41680,10 @@ mod tests {
                 provenance_attestation_hash: Hash::new(b"prov"),
                 registered_sequence: 9,
                 consumed_by_version: Some("v2".to_string()),
+                private_bundle_root: None,
+                compile_profile_hash: None,
+                chunk_manifest_root: None,
+                privacy_mode: None,
             },
         );
         world

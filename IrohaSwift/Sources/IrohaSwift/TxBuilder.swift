@@ -833,7 +833,7 @@ public final class IrohaSDK: @unchecked Sendable {
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 pipelineEndpointMode: PipelineEndpointMode = .pipeline,
-                creationTimeProvider: @escaping @Sendable () -> UInt64 = IrohaSDK.defaultCreationTimeMs) {
+                creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
         let client = ToriiClient(baseURL: baseURL, session: session)
         self.toriiClient = client
@@ -843,7 +843,7 @@ public final class IrohaSDK: @unchecked Sendable {
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
         self.pipelineEndpointMode = pipelineEndpointMode
-        self.creationTimeProvider = creationTimeProvider
+        self.creationTimeProvider = creationTimeProvider ?? { client.recommendedCreationTimeMs() }
     }
 
     public init(toriiClient: ToriiTransactionSubmitting,
@@ -852,7 +852,7 @@ public final class IrohaSDK: @unchecked Sendable {
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 pipelineEndpointMode: PipelineEndpointMode = .pipeline,
-                creationTimeProvider: @escaping @Sendable () -> UInt64 = IrohaSDK.defaultCreationTimeMs) {
+                creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
         self.toriiClient = toriiClient
         self.toriiRestClient = toriiClient as? ToriiClient
@@ -861,7 +861,13 @@ public final class IrohaSDK: @unchecked Sendable {
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
         self.pipelineEndpointMode = pipelineEndpointMode
-        self.creationTimeProvider = creationTimeProvider
+        if let creationTimeProvider {
+            self.creationTimeProvider = creationTimeProvider
+        } else if let restClient = toriiClient as? ToriiClient {
+            self.creationTimeProvider = { restClient.recommendedCreationTimeMs() }
+        } else {
+            self.creationTimeProvider = IrohaSDK.defaultCreationTimeMs
+        }
     }
 
     public convenience init(toriiClient: ToriiClient,
@@ -869,7 +875,7 @@ public final class IrohaSDK: @unchecked Sendable {
                              pipelineSubmitOptions: PipelineSubmitOptions = .default,
                              pipelinePollOptions: PipelineStatusPollOptions = .default,
                              pipelineEndpointMode: PipelineEndpointMode = .pipeline,
-                             creationTimeProvider: @escaping @Sendable () -> UInt64 = IrohaSDK.defaultCreationTimeMs) {
+                             creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.init(toriiClient: toriiClient,
                   baseURL: toriiClient.baseURL,
                   accelerationSettings: accelerationSettings,
@@ -885,7 +891,9 @@ public final class IrohaSDK: @unchecked Sendable {
         if millis < 0 {
             return 0
         }
-        return UInt64(millis.rounded())
+        let rounded = UInt64(millis.rounded())
+        let safetyMarginMs: UInt64 = 10_000
+        return rounded > safetyMarginMs ? rounded - safetyMarginMs : 0
     }
 
     private func makeCreationTimeMs() -> UInt64 {

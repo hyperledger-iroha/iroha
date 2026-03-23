@@ -107,6 +107,8 @@ toml = { workspace = true }
 norito = {workspace = true}
 iroha_i18n = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+rand = { workspace = true }
+x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"] }
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests"] }

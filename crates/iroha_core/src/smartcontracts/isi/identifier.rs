@@ -205,6 +205,11 @@ pub mod isi {
                     .into(),
                 ));
             }
+            evict_expired_identifier_binding(
+                state_transaction,
+                &receipt_payload.opaque_id,
+                now_ms,
+            )?;
             if let Some(existing_uaid) = state_transaction
                 .world
                 .opaque_uaids
@@ -346,6 +351,52 @@ pub mod isi {
                 .to_owned()
                 .into(),
         ))
+    }
+
+    fn evict_expired_identifier_binding(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        opaque_id: &OpaqueAccountId,
+        now_ms: u64,
+    ) -> Result<(), Error> {
+        let Some(existing_claim) = state_transaction
+            .world
+            .identifier_claims
+            .get(opaque_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if !existing_claim
+            .expires_at_ms
+            .is_some_and(|expires_at_ms| expires_at_ms <= now_ms)
+        {
+            return Ok(());
+        }
+
+        let retained: Vec<_> = state_transaction
+            .world
+            .account(&existing_claim.account_id)
+            .map_err(Error::from)?
+            .opaque_ids()
+            .iter()
+            .copied()
+            .filter(|existing| existing != opaque_id)
+            .collect();
+        state_transaction
+            .world
+            .account_mut(&existing_claim.account_id)
+            .map_err(Error::from)?
+            .set_opaque_ids(retained);
+
+        state_transaction
+            .world
+            .opaque_uaids
+            .remove(opaque_id.clone());
+        state_transaction
+            .world
+            .identifier_claims
+            .remove(opaque_id.clone());
+        Ok(())
     }
 
     fn validate_program_receipt(
@@ -1185,6 +1236,124 @@ mod tests {
         assert!(
             err.to_string().contains("expired at or before block time"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn expired_identifier_claim_can_be_reclaimed_by_new_uaid() {
+        let mut state = test_state();
+        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let owner = AccountId::new(KeyPair::random().public_key().clone());
+        let replacement = AccountId::new(KeyPair::random().public_key().clone());
+        let owner_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-owner-expired"));
+        let replacement_uaid =
+            UniversalAccountId::from_hash(Hash::new(b"uaid-replacement-expired"));
+        seed_domain(&mut state, &domain_id, &owner);
+        seed_account_with_uaid(&mut state, &owner, &domain_id, owner_uaid);
+        seed_account_with_uaid(&mut state, &replacement, &domain_id, replacement_uaid);
+
+        let resolver = KeyPair::random();
+        let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");
+        let program_id: RamLfeProgramId = "email_retail".parse().expect("program id");
+        let program_policy = sample_program_policy(&owner, &resolver, &program_id);
+        let policy = IdentifierPolicy::new(
+            policy_id.clone(),
+            owner.clone(),
+            IdentifierNormalization::EmailAddress,
+            program_id.clone(),
+        );
+        let output_seed = b"shared-identifier-value";
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        register_and_activate_program_policy(&owner, &mut tx, program_policy.clone());
+        RegisterIdentifierPolicy { policy }
+            .execute(&owner, &mut tx)
+            .expect("register policy");
+        ActivateIdentifierPolicy {
+            policy_id: policy_id.clone(),
+        }
+        .execute(&owner, &mut tx)
+        .expect("activate policy");
+        let expired_receipt = claim_receipt(
+            &policy_id,
+            &program_policy,
+            &resolver,
+            owner_uaid,
+            &owner,
+            0,
+            Some(50),
+            output_seed,
+        );
+        let opaque_id = expired_receipt.payload.opaque_id;
+        ClaimIdentifier {
+            account: owner.clone(),
+            receipt: expired_receipt,
+        }
+        .execute(&owner, &mut tx)
+        .expect("claim initial identifier");
+        tx.apply();
+        block.commit().expect("commit first block");
+
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 100, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let replacement_receipt = claim_receipt(
+            &policy_id,
+            &program_policy,
+            &resolver,
+            replacement_uaid,
+            &replacement,
+            100,
+            Some(200),
+            output_seed,
+        );
+        ClaimIdentifier {
+            account: replacement.clone(),
+            receipt: replacement_receipt,
+        }
+        .execute(&replacement, &mut tx)
+        .expect("reclaim expired identifier");
+        tx.apply();
+        block.commit().expect("commit second block");
+
+        let claim = state
+            .world
+            .identifier_claims
+            .view()
+            .get(&opaque_id)
+            .cloned()
+            .expect("claim should be re-bound");
+        assert_eq!(claim.account_id, replacement);
+        assert_eq!(claim.uaid, replacement_uaid);
+        assert_eq!(claim.expires_at_ms, Some(200));
+        assert_eq!(
+            state.world.opaque_uaids.view().get(&opaque_id),
+            Some(&replacement_uaid),
+            "opaque index should point at the replacement UAID"
+        );
+        assert!(
+            !state
+                .world
+                .accounts
+                .view()
+                .get(&owner)
+                .expect("owner exists")
+                .opaque_ids()
+                .contains(&opaque_id),
+            "expired owner binding should be removed from the old account"
+        );
+        assert!(
+            state
+                .world
+                .accounts
+                .view()
+                .get(&replacement)
+                .expect("replacement exists")
+                .opaque_ids()
+                .contains(&opaque_id),
+            "replacement account should advertise the reclaimed opaque identifier"
         );
     }
 }

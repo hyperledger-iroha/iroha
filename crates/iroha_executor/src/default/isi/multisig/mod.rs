@@ -30,6 +30,7 @@ pub(super) fn visit_instruction<V: Execute + Visit + ?Sized>(
         MultisigInstructionBox::Register(instruction) => instruction.visit_execute(executor),
         MultisigInstructionBox::Propose(instruction) => instruction.visit_execute(executor),
         MultisigInstructionBox::Approve(instruction) => instruction.visit_execute(executor),
+        MultisigInstructionBox::Cancel(instruction) => instruction.visit_execute(executor),
     }
 }
 

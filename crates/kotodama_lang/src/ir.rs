@@ -498,6 +498,10 @@ pub enum Instr {
     GetAuthority {
         dest: Temp,
     },
+    /// Load the current trusted host time in unix milliseconds into `dest`.
+    CurrentTimeMs {
+        dest: Temp,
+    },
     /// Resolve a stable `(label, domain)` alias to the current AccountId.
     ResolveAccountAlias {
         dest: Temp,
@@ -2200,6 +2204,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "authority" => {
                     let t = ctx.new_temp();
                     ctx.current_instr(Instr::GetAuthority { dest: t });
+                    t
+                }
+                "current_time_ms" => {
+                    let t = ctx.new_temp();
+                    ctx.current_instr(Instr::CurrentTimeMs { dest: t });
                     t
                 }
                 "trigger_event" => {

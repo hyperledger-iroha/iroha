@@ -85,6 +85,7 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
 - 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
+- 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=unix_time_ms` — Gas: G_read_time
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: -
 - 0x91 SM2_VERIFY — Args: `r10=&Blob(msg)`, `r11=&Blob(sig)` (64-byte r∥s), `r12=&Blob(pubkey)` (SEC1), `r13=&Blob(distid)` *(optional, 0 for default)* → Return: `u64=0/1` — Gas: G_verify
@@ -104,6 +105,7 @@ For the SM4 calls, the host appends the authentication tag to the ciphertext out
 Kotodama intrinsics
 - ``sm::hash(msg: Blob) -> Blob`` mirrors `msg` into INPUT with `INPUT_PUBLISH_TLV` and issues `SM3_HASH`, returning a pointer to the digest Blob.
 - ``sm::verify(msg: Blob, sig: Blob, pk: Blob[, distid: Blob]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting the fourth argument selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
+- ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the host-provided Unix epoch time in milliseconds. `CoreHost` binds this to block time; test/default hosts use their configured or wall-clock time.
 
 Numeric helpers (Norito)
 - 0x69 NUMERIC_FROM_INT — Args: `r10=value:i64` (non‑negative) → `r10=&NoritoBytes(Numeric)` (scale = 0).

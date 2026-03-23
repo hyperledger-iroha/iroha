@@ -621,6 +621,22 @@ fn compile_emits_get_authority_syscall() {
 }
 
 #[test]
+fn compile_emits_current_time_syscall() {
+    let src = r#"fn f() { let now = current_time_ms(); }"#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let mut words = Vec::new();
+    let mut i = off;
+    while i + 4 <= code.len() {
+        words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
+        i += 4;
+    }
+    let scall = instruction::wide::system::SCALL;
+    let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_CURRENT_TIME_MS as u8);
+    assert!(words.contains(&want), "CURRENT_TIME_MS syscall not found");
+}
+
+#[test]
 fn compile_emits_resolve_account_alias_syscall() {
     let src = r#"fn f() { let a = resolve_account_alias(name("banking"), domain("sbp")); }"#;
     let code = Compiler::new().compile_source(src).expect("compile");

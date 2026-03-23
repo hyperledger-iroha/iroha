@@ -257,6 +257,8 @@ pub enum PermissionToken {
     ManageTriggers,
     /// Permission to register and unregister peers.
     ManagePeers,
+    /// Opaque custom permission token used by contract entrypoints and tests.
+    Custom(String),
 }
 
 /// Minimal account representation tracking signatories, quorum, and metadata.
@@ -2274,7 +2276,13 @@ impl WsvHost {
     }
 
     fn decode_account_payload(&self, payload: &[u8]) -> Result<ScopedAccountId, VMError> {
-        decode_from_bytes::<ScopedAccountId>(payload).map_err(|_| VMError::DecodeError)
+        if let Ok(id) = decode_from_bytes::<ScopedAccountId>(payload) {
+            return Ok(id);
+        }
+        let subject = decode_from_bytes::<AccountId>(payload).map_err(|_| VMError::DecodeError)?;
+        self.wsv
+            .canonical_account_id_for_subject(&subject)
+            .ok_or(VMError::DecodeError)
     }
 
     fn decode_asset_payload(&self, payload: &[u8]) -> Result<AssetDefinitionId, VMError> {
@@ -2914,7 +2922,10 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
     if s == "manage_peers" {
         return Ok(PermissionToken::ManagePeers);
     }
-    Err(VMError::NoritoInvalid)
+    if s.is_empty() {
+        return Err(VMError::NoritoInvalid);
+    }
+    Ok(PermissionToken::Custom(s.to_string()))
 }
 
 /// Parse a JSON payload and return either the raw string value or selected field contents.
@@ -3057,6 +3068,16 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
         "manage_permissions" => Ok(PermissionToken::ManagePermissions),
         "manage_triggers" => Ok(PermissionToken::ManageTriggers),
         "manage_peers" => Ok(PermissionToken::ManagePeers),
+        "custom" => {
+            let name = map
+                .get("name")
+                .and_then(njson::Value::as_str)
+                .ok_or(VMError::NoritoInvalid)?;
+            if name.is_empty() {
+                return Err(VMError::NoritoInvalid);
+            }
+            Ok(PermissionToken::Custom(name.to_string()))
+        }
         _ => Err(VMError::NoritoInvalid),
     }
 }
@@ -5357,9 +5378,29 @@ impl IVMHost for WsvHost {
                     Err(VMError::PermissionDenied)
                 }
             }
+            syscalls::SYSCALL_DEBUG_PRINT => {
+                let value = vm.register(10);
+                if cfg!(any(test, debug_assertions)) {
+                    eprintln!("[IVM] debug_print r10={value}");
+                }
+                Ok(0)
+            }
+            syscalls::SYSCALL_EXIT => {
+                let status = vm.register(10);
+                vm.request_exit();
+                vm.set_register(10, status);
+                Ok(0)
+            }
+            syscalls::SYSCALL_ABORT => {
+                vm.set_register(10, 0);
+                vm.request_abort();
+                Ok(0)
+            }
             syscalls::SYSCALL_GET_AUTHORITY => {
-                // Write a TLV with the caller ScopedAccountId into INPUT using the bump allocator and return its pointer in x10.
-                let payload = norito::to_bytes(&self.caller).map_err(|_| VMError::NoritoInvalid)?;
+                // Return the domainless account subject so raw equality checks inside
+                // contracts match account_id(...) literals and stored AccountId state.
+                let authority = AccountId::from(&self.caller);
+                let payload = norito::to_bytes(&authority).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                 tlv.push(1);
@@ -5371,13 +5412,27 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, ptr);
                 Ok(0)
             }
+            syscalls::SYSCALL_CURRENT_TIME_MS => {
+                vm.set_register(10, self.wsv.current_time_ms());
+                Ok(0)
+            }
             syscalls::SYSCALL_GRANT_PERMISSION => {
                 // r10=&ScopedAccountId (subject), r11=permission as Name or Json
                 let subject = self.decode_account_reg(vm, 10)?;
                 // Decode permission token from TLV in r11
                 let token = {
                     let v = vm.register(11);
+                    if crate::dev_env::debug_wsv_enabled() {
+                        eprintln!("[wsv.grant_permission] reg=r11 ptr=0x{v:08x}");
+                    }
                     let tlv = vm.memory.validate_tlv(v)?;
+                    if crate::dev_env::debug_wsv_enabled() {
+                        eprintln!(
+                            "[wsv.grant_permission] tlv type={:?} len={}",
+                            tlv.type_id,
+                            tlv.payload.len()
+                        );
+                    }
                     match tlv.type_id {
                         PointerType::Name => parse_permission_name_any(tlv.payload)?,
                         PointerType::Json => parse_permission_json_any(tlv.payload)?,
@@ -5821,6 +5876,16 @@ mod tests_permission_json {
         let wrapped =
             parse_permission_json("{\"type\":\"manage_roles\"}").expect("parse wrapped object");
         assert!(matches!(wrapped, PermissionToken::ManageRoles));
+    }
+
+    #[test]
+    fn parse_custom_permission_variants_ok() {
+        let direct = parse_permission_json("\"BispAdmin\"").expect("parse direct custom");
+        assert!(matches!(direct, PermissionToken::Custom(name) if name == "BispAdmin"));
+
+        let wrapped = parse_permission_json("{\"type\":\"custom\",\"name\":\"BispSpend\"}")
+            .expect("parse wrapped custom");
+        assert!(matches!(wrapped, PermissionToken::Custom(name) if name == "BispSpend"));
     }
 }
 
@@ -6536,6 +6601,25 @@ mod tests_null_decode {
             call_syscall(&mut vm, number).expect("syscall should accept null");
             assert_eq!(vm.register(10), 0);
         }
+    }
+
+    #[test]
+    fn current_time_syscall_returns_host_time() {
+        let caller: ScopedAccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut host = WsvHost::new_with_subject(
+            MockWorldStateView::new(),
+            AccountId::from(&caller),
+            HashMap::new(),
+        );
+        host.set_current_time_ms(1_717_171_717_000);
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        call_syscall(&mut vm, syscalls::SYSCALL_CURRENT_TIME_MS).expect("syscall ok");
+        assert_eq!(vm.register(10), 1_717_171_717_000);
     }
 
     #[test]

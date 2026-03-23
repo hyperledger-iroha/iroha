@@ -21,7 +21,8 @@ use iroha_data_model::{
     role::{Role, RoleId},
 };
 use iroha_executor_data_model::isi::multisig::{
-    MultisigAccountState, MultisigApprove, MultisigInstructionBox, MultisigProposalState,
+    MultisigAccountState, MultisigApprove, MultisigCancel, MultisigInstructionBox,
+    MultisigProposalState, MultisigProposalTerminalState, MultisigProposalTerminalStatus,
     MultisigProposalValue, MultisigPropose, MultisigRegister, MultisigSpec,
 };
 use mv::storage::StorageReadOnly;
@@ -36,6 +37,7 @@ const DELIMITER: char = '/';
 const MULTISIG: &str = "multisig";
 const MULTISIG_ACCOUNT_STATE: &str = "account";
 const MULTISIG_PROPOSAL_STATE: &str = "proposal";
+const MULTISIG_PROPOSAL_TERMINAL_STATE: &str = "proposal-terminal";
 const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
 static MULTISIG_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {
     "iroha:created_via"
@@ -69,6 +71,9 @@ pub fn execute_multisig_instruction(
         }
         MultisigInstructionBox::Approve(instruction) => {
             execute_approve(state_transaction, authority, &instruction)
+        }
+        MultisigInstructionBox::Cancel(instruction) => {
+            execute_cancel(state_transaction, authority, &instruction)
         }
     }
 }
@@ -268,6 +273,26 @@ fn multisig_proposal_state_key(
         instructions_hash
     ))
     .expect("constant string must be a valid name")
+}
+
+fn multisig_proposal_terminal_state_prefix(account: &AccountId) -> Name {
+    Name::from_str(&format!(
+        "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_TERMINAL_STATE}{DELIMITER}{}{DELIMITER}",
+        HashOf::new(account)
+    ))
+    .expect("multisig proposal terminal state prefix must be a valid name")
+}
+
+fn multisig_proposal_terminal_state_key(
+    multisig_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+) -> Name {
+    Name::from_str(&format!(
+        "{}{}",
+        multisig_proposal_terminal_state_prefix(multisig_account),
+        instructions_hash
+    ))
+    .expect("multisig proposal terminal state path must be a valid name")
 }
 
 fn multisig_role_for(
@@ -1430,6 +1455,11 @@ fn execute_approve(
                     instructions_hash = %instructions_hash,
                     "multisig approval pruning proposal tree"
                 );
+                maybe_store_terminal_proposal_state(
+                    state_transaction,
+                    &proposal_state,
+                    MultisigProposalTerminalStatus::Finalized,
+                )?;
                 prune_down(state_transaction, &multisig_account, &instructions_hash)?;
                 iroha_logger::info!(
                     multisig_account = %multisig_account,
@@ -1452,9 +1482,13 @@ fn execute_approve(
                 instruction = ?instruction,
                 "multisig approval executing authenticated instruction"
             );
-            instruction
-                .execute(&multisig_account, state_transaction)
-                .map_err(ValidationFail::from)?;
+            if let Ok(multisig) = MultisigInstructionBox::try_from(&instruction) {
+                execute_multisig_instruction(state_transaction, &multisig_account, multisig)?;
+            } else {
+                instruction
+                    .execute(&multisig_account, state_transaction)
+                    .map_err(ValidationFail::from)?;
+            }
             iroha_logger::info!(
                 multisig_account = %multisig_account,
                 instructions_hash = %instructions_hash,
@@ -1465,6 +1499,42 @@ fn execute_approve(
     }
 
     Ok(())
+}
+
+fn canceler_is_authorized(multisig_account: &AccountId, canceler: &AccountId) -> bool {
+    canceler.subject_id() == multisig_account.subject_id()
+}
+
+fn execute_cancel(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &MultisigCancel,
+) -> Result<(), ValidationFail> {
+    let canceler = authority.clone();
+    let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
+    let instructions_hash = instruction.instructions_hash;
+
+    if !canceler_is_authorized(&multisig_account, &canceler) {
+        return Err(ValidationFail::NotPermitted(
+            "multisig cancel must execute as the multisig account".to_owned(),
+        ));
+    }
+
+    prune_expired(state_transaction, &multisig_account, &instructions_hash)?;
+
+    let proposal_state = proposal_state(state_transaction, &multisig_account, &instructions_hash)?;
+    if let Some(true) = proposal_state.is_relayed {
+        return Err(ValidationFail::NotPermitted(
+            "cannot cancel an executed relayed approval".to_owned(),
+        ));
+    }
+
+    maybe_store_terminal_proposal_state(
+        state_transaction,
+        &proposal_state,
+        MultisigProposalTerminalStatus::Canceled,
+    )?;
+    prune_down(state_transaction, &multisig_account, &instructions_hash)
 }
 
 fn deploy_relayer(
@@ -1530,7 +1600,7 @@ fn prune_expired(
         return Ok(());
     }
 
-    for instruction in proposal_state.instructions {
+    for instruction in &proposal_state.instructions {
         if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>()
             && let Ok(MultisigInstructionBox::Approve(approve)) = custom.payload().try_into()
         {
@@ -1542,6 +1612,11 @@ fn prune_expired(
         }
     }
 
+    maybe_store_terminal_proposal_state(
+        state_transaction,
+        &proposal_state,
+        MultisigProposalTerminalStatus::Expired,
+    )?;
     prune_down(state_transaction, multisig_account, instructions_hash)
 }
 
@@ -2031,6 +2106,21 @@ fn store_multisig_proposal_state(
     Ok(())
 }
 
+fn store_multisig_proposal_terminal_state(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    terminal_state: &MultisigProposalTerminalState,
+) -> Result<(), ValidationFail> {
+    let bytes = norito::to_bytes(terminal_state).map_err(multisig_state_encode_error)?;
+    state_transaction.world.smart_contract_state.insert(
+        multisig_proposal_terminal_state_key(
+            &terminal_state.multisig_account_id,
+            &terminal_state.instructions_hash,
+        ),
+        bytes,
+    );
+    Ok(())
+}
+
 fn proposal_state(
     state_transaction: &StateTransaction<'_, '_>,
     multisig_account: &AccountId,
@@ -2044,6 +2134,45 @@ fn proposal_state(
         .get(&key)
         .ok_or(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))?;
     norito::decode_from_bytes::<MultisigProposalState>(bytes).map_err(multisig_state_decode_error)
+}
+
+fn proposal_state_value(proposal_state: &MultisigProposalState) -> MultisigProposalValue {
+    MultisigProposalValue::new(
+        proposal_state.instructions.clone(),
+        proposal_state.proposed_at_ms,
+        proposal_state.expires_at_ms,
+        proposal_state.approvals.clone(),
+        proposal_state.is_relayed,
+    )
+}
+
+fn proposal_is_cancel_wrapper(proposal_state: &MultisigProposalState) -> bool {
+    matches!(
+        proposal_state.instructions.as_slice(),
+        [instruction]
+            if matches!(
+                MultisigInstructionBox::try_from(instruction),
+                Ok(MultisigInstructionBox::Cancel(_))
+            )
+    )
+}
+
+fn maybe_store_terminal_proposal_state(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    proposal_state: &MultisigProposalState,
+    status: MultisigProposalTerminalStatus,
+) -> Result<(), ValidationFail> {
+    if proposal_state.is_relayed.is_some() || proposal_is_cancel_wrapper(proposal_state) {
+        return Ok(());
+    }
+    let terminal_state = MultisigProposalTerminalState::new(
+        proposal_state.multisig_account_id.clone(),
+        proposal_state.instructions_hash,
+        proposal_state_value(proposal_state),
+        status,
+        now_ms(state_transaction),
+    );
+    store_multisig_proposal_terminal_state(state_transaction, &terminal_state)
 }
 
 fn move_multisig_proposals(
@@ -2070,6 +2199,28 @@ fn move_multisig_proposals(
     for (old_key, mut proposal_state) in entries {
         proposal_state.multisig_account_id = new_account.clone();
         store_multisig_proposal_state(state_transaction, &proposal_state)?;
+        state_transaction.world.smart_contract_state.remove(old_key);
+    }
+
+    let terminal_prefix = multisig_proposal_terminal_state_prefix(old_account);
+    let terminal_prefix_literal = terminal_prefix.as_ref().to_owned();
+    let mut terminal_entries = Vec::new();
+    for (key, value) in state_transaction
+        .world
+        .smart_contract_state
+        .range(terminal_prefix.clone()..)
+    {
+        if !key.as_ref().starts_with(terminal_prefix_literal.as_str()) {
+            break;
+        }
+        let state = norito::decode_from_bytes::<MultisigProposalTerminalState>(value)
+            .map_err(multisig_state_decode_error)?;
+        terminal_entries.push((key.clone(), state));
+    }
+
+    for (old_key, mut terminal_state) in terminal_entries {
+        terminal_state.multisig_account_id = new_account.clone();
+        store_multisig_proposal_terminal_state(state_transaction, &terminal_state)?;
         state_transaction.world.smart_contract_state.remove(old_key);
     }
 
@@ -2148,7 +2299,8 @@ mod tests {
         prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
-        DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigPropose, MultisigRegister, MultisigSpec,
+        DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigCancel, MultisigPropose,
+        MultisigRegister, MultisigSpec,
     };
     use nonzero_ext::nonzero;
 
@@ -4437,6 +4589,128 @@ mod tests {
         assert!(
             !role_name.ends_with(&canonical),
             "large multisig role ids should still fall back to the hash suffix when the canonical literal is too long"
+        );
+    }
+
+    #[test]
+    fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-cancel-prunes-target"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id: iroha_data_model::domain::DomainId = "cancel".parse().unwrap();
+
+        let owner_key = KeyPair::random();
+        let owner_id = new_account_id(&owner_key);
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&owner_id, &mut state_transaction)
+            .expect("domain registration");
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &owner_id,
+            "register owner",
+        );
+
+        let signer1_key = KeyPair::random();
+        let signer1_id = new_account_id(&signer1_key);
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &signer1_id,
+            "register signer1",
+        );
+        let signer2_key = KeyPair::random();
+        let signer2_id = new_account_id(&signer2_key);
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &signer2_id,
+            "register signer2",
+        );
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let multisig_id = register_multisig_account(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &spec,
+            "register multisig account",
+        );
+
+        let target_instructions: Vec<InstructionBox> = Vec::new();
+        let target_hash = HashOf::new(&target_instructions);
+        let target_proposal =
+            MultisigPropose::new(multisig_id.clone(), target_instructions.clone(), None);
+        Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer1_id,
+                InstructionBox::from(target_proposal),
+            )
+            .expect("create target proposal");
+
+        let cancel = MultisigCancel::new(multisig_id.clone(), target_hash);
+        let direct_err = Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer1_id,
+                InstructionBox::from(cancel.clone()),
+            )
+            .expect_err("direct cancel by signer must be rejected");
+        match direct_err {
+            ValidationFail::NotPermitted(message) => {
+                assert!(
+                    message.contains("must execute as the multisig account"),
+                    "unexpected cancel rejection: {message}"
+                );
+            }
+            other => panic!("unexpected direct cancel error: {other:?}"),
+        }
+        assert!(
+            proposal_value(&state_transaction, &multisig_id, &target_hash).is_ok(),
+            "target proposal should remain after rejected direct cancel"
+        );
+
+        let cancel_instructions = vec![InstructionBox::from(cancel)];
+        let cancel_hash = HashOf::new(&cancel_instructions);
+        let cancel_proposal = MultisigPropose::new(multisig_id.clone(), cancel_instructions, None);
+        Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer1_id,
+                InstructionBox::from(cancel_proposal),
+            )
+            .expect("create cancel proposal");
+        Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer2_id,
+                InstructionBox::from(MultisigApprove::new(multisig_id.clone(), cancel_hash)),
+            )
+            .expect("approve cancel proposal");
+
+        assert!(
+            proposal_value(&state_transaction, &multisig_id, &target_hash).is_err(),
+            "target proposal should be pruned once cancel reaches quorum"
+        );
+        assert!(
+            proposal_value(&state_transaction, &multisig_id, &cancel_hash).is_err(),
+            "cancel proposal should also be pruned after execution"
         );
     }
 

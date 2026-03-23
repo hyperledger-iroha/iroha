@@ -16,8 +16,10 @@ use crate::{
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
         FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SoraDeploymentBundleV1,
-        SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraModelPrivacyModeV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
+        SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -530,6 +532,9 @@ pub struct RunSoracloudAgentAutonomy {
     pub budget_units: u64,
     /// Human-readable run label.
     pub run_label: String,
+    /// Optional canonical JSON body forwarded to the generated HF `/infer` handler.
+    #[norito(default)]
+    pub workflow_input_json: Option<String>,
     /// Provenance attestation over the autonomy-run payload.
     pub provenance: ManifestProvenance,
 }
@@ -537,6 +542,54 @@ pub struct RunSoracloudAgentAutonomy {
 impl crate::seal::Instruction for RunSoracloudAgentAutonomy {}
 
 impl PartialOrd for RunSoracloudAgentAutonomy {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Persist an authoritative apartment-level execution audit for a completed autonomy run.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RecordSoracloudAgentAutonomyExecution {
+    /// Apartment that owns the executed run.
+    pub apartment_name: Name,
+    /// Stable approved run identifier.
+    pub run_id: String,
+    /// Process generation that executed the run.
+    pub process_generation: u64,
+    /// Whether the runtime completed the run successfully.
+    pub succeeded: bool,
+    /// Deterministic commitment over the execution outcome.
+    pub result_commitment: Hash,
+    /// Generated service name used for execution, when locally resolved.
+    #[norito(default)]
+    pub service_name: Option<Name>,
+    /// Generated service version used for execution, when locally resolved.
+    #[norito(default)]
+    pub service_version: Option<String>,
+    /// Generated handler used for execution, when locally resolved.
+    #[norito(default)]
+    pub handler_name: Option<Name>,
+    /// Authoritative runtime receipt referenced by the execution, when one exists.
+    #[norito(default)]
+    pub runtime_receipt_id: Option<Hash>,
+    /// Node-local journal artifact hash, when one was persisted.
+    #[norito(default)]
+    pub journal_artifact_hash: Option<Hash>,
+    /// Node-local checkpoint artifact hash, when one was persisted.
+    #[norito(default)]
+    pub checkpoint_artifact_hash: Option<Hash>,
+    /// Human-readable runtime error, when execution failed.
+    #[norito(default)]
+    pub error: Option<String>,
+}
+
+impl crate::seal::Instruction for RecordSoracloudAgentAutonomyExecution {}
+
+impl PartialOrd for RecordSoracloudAgentAutonomyExecution {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }
@@ -761,6 +814,209 @@ pub struct RollbackSoracloudModelWeight {
 impl crate::seal::Instruction for RollbackSoracloudModelWeight {}
 
 impl PartialOrd for RollbackSoracloudModelWeight {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Register an uploaded-model bundle root before encrypted chunks arrive.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RegisterSoracloudUploadedModelBundle {
+    /// Deterministic uploaded-model bundle metadata.
+    pub bundle: SoraUploadedModelBundleV1,
+    /// Provenance attestation over the bundle payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for RegisterSoracloudUploadedModelBundle {}
+
+impl PartialOrd for RegisterSoracloudUploadedModelBundle {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Append one encrypted uploaded-model chunk into authoritative chain state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AppendSoracloudUploadedModelChunk {
+    /// Deterministic encrypted chunk metadata.
+    pub chunk: SoraUploadedModelChunkV1,
+    /// Provenance attestation over the chunk payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for AppendSoracloudUploadedModelChunk {}
+
+impl PartialOrd for AppendSoracloudUploadedModelChunk {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Seal an uploaded-model bundle and publish its artifact metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct FinalizeSoracloudUploadedModelBundle {
+    /// Service that owns the artifact.
+    pub service_name: Name,
+    /// Logical model name in the canonical registry plane.
+    pub model_name: String,
+    /// Stable uploaded-model identifier.
+    pub model_id: String,
+    /// Artifact identifier bound to the uploaded model.
+    pub artifact_id: String,
+    /// Version label pinned by the artifact.
+    pub weight_version: String,
+    /// Canonical uploaded-model bundle root.
+    pub bundle_root: Hash,
+    /// Execution privacy mode exposed to apartments.
+    pub privacy_mode: SoraModelPrivacyModeV1,
+    /// Artifact hash for the uploaded payload.
+    pub weight_artifact_hash: Hash,
+    /// Dataset reference or upload source label.
+    pub dataset_ref: String,
+    /// Deterministic training/configuration hash for the upload.
+    pub training_config_hash: Hash,
+    /// Reproducibility metadata hash.
+    pub reproducibility_hash: Hash,
+    /// Provenance attestation hash for the canonical upload bundle.
+    pub provenance_attestation_hash: Hash,
+    /// Provenance attestation over the finalize payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for FinalizeSoracloudUploadedModelBundle {}
+
+impl PartialOrd for FinalizeSoracloudUploadedModelBundle {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Admit a private compile profile for an uploaded-model bundle.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AdmitSoracloudPrivateCompileProfile {
+    /// Service that owns the uploaded model.
+    pub service_name: Name,
+    /// Stable uploaded-model identifier.
+    pub model_id: String,
+    /// Version label pinned by the bundle.
+    pub weight_version: String,
+    /// Bundle root receiving the compile profile.
+    pub bundle_root: Hash,
+    /// Deterministic compile profile being admitted.
+    pub compile_profile: SoraPrivateCompileProfileV1,
+    /// Provenance attestation over the compile payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for AdmitSoracloudPrivateCompileProfile {}
+
+impl PartialOrd for AdmitSoracloudPrivateCompileProfile {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Explicitly bind an uploaded model version to an apartment.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AllowSoracloudUploadedModel {
+    /// Apartment receiving the uploaded-model binding.
+    pub apartment_name: Name,
+    /// Service that owns the uploaded model.
+    pub service_name: Name,
+    /// Logical model name in the canonical registry plane.
+    pub model_name: String,
+    /// Stable uploaded-model identifier.
+    pub model_id: String,
+    /// Artifact identifier backing the binding.
+    pub artifact_id: String,
+    /// Version label pinned by the apartment.
+    pub weight_version: String,
+    /// Bundle root admitted for the apartment.
+    pub bundle_root: Hash,
+    /// Compile profile hash used for the private runtime.
+    pub compile_profile_hash: Hash,
+    /// Execution privacy mode bound to the apartment.
+    pub privacy_mode: SoraModelPrivacyModeV1,
+    /// Whether `allow_model_inference` must stay active.
+    pub require_model_inference: bool,
+    /// Provenance attestation over the allow payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for AllowSoracloudUploadedModel {}
+
+impl PartialOrd for AllowSoracloudUploadedModel {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Start an authoritative private inference session for an uploaded model.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct StartSoracloudPrivateInference {
+    /// Session metadata admitted for execution.
+    pub session: SoraPrivateInferenceSessionV1,
+    /// Provenance attestation over the session payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for StartSoracloudPrivateInference {}
+
+impl PartialOrd for StartSoracloudPrivateInference {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Record a deterministic checkpoint or output release for a private session.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RecordSoracloudPrivateInferenceCheckpoint {
+    /// Stable session identifier being updated.
+    pub session_id: String,
+    /// New authoritative runtime status after the checkpoint is applied.
+    pub status: SoraPrivateInferenceSessionStatusV1,
+    /// Updated receipt root for the session.
+    pub receipt_root: Hash,
+    /// Total XOR nanos charged so far.
+    pub xor_cost_nanos: u128,
+    /// Deterministic checkpoint being published.
+    pub checkpoint: SoraPrivateInferenceCheckpointV1,
+    /// Provenance attestation over the checkpoint payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for RecordSoracloudPrivateInferenceCheckpoint {}
+
+impl PartialOrd for RecordSoracloudPrivateInferenceCheckpoint {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }

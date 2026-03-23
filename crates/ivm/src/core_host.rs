@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr, sync::Arc};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
 use iroha_data_model::{
-    account::ScopedAccountId,
+    account::{AccountId, ScopedAccountId},
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
     prelude::{Name, NftId},
@@ -78,6 +78,7 @@ pub struct CoreHost {
     fastpq_batch_active: bool,
     fastpq_batch_has_entries: bool,
     sm_enabled: bool,
+    current_time_ms: u64,
     access_log: AccessLog,
 }
 
@@ -104,6 +105,7 @@ struct CoreHostSnapshot {
     fastpq_batch_active: bool,
     fastpq_batch_has_entries: bool,
     sm_enabled: bool,
+    current_time_ms: u64,
     access_log: AccessLog,
 }
 
@@ -123,6 +125,7 @@ impl CoreHost {
             fastpq_batch_active: false,
             fastpq_batch_has_entries: false,
             sm_enabled: false,
+            current_time_ms: 0,
             access_log: AccessLog::default(),
         }
     }
@@ -143,6 +146,7 @@ impl CoreHost {
             fastpq_batch_active: false,
             fastpq_batch_has_entries: false,
             sm_enabled: false,
+            current_time_ms: 0,
             access_log: AccessLog::default(),
         }
     }
@@ -581,6 +585,12 @@ impl CoreHost {
     /// Enable or disable SM helper syscalls when constructing the host.
     pub fn with_sm_enabled(mut self, enabled: bool) -> Self {
         self.sm_enabled = enabled;
+        self
+    }
+
+    /// Set the trusted host time returned by `current_time_ms()`.
+    pub fn with_current_time_ms(mut self, current_time_ms: u64) -> Self {
+        self.current_time_ms = current_time_ms;
         self
     }
 
@@ -2067,12 +2077,13 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_GET_AUTHORITY => {
-                // Produce a TLV with a fixed ScopedAccountId and return its INPUT pointer in x10.
-                // Parsing expects canonical I105 controller format.
+                // Return the domainless account subject so contracts can compare
+                // authority() against AccountId literals and stored AccountId state.
                 const ACCOUNT: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
                 let account =
                     ScopedAccountId::parse_encoded(ACCOUNT).map_err(|_| VMError::NoritoInvalid)?;
-                let payload = to_bytes(&account).map_err(|_| VMError::NoritoInvalid)?;
+                let authority = AccountId::from(&account);
+                let payload = to_bytes(&authority).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                 tlv.push(1);
@@ -2082,6 +2093,10 @@ impl IVMHost for CoreHost {
                 tlv.extend_from_slice(&h);
                 let ptr = vm.alloc_input_tlv(&tlv)?;
                 vm.set_register(10, ptr);
+                Ok(0)
+            }
+            syscalls::SYSCALL_CURRENT_TIME_MS => {
+                vm.set_register(10, self.current_time_ms);
                 Ok(0)
             }
             syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
@@ -2122,6 +2137,7 @@ impl IVMHost for CoreHost {
             fastpq_batch_active: self.fastpq_batch_active,
             fastpq_batch_has_entries: self.fastpq_batch_has_entries,
             sm_enabled: self.sm_enabled,
+            current_time_ms: self.current_time_ms,
             access_log: self.access_log.clone(),
         }))
     }
@@ -2140,6 +2156,7 @@ impl IVMHost for CoreHost {
             self.fastpq_batch_active = saved.fastpq_batch_active;
             self.fastpq_batch_has_entries = saved.fastpq_batch_has_entries;
             self.sm_enabled = saved.sm_enabled;
+            self.current_time_ms = saved.current_time_ms;
             self.access_log = saved.access_log.clone();
             return true;
         }
