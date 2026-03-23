@@ -83,6 +83,19 @@ fn unique_asset_definition_id(domain: &str, prefix: &str) -> AssetDefinitionId {
     AssetDefinitionId::new(domain.parse().expect("domain should parse"), name)
 }
 
+fn named_numeric_asset_definition(
+    id: AssetDefinitionId,
+) -> iroha::data_model::asset::NewAssetDefinition {
+    AssetDefinition::numeric(id.clone()).with_name(id.name().to_string())
+}
+
+fn named_asset_definition(
+    id: AssetDefinitionId,
+    spec: NumericSpec,
+) -> iroha::data_model::asset::NewAssetDefinition {
+    AssetDefinition::new(id.clone(), spec).with_name(id.name().to_string())
+}
+
 fn is_transient_client_error(err: &Report) -> bool {
     const NEEDLES: [&str; 6] = [
         "Failed to send http",
@@ -466,10 +479,10 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let asset_definition_id = unique_asset_definition_id("wonderland", "xor");
     let big_asset_definition_id = unique_asset_definition_id("wonderland", "xorbig");
     let decimal_definition_id = unique_asset_definition_id("wonderland", "xorfrac");
-    let asset_definition = AssetDefinition::numeric(asset_definition_id.clone());
-    let big_asset_definition = AssetDefinition::numeric(big_asset_definition_id.clone());
+    let asset_definition = named_numeric_asset_definition(asset_definition_id.clone());
+    let big_asset_definition = named_numeric_asset_definition(big_asset_definition_id.clone());
     let decimal_definition =
-        AssetDefinition::new(decimal_definition_id.clone(), NumericSpec::fractional(3));
+        named_asset_definition(decimal_definition_id.clone(), NumericSpec::fractional(3));
 
     let builder = quiet_network_builder();
 
@@ -879,7 +892,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let asset_id: AssetId = AssetId::new(asset_definition_id.clone(), alice_id.clone());
         // Create asset definition which accepts only integers
         let asset_definition =
-            AssetDefinition::new(asset_definition_id.clone(), NumericSpec::integer());
+            named_asset_definition(asset_definition_id.clone(), NumericSpec::integer());
 
         let mut builder = quiet_network_builder();
         let domain_id: DomainId = "domain".parse().expect("domain should be valid");
@@ -1126,5 +1139,17 @@ mod helper_tests {
     fn quiet_network_builder_uses_fast_pipeline_time() {
         let network = quiet_network_builder().build();
         assert_eq!(network.pipeline_time(), FAST_PIPELINE_TIME);
+    }
+
+    #[test]
+    fn named_asset_definition_uses_id_name() {
+        let numeric_id = unique_asset_definition_id("wonderland", "named");
+        let numeric = named_numeric_asset_definition(numeric_id.clone()).build(&ALICE_ID);
+        assert_eq!(numeric.name(), &numeric_id.name().to_string());
+
+        let fractional_id = unique_asset_definition_id("wonderland", "fractional");
+        let fractional = named_asset_definition(fractional_id.clone(), NumericSpec::fractional(3))
+            .build(&ALICE_ID);
+        assert_eq!(fractional.name(), &fractional_id.name().to_string());
     }
 }

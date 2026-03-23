@@ -130,6 +130,26 @@ Open work for this slice now remains:
   into HF member accounting and queued-next-window sponsorship; and
 - add follow-on runtime work for failover and slash-evidence emission.
 
+Latest sync (2026-03-23 asset integration tests now use explicit display names):
+`integration_tests/tests/asset.rs` now aligns with the current
+`AssetDefinition::{numeric,new}` contract:
+
+- the asset integration helpers derive the required human-facing asset name
+  from `AssetDefinitionId` instead of assuming the constructors auto-populate
+  it,
+- the asset mint / numeric-spec coverage in that file now executes its real
+  assertions instead of skipping on blank-name registration rejections, and
+- a focused helper test now guards that ID-derived naming behavior inside the
+  test suite itself.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test asset -- --nocapture --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader integration sweep or `cargo test --workspace` when the
+  longer validation budget is available.
+
 Latest sync (2026-03-23 NPoS RBC persistence no longer loses delivered summaries across commit races or temp-store reads):
 `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,block_sync.rs,proposal_handlers.rs}`,
 `crates/iroha_core/src/sumeragi/main_loop/tests.rs`,

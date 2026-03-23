@@ -224,6 +224,25 @@ Last updated: 2026-03-23
     shared-lease economics; and
   - matching Soracloud CLI host-management commands are still pending.
 
+## 2026-03-23 Follow-up: asset integration tests derive required display names from asset IDs again
+- Fixed the stale asset-definition constructors in
+  `integration_tests/tests/asset.rs` so the asset integration suite no longer
+  depends on the old behavior where `AssetDefinition::{numeric,new}` filled in
+  the human-facing name automatically:
+  - added small helpers that always call
+    `.with_name(asset_definition_id.name().to_string())`,
+  - updated the mint-quantity and integer-spec asset tests to use those
+    helpers, so they execute the intended coverage instead of skipping on
+    `invalid asset definition name: asset name must not be blank`, and
+  - added a focused helper test proving the generated asset definitions keep
+    the ID-derived display name.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test asset -- --nocapture --test-threads=1` (pass)
+- Remaining validation gap:
+  - the broader integration / workspace sweep was not rerun for this targeted
+    test fix.
+
 ## 2026-03-23 Follow-up: Soracloud test fixtures use deterministic `AccountId` construction again
 - Fixed the `error[E0277]` regression in
   `crates/iroha_data_model/src/soracloud.rs` test fixtures:
