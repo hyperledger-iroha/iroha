@@ -2,6 +2,17 @@
 
 Last updated: 2026-03-23
 
+## 2026-03-23 Follow-up: `scheduler_telemetry` compiles again with the current `Nexus` config shape
+- Fixed the `error[E0063]` regression in
+  `crates/iroha_core/tests/scheduler_telemetry.rs` by populating the newly
+  required `hf_shared_leases` and `uploaded_models` fields on the explicit
+  `iroha_config::parameters::actual::Nexus` test fixture.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --test scheduler_telemetry --features telemetry --no-run` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep was not rerun for this targeted compile fix.
+
 ## 2026-03-23 Follow-up: Soracloud request signer bundle-root hashing no longer trips Norito tuple arity limits
 - Fixed the `error[E0277]` regression in
   `crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`:

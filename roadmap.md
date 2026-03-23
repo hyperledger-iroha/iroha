@@ -2,6 +2,22 @@
 
 Last updated: 2026-03-23
 
+Latest sync (2026-03-23 `scheduler_telemetry` `Nexus` fixture refresh):
+`crates/iroha_core/tests/scheduler_telemetry.rs` now initializes the current
+`iroha_config::parameters::actual::Nexus` shape again:
+
+- the telemetry test fixture now populates the recently added
+  `hf_shared_leases` and `uploaded_models` sections, restoring compilation for
+  the `scheduler_telemetry` integration test target.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_core --test scheduler_telemetry --features telemetry --no-run`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
 Latest sync (2026-03-23 Soracloud request signer bundle-root hashing compiles again):
 `crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`
 now avoids the current Norito tuple-arity ceiling in the uploaded-model
