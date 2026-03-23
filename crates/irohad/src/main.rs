@@ -1840,10 +1840,15 @@ impl NetworkRelayShared {
             SoranetPowConfig(bytes) => {
                 self.apply_remote_pow_update(&bytes).await;
             }
-            GenesisRequest(_) | GenesisResponse(_) | Health | Connect(_) => {
+            SoracloudLocalReadProxyRequest(_)
+            | SoracloudLocalReadProxyResponse(_)
+            | GenesisRequest(_)
+            | GenesisResponse(_)
+            | Health
+            | Connect(_) => {
                 // Genesis bootstrap is handled by the dedicated bootstrapper listener.
-                // Health frames are handled elsewhere. Connect frames go to Torii via its own
-                // subscriber when the `connect` feature is enabled.
+                // Health frames are handled elsewhere. Connect and Soracloud proxy frames go to
+                // Torii via its own subscriber tasks when those surfaces are enabled.
             }
             TimePing(p) => {
                 iroha_core::time::handle_message(
@@ -4643,10 +4648,13 @@ impl Iroha {
         );
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
+        let local_validator_account_id = AccountId::new(config.common.key_pair.public_key().clone());
+        let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
         let runtime_manager = SoracloudRuntimeManager::new(
             soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
                 &config.soracloud_runtime,
-            ),
+            )
+            .with_local_host_identity(local_validator_account_id, local_peer_id),
             Arc::clone(&state),
         )
         .with_sorafs_node(sorafs_node.clone());

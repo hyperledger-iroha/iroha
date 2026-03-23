@@ -212,6 +212,29 @@ public struct ClaimIdentifierRequest {
     }
 }
 
+public struct SetAccountLabelRequest {
+    public let chainId: String
+    public let authority: String
+    public let accountId: String
+    public let domainId: String
+    public let label: String
+    public let ttlMs: UInt64?
+
+    public init(chainId: String,
+                authority: String,
+                accountId: String,
+                domainId: String,
+                label: String,
+                ttlMs: UInt64? = nil) {
+        self.chainId = chainId
+        self.authority = authority
+        self.accountId = accountId
+        self.domainId = domainId
+        self.label = label
+        self.ttlMs = ttlMs
+    }
+}
+
 public enum VerifyingKeyIdError: Error, LocalizedError, Equatable {
     case emptyBackend
     case emptyName
@@ -1026,6 +1049,26 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
                                                                  signingKey: signingKey,
                                                                  creationTimeMs: creationTimeMs)
+    }
+
+    public func buildSetAccountLabel(request: SetAccountLabelRequest,
+                                     keypair: Keypair) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeSetAccountLabel(
+            request: request,
+            keypair: keypair,
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    public func buildSetAccountLabel(request: SetAccountLabelRequest,
+                                     signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeSetAccountLabel(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeMs
+        )
     }
 
     public func buildShield(shield: ShieldRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {

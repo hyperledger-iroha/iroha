@@ -16,10 +16,11 @@ use std::{
     fs, io,
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{ChildStdin, Command, Stdio},
     str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant},
+    sync::{Arc, mpsc},
+    thread,
+    time::Duration,
 };
 
 use eyre::WrapErr;
@@ -40,6 +41,7 @@ use iroha_core::soracloud_runtime::{
 use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
 use iroha_crypto::Hash;
 use iroha_data_model::{
+    account::AccountId,
     Encode,
     name::Name,
     soracloud::{
@@ -47,6 +49,8 @@ use iroha_data_model::{
         SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
         SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraDeploymentBundleV1,
+        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
+        SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
         SoraModelPrivacyModeV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
         SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
@@ -82,7 +86,7 @@ use ivm::{
     verify_contract_artifact,
 };
 use mv::storage::StorageReadOnly;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use sorafs_node::store::StoredManifest;
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
@@ -108,6 +112,10 @@ pub(crate) struct SoracloudRuntimeManagerConfig {
     pub egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
     /// Hugging Face importer and inference bridge settings.
     pub hf: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    /// Local validator account used to enforce authoritative HF placement assignments.
+    pub local_validator_account_id: Option<AccountId>,
+    /// Local peer identifier used to confirm authoritative HF placement assignments.
+    pub local_peer_id: Option<String>,
 }
 
 impl SoracloudRuntimeManagerConfig {
@@ -124,7 +132,21 @@ impl SoracloudRuntimeManagerConfig {
             native_process: config.native_process.clone(),
             egress: config.egress.clone(),
             hf: config.hf.clone(),
+            local_validator_account_id: None,
+            local_peer_id: None,
         }
+    }
+
+    /// Attach the local host identity used for placement-aware HF execution.
+    #[must_use]
+    pub fn with_local_host_identity(
+        mut self,
+        validator_account_id: AccountId,
+        peer_id: impl Into<String>,
+    ) -> Self {
+        self.local_validator_account_id = Some(validator_account_id);
+        self.local_peer_id = Some(peer_id.into());
+        self
     }
 }
 
@@ -135,6 +157,7 @@ pub struct SoracloudRuntimeManagerHandle {
     config: Arc<SoracloudRuntimeManagerConfig>,
     state_dir: Arc<PathBuf>,
     state: Arc<State>,
+    hf_local_workers: SharedHfLocalRunnerWorkers,
 }
 
 impl SoracloudRuntimeManagerHandle {
@@ -219,6 +242,14 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
     ) -> Option<SoracloudUploadedModelEncryptionRecipient> {
         load_or_create_uploaded_model_encryption_recipient(self.state_dir.as_ref().as_path()).ok()
     }
+
+    fn local_peer_id(&self) -> Option<String> {
+        self.config.local_peer_id.clone()
+    }
+
+    fn local_read_proxy_timeout(&self) -> Duration {
+        self.config.hf.request_timeout
+    }
 }
 
 impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
@@ -229,7 +260,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         let view = self.state.view();
         let snapshot = self.snapshot();
         validate_local_runtime_snapshot(&view, &snapshot, &request)?;
-        let context = resolve_local_read_context(&view, &request)?;
+        let context = resolve_local_read_context(&view, &request, &self.config)?;
 
         match request.handler_class {
             iroha_core::soracloud_runtime::SoracloudLocalReadKind::Asset => {
@@ -242,6 +273,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                     &context,
                     self.state_dir.as_ref(),
                     &self.config.hf,
+                    &self.hf_local_workers,
                 )
             }
         }
@@ -1065,6 +1097,9 @@ impl SoracloudIvmHost {
                 mailbox_message_id: Some(self.request.mailbox_message.message_id),
                 journal_artifact_hash,
                 checkpoint_artifact_hash,
+                placement_id: None,
+                selected_validator_account_id: None,
+                selected_peer_id: None,
             },
         })
     }
@@ -1248,6 +1283,16 @@ struct ResolvedLocalReadContext {
     deployment: SoraServiceDeploymentStateV1,
     bundle: SoraDeploymentBundleV1,
     handler: SoraServiceHandlerV1,
+    hf_execution_host: Option<ResolvedHfPlacementExecutionHost>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResolvedHfPlacementExecutionHost {
+    placement_id: Hash,
+    validator_account_id: AccountId,
+    peer_id: String,
+    role: SoraHfPlacementHostRoleV1,
+    status: SoraHfPlacementHostStatusV1,
 }
 
 #[derive(
@@ -1339,6 +1384,33 @@ struct HfLocalImportManifestV1 {
     import_error: Option<String>,
 }
 
+type SharedHfLocalRunnerWorkers = Arc<Mutex<BTreeMap<String, Arc<Mutex<HfLocalRunnerWorker>>>>>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HfLocalRunnerWorkerCacheKey {
+    source_id: String,
+    repo_id: String,
+    resolved_revision: String,
+    model_name: String,
+    adapter_id: String,
+    pipeline_tag: Option<String>,
+    library_name: Option<String>,
+    imported_at_ms: u64,
+    source_files_dir: PathBuf,
+    runner_program: String,
+    runner_script_path: PathBuf,
+    runner_script_revision: String,
+}
+
+struct HfLocalRunnerWorker {
+    cache_key: HfLocalRunnerWorkerCacheKey,
+    child: std::process::Child,
+    stdin: ChildStdin,
+    stdout_rx: mpsc::Receiver<io::Result<Vec<u8>>>,
+    stdout_reader: Option<thread::JoinHandle<()>>,
+    stderr_log_path: PathBuf,
+}
+
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
 )]
@@ -1373,6 +1445,7 @@ pub(crate) struct SoracloudRuntimeManager {
     config: SoracloudRuntimeManagerConfig,
     state: Arc<State>,
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
+    hf_local_workers: SharedHfLocalRunnerWorkers,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     sorafs_provider_cache: Option<Arc<AsyncRwLock<ProviderAdvertCache>>>,
 }
@@ -1408,6 +1481,7 @@ impl SoracloudRuntimeManager {
             config,
             state,
             snapshot: Arc::new(RwLock::new(SoracloudRuntimeSnapshot::default())),
+            hf_local_workers: Arc::new(Mutex::new(BTreeMap::new())),
             sorafs_node: None,
             sorafs_provider_cache: None,
         }
@@ -1452,6 +1526,7 @@ impl SoracloudRuntimeManager {
             config: Arc::new(manager.config.clone()),
             state_dir: Arc::new(manager.config.state_dir.clone()),
             state: Arc::clone(&manager.state),
+            hf_local_workers: Arc::clone(&manager.hf_local_workers),
         };
         let task = Arc::clone(&manager).spawn_reconcile_task(shutdown_signal);
         (
@@ -1527,6 +1602,7 @@ impl SoracloudRuntimeManager {
             &self.config.state_dir,
             self.artifacts_root(),
         )?;
+        self.prune_stale_hf_local_workers(&snapshot);
         write_json_atomic(
             &self.config.state_dir.join("runtime_snapshot.json"),
             &snapshot,
@@ -1548,6 +1624,29 @@ impl SoracloudRuntimeManager {
         };
         *self.snapshot.write() = snapshot;
         Ok(true)
+    }
+
+    fn prune_stale_hf_local_workers(&self, snapshot: &SoracloudRuntimeSnapshot) {
+        let active_sources = snapshot
+            .hf_sources
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let stale_workers = {
+            let mut workers = self.hf_local_workers.lock();
+            let stale_source_ids = workers
+                .keys()
+                .filter(|source_id| !active_sources.contains(*source_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            stale_source_ids
+                .into_iter()
+                .filter_map(|source_id| workers.remove(&source_id))
+                .collect::<Vec<_>>()
+        };
+        for worker in stale_workers {
+            worker.lock().stop();
+        }
     }
 
     fn services_root(&self) -> PathBuf {
@@ -1684,6 +1783,9 @@ impl SoracloudRuntimeManager {
                     || plan.bound_service_count > 0
                     || plan.bound_apartment_count > 0
             })
+            .filter(|(source_id, _plan)| {
+                self.local_hf_source_assignment_allowed(view, source_id.as_str())
+            })
             .map(|(source_id, _plan)| sanitize_path_component(source_id))
             .collect::<BTreeSet<_>>();
         prune_flat_directory_tree(self.hf_sources_root().as_path(), &desired_sources)?;
@@ -1725,6 +1827,39 @@ impl SoracloudRuntimeManager {
         }
 
         Ok(())
+    }
+
+    fn local_hf_source_assignment_allowed(
+        &self,
+        view: &StateView<'_>,
+        source_id: &str,
+    ) -> bool {
+        if !hf_local_host_identity_is_configured(&self.config) {
+            return true;
+        }
+        view.world().soracloud_hf_placements().iter().any(|(pool_id, placement)| {
+            placement.source_id.to_string() == source_id
+                && placement.status
+                    != iroha_data_model::soracloud::SoraHfPlacementStatusV1::Retired
+                && view
+                    .world()
+                    .soracloud_hf_shared_lease_pools()
+                    .get(pool_id)
+                    .is_some_and(|pool| {
+                        matches!(
+                            pool.status,
+                            SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+                        )
+                    })
+                && placement.assigned_hosts.iter().any(|assignment| {
+                    hf_assignment_matches_local_host(&self.config, assignment)
+                        && !matches!(
+                            assignment.status,
+                            SoraHfPlacementHostStatusV1::Unavailable
+                                | SoraHfPlacementHostStatusV1::Retired
+                        )
+                })
+        })
     }
 
     fn import_one_hf_source(
@@ -2844,6 +2979,7 @@ fn execute_asset_local_read(
             result_commitment,
             context.handler.certified_response,
             None,
+            context.hf_execution_host.as_ref(),
         )),
         SoraCertifiedResponsePolicyV1::StateCommitment => None,
         SoraCertifiedResponsePolicyV1::None => {
@@ -2880,11 +3016,19 @@ fn execute_query_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
     if let Some(binding) =
         iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(&context.bundle)
     {
-        return execute_generated_hf_local_read(request, context, state_dir, hf_config, &binding);
+        return execute_generated_hf_local_read(
+            request,
+            context,
+            state_dir,
+            hf_config,
+            hf_local_workers,
+            &binding,
+        );
     }
 
     let filters = parse_query_params(request.request_query.as_deref());
@@ -2957,6 +3101,7 @@ fn execute_query_local_read(
             result_commitment,
             context.handler.certified_response,
             None,
+            context.hf_execution_host.as_ref(),
         )),
         SoraCertifiedResponsePolicyV1::StateCommitment => None,
         SoraCertifiedResponsePolicyV1::None => {
@@ -2987,15 +3132,21 @@ fn execute_generated_hf_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
     match context.handler.handler_name.as_ref() {
         "metadata" => execute_generated_hf_metadata_local_read(
             request, context, state_dir, hf_config, binding,
         ),
-        "infer" => {
-            execute_generated_hf_infer_local_read(request, context, state_dir, hf_config, binding)
-        }
+        "infer" => execute_generated_hf_infer_local_read(
+            request,
+            context,
+            state_dir,
+            hf_config,
+            hf_local_workers,
+            binding,
+        ),
         other => Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::InvalidRequest,
             format!("unsupported generated HF handler `{other}`"),
@@ -3010,6 +3161,12 @@ fn execute_generated_hf_metadata_local_read(
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
+    ensure_generated_hf_execution_host_ready(
+        context.hf_execution_host.as_ref(),
+        false,
+        request.service_name.as_str(),
+        &binding.source_id,
+    )?;
     let import_manifest =
         read_hf_import_manifest(state_dir, &binding.source_id).map_err(|error| {
             SoracloudRuntimeExecutionError::new(
@@ -3096,6 +3253,7 @@ fn execute_generated_hf_metadata_local_read(
             result_commitment,
             context.handler.certified_response,
             None,
+            context.hf_execution_host.as_ref(),
         )),
     })
 }
@@ -3105,6 +3263,7 @@ fn execute_generated_hf_infer_local_read(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
     if !request.request_method.eq_ignore_ascii_case("POST") {
@@ -3113,6 +3272,12 @@ fn execute_generated_hf_infer_local_read(
             "generated HF `/infer` only supports POST requests",
         ));
     }
+    ensure_generated_hf_execution_host_ready(
+        context.hf_execution_host.as_ref(),
+        true,
+        request.service_name.as_str(),
+        &binding.source_id,
+    )?;
     let bridge_fallback_opt_in = request
         .request_headers
         .get(HF_ALLOW_BRIDGE_FALLBACK_HEADER_V1)
@@ -3122,7 +3287,14 @@ fn execute_generated_hf_infer_local_read(
                 || value.eq_ignore_ascii_case("yes")
         });
     let local_error = if hf_config.local_execution_enabled {
-        match execute_generated_hf_local_runner(request, context, state_dir, hf_config, binding) {
+        match execute_generated_hf_local_runner(
+            request,
+            context,
+            state_dir,
+            hf_config,
+            hf_local_workers,
+            binding,
+        ) {
             Ok(response) => return Ok(response),
             Err(error) => Some(error),
         }
@@ -3164,6 +3336,7 @@ fn execute_generated_hf_local_runner(
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
     binding: &iroha_core::soracloud_runtime::SoracloudHfGeneratedSourceBinding,
 ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
     let Some(import_manifest) = read_hf_import_manifest(state_dir, &binding.source_id).map_err(|error| {
@@ -3295,9 +3468,23 @@ fn execute_generated_hf_local_runner(
             ),
         )
     })?;
-    let output = run_hf_local_runner(
-        &hf_config.local_runner_program,
-        &runner_script_path,
+    let worker_cache_key = HfLocalRunnerWorkerCacheKey {
+        source_id: binding.source_id.clone(),
+        repo_id: binding.repo_id.clone(),
+        resolved_revision: binding.resolved_revision.clone(),
+        model_name: binding.model_name.clone(),
+        adapter_id: import_manifest.adapter_id.clone(),
+        pipeline_tag: import_manifest.pipeline_tag.clone(),
+        library_name: import_manifest.library_name.clone(),
+        imported_at_ms: import_manifest.imported_at_ms,
+        source_files_dir: source_files_dir.clone(),
+        runner_program: hf_config.local_runner_program.trim().to_owned(),
+        runner_script_path,
+        runner_script_revision: Hash::new(HF_LOCAL_RUNNER_SCRIPT_V1.as_bytes()).to_string(),
+    };
+    let output = execute_hf_local_runner_request(
+        hf_local_workers,
+        worker_cache_key,
         hf_config.local_runner_timeout,
         &runner_request_bytes,
     )?;
@@ -3371,6 +3558,7 @@ fn execute_generated_hf_local_runner(
             result_commitment,
             context.handler.certified_response,
             None,
+            context.hf_execution_host.as_ref(),
         )),
     })
 }
@@ -3480,6 +3668,7 @@ fn execute_generated_hf_inference_bridge_local_read(
             result_commitment,
             context.handler.certified_response,
             None,
+            context.hf_execution_host.as_ref(),
         )),
     })
 }
@@ -4976,6 +5165,7 @@ fn apartment_autonomy_checkpoint_path(
 fn resolve_local_read_context(
     view: &StateView<'_>,
     request: &SoracloudLocalReadRequest,
+    config: &SoracloudRuntimeManagerConfig,
 ) -> Result<ResolvedLocalReadContext, SoracloudRuntimeExecutionError> {
     let service_id: Name = request.service_name.parse().map_err(|error| {
         SoracloudRuntimeExecutionError::new(
@@ -5055,12 +5245,132 @@ fn resolve_local_read_context(
             ),
         ));
     };
+    let hf_execution_host =
+        if let Some(binding) = soracloud_hf_generated_source_binding(&bundle) {
+            resolve_local_hf_execution_host(view, request.service_name.as_str(), &binding.source_id, config)?
+        } else {
+            None
+        };
 
     Ok(ResolvedLocalReadContext {
         deployment,
         bundle,
         handler,
+        hf_execution_host,
     })
+}
+
+fn hf_local_host_identity_is_configured(config: &SoracloudRuntimeManagerConfig) -> bool {
+    config.local_validator_account_id.is_some() || config.local_peer_id.is_some()
+}
+
+fn hf_assignment_matches_local_host(
+    config: &SoracloudRuntimeManagerConfig,
+    assignment: &SoraHfPlacementHostAssignmentV1,
+) -> bool {
+    if !hf_local_host_identity_is_configured(config) {
+        return false;
+    }
+    config
+        .local_validator_account_id
+        .as_ref()
+        .is_none_or(|validator_account_id| assignment.validator_account_id == *validator_account_id)
+        && config
+            .local_peer_id
+            .as_deref()
+            .is_none_or(|peer_id| assignment.peer_id == peer_id)
+}
+
+fn resolve_active_hf_placement_for_service(
+    view: &StateView<'_>,
+    service_name: &str,
+    source_id: &str,
+) -> Result<Option<SoraHfPlacementRecordV1>, SoracloudRuntimeExecutionError> {
+    iroha_core::soracloud_runtime::resolve_generated_hf_active_placement(
+        view.world(),
+        service_name,
+        source_id,
+    )
+    .map_err(|message| {
+        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
+    })
+}
+
+fn resolve_local_hf_execution_host(
+    view: &StateView<'_>,
+    service_name: &str,
+    source_id: &str,
+    config: &SoracloudRuntimeManagerConfig,
+) -> Result<Option<ResolvedHfPlacementExecutionHost>, SoracloudRuntimeExecutionError> {
+    if !hf_local_host_identity_is_configured(config) {
+        return Ok(None);
+    }
+    let Some(placement) = resolve_active_hf_placement_for_service(view, service_name, source_id)? else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{service_name}` has no active placement for source `{source_id}`"
+            ),
+        ));
+    };
+    let Some(assignment) = placement
+        .assigned_hosts
+        .iter()
+        .find(|assignment| hf_assignment_matches_local_host(config, assignment))
+    else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{service_name}` source `{source_id}` is not assigned to this validator host"
+            ),
+        ));
+    };
+    Ok(Some(ResolvedHfPlacementExecutionHost {
+        placement_id: placement.placement_id,
+        validator_account_id: assignment.validator_account_id.clone(),
+        peer_id: assignment.peer_id.clone(),
+        role: assignment.role,
+        status: assignment.status,
+    }))
+}
+
+fn ensure_generated_hf_execution_host_ready(
+    host: Option<&ResolvedHfPlacementExecutionHost>,
+    require_primary: bool,
+    service_name: &str,
+    source_id: &str,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    let Some(host) = host else {
+        return Ok(());
+    };
+    if matches!(
+        host.status,
+        SoraHfPlacementHostStatusV1::Unavailable | SoraHfPlacementHostStatusV1::Retired
+    ) {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{service_name}` source `{source_id}` is assigned locally but the placement host is not currently available"
+            ),
+        ));
+    }
+    if require_primary && host.role != SoraHfPlacementHostRoleV1::Primary {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{service_name}` source `{source_id}` is assigned locally as a replica; proxy-to-primary routing is still required"
+            ),
+        ));
+    }
+    if require_primary && host.status != SoraHfPlacementHostStatusV1::Warm {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF service `{service_name}` source `{source_id}` is not warm on the local primary host yet"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_asset_artifact<'a>(
@@ -5159,7 +5469,12 @@ fn local_read_receipt(
     result_commitment: Hash,
     certified_by: SoraCertifiedResponsePolicyV1,
     mailbox_message_id: Option<Hash>,
+    placement_host: Option<&ResolvedHfPlacementExecutionHost>,
 ) -> SoraRuntimeReceiptV1 {
+    let placement_id = placement_host.map(|host| host.placement_id);
+    let selected_validator_account_id =
+        placement_host.map(|host| host.validator_account_id.clone());
+    let selected_peer_id = placement_host.map(|host| host.peer_id.clone());
     let emitted_sequence = next_authoritative_observation_sequence_from_view(
         deployment.service_name.as_ref(),
         request.observed_height,
@@ -5174,6 +5489,9 @@ fn local_read_receipt(
             request.request_commitment,
             result_commitment,
             certified_by,
+            placement_id,
+            selected_validator_account_id.clone(),
+            selected_peer_id.clone(),
         ))),
         service_name: deployment.service_name.clone(),
         service_version: deployment.current_service_version.clone(),
@@ -5186,6 +5504,9 @@ fn local_read_receipt(
         mailbox_message_id,
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
+        placement_id,
+        selected_validator_account_id,
+        selected_peer_id,
     }
 }
 
@@ -5805,6 +6126,9 @@ fn deterministic_mailbox_failure_result_with_message(
             mailbox_message_id: Some(request.mailbox_message.message_id),
             journal_artifact_hash: None,
             checkpoint_artifact_hash: None,
+            placement_id: None,
+            selected_validator_account_id: None,
+            selected_peer_id: None,
         },
     }
 }
@@ -6171,6 +6495,13 @@ fn hf_local_runner_script_path(state_dir: &Path) -> PathBuf {
         .join("soracloud_hf_local_runner.py")
 }
 
+fn hf_local_runner_stderr_log_path(state_dir: &Path, source_id: &str) -> PathBuf {
+    state_dir
+        .join("hf_runtime")
+        .join("workers")
+        .join(format!("{}.stderr.log", sanitize_path_component(source_id)))
+}
+
 fn ensure_hf_local_runner_script(state_dir: &Path) -> io::Result<PathBuf> {
     let path = hf_local_runner_script_path(state_dir);
     match fs::read_to_string(&path) {
@@ -6182,99 +6513,357 @@ fn ensure_hf_local_runner_script(state_dir: &Path) -> io::Result<PathBuf> {
     }
 }
 
-fn run_hf_local_runner(
-    program: &str,
-    script_path: &Path,
+fn execute_hf_local_runner_request(
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
+    cache_key: HfLocalRunnerWorkerCacheKey,
     timeout: Duration,
     request_payload: &[u8],
 ) -> Result<Vec<u8>, SoracloudRuntimeExecutionError> {
-    let program = program.trim();
-    if program.is_empty() {
-        return Err(SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            "generated HF local execution requires a non-empty `soracloud_runtime.hf.local_runner_program`",
-        ));
+    for attempt in 0..2 {
+        let worker = ensure_hf_local_runner_worker(hf_local_workers, &cache_key)?;
+        let mut worker_guard = worker.lock();
+        match worker_guard.request(timeout, request_payload) {
+            Ok(output) => return Ok(output),
+            Err(error) => {
+                worker_guard.stop();
+                drop(worker_guard);
+                remove_hf_local_runner_worker_if_same(
+                    hf_local_workers,
+                    &cache_key.source_id,
+                    &worker,
+                );
+                if attempt == 0 {
+                    continue;
+                }
+                return Err(error);
+            }
+        }
     }
+    unreachable!("resident HF local runner retries are bounded")
+}
 
-    let mut child = Command::new(program)
-        .arg(script_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
+fn ensure_hf_local_runner_worker(
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
+    cache_key: &HfLocalRunnerWorkerCacheKey,
+) -> Result<Arc<Mutex<HfLocalRunnerWorker>>, SoracloudRuntimeExecutionError> {
+    loop {
+        let existing = {
+            let workers = hf_local_workers.lock();
+            workers.get(&cache_key.source_id).cloned()
+        };
+        if let Some(existing) = existing {
+            let mut worker = existing.lock();
+            let is_compatible = worker.cache_key == *cache_key;
+            let is_running = worker.is_running()?;
+            drop(worker);
+            if is_compatible && is_running {
+                return Ok(existing);
+            }
+            remove_hf_local_runner_worker_if_same(
+                hf_local_workers,
+                &cache_key.source_id,
+                &existing,
+            );
+            let mut worker = existing.lock();
+            worker.stop();
+            drop(worker);
+            continue;
+        }
+
+        let candidate = Arc::new(Mutex::new(HfLocalRunnerWorker::spawn(cache_key.clone())?));
+        let mut workers = hf_local_workers.lock();
+        match workers.entry(cache_key.source_id.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Arc::clone(&candidate));
+                return Ok(candidate);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {
+                drop(workers);
+                candidate.lock().stop();
+            }
+        }
+    }
+}
+
+fn remove_hf_local_runner_worker_if_same(
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
+    source_id: &str,
+    worker: &Arc<Mutex<HfLocalRunnerWorker>>,
+) {
+    let mut workers = hf_local_workers.lock();
+    let should_remove = workers
+        .get(source_id)
+        .is_some_and(|current| Arc::ptr_eq(current, worker));
+    if should_remove {
+        workers.remove(source_id);
+    }
+}
+
+fn stderr_log_excerpt(path: &Path) -> String {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    let mut tail = contents
+        .lines()
+        .rev()
+        .take(6)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    if tail.is_empty() {
+        return String::new();
+    }
+    tail.reverse();
+    tail.join(" | ")
+}
+
+impl HfLocalRunnerWorker {
+    fn spawn(
+        cache_key: HfLocalRunnerWorkerCacheKey,
+    ) -> Result<Self, SoracloudRuntimeExecutionError> {
+        let program = cache_key.runner_program.trim();
+        if program.is_empty() {
+            return Err(SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!(
-                    "spawn local HF runner `{program}` for script {}: {error}",
-                    script_path.display()
-                ),
-            )
-        })?;
+                "generated HF local execution requires a non-empty `soracloud_runtime.hf.local_runner_program`",
+            ));
+        }
 
-    {
-        use io::Write as _;
+        let state_dir = cache_key
+            .runner_script_path
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "local HF runner script path `{}` must live under the runtime state directory",
+                        cache_key.runner_script_path.display()
+                    ),
+                )
+            })?;
+        let stderr_log_path = hf_local_runner_stderr_log_path(state_dir, &cache_key.source_id);
+        if let Some(parent) = stderr_log_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "create resident HF worker log directory `{}`: {error}",
+                        parent.display()
+                    ),
+                )
+            })?;
+        }
+        let stderr_log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&stderr_log_path)
+            .map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "open resident HF worker stderr log `{}`: {error}",
+                        stderr_log_path.display()
+                    ),
+                )
+            })?;
 
-        let mut stdin = child.stdin.take().ok_or_else(|| {
+        let mut child = Command::new(program)
+            .arg(&cache_key.runner_script_path)
+            .arg("--server")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(stderr_log))
+            .spawn()
+            .map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    format!(
+                        "spawn resident HF local runner `{program}` for script {}: {error}",
+                        cache_key.runner_script_path.display()
+                    ),
+                )
+            })?;
+        let stdin = child.stdin.take().ok_or_else(|| {
             SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Internal,
-                "local HF runner stdin pipe is unavailable",
+                "resident HF local runner stdin pipe is unavailable",
             )
         })?;
-        stdin.write_all(request_payload).map_err(|error| {
+        let stdout = child.stdout.take().ok_or_else(|| {
             SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                format!("write local HF runner request payload: {error}"),
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                "resident HF local runner stdout pipe is unavailable",
             )
         })?;
+        let (stdout_tx, stdout_rx) = mpsc::channel();
+        let source_id = cache_key.source_id.clone();
+        let stdout_reader = thread::Builder::new()
+            .name(format!(
+                "hf-runner-{}",
+                sanitize_path_component(&source_id)
+            ))
+            .spawn(move || {
+                use io::BufRead as _;
+
+                let mut reader = io::BufReader::new(stdout);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            let payload = line
+                                .trim_end_matches(['\r', '\n'])
+                                .as_bytes()
+                                .to_vec();
+                            if stdout_tx.send(Ok(payload)).is_err() {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            let _ = stdout_tx.send(Err(error));
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Internal,
+                    format!(
+                        "spawn resident HF local runner stdout reader for source `{}`: {error}",
+                        cache_key.source_id
+                    ),
+                )
+            })?;
+
+        Ok(Self {
+            cache_key,
+            child,
+            stdin,
+            stdout_rx,
+            stdout_reader: Some(stdout_reader),
+            stderr_log_path,
+        })
     }
 
-    let started_at = Instant::now();
-    loop {
-        if started_at.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+    fn is_running(&mut self) -> Result<bool, SoracloudRuntimeExecutionError> {
+        self.child
+            .try_wait()
+            .map(|status| status.is_none())
+            .map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    format!(
+                        "poll resident HF local runner for source `{}`: {error}",
+                        self.cache_key.source_id
+                    ),
+                )
+            })
+    }
+
+    fn request(
+        &mut self,
+        timeout: Duration,
+        request_payload: &[u8],
+    ) -> Result<Vec<u8>, SoracloudRuntimeExecutionError> {
+        if !self.is_running()? {
+            let stderr = stderr_log_excerpt(&self.stderr_log_path);
             return Err(SoracloudRuntimeExecutionError::new(
                 SoracloudRuntimeExecutionErrorKind::Unavailable,
                 format!(
-                    "local HF runner `{program}` exceeded timeout of {} ms",
-                    timeout.as_millis()
+                    "resident HF local runner for source `{}` is no longer running{}",
+                    self.cache_key.source_id,
+                    if stderr.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {stderr}")
+                    }
                 ),
             ));
         }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let output = child.wait_with_output().map_err(|error| {
-                    SoracloudRuntimeExecutionError::new(
-                        SoracloudRuntimeExecutionErrorKind::Unavailable,
-                        format!("collect local HF runner output: {error}"),
-                    )
-                })?;
-                if !status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-                    return Err(SoracloudRuntimeExecutionError::new(
-                        SoracloudRuntimeExecutionErrorKind::Unavailable,
-                        format!(
-                            "local HF runner `{program}` exited with {}{}",
-                            status,
-                            if stderr.is_empty() {
-                                String::new()
-                            } else {
-                                format!(": {stderr}")
-                            }
-                        ),
-                    ));
-                }
-                return Ok(output.stdout);
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(error) => {
-                return Err(SoracloudRuntimeExecutionError::new(
+
+        {
+            use io::Write as _;
+
+            self.stdin.write_all(request_payload).map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
                     SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    format!("poll local HF runner `{program}`: {error}"),
-                ));
+                    format!(
+                        "write resident HF local runner request for source `{}`: {error}",
+                        self.cache_key.source_id
+                    ),
+                )
+            })?;
+            self.stdin.write_all(b"\n").map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    format!(
+                        "frame resident HF local runner request for source `{}`: {error}",
+                        self.cache_key.source_id
+                    ),
+                )
+            })?;
+            self.stdin.flush().map_err(|error| {
+                SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    format!(
+                        "flush resident HF local runner request for source `{}`: {error}",
+                        self.cache_key.source_id
+                    ),
+                )
+            })?;
+        }
+
+        match self.stdout_rx.recv_timeout(timeout) {
+            Ok(Ok(payload)) => Ok(payload),
+            Ok(Err(error)) => Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "read resident HF local runner response for source `{}`: {error}",
+                    self.cache_key.source_id
+                ),
+            )),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                format!(
+                    "resident HF local runner for source `{}` exceeded timeout of {} ms",
+                    self.cache_key.source_id,
+                    timeout.as_millis()
+                ),
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let stderr = stderr_log_excerpt(&self.stderr_log_path);
+                Err(SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    format!(
+                        "resident HF local runner for source `{}` exited before returning a response{}",
+                        self.cache_key.source_id,
+                        if stderr.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {stderr}")
+                        }
+                    ),
+                ))
             }
         }
+    }
+
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(stdout_reader) = self.stdout_reader.take() {
+            let _ = stdout_reader.join();
+        }
+    }
+}
+
+impl Drop for HfLocalRunnerWorker {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -6575,12 +7164,16 @@ mod tests {
         smart_contract::manifest::EntryPointKind,
         soracloud::{
             AgentApartmentManifestV1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+            SORA_HF_PLACEMENT_RECORD_VERSION_V1,
             SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
             SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
             SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
             SORA_SERVICE_RUNTIME_STATE_VERSION_V1, SoraAgentArtifactAllowRuleV1,
             SoraAgentAutonomyRunRecordV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
-            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfSharedLeaseMemberStatusV1,
+            SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
+            SoraHfModelFormatV1, SoraHfPlacementHostAssignmentV1,
+            SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
+            SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1,
             SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
             SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraRolloutStageV1,
             SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
@@ -6591,7 +7184,7 @@ mod tests {
             ReplicationOrderRecord, ReplicationOrderStatus,
         },
     };
-    use iroha_test_samples::ALICE_ID;
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
     use sorafs_car::CarBuildPlan;
     use sorafs_chunker::ChunkProfile;
@@ -6626,6 +7219,17 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         Ok(Arc::new(State::new_for_testing(World::new(), kura, query)))
+    }
+
+    fn sample_hf_resource_profile_for_tests() -> SoraHfResourceProfileV1 {
+        SoraHfResourceProfileV1 {
+            required_model_bytes: 3 * 1024 * 1024 * 1024,
+            backend_family: SoraHfBackendFamilyV1::Transformers,
+            model_format: SoraHfModelFormatV1::Safetensors,
+            disk_cache_bytes_floor: 4 * 1024 * 1024 * 1024,
+            ram_bytes_floor: 4 * 1024 * 1024 * 1024,
+            vram_bytes_floor: 0,
+        }
     }
 
     fn sample_agent_record() -> Result<SoraAgentApartmentRecordV1> {
@@ -7507,12 +8111,14 @@ mod tests {
             config: Arc::new(manager.config.clone()),
             state_dir: Arc::new(manager.config.state_dir.clone()),
             state,
+            hf_local_workers: Arc::clone(&manager.hf_local_workers),
         }
     }
 
     #[derive(Clone)]
     struct GeneratedHfServiceFixture {
         source_id: Hash,
+        pool_id: Hash,
         bundle: SoraDeploymentBundleV1,
     }
 
@@ -7562,6 +8168,7 @@ mod tests {
                 normalized_runtime_hash: Hash::new(
                     format!("generated-hf-runtime:{service_name}").as_bytes(),
                 ),
+                resource_profile: Some(sample_hf_resource_profile_for_tests()),
                 status: SoraHfSourceStatusV1::PendingImport,
                 created_at_ms: 10,
                 updated_at_ms: 20,
@@ -7602,12 +8209,19 @@ mod tests {
                     total_paid_nanos: 10_000,
                     total_refunded_nanos: 0,
                     last_charge_nanos: 10_000,
+                    total_compute_paid_nanos: 0,
+                    total_compute_refunded_nanos: 0,
+                    last_compute_charge_nanos: 0,
                     service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
                     apartment_bindings: BTreeSet::new(),
                 },
             );
 
-        Ok(GeneratedHfServiceFixture { source_id, bundle })
+        Ok(GeneratedHfServiceFixture {
+            source_id,
+            pool_id,
+            bundle,
+        })
     }
 
     fn assign_fixture_artifact_hashes(
@@ -7625,6 +8239,82 @@ mod tests {
             payloads.push(payload);
         }
         payloads
+    }
+
+    fn insert_generated_hf_placement_fixture(
+        state: &mut Arc<State>,
+        fixture: &GeneratedHfServiceFixture,
+        local_role: SoraHfPlacementHostRoleV1,
+        local_status: SoraHfPlacementHostStatusV1,
+        local_peer_id: &str,
+    ) -> Hash {
+        let placement_id = Hash::new(
+            format!("generated-hf-placement:{}", fixture.bundle.service.service_name).as_bytes(),
+        );
+        let mut assigned_hosts = Vec::new();
+        if local_role == SoraHfPlacementHostRoleV1::Replica {
+            assigned_hosts.push(SoraHfPlacementHostAssignmentV1 {
+                validator_account_id: BOB_ID.clone(),
+                peer_id: "12D3KooWGeneratedHfFixturePrimary".to_owned(),
+                role: SoraHfPlacementHostRoleV1::Primary,
+                status: SoraHfPlacementHostStatusV1::Warm,
+                host_class: "cpu.large".to_owned(),
+            });
+        }
+        assigned_hosts.push(SoraHfPlacementHostAssignmentV1 {
+            validator_account_id: ALICE_ID.clone(),
+            peer_id: local_peer_id.to_owned(),
+            role: local_role,
+            status: local_status,
+            host_class: "cpu.large".to_owned(),
+        });
+        if local_role == SoraHfPlacementHostRoleV1::Primary {
+            assigned_hosts.push(SoraHfPlacementHostAssignmentV1 {
+                validator_account_id: BOB_ID.clone(),
+                peer_id: "12D3KooWGeneratedHfFixtureReplica".to_owned(),
+                role: SoraHfPlacementHostRoleV1::Replica,
+                status: SoraHfPlacementHostStatusV1::Warm,
+                host_class: "cpu.large".to_owned(),
+            });
+        }
+
+        Arc::get_mut(state)
+            .expect("unique test state")
+            .world
+            .soracloud_hf_placements_mut_for_testing()
+            .insert(
+                fixture.pool_id,
+                SoraHfPlacementRecordV1 {
+                    schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                    placement_id,
+                    source_id: fixture.source_id,
+                    pool_id: fixture.pool_id,
+                    status: if local_role == SoraHfPlacementHostRoleV1::Primary
+                        && local_status == SoraHfPlacementHostStatusV1::Warm
+                    {
+                        SoraHfPlacementStatusV1::Ready
+                    } else {
+                        SoraHfPlacementStatusV1::Degraded
+                    },
+                    selection_seed_hash: Hash::new(
+                        format!(
+                            "generated-hf-placement-seed:{}",
+                            fixture.bundle.service.service_name
+                        )
+                        .as_bytes(),
+                    ),
+                    resource_profile: sample_hf_resource_profile_for_tests(),
+                    eligible_validator_count: u32::try_from(assigned_hosts.len())
+                        .expect("assigned host count fits in u32"),
+                    adaptive_target_host_count: u16::try_from(assigned_hosts.len())
+                        .expect("assigned host count fits in u16"),
+                    assigned_hosts,
+                    total_reservation_fee_nanos: 20_000,
+                    last_rebalance_at_ms: 20,
+                    last_error: None,
+                },
+            );
+        placement_id
     }
 
     fn seed_local_artifact_cache(
@@ -7984,6 +8674,7 @@ mod tests {
                     model_name: "gpt_oss_20b".to_owned(),
                     adapter_id: "hf.shared.v1".to_owned(),
                     normalized_runtime_hash: Hash::new(b"hf-runtime"),
+                    resource_profile: Some(sample_hf_resource_profile_for_tests()),
                     status: SoraHfSourceStatusV1::PendingImport,
                     created_at_ms: 10,
                     updated_at_ms: 20,
@@ -8024,6 +8715,9 @@ mod tests {
                         total_paid_nanos: 10_000,
                         total_refunded_nanos: 0,
                         last_charge_nanos: 10_000,
+                        total_compute_paid_nanos: 0,
+                        total_compute_refunded_nanos: 0,
+                        last_compute_charge_nanos: 0,
                         service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
                         apartment_bindings: BTreeSet::new(),
                     },
@@ -8181,6 +8875,7 @@ mod tests {
                     model_name: "gpt-oss".to_owned(),
                     adapter_id: "hf.shared.v1".to_owned(),
                     normalized_runtime_hash: Hash::new(b"generated-hf-runtime"),
+                    resource_profile: Some(sample_hf_resource_profile_for_tests()),
                     status: SoraHfSourceStatusV1::PendingImport,
                     created_at_ms: 10,
                     updated_at_ms: 20,
@@ -8221,6 +8916,9 @@ mod tests {
                         total_paid_nanos: 10_000,
                         total_refunded_nanos: 0,
                         last_charge_nanos: 10_000,
+                        total_compute_paid_nanos: 0,
+                        total_compute_refunded_nanos: 0,
+                        last_compute_charge_nanos: 0,
                         service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
                         apartment_bindings: BTreeSet::from([apartment_manifest
                             .apartment_name
@@ -8632,6 +9330,89 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_once_imports_generated_hf_source_only_for_locally_assigned_host() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_local_assignment_import",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWLocalAssignedRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-assigned-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+
+        let unassigned_manager = SoracloudRuntimeManager::new(
+            config
+                .clone()
+                .with_local_host_identity(ALICE_ID.clone(), "12D3KooWUnassignedRuntimeHost"),
+            Arc::clone(&state),
+        );
+        unassigned_manager.reconcile_once()?;
+        assert!(
+            read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?.is_none(),
+            "HF sources should stay metadata-only on unassigned hosts",
+        );
+
+        let assigned_manager = SoracloudRuntimeManager::new(
+            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        );
+        assigned_manager.reconcile_once()?;
+        assert!(
+            read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?.is_some(),
+            "assigned hosts should materialize the canonical HF import",
+        );
+        Ok(())
+    }
+
+    #[test]
     fn execute_local_read_generated_hf_infer_requires_configured_token() -> Result<()> {
         let mut state = test_state()?;
         let fixture = insert_generated_hf_service_fixture(
@@ -8739,6 +9520,14 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        let local_peer_id = "12D3KooWLocalInferRuntimeHost";
+        let placement_id = insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
         let config_json =
             br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"local:"}}"#
                 .to_vec();
@@ -8783,7 +9572,10 @@ mod tests {
         config.hf.import_file_allowlist = vec!["config.json".to_owned()];
         config.hf.allow_inference_bridge_fallback = false;
 
-        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        let manager = SoracloudRuntimeManager::new(
+            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        );
         manager.reconcile_once()?;
         let handle = test_runtime_handle(&manager, Arc::clone(&state));
 
@@ -8832,7 +9624,204 @@ mod tests {
             response.certified_by,
             SoraCertifiedResponsePolicyV1::AuditReceipt
         );
-        assert!(response.runtime_receipt.is_some());
+        let runtime_receipt = response
+            .runtime_receipt
+            .as_ref()
+            .expect("generated HF local inference should emit a runtime receipt");
+        let expected_validator = ALICE_ID.clone();
+        assert_eq!(runtime_receipt.placement_id, Some(placement_id));
+        assert_eq!(
+            runtime_receipt.selected_validator_account_id.as_ref(),
+            Some(&expected_validator)
+        );
+        assert_eq!(
+            runtime_receipt.selected_peer_id.as_deref(),
+            Some(local_peer_id)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_generated_hf_infer_reuses_resident_worker_across_calls() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_local_worker_reuse_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWLocalReuseRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let config_json =
+            br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"reuse:"}}"#
+                .to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-local-reuse-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+        config.hf.allow_inference_bridge_fallback = false;
+
+        let manager = SoracloudRuntimeManager::new(
+            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let first = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::from([(
+                    "content-type".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                request_body: br#"{"inputs":"first"}"#.to_vec(),
+                request_commitment: Hash::new(b"hf-local-worker-reuse-first"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+        let second = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::from([(
+                    "content-type".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                request_body: br#"{"inputs":"second"}"#.to_vec(),
+                request_commitment: Hash::new(b"hf-local-worker-reuse-second"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        let first_json: norito::json::Value = norito::json::from_slice(&first.response_bytes)?;
+        let second_json: norito::json::Value = norito::json::from_slice(&second.response_bytes)?;
+        assert_eq!(
+            first_json
+                .get("worker_instance_id")
+                .and_then(norito::json::Value::as_str),
+            second_json
+                .get("worker_instance_id")
+                .and_then(norito::json::Value::as_str)
+        );
+        assert_eq!(
+            first_json.get("text").and_then(norito::json::Value::as_str),
+            Some("reuse:first")
+        );
+        assert_eq!(
+            second_json.get("text").and_then(norito::json::Value::as_str),
+            Some("reuse:second")
+        );
+        assert_eq!(manager.hf_local_workers.lock().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_generated_hf_infer_rejects_local_replica_without_proxy() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_replica_infer_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWReplicaRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Replica,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf())
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        );
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let error = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::from([(
+                    "content-type".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                request_body: br#"{"inputs":"hello"}"#.to_vec(),
+                request_commitment: Hash::new(b"hf-replica-infer-request"),
+            })
+            .expect_err("replica hosts should fail closed until proxy-to-primary is implemented");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+        assert!(error.message.contains("replica"));
         Ok(())
     }
 

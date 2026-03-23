@@ -9842,6 +9842,149 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
     public let content: Content
 }
 
+public struct ToriiPipelineTransactionEvent: Decodable, Sendable {
+    public let category: String?
+    public let event: String
+    public let hash: String
+    public let status: String
+    public let blockHeight: UInt64?
+    public let dataspaceId: String?
+    public let laneId: String?
+    public let eventName: String?
+    public let eventId: String?
+    public let retryHintMilliseconds: Int?
+    public let rawEvent: String
+
+    private enum CodingKeys: String, CodingKey {
+        case category
+        case event
+        case hash
+        case status
+        case blockHeight = "block_height"
+        case dataspaceId = "dataspace_id"
+        case laneId = "lane_id"
+    }
+
+    public var state: PipelineTransactionState {
+        PipelineTransactionState(kind: status)
+    }
+
+    public var rejectionReason: String? {
+        Self.parseRejectedReason(from: status)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            category: try container.decodeIfPresent(String.self, forKey: .category),
+            event: try container.decode(String.self, forKey: .event),
+            hash: try container.decode(String.self, forKey: .hash),
+            status: try container.decode(String.self, forKey: .status),
+            blockHeight: Self.decodeFlexibleUInt64IfPresent(container: container, key: .blockHeight),
+            dataspaceId: try container.decodeIfPresent(String.self, forKey: .dataspaceId),
+            laneId: Self.decodeFlexibleStringIfPresent(container: container, key: .laneId),
+            eventName: nil,
+            eventId: nil,
+            retryHintMilliseconds: nil,
+            rawEvent: ""
+        )
+    }
+
+    fileprivate init(
+        category: String?,
+        event: String,
+        hash: String,
+        status: String,
+        blockHeight: UInt64?,
+        dataspaceId: String?,
+        laneId: String?,
+        eventName: String?,
+        eventId: String?,
+        retryHintMilliseconds: Int?,
+        rawEvent: String
+    ) {
+        self.category = category
+        self.event = event
+        self.hash = hash
+        self.status = status
+        self.blockHeight = blockHeight
+        self.dataspaceId = dataspaceId
+        self.laneId = laneId
+        self.eventName = eventName
+        self.eventId = eventId
+        self.retryHintMilliseconds = retryHintMilliseconds
+        self.rawEvent = rawEvent
+    }
+
+    fileprivate init(
+        snapshot: ToriiPipelineTransactionStatus,
+        hashHex: String
+    ) {
+        self.init(
+            category: "Pipeline",
+            event: snapshot.kind,
+            hash: snapshot.content.hash.isEmpty ? hashHex : snapshot.content.hash,
+            status: snapshot.content.status.kind,
+            blockHeight: nil,
+            dataspaceId: nil,
+            laneId: nil,
+            eventName: nil,
+            eventId: nil,
+            retryHintMilliseconds: nil,
+            rawEvent: ""
+        )
+    }
+
+    private static func decodeFlexibleUInt64IfPresent<Key: CodingKey>(
+        container: KeyedDecodingContainer<Key>,
+        key: Key
+    ) -> UInt64? {
+        if let direct = try? container.decodeIfPresent(UInt64.self, forKey: key) {
+            return direct
+        }
+        if let signed = try? container.decode(Int64.self, forKey: key),
+           signed >= 0 {
+            return UInt64(signed)
+        }
+        if let rendered = try? container.decode(String.self, forKey: key) {
+            let trimmed = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+            return UInt64(trimmed)
+        }
+        return nil
+    }
+
+    private static func decodeFlexibleStringIfPresent<Key: CodingKey>(
+        container: KeyedDecodingContainer<Key>,
+        key: Key
+    ) -> String? {
+        if let direct = try? container.decodeIfPresent(String.self, forKey: key) {
+            return direct
+        }
+        if let unsigned = try? container.decode(UInt64.self, forKey: key) {
+            return String(unsigned)
+        }
+        if let signed = try? container.decode(Int64.self, forKey: key) {
+            return String(signed)
+        }
+        return nil
+    }
+
+    private static func parseRejectedReason(from statusLiteral: String) -> String? {
+        let trimmed = statusLiteral.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("Rejected"),
+              let open = trimmed.firstIndex(of: "("),
+              trimmed.hasSuffix(")"),
+              open < trimmed.index(before: trimmed.endIndex) else {
+            return nil
+        }
+        let reason = String(
+            trimmed[trimmed.index(after: open)..<trimmed.index(before: trimmed.endIndex)]
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        return reason.isEmpty ? nil : reason
+    }
+}
+
 public struct ToriiPipelineRecovery: Decodable, Sendable {
     public struct Dag: Decodable, Sendable {
         public let fingerprint: String
@@ -9875,14 +10018,15 @@ public enum PipelineTransactionState: Hashable, Sendable {
     case other(String)
 
     public init(kind: String) {
-        switch kind {
-        case "Queued": self = .queued
-        case "Approved": self = .approved
-        case "Committed": self = .committed
-        case "Applied": self = .applied
-        case "Rejected": self = .rejected
-        case "Expired": self = .expired
-        default: self = .other(kind)
+        let trimmed = kind.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmed {
+        case let value where value.hasPrefix("Queued"): self = .queued
+        case let value where value.hasPrefix("Approved"): self = .approved
+        case let value where value.hasPrefix("Committed"): self = .committed
+        case let value where value.hasPrefix("Applied"): self = .applied
+        case let value where value.hasPrefix("Rejected"): self = .rejected
+        case let value where value.hasPrefix("Expired"): self = .expired
+        default: self = .other(trimmed)
         }
     }
 
@@ -9908,6 +10052,24 @@ public enum PipelineTransactionState: Hashable, Sendable {
     }
 
     public var isKnownTerminalFailure: Bool {
+        switch self {
+        case .rejected, .expired:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isTerminalSuccess: Bool {
+        switch self {
+        case .committed, .applied:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isTerminalFailure: Bool {
         switch self {
         case .rejected, .expired:
             return true
@@ -14331,6 +14493,125 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    public func streamTransactionStatusEvents(hashHex: String,
+                                              lastEventId: String? = nil) -> AsyncThrowingStream<ToriiPipelineTransactionEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
+                    let filterValue = try String(
+                        decoding: Self.queryEqualsFilter(field: "tx_hash", value: normalizedHash).encodedData(),
+                        as: UTF8.self
+                    )
+                    var headers = ["Accept": "text/event-stream"]
+                    if let lastEventId {
+                        headers["Last-Event-ID"] = lastEventId
+                    }
+                    let request = try makeRequest(
+                        path: "/v1/events/sse",
+                        queryItems: [URLQueryItem(name: "filter", value: filterValue)],
+                        headers: headers
+                    )
+                    let (bytes, response) = try await session.bytes(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw ToriiClientError.invalidResponse
+                    }
+                    try ensureStatus(httpResponse, equals: 200)
+
+                    var buffer: [String] = []
+                    var lineAccumulator = Data()
+                    var iterator = bytes.makeAsyncIterator()
+                    while let byte = try await iterator.next() {
+                        if Task.isCancelled {
+                            break
+                        }
+                        if byte == UInt8(ascii: "\n") {
+                            let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
+                            if rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                if let event = try parseTransactionStatusEvent(from: buffer) {
+                                    continuation.yield(event)
+                                }
+                                buffer.removeAll(keepingCapacity: true)
+                            } else {
+                                buffer.append(rawLine)
+                            }
+                            lineAccumulator.removeAll(keepingCapacity: true)
+                        } else {
+                            lineAccumulator.append(byte)
+                        }
+                    }
+                    if !lineAccumulator.isEmpty {
+                        let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
+                        buffer.append(rawLine)
+                    }
+                    if let event = try parseTransactionStatusEvent(from: buffer) {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    if Task.isCancelled {
+                        continuation.finish()
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func waitForTerminalTransactionStatusEvent(hashHex: String,
+                                                      timeout: TimeInterval = 5) async throws -> ToriiPipelineTransactionEvent {
+        let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
+        if let snapshot = try await getTransactionStatus(hashHex: normalizedHash),
+           snapshot.content.status.state.isTerminalSuccess || snapshot.content.status.state.isTerminalFailure {
+            return ToriiPipelineTransactionEvent(snapshot: snapshot, hashHex: normalizedHash)
+        }
+
+        let terminalTask = Task { () throws -> ToriiPipelineTransactionEvent in
+            var iterator = streamTransactionStatusEvents(hashHex: normalizedHash).makeAsyncIterator()
+            while let nextEvent = try await iterator.next() {
+                if nextEvent.state.isTerminalSuccess || nextEvent.state.isTerminalFailure {
+                    return nextEvent
+                }
+            }
+            throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+        }
+
+        guard timeout > 0 else {
+            do {
+                return try await terminalTask.value
+            } catch is CancellationError {
+                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+            }
+        }
+
+        let nanosDouble = min(max(timeout * 1_000_000_000, 0), Double(UInt64.max))
+        return try await withThrowingTaskGroup(of: ToriiPipelineTransactionEvent.self) { group in
+            group.addTask {
+                try await terminalTask.value
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(nanosDouble))
+                terminalTask.cancel()
+                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+            }
+            guard let result = try await group.next() else {
+                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+            }
+            group.cancelAll()
+            terminalTask.cancel()
+            return result
+        }
+    }
+
     public func getPipelineRecovery(height: UInt64) async throws -> ToriiPipelineRecovery? {
         let request = try makeRequest(path: "/v1/pipeline/recovery/\(height)")
         let (data, response) = try await send(request)
@@ -15079,6 +15360,35 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             throw ToriiClientError.invalidPayload("SSE payload is not valid UTF-8.")
         }
         return try decodeJSON(ToriiExplorerInstructionItem.self, from: payloadData)
+    }
+
+    private func parseTransactionStatusEvent(from lines: [String]) throws -> ToriiPipelineTransactionEvent? {
+        guard let parsed = try parseServerSentEvent(from: lines) else {
+            return nil
+        }
+        guard let payloadString = parsed.data else {
+            return nil
+        }
+        guard let payloadData = payloadString.data(using: .utf8) else {
+            throw ToriiClientError.invalidPayload("SSE payload is not valid UTF-8.")
+        }
+        let payload = try decodeJSON(ToriiPipelineTransactionEvent.self, from: payloadData)
+        guard payload.event.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Transaction") == .orderedSame else {
+            return nil
+        }
+        return ToriiPipelineTransactionEvent(
+            category: payload.category,
+            event: payload.event,
+            hash: payload.hash,
+            status: payload.status,
+            blockHeight: payload.blockHeight,
+            dataspaceId: payload.dataspaceId,
+            laneId: payload.laneId,
+            eventName: parsed.eventName,
+            eventId: parsed.id,
+            retryHintMilliseconds: parsed.retry,
+            rawEvent: parsed.raw
+        )
     }
 
     private struct ToriiVerifyingKeyEventEnvelope: Decodable {

@@ -10,12 +10,13 @@ use crate::{
         nexus::SetLaneRelayEmergencyValidators,
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
-            AdvanceSoracloudRollout, AllowSoracloudAgentAutonomyArtifact,
-            AllowSoracloudUploadedModel, AppendSoracloudUploadedModelChunk,
-            ApproveSoracloudAgentWalletSpend, CheckpointSoracloudTrainingJob,
-            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
-            FinalizeSoracloudUploadedModelBundle, JoinSoracloudHfSharedLease,
-            LeaveSoracloudHfSharedLease, MutateSoracloudState, PromoteSoracloudModelWeight,
+            AdvanceSoracloudRollout, AdvertiseSoracloudModelHost,
+            AllowSoracloudAgentAutonomyArtifact, AllowSoracloudUploadedModel,
+            AppendSoracloudUploadedModelChunk, ApproveSoracloudAgentWalletSpend,
+            CheckpointSoracloudTrainingJob, DeploySoracloudAgentApartment, DeploySoracloudService,
+            EnqueueSoracloudAgentMessage, FinalizeSoracloudUploadedModelBundle,
+            HeartbeatSoracloudModelHost, JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease,
+            MutateSoracloudState, PromoteSoracloudModelWeight,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateInferenceCheckpoint,
             RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
@@ -25,7 +26,7 @@ use crate::{
             RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
             RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
             SetSoracloudRuntimeState, StartSoracloudPrivateInference, StartSoracloudTrainingJob,
-            UpgradeSoracloudService,
+            UpgradeSoracloudService, WithdrawSoracloudModelHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
@@ -149,6 +150,12 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
         visitor.visit_leave_soracloud_hf_shared_lease(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RenewSoracloudHfSharedLease>() {
         visitor.visit_renew_soracloud_hf_shared_lease(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<AdvertiseSoracloudModelHost>() {
+        visitor.visit_advertise_soracloud_model_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<HeartbeatSoracloudModelHost>() {
+        visitor.visit_heartbeat_soracloud_model_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawSoracloudModelHost>() {
+        visitor.visit_withdraw_soracloud_model_host(v);
     } else {
         return false;
     }
@@ -441,6 +448,9 @@ macro_rules! instruction_visitors {
             visit_join_soracloud_hf_shared_lease(&JoinSoracloudHfSharedLease),
             visit_leave_soracloud_hf_shared_lease(&LeaveSoracloudHfSharedLease),
             visit_renew_soracloud_hf_shared_lease(&RenewSoracloudHfSharedLease),
+            visit_advertise_soracloud_model_host(&AdvertiseSoracloudModelHost),
+            visit_heartbeat_soracloud_model_host(&HeartbeatSoracloudModelHost),
+            visit_withdraw_soracloud_model_host(&WithdrawSoracloudModelHost),
             visit_deploy_soracloud_agent_apartment(&DeploySoracloudAgentApartment),
             visit_renew_soracloud_agent_lease(&RenewSoracloudAgentLease),
             visit_restart_soracloud_agent_apartment(&RestartSoracloudAgentApartment),

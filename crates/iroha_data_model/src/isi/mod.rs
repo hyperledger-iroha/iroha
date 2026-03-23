@@ -284,6 +284,24 @@ impl From<crate::isi::soracloud::RenewSoracloudHfSharedLease> for InstructionBox
     }
 }
 
+impl From<crate::isi::soracloud::AdvertiseSoracloudModelHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdvertiseSoracloudModelHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::HeartbeatSoracloudModelHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::HeartbeatSoracloudModelHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::WithdrawSoracloudModelHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::WithdrawSoracloudModelHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::DeploySoracloudAgentApartment> for InstructionBox {
     fn from(i: crate::isi::soracloud::DeploySoracloudAgentApartment) -> Self {
         InstructionBox(Box::new(i))

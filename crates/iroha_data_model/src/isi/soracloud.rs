@@ -10,13 +10,15 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
+    account::AccountId,
     asset::AssetDefinitionId,
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
         FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SoraDeploymentBundleV1,
-        SoraModelPrivacyModeV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
+        SoraHfResourceProfileV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
+        SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
         SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
@@ -210,6 +212,9 @@ pub struct JoinSoracloudHfSharedLease {
     pub lease_asset_definition_id: AssetDefinitionId,
     /// Full-window price in nanos of `lease_asset_definition_id`.
     pub base_fee_nanos: u128,
+    /// Canonical HF resource profile derived by the control plane.
+    #[norito(default)]
+    pub resource_profile: Option<SoraHfResourceProfileV1>,
     /// Provenance attestation over the join payload.
     pub provenance: ManifestProvenance,
 }
@@ -281,6 +286,9 @@ pub struct RenewSoracloudHfSharedLease {
     pub lease_asset_definition_id: AssetDefinitionId,
     /// Full-window price in nanos of `lease_asset_definition_id`.
     pub base_fee_nanos: u128,
+    /// Canonical HF resource profile derived by the control plane.
+    #[norito(default)]
+    pub resource_profile: Option<SoraHfResourceProfileV1>,
     /// Provenance attestation over the renew payload.
     pub provenance: ManifestProvenance,
 }
@@ -288,6 +296,71 @@ pub struct RenewSoracloudHfSharedLease {
 impl crate::seal::Instruction for RenewSoracloudHfSharedLease {}
 
 impl PartialOrd for RenewSoracloudHfSharedLease {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Advertise validator-host capabilities for authoritative HF placement.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AdvertiseSoracloudModelHost {
+    /// Capability advert being published by the validator.
+    pub capability: SoraModelHostCapabilityRecordV1,
+    /// Provenance attestation over the advert payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for AdvertiseSoracloudModelHost {}
+
+impl PartialOrd for AdvertiseSoracloudModelHost {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Refresh the heartbeat TTL for an advertised validator host.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct HeartbeatSoracloudModelHost {
+    /// Validator account that owns the host advert.
+    pub validator_account_id: AccountId,
+    /// New heartbeat-expiry timestamp.
+    pub heartbeat_expires_at_ms: u64,
+    /// Provenance attestation over the heartbeat payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for HeartbeatSoracloudModelHost {}
+
+impl PartialOrd for HeartbeatSoracloudModelHost {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Withdraw an advertised validator host from authoritative HF placement.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct WithdrawSoracloudModelHost {
+    /// Validator account that owns the host advert.
+    pub validator_account_id: AccountId,
+    /// Provenance attestation over the withdrawal payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for WithdrawSoracloudModelHost {}
+
+impl PartialOrd for WithdrawSoracloudModelHost {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }

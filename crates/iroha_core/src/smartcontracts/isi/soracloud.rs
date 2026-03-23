@@ -1,6 +1,6 @@
 //! Soracloud lifecycle and private-runtime instruction handlers.
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -10,14 +10,16 @@ use iroha_data_model::{
         soracloud as isi,
     },
     name::Name,
+    nexus::PublicLaneValidatorStatus,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1,
         FheParamSetV1, SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
         SORA_AGENT_APARTMENT_RECORD_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
-        SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
-        SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SORA_HF_SOURCE_RECORD_VERSION_V1,
-        SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
+        SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+        SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+        SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
+        SORA_MODEL_ARTIFACT_RECORD_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
         SORA_MODEL_REGISTRY_VERSION_V1, SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
         SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1, SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1,
         SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1, SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1,
@@ -29,21 +31,24 @@ use iroha_data_model::{
         SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1,
         SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
         SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
-        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
+        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
+        SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
         SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
         SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1, SoraHfSharedLeaseStatusV1,
         SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraModelArtifactActionV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelPrivacyModeV1,
-        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
-        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRolloutStageV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
-        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
-        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBindingStatusV1,
-        SoraUploadedModelBindingV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
+        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
+        SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraPrivateInferenceSessionV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceLifecycleActionV1,
+        SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraTrainingJobStatusV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBindingV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
         derive_agent_autonomy_request_commitment, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
@@ -56,6 +61,9 @@ use iroha_data_model::{
         encode_hf_shared_lease_leave_provenance_payload,
         encode_hf_shared_lease_renew_provenance_payload,
         encode_model_artifact_register_provenance_payload,
+        encode_model_host_advertise_provenance_payload,
+        encode_model_host_heartbeat_provenance_payload,
+        encode_model_host_withdraw_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload,
@@ -72,6 +80,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 
 use super::*;
@@ -95,11 +104,169 @@ const AGENT_MAILBOX_MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
 const AGENT_AUTONOMY_MAX_LABEL_BYTES: usize = 128;
 const AGENT_AUTONOMY_MAX_REQUEST_BYTES: usize = 16 * 1024;
+const HF_ADAPTIVE_TARGET_HOST_COUNT_SMALL: u16 = 3;
+const HF_ADAPTIVE_TARGET_HOST_COUNT_MEDIUM: u16 = 2;
+const HF_ADAPTIVE_TARGET_HOST_COUNT_LARGE: u16 = 2;
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HfHostReservationUsage {
+    required_model_bytes: u64,
+    disk_cache_bytes: u64,
+    ram_bytes: u64,
+    vram_bytes: u64,
+    resident_models: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HfHostClassPolicy {
+    host_class: &'static str,
+    min_model_bytes: u64,
+    min_disk_cache_bytes: u64,
+    min_ram_bytes: u64,
+    min_vram_bytes: u64,
+    reservation_fee_small_nanos: u128,
+    reservation_fee_medium_nanos: u128,
+    reservation_fee_large_nanos: u128,
+}
+
+const HF_HOST_CLASS_POLICIES: [HfHostClassPolicy; 3] = [
+    HfHostClassPolicy {
+        host_class: "cpu.small",
+        min_model_bytes: 2 * 1024 * 1024 * 1024,
+        min_disk_cache_bytes: 8 * 1024 * 1024 * 1024,
+        min_ram_bytes: 8 * 1024 * 1024 * 1024,
+        min_vram_bytes: 0,
+        reservation_fee_small_nanos: 500,
+        reservation_fee_medium_nanos: 750,
+        reservation_fee_large_nanos: 1_000,
+    },
+    HfHostClassPolicy {
+        host_class: "cpu.large",
+        min_model_bytes: 8 * 1024 * 1024 * 1024,
+        min_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
+        min_ram_bytes: 32 * 1024 * 1024 * 1024,
+        min_vram_bytes: 0,
+        reservation_fee_small_nanos: 1_000,
+        reservation_fee_medium_nanos: 1_500,
+        reservation_fee_large_nanos: 2_000,
+    },
+    HfHostClassPolicy {
+        host_class: "gpu.large",
+        min_model_bytes: 24 * 1024 * 1024 * 1024,
+        min_disk_cache_bytes: 64 * 1024 * 1024 * 1024,
+        min_ram_bytes: 64 * 1024 * 1024 * 1024,
+        min_vram_bytes: 24 * 1024 * 1024 * 1024,
+        reservation_fee_small_nanos: 2_500,
+        reservation_fee_medium_nanos: 4_000,
+        reservation_fee_large_nanos: 6_000,
+    },
+];
 
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
+}
+
+fn numeric_to_u128(value: &Numeric) -> Result<u128, InstructionExecutionError> {
+    let mantissa = value
+        .try_mantissa_u128()
+        .ok_or_else(|| invalid_parameter(format!("numeric value `{value}` exceeds u128")))?;
+    if value.scale() == 0 {
+        return Ok(mantissa);
+    }
+
+    let scale = 10u128.checked_pow(value.scale()).ok_or_else(|| {
+        invalid_parameter(format!("numeric value `{value}` has unsupported scale"))
+    })?;
+    if mantissa % scale != 0 {
+        return Err(invalid_parameter(format!(
+            "numeric value `{value}` must be an integer"
+        )));
+    }
+    mantissa
+        .checked_div(scale)
+        .ok_or_else(|| invalid_parameter(format!("numeric value `{value}` underflowed")))
+}
+
+fn hf_host_class_policy(host_class: &str) -> Option<&'static HfHostClassPolicy> {
+    HF_HOST_CLASS_POLICIES
+        .iter()
+        .find(|policy| policy.host_class == host_class)
+}
+
+fn hf_adaptive_target_host_count(resource_profile: &SoraHfResourceProfileV1) -> u16 {
+    match resource_profile.size_bucket() {
+        iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Small => {
+            HF_ADAPTIVE_TARGET_HOST_COUNT_SMALL
+        }
+        iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Medium => {
+            HF_ADAPTIVE_TARGET_HOST_COUNT_MEDIUM
+        }
+        iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Large => {
+            HF_ADAPTIVE_TARGET_HOST_COUNT_LARGE
+        }
+    }
+}
+
+fn hf_host_class_reservation_fee_nanos(
+    host_class: &str,
+    resource_profile: &SoraHfResourceProfileV1,
+) -> Result<u128, InstructionExecutionError> {
+    let policy = hf_host_class_policy(host_class)
+        .ok_or_else(|| invalid_parameter(format!("unsupported model host class `{host_class}`")))?;
+    Ok(match resource_profile.size_bucket() {
+        iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Small => {
+            policy.reservation_fee_small_nanos
+        }
+        iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Medium => {
+            policy.reservation_fee_medium_nanos
+        }
+        iroha_data_model::soracloud::SoraHfModelSizeBucketV1::Large => {
+            policy.reservation_fee_large_nanos
+        }
+    })
+}
+
+fn validate_model_host_capability_against_class(
+    capability: &SoraModelHostCapabilityRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    let policy = hf_host_class_policy(&capability.host_class).ok_or_else(|| {
+        invalid_parameter(format!(
+            "model host capability uses unsupported host class `{}`",
+            capability.host_class
+        ))
+    })?;
+    for (field, actual, minimum) in [
+        (
+            "max_model_bytes",
+            capability.max_model_bytes,
+            policy.min_model_bytes,
+        ),
+        (
+            "max_disk_cache_bytes",
+            capability.max_disk_cache_bytes,
+            policy.min_disk_cache_bytes,
+        ),
+        (
+            "max_ram_bytes",
+            capability.max_ram_bytes,
+            policy.min_ram_bytes,
+        ),
+        (
+            "max_vram_bytes",
+            capability.max_vram_bytes,
+            policy.min_vram_bytes,
+        ),
+    ] {
+        if actual < minimum {
+            return Err(invalid_parameter(format!(
+                "model host capability field `{field}` ({actual}) is below the `{}` class floor ({minimum})",
+                capability.host_class
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn require_soracloud_permission(
@@ -120,6 +287,24 @@ fn require_soracloud_permission(
     } else {
         Err(InstructionExecutionError::InvariantViolation(
             format!("not permitted: {CAN_MANAGE_SORACLOUD_PERMISSION}").into(),
+        ))
+    }
+}
+
+fn require_active_public_lane_validator(
+    authority: &AccountId,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), InstructionExecutionError> {
+    let is_active_validator = state_transaction.world.public_lane_validators.iter().any(
+        |((_lane_id, account_id), record)| {
+            account_id == authority && record.status == PublicLaneValidatorStatus::Active
+        },
+    );
+    if is_active_validator {
+        Ok(())
+    } else {
+        Err(InstructionExecutionError::InvariantViolation(
+            format!("account `{authority}` is not an active public-lane validator").into(),
         ))
     }
 }
@@ -2090,6 +2275,21 @@ fn record_hf_source(
     Ok(())
 }
 
+fn record_model_host_capability(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    record: SoraModelHostCapabilityRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    validate_model_host_capability_against_class(&record)?;
+    record
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    state_transaction
+        .world
+        .soracloud_model_host_capabilities
+        .insert(record.validator_account_id.clone(), record);
+    Ok(())
+}
+
 fn record_hf_shared_lease_pool(
     state_transaction: &mut StateTransaction<'_, '_>,
     record: SoraHfSharedLeasePoolV1,
@@ -2100,6 +2300,53 @@ fn record_hf_shared_lease_pool(
     state_transaction
         .world
         .soracloud_hf_shared_lease_pools
+        .insert(record.pool_id, record);
+    Ok(())
+}
+
+fn derive_hf_placement_status(record: &SoraHfPlacementRecordV1) -> SoraHfPlacementStatusV1 {
+    let warm_primary = record.assigned_hosts.iter().any(|assignment| {
+        assignment.status == SoraHfPlacementHostStatusV1::Warm
+            && matches!(
+                assignment.role,
+                iroha_data_model::soracloud::SoraHfPlacementHostRoleV1::Primary
+            )
+    });
+    let warm_count = record.warm_host_count();
+    if warm_primary {
+        if usize::from(record.adaptive_target_host_count) == record.assigned_hosts.len()
+            && usize::try_from(warm_count).unwrap_or(usize::MAX) == record.assigned_hosts.len()
+        {
+            SoraHfPlacementStatusV1::Ready
+        } else {
+            SoraHfPlacementStatusV1::Degraded
+        }
+    } else if warm_count > 0 {
+        SoraHfPlacementStatusV1::Degraded
+    } else if record
+        .assigned_hosts
+        .iter()
+        .any(|assignment| assignment.status == SoraHfPlacementHostStatusV1::Warming)
+    {
+        SoraHfPlacementStatusV1::Warming
+    } else if record.assigned_hosts.is_empty() {
+        SoraHfPlacementStatusV1::Selecting
+    } else {
+        SoraHfPlacementStatusV1::Unavailable
+    }
+}
+
+fn record_hf_placement(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    mut record: SoraHfPlacementRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    record.status = derive_hf_placement_status(&record);
+    record
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    state_transaction
+        .world
+        .soracloud_hf_placements
         .insert(record.pool_id, record);
     Ok(())
 }
@@ -2118,6 +2365,144 @@ fn record_hf_shared_lease_member(
             (record.pool_id.to_string(), record.account_id.to_string()),
             record,
         );
+    Ok(())
+}
+
+fn refresh_hf_placements_for_host_status(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    validator_account_id: &AccountId,
+    next_host_status: SoraHfPlacementHostStatusV1,
+    now_ms: u64,
+    reason: Option<&str>,
+) -> Result<(), InstructionExecutionError> {
+    let placements = state_transaction
+        .world
+        .soracloud_hf_placements
+        .iter()
+        .filter_map(|(_pool_id, record)| {
+            record
+                .assigned_hosts
+                .iter()
+                .any(|assignment| assignment.validator_account_id == *validator_account_id)
+                .then_some(record.clone())
+        })
+        .collect::<Vec<_>>();
+    for mut placement in placements {
+        let mut changed = false;
+        for assignment in &mut placement.assigned_hosts {
+            if assignment.validator_account_id == *validator_account_id {
+                assignment.status = next_host_status;
+                changed = true;
+            }
+        }
+        if changed {
+            if next_host_status == SoraHfPlacementHostStatusV1::Unavailable {
+                let ranked_eligible = ranked_hf_eligible_hosts_by_seed(
+                    state_transaction,
+                    &placement.resource_profile,
+                    &placement.selection_seed_hash,
+                    now_ms,
+                    Some(&placement.pool_id),
+                )?
+                .into_iter()
+                .filter(|(account_id, _capability)| account_id != validator_account_id)
+                .collect::<Vec<_>>();
+                placement.eligible_validator_count =
+                    u32::try_from(ranked_eligible.len()).unwrap_or(u32::MAX);
+                let rank_by_validator = ranked_eligible
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (account_id, _capability))| (account_id.clone(), index))
+                    .collect::<BTreeMap<_, _>>();
+                let target_host_count = placement
+                    .adaptive_target_host_count
+                    .min(u16::try_from(ranked_eligible.len()).unwrap_or(u16::MAX))
+                    .max(1);
+                let mut retained_assignments = placement
+                    .assigned_hosts
+                    .into_iter()
+                    .filter(|assignment| {
+                        !matches!(
+                            assignment.status,
+                            SoraHfPlacementHostStatusV1::Unavailable
+                                | SoraHfPlacementHostStatusV1::Retired
+                        ) && rank_by_validator.contains_key(&assignment.validator_account_id)
+                    })
+                    .collect::<Vec<_>>();
+                retained_assignments.sort_by_key(|assignment| {
+                    rank_by_validator
+                        .get(&assignment.validator_account_id)
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+
+                let primary_validator = retained_assignments
+                    .iter()
+                    .find(|assignment| assignment.status == SoraHfPlacementHostStatusV1::Warm)
+                    .or_else(|| retained_assignments.first())
+                    .map(|assignment| assignment.validator_account_id.clone())
+                    .or_else(|| {
+                        ranked_eligible
+                            .first()
+                            .map(|(account_id, _)| account_id.clone())
+                    });
+
+                let mut assigned_hosts = Vec::new();
+                for mut assignment in retained_assignments {
+                    if assigned_hosts.len() >= usize::from(target_host_count) {
+                        break;
+                    }
+                    assignment.role = if primary_validator
+                        .as_ref()
+                        .is_some_and(|primary| *primary == assignment.validator_account_id)
+                    {
+                        SoraHfPlacementHostRoleV1::Primary
+                    } else {
+                        SoraHfPlacementHostRoleV1::Replica
+                    };
+                    assigned_hosts.push(assignment);
+                }
+                for (account_id, capability) in ranked_eligible {
+                    if assigned_hosts.len() >= usize::from(target_host_count) {
+                        break;
+                    }
+                    if assigned_hosts
+                        .iter()
+                        .any(|assignment: &SoraHfPlacementHostAssignmentV1| {
+                            assignment.validator_account_id == account_id
+                        })
+                    {
+                        continue;
+                    }
+                    assigned_hosts.push(SoraHfPlacementHostAssignmentV1 {
+                        validator_account_id: account_id.clone(),
+                        peer_id: capability.peer_id,
+                        role: if primary_validator
+                            .as_ref()
+                            .is_some_and(|primary| *primary == account_id)
+                        {
+                            SoraHfPlacementHostRoleV1::Primary
+                        } else {
+                            SoraHfPlacementHostRoleV1::Replica
+                        },
+                        status: SoraHfPlacementHostStatusV1::Warming,
+                        host_class: capability.host_class,
+                    });
+                }
+                if !assigned_hosts.is_empty()
+                    && assigned_hosts
+                        .iter()
+                        .all(|assignment| assignment.role != SoraHfPlacementHostRoleV1::Primary)
+                {
+                    assigned_hosts[0].role = SoraHfPlacementHostRoleV1::Primary;
+                }
+                placement.assigned_hosts = assigned_hosts;
+            }
+            placement.last_rebalance_at_ms = now_ms;
+            placement.last_error = reason.map(ToOwned::to_owned);
+            record_hf_placement(state_transaction, placement)?;
+        }
+    }
     Ok(())
 }
 
@@ -2150,6 +2535,427 @@ fn hf_shared_lease_pool_id(
         invalid_parameter(format!("failed to encode hf shared lease pool id: {err}"))
     })?;
     Ok(Hash::new(payload))
+}
+
+fn resolve_hf_resource_profile(
+    source_record: &mut SoraHfSourceRecordV1,
+    resource_profile: Option<SoraHfResourceProfileV1>,
+) -> Result<SoraHfResourceProfileV1, InstructionExecutionError> {
+    match (&source_record.resource_profile, resource_profile) {
+        (Some(existing), Some(profile)) => {
+            profile
+                .validate()
+                .map_err(|err| invalid_parameter(err.to_string()))?;
+            if *existing != profile {
+                return Err(invalid_parameter(
+                    "hf resource_profile does not match the canonical source profile",
+                ));
+            }
+            Ok(existing.clone())
+        }
+        (Some(existing), None) => Ok(existing.clone()),
+        (None, Some(profile)) => {
+            profile
+                .validate()
+                .map_err(|err| invalid_parameter(err.to_string()))?;
+            source_record.resource_profile = Some(profile.clone());
+            Ok(profile)
+        }
+        (None, None) => Err(invalid_parameter(
+            "hf resource_profile must be provided when the canonical source profile is unknown",
+        )),
+    }
+}
+
+fn retire_hf_placement_for_pool(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    pool_id: &Hash,
+    now_ms: u64,
+    reason: &str,
+) -> Result<(), InstructionExecutionError> {
+    let Some(mut placement) = state_transaction
+        .world
+        .soracloud_hf_placements
+        .get(pool_id)
+        .cloned()
+    else {
+        return Ok(());
+    };
+    for assignment in &mut placement.assigned_hosts {
+        assignment.status = SoraHfPlacementHostStatusV1::Retired;
+    }
+    placement.status = SoraHfPlacementStatusV1::Retired;
+    placement.last_rebalance_at_ms = now_ms;
+    placement.last_error = Some(reason.to_string());
+    placement
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    state_transaction
+        .world
+        .soracloud_hf_placements
+        .insert(*pool_id, placement);
+    Ok(())
+}
+
+fn hf_active_validator_stakes(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<BTreeMap<AccountId, u128>, InstructionExecutionError> {
+    let mut stakes = BTreeMap::new();
+    for ((_lane_id, validator_account_id), record) in
+        state_transaction.world.public_lane_validators.iter()
+    {
+        if record.status != PublicLaneValidatorStatus::Active {
+            continue;
+        }
+        let stake = numeric_to_u128(&record.total_stake)?;
+        let entry = stakes.entry(validator_account_id.clone()).or_insert(0_u128);
+        *entry = (*entry).saturating_add(stake.max(1));
+    }
+    Ok(stakes)
+}
+
+fn accumulate_hf_host_reservation_usage(
+    usage_by_validator: &mut BTreeMap<AccountId, HfHostReservationUsage>,
+    validator_account_id: &AccountId,
+    resource_profile: &SoraHfResourceProfileV1,
+) {
+    let usage = usage_by_validator
+        .entry(validator_account_id.clone())
+        .or_default();
+    usage.required_model_bytes = usage
+        .required_model_bytes
+        .saturating_add(resource_profile.required_model_bytes);
+    usage.disk_cache_bytes = usage
+        .disk_cache_bytes
+        .saturating_add(resource_profile.disk_cache_bytes_floor);
+    usage.ram_bytes = usage
+        .ram_bytes
+        .saturating_add(resource_profile.ram_bytes_floor);
+    usage.vram_bytes = usage
+        .vram_bytes
+        .saturating_add(resource_profile.vram_bytes_floor);
+    usage.resident_models = usage.resident_models.saturating_add(1);
+}
+
+fn hf_reserved_host_usage(
+    state_transaction: &StateTransaction<'_, '_>,
+    now_ms: u64,
+    exclude_pool_id: Option<&Hash>,
+) -> BTreeMap<AccountId, HfHostReservationUsage> {
+    let mut usage_by_validator = BTreeMap::new();
+    for (pool_id, placement) in state_transaction.world.soracloud_hf_placements.iter() {
+        if exclude_pool_id.is_some_and(|excluded| excluded == pool_id) {
+            continue;
+        }
+        if placement.status == SoraHfPlacementStatusV1::Retired {
+            continue;
+        }
+        let Some(pool) = state_transaction
+            .world
+            .soracloud_hf_shared_lease_pools
+            .get(pool_id)
+        else {
+            continue;
+        };
+        if matches!(
+            pool.status,
+            SoraHfSharedLeaseStatusV1::Expired | SoraHfSharedLeaseStatusV1::Retired
+        ) {
+            continue;
+        }
+        if pool.window_expires_at_ms <= now_ms && pool.queued_next_window.is_none() {
+            continue;
+        }
+        for assignment in &placement.assigned_hosts {
+            if matches!(
+                assignment.status,
+                SoraHfPlacementHostStatusV1::Retired | SoraHfPlacementHostStatusV1::Unavailable
+            ) {
+                continue;
+            }
+            accumulate_hf_host_reservation_usage(
+                &mut usage_by_validator,
+                &assignment.validator_account_id,
+                &placement.resource_profile,
+            );
+        }
+    }
+    usage_by_validator
+}
+
+fn hf_placement_seed_hash(
+    state_transaction: &StateTransaction<'_, '_>,
+    source_id: Hash,
+    pool_id: Hash,
+    window_started_at_ms: u64,
+) -> Result<Hash, InstructionExecutionError> {
+    let payload = norito::to_bytes(&(
+        source_id,
+        pool_id,
+        window_started_at_ms,
+        next_soracloud_audit_sequence(state_transaction),
+    ))
+    .map_err(|err| invalid_parameter(format!("failed to encode hf placement seed: {err}")))?;
+    Ok(Hash::new(payload))
+}
+
+fn hf_ranked_validator_score(
+    seed_hash: &Hash,
+    validator_account_id: &AccountId,
+    stake_weight: u128,
+) -> Result<(u128, [u8; 32]), InstructionExecutionError> {
+    let payload =
+        norito::to_bytes(&(seed_hash.clone(), validator_account_id.clone())).map_err(|err| {
+            invalid_parameter(format!(
+                "failed to encode hf placement rendezvous input for `{validator_account_id}`: {err}"
+            ))
+        })?;
+    let digest = Hash::new(payload);
+    let digest_bytes = *digest.as_ref();
+    let entropy = u128::from_be_bytes(
+        digest_bytes[..16]
+            .try_into()
+            .expect("digest slice length is fixed"),
+    )
+    .saturating_add(1);
+    Ok((entropy.saturating_mul(stake_weight.max(1)), digest_bytes))
+}
+
+fn hf_host_supports_resource_profile(
+    capability: &SoraModelHostCapabilityRecordV1,
+    resource_profile: &SoraHfResourceProfileV1,
+    reserved_usage: Option<&HfHostReservationUsage>,
+    now_ms: u64,
+) -> bool {
+    if !capability.is_active_at(now_ms) {
+        return false;
+    }
+    if !capability
+        .supported_backends
+        .contains(&resource_profile.backend_family)
+        || !capability
+            .supported_formats
+            .contains(&resource_profile.model_format)
+    {
+        return false;
+    }
+    let reserved_usage = reserved_usage.copied().unwrap_or_default();
+    capability.max_model_bytes
+        >= reserved_usage
+            .required_model_bytes
+            .saturating_add(resource_profile.required_model_bytes)
+        && capability.max_disk_cache_bytes
+            >= reserved_usage
+                .disk_cache_bytes
+                .saturating_add(resource_profile.disk_cache_bytes_floor)
+        && capability.max_ram_bytes
+            >= reserved_usage
+                .ram_bytes
+                .saturating_add(resource_profile.ram_bytes_floor)
+        && capability.max_vram_bytes
+            >= reserved_usage
+                .vram_bytes
+                .saturating_add(resource_profile.vram_bytes_floor)
+        && capability.max_concurrent_resident_models
+            >= reserved_usage.resident_models.saturating_add(1)
+}
+
+fn ranked_hf_eligible_hosts_by_seed(
+    state_transaction: &StateTransaction<'_, '_>,
+    resource_profile: &SoraHfResourceProfileV1,
+    selection_seed_hash: &Hash,
+    now_ms: u64,
+    exclude_pool_id: Option<&Hash>,
+) -> Result<Vec<(AccountId, SoraModelHostCapabilityRecordV1)>, InstructionExecutionError> {
+    let active_validator_stakes = hf_active_validator_stakes(state_transaction)?;
+    let reserved_usage_by_validator =
+        hf_reserved_host_usage(state_transaction, now_ms, exclude_pool_id);
+    let mut eligible = state_transaction
+        .world
+        .soracloud_model_host_capabilities
+        .iter()
+        .filter_map(|(validator_account_id, capability)| {
+            let stake = active_validator_stakes.get(validator_account_id).copied()?;
+            hf_host_supports_resource_profile(
+                capability,
+                resource_profile,
+                reserved_usage_by_validator.get(validator_account_id),
+                now_ms,
+            )
+            .then_some((validator_account_id.clone(), capability.clone(), stake))
+        })
+        .map(|(validator_account_id, capability, stake)| {
+            hf_ranked_validator_score(selection_seed_hash, &validator_account_id, stake)
+                .map(|(score, digest)| (validator_account_id, capability, score, digest))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    eligible.sort_by(
+        |(left_account, _left_capability, left_score, left_digest),
+         (right_account, _right_capability, right_score, right_digest)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| right_digest.cmp(left_digest))
+                .then_with(|| left_account.cmp(right_account))
+        },
+    );
+    Ok(eligible
+        .into_iter()
+        .map(|(validator_account_id, capability, _score, _digest)| {
+            (validator_account_id, capability)
+        })
+        .collect())
+}
+
+fn select_hf_placement_for_window(
+    state_transaction: &StateTransaction<'_, '_>,
+    source_id: Hash,
+    pool_id: Hash,
+    resource_profile: &SoraHfResourceProfileV1,
+    window_started_at_ms: u64,
+    now_ms: u64,
+    exclude_pool_id: Option<&Hash>,
+) -> Result<SoraHfPlacementRecordV1, InstructionExecutionError> {
+    let selection_seed_hash =
+        hf_placement_seed_hash(state_transaction, source_id, pool_id, window_started_at_ms)?;
+    let eligible = ranked_hf_eligible_hosts_by_seed(
+        state_transaction,
+        resource_profile,
+        &selection_seed_hash,
+        now_ms,
+        exclude_pool_id,
+    )?;
+    let eligible_validator_count = u32::try_from(eligible.len()).unwrap_or(u32::MAX);
+    if eligible.is_empty() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "no eligible validator host advert can satisfy the canonical HF resource profile for pool `{pool_id}`"
+            )
+            .into(),
+        ));
+    }
+
+    let adaptive_target_host_count = hf_adaptive_target_host_count(resource_profile)
+        .min(u16::try_from(eligible.len()).unwrap_or(u16::MAX))
+        .max(1);
+    let assigned_hosts = eligible
+        .into_iter()
+        .take(usize::from(adaptive_target_host_count))
+        .enumerate()
+        .map(
+            |(index, (validator_account_id, capability))| SoraHfPlacementHostAssignmentV1 {
+                validator_account_id,
+                peer_id: capability.peer_id,
+                role: if index == 0 {
+                    SoraHfPlacementHostRoleV1::Primary
+                } else {
+                    SoraHfPlacementHostRoleV1::Replica
+                },
+                status: SoraHfPlacementHostStatusV1::Warming,
+                host_class: capability.host_class,
+            },
+        )
+        .collect::<Vec<_>>();
+    let total_reservation_fee_nanos = assigned_hosts.iter().try_fold(0_u128, |total, host| {
+        hf_host_class_reservation_fee_nanos(&host.host_class, resource_profile)
+            .map(|fee| total.saturating_add(fee))
+    })?;
+    let placement_id_payload =
+        norito::to_bytes(&(pool_id, selection_seed_hash)).map_err(|err| {
+            invalid_parameter(format!("failed to encode hf placement_id payload: {err}"))
+        })?;
+    Ok(SoraHfPlacementRecordV1 {
+        schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+        placement_id: Hash::new(placement_id_payload),
+        source_id,
+        pool_id,
+        status: SoraHfPlacementStatusV1::Selecting,
+        selection_seed_hash,
+        resource_profile: resource_profile.clone(),
+        eligible_validator_count,
+        adaptive_target_host_count,
+        assigned_hosts,
+        total_reservation_fee_nanos,
+        last_rebalance_at_ms: now_ms.max(1),
+        last_error: None,
+    })
+}
+
+fn ensure_hf_placement_for_active_pool(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    pool: &SoraHfSharedLeasePoolV1,
+    resource_profile: &SoraHfResourceProfileV1,
+    now_ms: u64,
+) -> Result<SoraHfPlacementRecordV1, InstructionExecutionError> {
+    if let Some(existing) = state_transaction
+        .world
+        .soracloud_hf_placements
+        .get(&pool.pool_id)
+        .cloned()
+    {
+        return Ok(existing);
+    }
+    let placement = select_hf_placement_for_window(
+        state_transaction,
+        pool.source_id,
+        pool.pool_id,
+        resource_profile,
+        pool.window_started_at_ms,
+        now_ms,
+        Some(&pool.pool_id),
+    )?;
+    record_hf_placement(state_transaction, placement.clone())?;
+    Ok(placement)
+}
+
+fn prorated_window_fee_nanos(
+    window_fee_nanos: u128,
+    remaining_ms: u64,
+    lease_term_ms: u64,
+) -> u128 {
+    if lease_term_ms == 0 {
+        return 0;
+    }
+    window_fee_nanos.saturating_mul(u128::from(remaining_ms)) / u128::from(lease_term_ms)
+}
+
+fn distribute_hf_join_refunds(
+    authority: &AccountId,
+    lease_asset_definition_id: &AssetDefinitionId,
+    now_ms: u64,
+    join_fee_nanos: u128,
+    existing_members: &mut [SoraHfSharedLeaseMemberV1],
+    state_transaction: &mut StateTransaction<'_, '_>,
+    storage_refund: bool,
+) -> Result<(), InstructionExecutionError> {
+    if existing_members.is_empty() || join_fee_nanos == 0 {
+        return Ok(());
+    }
+
+    let member_count_u128 = u128::try_from(existing_members.len()).unwrap_or(u128::MAX);
+    let base_refund_nanos = join_fee_nanos / member_count_u128;
+    let remainder = usize::try_from(join_fee_nanos % member_count_u128).unwrap_or(0);
+    for (index, existing_member) in existing_members.iter_mut().enumerate() {
+        let refund_nanos = base_refund_nanos + u128::from((index < remainder) as u8);
+        if storage_refund {
+            transfer_hf_shared_lease_amount(
+                authority,
+                lease_asset_definition_id,
+                refund_nanos,
+                &existing_member.account_id,
+                state_transaction,
+            )?;
+            existing_member.total_refunded_nanos = existing_member
+                .total_refunded_nanos
+                .saturating_add(refund_nanos);
+        } else {
+            existing_member.total_compute_refunded_nanos = existing_member
+                .total_compute_refunded_nanos
+                .saturating_add(refund_nanos);
+        }
+        existing_member.updated_at_ms = now_ms;
+        record_hf_shared_lease_member(state_transaction, existing_member.clone())?;
+    }
+    Ok(())
 }
 
 fn resolve_fee_sink_account(
@@ -2298,6 +3104,7 @@ fn expire_hf_shared_lease_members_except(
         member.status = SoraHfSharedLeaseMemberStatusV1::Left;
         member.updated_at_ms = updated_at_ms;
         member.last_charge_nanos = 0;
+        member.last_compute_charge_nanos = 0;
         record_hf_shared_lease_member(state_transaction, member)?;
     }
     Ok(())
@@ -2351,6 +3158,7 @@ fn promote_hf_shared_lease_queued_window(
     sponsor_member.joined_at_ms = next_window.window_started_at_ms;
     sponsor_member.updated_at_ms = now_ms;
     sponsor_member.last_charge_nanos = 0;
+    sponsor_member.last_compute_charge_nanos = 0;
     bind_hf_shared_lease_targets(
         &mut sponsor_member,
         &next_window.service_name,
@@ -2378,6 +3186,7 @@ fn promote_hf_shared_lease_queued_window(
     pool.status = SoraHfSharedLeaseStatusV1::Active;
     pool.queued_next_window = None;
     record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+    record_hf_placement(state_transaction, next_window.planned_placement)?;
     Ok(true)
 }
 
@@ -2523,6 +3332,69 @@ fn verify_hf_shared_lease_renew_provenance(
         payload,
         "hf shared lease renew provenance signer must match the transaction authority",
         "hf shared lease renew provenance signature verification failed",
+    )
+}
+
+fn verify_model_host_advertise_provenance(
+    authority: &AccountId,
+    capability: &SoraModelHostCapabilityRecordV1,
+    provenance: &ManifestProvenance,
+) -> Result<(), InstructionExecutionError> {
+    let payload = encode_model_host_advertise_provenance_payload(capability).map_err(|err| {
+        invalid_parameter(format!(
+            "failed to encode model host advertise provenance: {err}"
+        ))
+    })?;
+    verify_provenance_payload(
+        authority,
+        provenance,
+        payload,
+        "model host advertise provenance signer must match the transaction authority",
+        "model host advertise provenance signature verification failed",
+    )
+}
+
+fn verify_model_host_heartbeat_provenance(
+    authority: &AccountId,
+    validator_account_id: &AccountId,
+    heartbeat_expires_at_ms: u64,
+    provenance: &ManifestProvenance,
+) -> Result<(), InstructionExecutionError> {
+    let payload = encode_model_host_heartbeat_provenance_payload(
+        validator_account_id,
+        heartbeat_expires_at_ms,
+    )
+    .map_err(|err| {
+        invalid_parameter(format!(
+            "failed to encode model host heartbeat provenance: {err}"
+        ))
+    })?;
+    verify_provenance_payload(
+        authority,
+        provenance,
+        payload,
+        "model host heartbeat provenance signer must match the transaction authority",
+        "model host heartbeat provenance signature verification failed",
+    )
+}
+
+fn verify_model_host_withdraw_provenance(
+    authority: &AccountId,
+    validator_account_id: &AccountId,
+    provenance: &ManifestProvenance,
+) -> Result<(), InstructionExecutionError> {
+    let payload =
+        encode_model_host_withdraw_provenance_payload(validator_account_id).map_err(|err| {
+            invalid_parameter(format!(
+                "failed to encode model host withdraw provenance: {err}"
+            ))
+        })?;
+    verify_provenance_payload(
+        authority,
+        provenance,
+        payload,
+        "model host withdraw provenance signer must match the transaction authority",
+        "model host withdraw provenance signature verification failed",
     )
 }
 
@@ -3245,6 +4117,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             lease_term_ms,
             lease_asset_definition_id,
             base_fee_nanos,
+            resource_profile,
             provenance,
         } = self;
 
@@ -3292,6 +4165,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 normalized_runtime_hash: Hash::new(
                     format!("{repo_id}:{resolved_revision}:{model_name}").as_bytes(),
                 ),
+                resource_profile: None,
                 status: SoraHfSourceStatusV1::PendingImport,
                 created_at_ms: now_ms,
                 updated_at_ms: now_ms,
@@ -3307,7 +4181,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         }
         source_record.repo_id = repo_id.clone();
         source_record.resolved_revision = resolved_revision.clone();
-        source_record.model_name = model_name.clone();
+        let resource_profile = resolve_hf_resource_profile(&mut source_record, resource_profile)?;
         source_record.updated_at_ms = now_ms;
         if source_record.status == SoraHfSourceStatusV1::Retired {
             source_record.status = SoraHfSourceStatusV1::PendingImport;
@@ -3343,6 +4217,12 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 pool.active_member_count = 0;
                 pool.status = SoraHfSharedLeaseStatusV1::Expired;
                 record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+                retire_hf_placement_for_pool(
+                    state_transaction,
+                    &pool_id,
+                    now_ms,
+                    "lease window expired without a queued next-window sponsor",
+                )?;
             }
             pool_record = state_transaction
                 .world
@@ -3374,6 +4254,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             bind_hf_shared_lease_targets(&mut member, &service_name, apartment_name.as_ref());
             member.updated_at_ms = now_ms;
             member.last_charge_nanos = 0;
+            member.last_compute_charge_nanos = 0;
             record_hf_shared_lease_member(state_transaction, member)?;
             return record_hf_shared_lease_audit_event(
                 state_transaction,
@@ -3414,30 +4295,41 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             pool.active_member_count = u32::try_from(existing_members.len()).unwrap_or(u32::MAX);
             let remaining_ms = pool.window_expires_at_ms.saturating_sub(now_ms);
             let remaining_fee_nanos =
-                base_fee_nanos.saturating_mul(u128::from(remaining_ms)) / u128::from(lease_term_ms);
+                prorated_window_fee_nanos(base_fee_nanos, remaining_ms, lease_term_ms);
             let join_fee_nanos = remaining_fee_nanos
                 / u128::try_from(existing_members.len().saturating_add(1)).unwrap_or(u128::MAX);
+            let placement = ensure_hf_placement_for_active_pool(
+                state_transaction,
+                &pool,
+                &resource_profile,
+                now_ms,
+            )?;
+            let remaining_compute_fee_nanos = prorated_window_fee_nanos(
+                placement.total_reservation_fee_nanos,
+                remaining_ms,
+                lease_term_ms,
+            );
+            let join_compute_fee_nanos = remaining_compute_fee_nanos
+                / u128::try_from(existing_members.len().saturating_add(1)).unwrap_or(u128::MAX);
 
-            if !existing_members.is_empty() && join_fee_nanos > 0 {
-                let member_count_u128 = u128::try_from(existing_members.len()).unwrap_or(u128::MAX);
-                let base_refund_nanos = join_fee_nanos / member_count_u128;
-                let remainder = usize::try_from(join_fee_nanos % member_count_u128).unwrap_or(0);
-                for (index, existing_member) in existing_members.iter_mut().enumerate() {
-                    let refund_nanos = base_refund_nanos + u128::from((index < remainder) as u8);
-                    transfer_hf_shared_lease_amount(
-                        authority,
-                        &lease_asset_definition_id,
-                        refund_nanos,
-                        &existing_member.account_id,
-                        state_transaction,
-                    )?;
-                    existing_member.total_refunded_nanos = existing_member
-                        .total_refunded_nanos
-                        .saturating_add(refund_nanos);
-                    existing_member.updated_at_ms = now_ms;
-                    record_hf_shared_lease_member(state_transaction, existing_member.clone())?;
-                }
-            }
+            distribute_hf_join_refunds(
+                authority,
+                &lease_asset_definition_id,
+                now_ms,
+                join_fee_nanos,
+                &mut existing_members,
+                state_transaction,
+                true,
+            )?;
+            distribute_hf_join_refunds(
+                authority,
+                &lease_asset_definition_id,
+                now_ms,
+                join_compute_fee_nanos,
+                &mut existing_members,
+                state_transaction,
+                false,
+            )?;
 
             let mut member = existing_member.unwrap_or(SoraHfSharedLeaseMemberV1 {
                 schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
@@ -3450,6 +4342,9 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 total_paid_nanos: 0,
                 total_refunded_nanos: 0,
                 last_charge_nanos: 0,
+                total_compute_paid_nanos: 0,
+                total_compute_refunded_nanos: 0,
+                last_compute_charge_nanos: 0,
                 service_bindings: std::collections::BTreeSet::new(),
                 apartment_bindings: std::collections::BTreeSet::new(),
             });
@@ -3458,6 +4353,10 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             member.updated_at_ms = now_ms;
             member.total_paid_nanos = member.total_paid_nanos.saturating_add(join_fee_nanos);
             member.last_charge_nanos = join_fee_nanos;
+            member.total_compute_paid_nanos = member
+                .total_compute_paid_nanos
+                .saturating_add(join_compute_fee_nanos);
+            member.last_compute_charge_nanos = join_compute_fee_nanos;
             bind_hf_shared_lease_targets(&mut member, &service_name, apartment_name.as_ref());
             record_hf_shared_lease_member(state_transaction, member)?;
 
@@ -3484,21 +4383,12 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             );
         }
 
-        let sink_account = resolve_fee_sink_account(state_transaction)?;
-        transfer_hf_shared_lease_amount(
-            authority,
-            &lease_asset_definition_id,
-            base_fee_nanos,
-            &sink_account,
-            state_transaction,
-        )?;
-
         let pool = SoraHfSharedLeasePoolV1 {
             schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
             pool_id,
             source_id,
             storage_class,
-            lease_asset_definition_id,
+            lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos,
             lease_term_ms,
             window_started_at_ms: now_ms,
@@ -3507,6 +4397,23 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             status: SoraHfSharedLeaseStatusV1::Active,
             queued_next_window: None,
         };
+        let placement = select_hf_placement_for_window(
+            state_transaction,
+            source_id,
+            pool_id,
+            &resource_profile,
+            now_ms,
+            now_ms,
+            Some(&pool_id),
+        )?;
+        let sink_account = resolve_fee_sink_account(state_transaction)?;
+        transfer_hf_shared_lease_amount(
+            authority,
+            &lease_asset_definition_id,
+            base_fee_nanos.saturating_add(placement.total_reservation_fee_nanos),
+            &sink_account,
+            state_transaction,
+        )?;
         let previous_paid_nanos = existing_member
             .as_ref()
             .map(|member| member.total_paid_nanos)
@@ -3514,6 +4421,14 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         let previous_refunded_nanos = existing_member
             .as_ref()
             .map(|member| member.total_refunded_nanos)
+            .unwrap_or(0);
+        let previous_compute_paid_nanos = existing_member
+            .as_ref()
+            .map(|member| member.total_compute_paid_nanos)
+            .unwrap_or(0);
+        let previous_compute_refunded_nanos = existing_member
+            .as_ref()
+            .map(|member| member.total_compute_refunded_nanos)
             .unwrap_or(0);
         let mut member = SoraHfSharedLeaseMemberV1 {
             schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
@@ -3526,12 +4441,17 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             total_paid_nanos: previous_paid_nanos.saturating_add(base_fee_nanos),
             total_refunded_nanos: previous_refunded_nanos,
             last_charge_nanos: base_fee_nanos,
+            total_compute_paid_nanos: previous_compute_paid_nanos
+                .saturating_add(placement.total_reservation_fee_nanos),
+            total_compute_refunded_nanos: previous_compute_refunded_nanos,
+            last_compute_charge_nanos: placement.total_reservation_fee_nanos,
             service_bindings: std::collections::BTreeSet::new(),
             apartment_bindings: std::collections::BTreeSet::new(),
         };
         bind_hf_shared_lease_targets(&mut member, &service_name, apartment_name.as_ref());
 
         record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+        record_hf_placement(state_transaction, placement)?;
         record_hf_shared_lease_member(state_transaction, member)?;
         record_hf_shared_lease_audit_event(
             state_transaction,
@@ -3632,6 +4552,12 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
                 pool.active_member_count = 0;
                 pool.status = SoraHfSharedLeaseStatusV1::Expired;
                 record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+                retire_hf_placement_for_pool(
+                    state_transaction,
+                    &pool_id,
+                    now_ms,
+                    "lease window expired without a queued next-window sponsor",
+                )?;
             }
             pool = state_transaction
                 .world
@@ -3684,6 +4610,7 @@ impl Execute for isi::LeaveSoracloudHfSharedLease {
         member.status = SoraHfSharedLeaseMemberStatusV1::Left;
         member.updated_at_ms = now_ms;
         member.last_charge_nanos = 0;
+        member.last_compute_charge_nanos = 0;
         member.service_bindings.clear();
         member.apartment_bindings.clear();
         record_hf_shared_lease_member(state_transaction, member)?;
@@ -3741,6 +4668,7 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             lease_term_ms,
             lease_asset_definition_id,
             base_fee_nanos,
+            resource_profile,
             provenance,
         } = self;
 
@@ -3794,6 +4722,10 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 .into(),
             ));
         }
+        source_record.repo_id = repo_id.clone();
+        source_record.resolved_revision = resolved_revision.clone();
+        source_record.model_name = model_name.clone();
+        let resource_profile = resolve_hf_resource_profile(&mut source_record, resource_profile)?;
 
         let mut pool = state_transaction
             .world
@@ -3824,6 +4756,12 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 pool.active_member_count = 0;
                 pool.status = SoraHfSharedLeaseStatusV1::Expired;
                 record_hf_shared_lease_pool(state_transaction, pool.clone())?;
+                retire_hf_placement_for_pool(
+                    state_transaction,
+                    &pool_id,
+                    now_ms,
+                    "lease window expired without a queued next-window sponsor",
+                )?;
             }
             pool = state_transaction
                 .world
@@ -3872,11 +4810,24 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 ));
             }
 
+            let next_window_started_at_ms = pool.window_expires_at_ms;
+            let next_window_expires_at_ms = pool.window_expires_at_ms.saturating_add(lease_term_ms);
+            let planned_placement = select_hf_placement_for_window(
+                state_transaction,
+                source_id,
+                pool_id,
+                &resource_profile,
+                next_window_started_at_ms,
+                now_ms,
+                Some(&pool_id),
+            )?;
+            source_record.updated_at_ms = now_ms;
+            record_hf_source(state_transaction, source_record.clone())?;
             let sink_account = resolve_fee_sink_account(state_transaction)?;
             transfer_hf_shared_lease_amount(
                 authority,
                 &lease_asset_definition_id,
-                base_fee_nanos,
+                base_fee_nanos.saturating_add(planned_placement.total_reservation_fee_nanos),
                 &sink_account,
                 state_transaction,
             )?;
@@ -3884,6 +4835,10 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             member.updated_at_ms = now_ms;
             member.total_paid_nanos = member.total_paid_nanos.saturating_add(base_fee_nanos);
             member.last_charge_nanos = base_fee_nanos;
+            member.total_compute_paid_nanos = member
+                .total_compute_paid_nanos
+                .saturating_add(planned_placement.total_reservation_fee_nanos);
+            member.last_compute_charge_nanos = planned_placement.total_reservation_fee_nanos;
             record_hf_shared_lease_member(state_transaction, member)?;
 
             let next_window = SoraHfSharedLeaseQueuedWindowV1 {
@@ -3891,9 +4846,11 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 model_name: model_name.clone(),
                 lease_asset_definition_id,
                 base_fee_nanos,
+                compute_reservation_fee_nanos: planned_placement.total_reservation_fee_nanos,
+                planned_placement,
                 sponsored_at_ms: now_ms,
-                window_started_at_ms: pool.window_expires_at_ms,
-                window_expires_at_ms: pool.window_expires_at_ms.saturating_add(lease_term_ms),
+                window_started_at_ms: next_window_started_at_ms,
+                window_expires_at_ms: next_window_expires_at_ms,
                 service_name: service_name.clone(),
                 apartment_name,
             };
@@ -3920,15 +4877,6 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         }
 
         expire_hf_shared_lease_members(state_transaction, &pool_id, now_ms)?;
-        let sink_account = resolve_fee_sink_account(state_transaction)?;
-        transfer_hf_shared_lease_amount(
-            authority,
-            &lease_asset_definition_id,
-            base_fee_nanos,
-            &sink_account,
-            state_transaction,
-        )?;
-
         source_record.model_name = model_name;
         source_record.updated_at_ms = now_ms;
         if source_record.status == SoraHfSourceStatusV1::Retired {
@@ -3941,13 +4889,30 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         );
         record_hf_source(state_transaction, source_record)?;
 
-        pool.lease_asset_definition_id = lease_asset_definition_id;
+        pool.lease_asset_definition_id = lease_asset_definition_id.clone();
         pool.base_fee_nanos = base_fee_nanos;
         pool.window_started_at_ms = now_ms;
         pool.window_expires_at_ms = now_ms.saturating_add(lease_term_ms);
         pool.active_member_count = 1;
         pool.status = SoraHfSharedLeaseStatusV1::Active;
         pool.queued_next_window = None;
+        let placement = select_hf_placement_for_window(
+            state_transaction,
+            source_id,
+            pool_id,
+            &resource_profile,
+            pool.window_started_at_ms,
+            now_ms,
+            Some(&pool_id),
+        )?;
+        let sink_account = resolve_fee_sink_account(state_transaction)?;
+        transfer_hf_shared_lease_amount(
+            authority,
+            &lease_asset_definition_id,
+            base_fee_nanos.saturating_add(placement.total_reservation_fee_nanos),
+            &sink_account,
+            state_transaction,
+        )?;
         record_hf_shared_lease_pool(state_transaction, pool.clone())?;
 
         let previous_paid_nanos = existing_member
@@ -3957,6 +4922,14 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
         let previous_refunded_nanos = existing_member
             .as_ref()
             .map(|member| member.total_refunded_nanos)
+            .unwrap_or(0);
+        let previous_compute_paid_nanos = existing_member
+            .as_ref()
+            .map(|member| member.total_compute_paid_nanos)
+            .unwrap_or(0);
+        let previous_compute_refunded_nanos = existing_member
+            .as_ref()
+            .map(|member| member.total_compute_refunded_nanos)
             .unwrap_or(0);
         let mut member = SoraHfSharedLeaseMemberV1 {
             schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
@@ -3969,10 +4942,15 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
             total_paid_nanos: previous_paid_nanos.saturating_add(base_fee_nanos),
             total_refunded_nanos: previous_refunded_nanos,
             last_charge_nanos: base_fee_nanos,
+            total_compute_paid_nanos: previous_compute_paid_nanos
+                .saturating_add(placement.total_reservation_fee_nanos),
+            total_compute_refunded_nanos: previous_compute_refunded_nanos,
+            last_compute_charge_nanos: placement.total_reservation_fee_nanos,
             service_bindings: std::collections::BTreeSet::new(),
             apartment_bindings: std::collections::BTreeSet::new(),
         };
         bind_hf_shared_lease_targets(&mut member, &service_name, apartment_name.as_ref());
+        record_hf_placement(state_transaction, placement)?;
         record_hf_shared_lease_member(state_transaction, member)?;
         record_hf_shared_lease_audit_event(
             state_transaction,
@@ -3991,6 +4969,135 @@ impl Execute for isi::RenewSoracloudHfSharedLease {
                 service_name: Some(service_name.to_string()),
                 apartment_name: apartment_name.map(|name| name.to_string()),
             },
+        )
+    }
+}
+
+impl Execute for isi::AdvertiseSoracloudModelHost {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        let isi::AdvertiseSoracloudModelHost {
+            mut capability,
+            provenance,
+        } = self;
+
+        require_soracloud_permission(authority, state_transaction)?;
+        require_active_public_lane_validator(authority, state_transaction)?;
+        if capability.validator_account_id != *authority {
+            return Err(invalid_parameter(
+                "model host capability validator_account_id must match the transaction authority",
+            ));
+        }
+        verify_model_host_advertise_provenance(authority, &capability, &provenance)?;
+
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        if capability.advertised_at_ms == 0 {
+            capability.advertised_at_ms = now_ms;
+        }
+        if capability.schema_version == 0 {
+            capability.schema_version = SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1;
+        }
+        if capability.heartbeat_expires_at_ms <= capability.advertised_at_ms {
+            return Err(invalid_parameter(
+                "model host capability heartbeat_expires_at_ms must be greater than advertised_at_ms",
+            ));
+        }
+        record_model_host_capability(state_transaction, capability)
+    }
+}
+
+impl Execute for isi::HeartbeatSoracloudModelHost {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        let isi::HeartbeatSoracloudModelHost {
+            validator_account_id,
+            heartbeat_expires_at_ms,
+            provenance,
+        } = self;
+
+        require_soracloud_permission(authority, state_transaction)?;
+        require_active_public_lane_validator(authority, state_transaction)?;
+        if validator_account_id != *authority {
+            return Err(invalid_parameter(
+                "model host heartbeat validator_account_id must match the transaction authority",
+            ));
+        }
+        verify_model_host_heartbeat_provenance(
+            authority,
+            &validator_account_id,
+            heartbeat_expires_at_ms,
+            &provenance,
+        )?;
+
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        if heartbeat_expires_at_ms <= now_ms {
+            return Err(invalid_parameter(
+                "model host heartbeat_expires_at_ms must be in the future",
+            ));
+        }
+        let mut capability = state_transaction
+            .world
+            .soracloud_model_host_capabilities
+            .get(&validator_account_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "model host capability for validator `{validator_account_id}` does not exist"
+                    )
+                    .into(),
+                )
+            })?;
+        capability.advertised_at_ms = now_ms;
+        capability.heartbeat_expires_at_ms = heartbeat_expires_at_ms;
+        record_model_host_capability(state_transaction, capability)?;
+        refresh_hf_placements_for_host_status(
+            state_transaction,
+            &validator_account_id,
+            SoraHfPlacementHostStatusV1::Warm,
+            now_ms,
+            None,
+        )
+    }
+}
+
+impl Execute for isi::WithdrawSoracloudModelHost {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        let isi::WithdrawSoracloudModelHost {
+            validator_account_id,
+            provenance,
+        } = self;
+
+        require_soracloud_permission(authority, state_transaction)?;
+        require_active_public_lane_validator(authority, state_transaction)?;
+        if validator_account_id != *authority {
+            return Err(invalid_parameter(
+                "model host withdraw validator_account_id must match the transaction authority",
+            ));
+        }
+        verify_model_host_withdraw_provenance(authority, &validator_account_id, &provenance)?;
+
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        state_transaction
+            .world
+            .soracloud_model_host_capabilities
+            .remove(validator_account_id.clone());
+        refresh_hf_placements_for_host_status(
+            state_transaction,
+            &validator_account_id,
+            SoraHfPlacementHostStatusV1::Unavailable,
+            now_ms,
+            Some("assigned host withdrew capability advert"),
         )
     }
 }
@@ -8013,27 +9120,37 @@ mod tests {
     use iroha_data_model::{
         Encode,
         account::Account,
-        asset::AssetDefinitionId,
+        asset::{AssetDefinition, AssetDefinitionId, AssetId},
         domain::Domain,
-        isi::Grant,
+        isi::{Grant, Mint},
+        metadata::Metadata,
+        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
         permission::Permission,
         prelude::Register,
         soracloud::{
             AgentApartmentManifestV1, DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1,
             DecryptionRequestV1, FheDeterministicRoundingModeV1, FheExecutionPolicyV1,
             FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1,
-            FheSchemeV1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1, SoraArtifactKindV1,
-            SoraArtifactRefV1, SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1,
-            SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-            SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraLifecycleHooksV1,
-            SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1,
-            SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
-            SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
+            FheSchemeV1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+            SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SoraArtifactKindV1, SoraArtifactRefV1,
+            SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1,
+            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraHfBackendFamilyV1,
+            SoraHfModelFormatV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
+            SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
+            SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
+            SoraLifecycleHooksV1, SoraModelHostCapabilityRecordV1, SoraNetworkPolicyV1,
+            SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+            SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
+            SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+            SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
         },
     };
     use iroha_primitives::json::Json;
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID};
+    use iroha_primitives::numeric::Numeric;
+    use iroha_test_samples::{
+        ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID,
+    };
 
     use crate::{
         block::ValidBlock,
@@ -8061,6 +9178,21 @@ mod tests {
             ALICE_ID.clone(),
         )
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+        state_transaction.world.public_lane_validators.insert(
+            (LaneId::SINGLE, ALICE_ID.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: ALICE_ID.clone(),
+                stake_account: ALICE_ID.clone(),
+                total_stake: Numeric::new(1_000, 0),
+                self_stake: Numeric::new(1_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: None,
+                activation_height: None,
+                last_reward_epoch: None,
+            },
+        );
         state_transaction.apply();
         state_block.commit()?;
         Ok(state)
@@ -8619,6 +9751,33 @@ mod tests {
         lease_asset_definition_id: &AssetDefinitionId,
         base_fee_nanos: u128,
     ) -> ManifestProvenance {
+        hf_shared_lease_join_provenance_for(
+            &ALICE_KEYPAIR,
+            repo_id,
+            resolved_revision,
+            model_name,
+            service_name,
+            apartment_name,
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id,
+            base_fee_nanos,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hf_shared_lease_join_provenance_for(
+        key_pair: &KeyPair,
+        repo_id: &str,
+        resolved_revision: &str,
+        model_name: &str,
+        service_name: &iroha_data_model::name::Name,
+        apartment_name: Option<&iroha_data_model::name::Name>,
+        storage_class: StorageClass,
+        lease_term_ms: u64,
+        lease_asset_definition_id: &AssetDefinitionId,
+        base_fee_nanos: u128,
+    ) -> ManifestProvenance {
         let payload = encode_hf_shared_lease_join_provenance_payload(
             repo_id,
             resolved_revision,
@@ -8631,6 +9790,36 @@ mod tests {
             base_fee_nanos,
         )
         .expect("hf shared lease join payload");
+        ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hf_shared_lease_renew_provenance(
+        repo_id: &str,
+        resolved_revision: &str,
+        model_name: &str,
+        service_name: &iroha_data_model::name::Name,
+        apartment_name: Option<&iroha_data_model::name::Name>,
+        storage_class: StorageClass,
+        lease_term_ms: u64,
+        lease_asset_definition_id: &AssetDefinitionId,
+        base_fee_nanos: u128,
+    ) -> ManifestProvenance {
+        let payload = encode_hf_shared_lease_renew_provenance_payload(
+            repo_id,
+            resolved_revision,
+            model_name,
+            service_name.as_ref(),
+            apartment_name.map(iroha_data_model::name::Name::as_ref),
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id,
+            base_fee_nanos,
+        )
+        .expect("hf shared lease renew payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
@@ -8660,30 +9849,70 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn hf_shared_lease_renew_provenance(
-        repo_id: &str,
-        resolved_revision: &str,
-        model_name: &str,
-        service_name: &iroha_data_model::name::Name,
-        apartment_name: Option<&iroha_data_model::name::Name>,
-        storage_class: StorageClass,
-        lease_term_ms: u64,
-        lease_asset_definition_id: &AssetDefinitionId,
-        base_fee_nanos: u128,
+    fn sample_hf_resource_profile() -> SoraHfResourceProfileV1 {
+        SoraHfResourceProfileV1 {
+            required_model_bytes: 1024 * 1024 * 1024,
+            backend_family: SoraHfBackendFamilyV1::Transformers,
+            model_format: SoraHfModelFormatV1::Safetensors,
+            disk_cache_bytes_floor: 1024 * 1024 * 1024,
+            ram_bytes_floor: 2 * 1024 * 1024 * 1024,
+            vram_bytes_floor: 0,
+        }
+    }
+
+    fn sample_model_host_capability(
+        validator_account_id: AccountId,
+        advertised_at_ms: u64,
+        heartbeat_expires_at_ms: u64,
+    ) -> SoraModelHostCapabilityRecordV1 {
+        SoraModelHostCapabilityRecordV1 {
+            schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id,
+            peer_id: "12D3KooWCoreTestPeer".to_string(),
+            supported_backends: std::collections::BTreeSet::from([
+                SoraHfBackendFamilyV1::Transformers,
+            ]),
+            supported_formats: std::collections::BTreeSet::from([SoraHfModelFormatV1::Safetensors]),
+            max_model_bytes: 8 * 1024 * 1024 * 1024,
+            max_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
+            max_ram_bytes: 32 * 1024 * 1024 * 1024,
+            max_vram_bytes: 0,
+            max_concurrent_resident_models: 2,
+            host_class: "cpu.large".to_string(),
+            advertised_at_ms,
+            heartbeat_expires_at_ms,
+        }
+    }
+
+    fn model_host_advertise_provenance(
+        capability: &SoraModelHostCapabilityRecordV1,
     ) -> ManifestProvenance {
-        let payload = encode_hf_shared_lease_renew_provenance_payload(
-            repo_id,
-            resolved_revision,
-            model_name,
-            service_name.as_ref(),
-            apartment_name.map(iroha_data_model::name::Name::as_ref),
-            storage_class,
-            lease_term_ms,
-            lease_asset_definition_id,
-            base_fee_nanos,
+        let payload = encode_model_host_advertise_provenance_payload(capability)
+            .expect("model host advertise payload");
+        ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+        }
+    }
+
+    fn model_host_heartbeat_provenance(
+        validator_account_id: &AccountId,
+        heartbeat_expires_at_ms: u64,
+    ) -> ManifestProvenance {
+        let payload = encode_model_host_heartbeat_provenance_payload(
+            validator_account_id,
+            heartbeat_expires_at_ms,
         )
-        .expect("hf shared lease renew payload");
+        .expect("model host heartbeat payload");
+        ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+        }
+    }
+
+    fn model_host_withdraw_provenance(validator_account_id: &AccountId) -> ManifestProvenance {
+        let payload = encode_model_host_withdraw_provenance_payload(validator_account_id)
+            .expect("model host withdraw payload");
         ManifestProvenance {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
@@ -8723,6 +9952,132 @@ mod tests {
     }
 
     #[test]
+    fn model_host_advertise_and_withdraw_updates_authoritative_state() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+
+        let advertise_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut advertise_block = state.block(advertise_header);
+        let mut advertise_tx = advertise_block.transaction();
+        let capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
+        isi::AdvertiseSoracloudModelHost {
+            capability: capability.clone(),
+            provenance: model_host_advertise_provenance(&capability),
+        }
+        .execute(&ALICE_ID, &mut advertise_tx)?;
+        advertise_tx.apply();
+        advertise_block.commit()?;
+
+        let view = state.view();
+        let advertised = view
+            .world()
+            .soracloud_model_host_capabilities()
+            .get(&ALICE_ID)
+            .expect("advertised capability");
+        assert_eq!(advertised.peer_id, capability.peer_id);
+
+        let withdraw_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut withdraw_block = state.block(withdraw_header);
+        let mut withdraw_tx = withdraw_block.transaction();
+        isi::WithdrawSoracloudModelHost {
+            validator_account_id: ALICE_ID.clone(),
+            provenance: model_host_withdraw_provenance(&ALICE_ID),
+        }
+        .execute(&ALICE_ID, &mut withdraw_tx)?;
+        withdraw_tx.apply();
+        withdraw_block.commit()?;
+
+        let view = state.view();
+        assert!(
+            view.world()
+                .soracloud_model_host_capabilities()
+                .get(&ALICE_ID)
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn model_host_heartbeat_marks_assigned_placement_warm() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+
+        let advertise_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut advertise_block = state.block(advertise_header);
+        let mut advertise_tx = advertise_block.transaction();
+        let capability = sample_model_host_capability(ALICE_ID.clone(), 10, 110);
+        isi::AdvertiseSoracloudModelHost {
+            capability: capability.clone(),
+            provenance: model_host_advertise_provenance(&capability),
+        }
+        .execute(&ALICE_ID, &mut advertise_tx)?;
+        let placement = SoraHfPlacementRecordV1 {
+            schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+            placement_id: Hash::new(b"placement"),
+            source_id: Hash::new(b"source"),
+            pool_id: Hash::new(b"pool"),
+            status: SoraHfPlacementStatusV1::Warming,
+            selection_seed_hash: Hash::new(b"seed"),
+            resource_profile: SoraHfResourceProfileV1 {
+                required_model_bytes: 1_024,
+                backend_family: SoraHfBackendFamilyV1::Transformers,
+                model_format: SoraHfModelFormatV1::Safetensors,
+                disk_cache_bytes_floor: 2_048,
+                ram_bytes_floor: 2_048,
+                vram_bytes_floor: 0,
+            },
+            eligible_validator_count: 1,
+            adaptive_target_host_count: 1,
+            assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                validator_account_id: ALICE_ID.clone(),
+                peer_id: capability.peer_id.clone(),
+                role: SoraHfPlacementHostRoleV1::Primary,
+                status: SoraHfPlacementHostStatusV1::Warming,
+                host_class: capability.host_class.clone(),
+            }],
+            total_reservation_fee_nanos: 1_000,
+            last_rebalance_at_ms: 10,
+            last_error: None,
+        };
+        record_hf_placement(&mut advertise_tx, placement)?;
+        advertise_tx.apply();
+        advertise_block.commit()?;
+
+        let heartbeat_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut heartbeat_block = state.block(heartbeat_header);
+        let mut heartbeat_tx = heartbeat_block.transaction();
+        isi::HeartbeatSoracloudModelHost {
+            validator_account_id: ALICE_ID.clone(),
+            heartbeat_expires_at_ms: 510,
+            provenance: model_host_heartbeat_provenance(&ALICE_ID, 510),
+        }
+        .execute(&ALICE_ID, &mut heartbeat_tx)?;
+        heartbeat_tx.apply();
+        heartbeat_block.commit()?;
+
+        let view = state.view();
+        let placement = view
+            .world()
+            .soracloud_hf_placements()
+            .get(&Hash::new(b"pool"))
+            .expect("updated placement");
+        assert_eq!(placement.status, SoraHfPlacementStatusV1::Ready);
+        assert_eq!(
+            placement.assigned_hosts[0].status,
+            SoraHfPlacementHostStatusV1::Warm
+        );
+        Ok(())
+    }
+
+    #[test]
     fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let mut state = state_with_soracloud_permission(&kura)?;
@@ -8737,7 +10092,7 @@ mod tests {
         let lease_term_ms = 60_000_u64;
         let base_fee_nanos = 10_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "domain".parse().expect("domain"),
+            "wonderland".parse().expect("domain"),
             "xor".parse().expect("xor"),
         );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
@@ -8745,6 +10100,13 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
+        let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
+
+        isi::AdvertiseSoracloudModelHost {
+            capability: capability.clone(),
+            provenance: model_host_advertise_provenance(&capability),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
 
         isi::JoinSoracloudHfSharedLease {
             repo_id: repo_id.to_string(),
@@ -8756,6 +10118,7 @@ mod tests {
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -8854,6 +10217,13 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
+        let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
+
+        isi::AdvertiseSoracloudModelHost {
+            capability: capability.clone(),
+            provenance: model_host_advertise_provenance(&capability),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
 
         isi::DeploySoracloudService {
             bundle: bundle.clone(),
@@ -8871,6 +10241,7 @@ mod tests {
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -8924,6 +10295,13 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
+        let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
+
+        isi::AdvertiseSoracloudModelHost {
+            capability: capability.clone(),
+            provenance: model_host_advertise_provenance(&capability),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
 
         isi::JoinSoracloudHfSharedLease {
             repo_id: repo_id.to_string(),
@@ -8935,6 +10313,7 @@ mod tests {
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -8967,6 +10346,7 @@ mod tests {
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos: renewed_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_renew_provenance(
                 repo_id,
                 resolved_revision,
@@ -9007,6 +10387,10 @@ mod tests {
             .queued_next_window
             .as_ref()
             .expect("queued next window");
+        let active_placement = world
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("active placement");
 
         assert_eq!(pool.status, SoraHfSharedLeaseStatusV1::Active);
         assert_eq!(pool.active_member_count, 1);
@@ -9020,12 +10404,29 @@ mod tests {
         assert_eq!(queued_next_window.base_fee_nanos, renewed_fee_nanos);
         assert_eq!(queued_next_window.model_name, renewed_model_name);
         assert_eq!(queued_next_window.service_name, renewed_service_name);
+        assert_eq!(
+            queued_next_window.compute_reservation_fee_nanos,
+            queued_next_window
+                .planned_placement
+                .total_reservation_fee_nanos
+        );
+        assert!(queued_next_window.compute_reservation_fee_nanos > 0);
         assert_eq!(member.status, SoraHfSharedLeaseMemberStatusV1::Active);
         assert_eq!(
             member.total_paid_nanos,
             base_fee_nanos.saturating_add(renewed_fee_nanos)
         );
         assert_eq!(member.last_charge_nanos, renewed_fee_nanos);
+        assert_eq!(
+            member.total_compute_paid_nanos,
+            active_placement
+                .total_reservation_fee_nanos
+                .saturating_add(queued_next_window.compute_reservation_fee_nanos)
+        );
+        assert_eq!(
+            member.last_compute_charge_nanos,
+            queued_next_window.compute_reservation_fee_nanos
+        );
         assert_eq!(audit_event.action, SoraHfSharedLeaseActionV1::Renew);
         assert_eq!(
             audit_event.lease_expires_at_ms,
@@ -9065,6 +10466,13 @@ mod tests {
                 .header();
             let mut state_block = state.block(block_header);
             let mut stx = state_block.transaction();
+            let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
+
+            isi::AdvertiseSoracloudModelHost {
+                capability: capability.clone(),
+                provenance: model_host_advertise_provenance(&capability),
+            }
+            .execute(&ALICE_ID, &mut stx)?;
 
             isi::JoinSoracloudHfSharedLease {
                 repo_id: repo_id.to_string(),
@@ -9076,6 +10484,7 @@ mod tests {
                 lease_term_ms,
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
                 base_fee_nanos,
+                resource_profile: Some(sample_hf_resource_profile()),
                 provenance: hf_shared_lease_join_provenance(
                     repo_id,
                     resolved_revision,
@@ -9100,6 +10509,7 @@ mod tests {
                 lease_term_ms,
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
                 base_fee_nanos: renewed_fee_nanos,
+                resource_profile: Some(sample_hf_resource_profile()),
                 provenance: hf_shared_lease_renew_provenance(
                     repo_id,
                     resolved_revision,
@@ -9128,6 +10538,18 @@ mod tests {
                 .map(|(_pool_id, pool)| pool.window_expires_at_ms)
                 .expect("pool")
         };
+        let queued_placement_id = {
+            let view = state.view();
+            let world = view.world();
+            let source_id = hf_source_id(repo_id, resolved_revision)?;
+            let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
+            world
+                .soracloud_hf_shared_lease_pools()
+                .get(&pool_id)
+                .and_then(|pool| pool.queued_next_window.as_ref())
+                .map(|next_window| next_window.planned_placement.placement_id)
+                .expect("queued next-window placement")
+        };
 
         let second_block_header =
             ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
@@ -9148,6 +10570,7 @@ mod tests {
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos: renewed_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -9182,6 +10605,10 @@ mod tests {
             .soracloud_hf_sources()
             .get(&source_id)
             .expect("hf source");
+        let placement = world
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("active placement");
         let audit_event = world
             .soracloud_hf_shared_lease_audit_events()
             .iter()
@@ -9199,9 +10626,11 @@ mod tests {
         );
         assert_eq!(pool.base_fee_nanos, renewed_fee_nanos);
         assert_eq!(source.model_name, renewed_model_name);
+        assert_eq!(placement.placement_id, queued_placement_id);
         assert_eq!(member.status, SoraHfSharedLeaseMemberStatusV1::Active);
         assert_eq!(member.joined_at_ms, first_pool_expires_at_ms);
         assert_eq!(member.last_charge_nanos, 0);
+        assert_eq!(member.last_compute_charge_nanos, 0);
         assert!(member.service_bindings.contains(service_name.as_ref()));
         assert!(
             member
@@ -9216,6 +10645,255 @@ mod tests {
         assert_eq!(audit_event.action, SoraHfSharedLeaseActionV1::Join);
         assert_eq!(audit_event.charged_nanos, 0);
         assert_eq!(audit_event.lease_expires_at_ms, pool.window_expires_at_ms);
+        Ok(())
+    }
+
+    #[test]
+    fn join_hf_shared_lease_rejects_when_no_model_host_can_run_profile() -> Result<(), eyre::Report>
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_with_soracloud_permission(&kura)?;
+        state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
+
+        let repo_id = "openai/gpt-oss";
+        let resolved_revision = "main";
+        let model_name = "gpt-oss";
+        let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
+        let storage_class = StorageClass::Warm;
+        let lease_term_ms = 60_000_u64;
+        let base_fee_nanos = 10_000_u128;
+        let lease_asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "xor".parse().expect("xor"),
+        );
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        let error = isi::JoinSoracloudHfSharedLease {
+            repo_id: repo_id.to_string(),
+            resolved_revision: resolved_revision.to_string(),
+            model_name: model_name.to_string(),
+            service_name: service_name.clone(),
+            apartment_name: None,
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id: lease_asset_definition_id.clone(),
+            base_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
+            provenance: hf_shared_lease_join_provenance(
+                repo_id,
+                resolved_revision,
+                model_name,
+                &service_name,
+                None,
+                storage_class,
+                lease_term_ms,
+                &lease_asset_definition_id,
+                base_fee_nanos,
+            ),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("join should fail without an eligible host advert");
+
+        assert!(
+            error
+                .to_string()
+                .contains("no eligible validator host advert"),
+            "unexpected error: {error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn join_hf_shared_lease_late_join_prorates_compute_and_refunds_existing_members()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_with_soracloud_permission(&kura)?;
+        state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
+
+        let repo_id = "openai/gpt-oss";
+        let resolved_revision = "main";
+        let model_name = "gpt-oss";
+        let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
+        let bob_service_name: iroha_data_model::name::Name =
+            "vision_portal_bob".parse().expect("valid");
+        let storage_class = StorageClass::Warm;
+        let lease_term_ms = 60_000_u64;
+        let base_fee_nanos = 10_000_u128;
+        let lease_asset_definition_id = AssetDefinitionId::new(
+            "domain".parse().expect("domain"),
+            "xor".parse().expect("xor"),
+        );
+
+        {
+            let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+                .as_ref()
+                .header();
+            let mut state_block = state.block(block_header);
+            let mut stx = state_block.transaction();
+            let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
+            let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
+
+            Register::account(Account::new(BOB_ID.clone().to_account_id(wonderland)))
+                .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Grant::account_permission(
+                Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
+                BOB_ID.clone(),
+            )
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Register::asset_definition(
+                AssetDefinition::numeric(lease_asset_definition_id.clone())
+                    .with_name(lease_asset_definition_id.name().to_string()),
+            )
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Mint::asset_numeric(
+                Numeric::new(100_000, 0),
+                AssetId::new(lease_asset_definition_id.clone(), ALICE_ID.clone()),
+            )
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            Mint::asset_numeric(
+                Numeric::new(100_000, 0),
+                AssetId::new(lease_asset_definition_id.clone(), BOB_ID.clone()),
+            )
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+            isi::AdvertiseSoracloudModelHost {
+                capability: capability.clone(),
+                provenance: model_host_advertise_provenance(&capability),
+            }
+            .execute(&ALICE_ID, &mut stx)?;
+
+            isi::JoinSoracloudHfSharedLease {
+                repo_id: repo_id.to_string(),
+                resolved_revision: resolved_revision.to_string(),
+                model_name: model_name.to_string(),
+                service_name: service_name.clone(),
+                apartment_name: None,
+                storage_class,
+                lease_term_ms,
+                lease_asset_definition_id: lease_asset_definition_id.clone(),
+                base_fee_nanos,
+                resource_profile: Some(sample_hf_resource_profile()),
+                provenance: hf_shared_lease_join_provenance(
+                    repo_id,
+                    resolved_revision,
+                    model_name,
+                    &service_name,
+                    None,
+                    storage_class,
+                    lease_term_ms,
+                    &lease_asset_definition_id,
+                    base_fee_nanos,
+                ),
+            }
+            .execute(&ALICE_ID, &mut stx)?;
+
+            stx.apply();
+            state_block.commit()?;
+        }
+
+        let source_id = hf_source_id(repo_id, resolved_revision)?;
+        let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
+        let (first_window_started_at_ms, first_window_expires_at_ms, placement_fee_nanos) = {
+            let view = state.view();
+            let world = view.world();
+            let pool = world
+                .soracloud_hf_shared_lease_pools()
+                .get(&pool_id)
+                .expect("shared lease pool");
+            let placement = world
+                .soracloud_hf_placements()
+                .get(&pool_id)
+                .expect("placement");
+            (
+                pool.window_started_at_ms,
+                pool.window_expires_at_ms,
+                placement.total_reservation_fee_nanos,
+            )
+        };
+        let second_join_time_ms =
+            first_window_started_at_ms.saturating_add(lease_term_ms.saturating_div(2));
+
+        let second_block_header = ValidBlock::new_dummy_and_modify_header(
+            &BOB_KEYPAIR.clone().into_parts().1,
+            |header| {
+                header.creation_time_ms = second_join_time_ms;
+            },
+        )
+        .as_ref()
+        .header();
+        let mut second_state_block = state.block(second_block_header);
+        let mut second_stx = second_state_block.transaction();
+
+        isi::JoinSoracloudHfSharedLease {
+            repo_id: repo_id.to_string(),
+            resolved_revision: resolved_revision.to_string(),
+            model_name: model_name.to_string(),
+            service_name: bob_service_name.clone(),
+            apartment_name: None,
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id: lease_asset_definition_id.clone(),
+            base_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
+            provenance: hf_shared_lease_join_provenance_for(
+                &BOB_KEYPAIR,
+                repo_id,
+                resolved_revision,
+                model_name,
+                &bob_service_name,
+                None,
+                storage_class,
+                lease_term_ms,
+                &lease_asset_definition_id,
+                base_fee_nanos,
+            ),
+        }
+        .execute(&BOB_ID, &mut second_stx)?;
+
+        second_stx.apply();
+        second_state_block.commit()?;
+
+        let remaining_ms = first_window_expires_at_ms.saturating_sub(second_join_time_ms);
+        let expected_storage_join_fee =
+            prorated_window_fee_nanos(base_fee_nanos, remaining_ms, lease_term_ms) / 2;
+        let expected_compute_join_fee =
+            prorated_window_fee_nanos(placement_fee_nanos, remaining_ms, lease_term_ms) / 2;
+        let alice_member_key = (pool_id.to_string(), ALICE_ID.to_string());
+        let bob_member_key = (pool_id.to_string(), BOB_ID.to_string());
+        let view = state.view();
+        let world = view.world();
+        let pool = world
+            .soracloud_hf_shared_lease_pools()
+            .get(&pool_id)
+            .expect("shared lease pool");
+        let alice_member = world
+            .soracloud_hf_shared_lease_members()
+            .get(&alice_member_key)
+            .expect("alice shared lease member");
+        let bob_member = world
+            .soracloud_hf_shared_lease_members()
+            .get(&bob_member_key)
+            .expect("bob shared lease member");
+
+        assert_eq!(pool.active_member_count, 2);
+        assert_eq!(alice_member.total_refunded_nanos, expected_storage_join_fee);
+        assert_eq!(
+            alice_member.total_compute_refunded_nanos,
+            expected_compute_join_fee
+        );
+        assert_eq!(bob_member.total_paid_nanos, expected_storage_join_fee);
+        assert_eq!(
+            bob_member.total_compute_paid_nanos,
+            expected_compute_join_fee
+        );
+        assert_eq!(bob_member.last_charge_nanos, expected_storage_join_fee);
+        assert_eq!(
+            bob_member.last_compute_charge_nanos,
+            expected_compute_join_fee
+        );
         Ok(())
     }
 
@@ -9245,6 +10923,13 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
+        let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
+
+        isi::AdvertiseSoracloudModelHost {
+            capability: capability.clone(),
+            provenance: model_host_advertise_provenance(&capability),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
 
         isi::JoinSoracloudHfSharedLease {
             repo_id: repo_id.to_string(),
@@ -9256,6 +10941,7 @@ mod tests {
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -9280,6 +10966,7 @@ mod tests {
             lease_term_ms,
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee_nanos: renewed_fee_nanos,
+            resource_profile: Some(sample_hf_resource_profile()),
             provenance: hf_shared_lease_renew_provenance(
                 repo_id,
                 resolved_revision,

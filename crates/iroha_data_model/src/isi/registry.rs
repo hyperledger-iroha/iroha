@@ -110,6 +110,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::JoinSoracloudHfSharedLease>,
     InstructionRegistry::register::<soracloud::LeaveSoracloudHfSharedLease>,
     InstructionRegistry::register::<soracloud::RenewSoracloudHfSharedLease>,
+    InstructionRegistry::register::<soracloud::AdvertiseSoracloudModelHost>,
+    InstructionRegistry::register::<soracloud::HeartbeatSoracloudModelHost>,
+    InstructionRegistry::register::<soracloud::WithdrawSoracloudModelHost>,
     InstructionRegistry::register::<soracloud::DeploySoracloudAgentApartment>,
     InstructionRegistry::register::<soracloud::RenewSoracloudAgentLease>,
     InstructionRegistry::register::<soracloud::RestartSoracloudAgentApartment>,
@@ -321,6 +324,15 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     );
     registry = registry.register_with_id::<soracloud::RenewSoracloudHfSharedLease>(
         "soracloud::RenewSoracloudHfSharedLease",
+    );
+    registry = registry.register_with_id::<soracloud::AdvertiseSoracloudModelHost>(
+        "soracloud::AdvertiseSoracloudModelHost",
+    );
+    registry = registry.register_with_id::<soracloud::HeartbeatSoracloudModelHost>(
+        "soracloud::HeartbeatSoracloudModelHost",
+    );
+    registry = registry.register_with_id::<soracloud::WithdrawSoracloudModelHost>(
+        "soracloud::WithdrawSoracloudModelHost",
     );
     registry = registry.register_with_id::<soracloud::DeploySoracloudAgentApartment>(
         "soracloud::DeploySoracloudAgentApartment",

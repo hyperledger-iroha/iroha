@@ -9,6 +9,8 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     case malformedAssetDefinitionId(String)
     case emptyDomainId(field: String)
     case malformedDomainId(field: String, value: String)
+    case emptyLabel(field: String)
+    case malformedLabel(field: String, value: String)
     case emptyAssetId
     case malformedAssetId(String)
     case invalidZkBallotPublicInputs(String)
@@ -31,6 +33,10 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
             return "Domain id for \(field) must not be empty."
         case let .malformedDomainId(field, value):
             return "Domain id for \(field) must not contain whitespace, '@', '#', or '$' (received '\(value)')."
+        case let .emptyLabel(field):
+            return "Label for \(field) must not be empty."
+        case let .malformedLabel(field, value):
+            return "Label for \(field) must use lowercase a-z, 0-9, '_' or '-' and be 32 characters or fewer (received '\(value)')."
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
@@ -131,7 +137,7 @@ struct TransactionInputValidator {
         return "\(prefix)\(payload)"
     }
 
-    private static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {
+    static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {
         let trimmed = domainId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw TransactionInputError.emptyDomainId(field: field)
@@ -141,6 +147,21 @@ struct TransactionInputValidator {
         }
         if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
             throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
+        }
+        return trimmed
+    }
+
+    static func sanitizeLabel(_ label: String, field: String) throws -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw TransactionInputError.emptyLabel(field: field)
+        }
+        if trimmed.count > 32 || trimmed != trimmed.lowercased() {
+            throw TransactionInputError.malformedLabel(field: field, value: trimmed)
+        }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
+        if trimmed.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+            throw TransactionInputError.malformedLabel(field: field, value: trimmed)
         }
         return trimmed
     }
@@ -378,6 +399,124 @@ private enum ClaimIdentifierSwiftNoritoEncoder {
             return Data(hexString: String(trimmed.dropFirst(2)))
         }
         return Data(hexString: trimmed)
+    }
+}
+
+private enum SetAccountLabelSwiftNoritoEncoder {
+    private static let instructionWireName = "identity::SetAccountLabel"
+    private static let instructionTypeName = "iroha_data_model::isi::domain_link::SetAccountLabel"
+    private static let signedTransactionTypeName = "iroha_data_model::transaction::signed::model::SignedTransaction"
+
+    static func encode(chainId: String,
+                       authority: String,
+                       creationTimeMs: UInt64,
+                       ttlMs: UInt64?,
+                       accountId: String,
+                       domainId: String,
+                       label: String,
+                       signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let instructionPayload = try encodeInstruction(
+            accountId: accountId,
+            domainId: domainId,
+            label: label
+        )
+        let transactionPayload = try encodeTransactionPayload(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            instructionPayload: instructionPayload
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signedTransaction = encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
+        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+        let norito = noritoEncode(typeName: signedTransactionTypeName, payload: signedTransaction, flags: 0)
+        return SignedTransactionEnvelope(
+            norito: norito,
+            signedTransaction: signedTransaction,
+            payload: nil,
+            transactionHash: transactionHash
+        )
+    }
+
+    private static func encodeInstruction(accountId: String, domainId: String, label: String) throws -> Data {
+        let accountPayload = try OfflineNorito.encodeAccountId(accountId)
+        let accountLabelPayload = try encodeAccountLabel(domainId: domainId, label: label)
+
+        var instructionPayload = OfflineNoritoWriter()
+        instructionPayload.writeField(accountPayload)
+        instructionPayload.writeField(accountLabelPayload)
+
+        let framedInstruction = noritoEncode(typeName: instructionTypeName, payload: instructionPayload.data, flags: 0)
+        var wireInstruction = OfflineNoritoWriter()
+        wireInstruction.writeField(OfflineNorito.encodeString(instructionWireName))
+        wireInstruction.writeField(OfflineNorito.encodeBytesVec(framedInstruction))
+        return wireInstruction.data
+    }
+
+    private static func encodeAccountLabel(domainId: String, label: String) throws -> Data {
+        var payload = OfflineNoritoWriter()
+        payload.writeField(try OfflineNorito.encodeDomainId(domainId))
+        payload.writeField(OfflineNorito.encodeString(label))
+        return payload.data
+    }
+
+    private static func encodeTransactionPayload(chainId: String,
+                                                 authority: String,
+                                                 creationTimeMs: UInt64,
+                                                 ttlMs: UInt64?,
+                                                 instructionPayload: Data) throws -> Data {
+        let executablePayload = encodeExecutable(instructionPayload: instructionPayload)
+        var transactionPayload = OfflineNoritoWriter()
+        transactionPayload.writeField(OfflineNorito.encodeString(chainId))
+        transactionPayload.writeField(OfflineNorito.encodeString(authority))
+        transactionPayload.writeField(OfflineNorito.encodeUInt64(creationTimeMs))
+        transactionPayload.writeField(executablePayload)
+        transactionPayload.writeField(try OfflineNorito.encodeOption(ttlMs, encode: OfflineNorito.encodeUInt64))
+        transactionPayload.writeField(encodeNoneOption())
+        transactionPayload.writeField(encodeEmptyMetadata())
+        return transactionPayload.data
+    }
+
+    private static func encodeExecutable(instructionPayload: Data) -> Data {
+        var instructions = OfflineNoritoWriter()
+        instructions.writeLength(1)
+        instructions.writeField(instructionPayload)
+
+        var executable = OfflineNoritoWriter()
+        executable.writeUInt32LE(0)
+        executable.writeField(instructions.data)
+        return executable.data
+    }
+
+    private static func encodeSignedTransaction(signature: Data,
+                                                transactionPayload: Data) -> Data {
+        var signedTransaction = OfflineNoritoWriter()
+        signedTransaction.writeField(OfflineNorito.encodeConstVec(signature))
+        signedTransaction.writeField(transactionPayload)
+        signedTransaction.writeField(encodeNoneOption())
+        signedTransaction.writeField(encodeNoneOption())
+        return signedTransaction.data
+    }
+
+    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
+        var entrypoint = OfflineNoritoWriter()
+        entrypoint.writeUInt32LE(0)
+        entrypoint.writeField(signedTransaction)
+        return entrypoint.data
+    }
+
+    private static func encodeEmptyMetadata() -> Data {
+        var metadata = OfflineNoritoWriter()
+        metadata.writeLength(0)
+        return metadata.data
+    }
+
+    private static func encodeNoneOption() -> Data {
+        Data([0])
     }
 }
 
@@ -750,6 +889,38 @@ struct SwiftTransactionEncoder {
             ttlMs: request.ttlMs,
             accountId: canonicalAccountId,
             receipt: request.receipt,
+            signingKey: signingKey
+        )
+    }
+
+    static func encodeSetAccountLabel(request: SetAccountLabelRequest,
+                                      keypair: Keypair,
+                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeSetAccountLabel(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
+    }
+
+    static func encodeSetAccountLabel(request: SetAccountLabelRequest,
+                                      signingKey: SigningKey,
+                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId,
+            authorityId: request.authority,
+            accountIds: [
+                TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId)
+            ]
+        )
+        let accountId = ids.accountIds["account"] ?? request.accountId
+        let domainId = try TransactionInputValidator.sanitizeDomainId(request.domainId, field: "label_domain")
+        let label = try TransactionInputValidator.sanitizeLabel(request.label, field: "label")
+        return try SetAccountLabelSwiftNoritoEncoder.encode(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs,
+            accountId: accountId,
+            domainId: domainId,
+            label: label,
             signingKey: signingKey
         )
     }

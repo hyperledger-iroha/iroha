@@ -244,6 +244,10 @@ pub enum NetworkMessage {
     TimePong(Box<crate::time::TimePong>),
     /// Iroha Connect (WalletConnect-style) frame relay.
     Connect(Box<connect_proto::ConnectFrame>),
+    /// Soracloud local-read proxy request routed to the authoritative primary host.
+    SoracloudLocalReadProxyRequest(Box<soracloud_runtime::SoracloudLocalReadProxyRequestV1>),
+    /// Soracloud local-read proxy response returned to the ingress node.
+    SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
     /// Norito Streaming control-plane frame.
     StreamingControl(Box<ControlFrame>),
     /// Gossip for `SoraNet` `PoW`/puzzle runtime configuration (Norito-encoded bytes).
@@ -297,6 +301,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
+            | NetworkMessage::SoracloudLocalReadProxyRequest(_)
+            | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::StreamingControl(_)
             | NetworkMessage::GenesisRequest(_)
             | NetworkMessage::GenesisResponse(_) => T::Control,

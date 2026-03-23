@@ -45,22 +45,23 @@ use iroha_data_model::{
         SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
         SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
         SoraAgentRuntimeStatusV1, SoraCertifiedResponsePolicyV1, SoraContainerRuntimeV1,
-        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfSharedLeaseActionV1,
-        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-        SoraHfSourceStatusV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
-        SoraModelArtifactRecordV1, SoraModelPrivacyModeV1, SoraModelProvenanceKindV1,
-        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraPrivateCompileProfileV1,
-        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraPrivateInferenceSessionV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
-        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
-        SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
-        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraTrainingJobStatusV1, SoraUploadedModelBindingV1, SoraUploadedModelBundleV1,
-        SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
-        encode_agent_artifact_allow_provenance_payload,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
+        SoraHfModelFormatV1, SoraHfPlacementRecordV1, SoraHfResourceProfileV1,
+        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
+        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraModelArtifactActionV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRolloutStageV1,
+        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
+        SoraServiceHandlerClassV1, SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1,
+        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
+        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBindingV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        SoraUploadedModelEncryptionRecipientV1, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -72,6 +73,9 @@ use iroha_data_model::{
         encode_hf_shared_lease_leave_provenance_payload,
         encode_hf_shared_lease_renew_provenance_payload,
         encode_model_artifact_register_provenance_payload,
+        encode_model_host_advertise_provenance_payload,
+        encode_model_host_heartbeat_provenance_payload,
+        encode_model_host_withdraw_provenance_payload,
         encode_model_weight_promote_provenance_payload,
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload,
@@ -536,6 +540,52 @@ pub(crate) struct HfLeaseRenewPayload {
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub(crate) struct SignedHfLeaseRenewRequest {
     pub payload: HfLeaseRenewPayload,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ModelHostAdvertisePayload {
+    pub capability: SoraModelHostCapabilityRecordV1,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedModelHostAdvertiseRequest {
+    pub payload: ModelHostAdvertisePayload,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ModelHostHeartbeatPayload {
+    pub validator_account_id: AccountId,
+    pub heartbeat_expires_at_ms: u64,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedModelHostHeartbeatRequest {
+    pub payload: ModelHostHeartbeatPayload,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ModelHostWithdrawPayload {
+    pub validator_account_id: AccountId,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedModelHostWithdrawRequest {
+    pub payload: ModelHostWithdrawPayload,
     pub provenance: ManifestProvenance,
     #[norito(default)]
     pub authority: Option<AccountId>,
@@ -1340,8 +1390,15 @@ pub(crate) struct HfSharedLeaseStatusResponse {
     pub member: Option<SoraHfSharedLeaseMemberV1>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<SoraHfPlacementRecordV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub latest_audit_event: Option<SoraHfSharedLeaseAuditEventV1>,
     pub audit_event_count: u32,
+    pub storage_base_fee_nanos: u128,
+    pub compute_reservation_fee_nanos: u128,
+    pub eligible_host_count: u32,
+    pub warm_host_count: u32,
     pub importer_pending: bool,
 }
 
@@ -1357,8 +1414,41 @@ pub(crate) struct HfSharedLeaseMutationResponse {
     pub member: SoraHfSharedLeaseMemberV1,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<SoraHfPlacementRecordV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub latest_audit_event: Option<SoraHfSharedLeaseAuditEventV1>,
+    pub storage_base_fee_nanos: u128,
+    pub compute_reservation_fee_nanos: u128,
+    pub eligible_host_count: u32,
+    pub warm_host_count: u32,
     pub importer_pending: bool,
+}
+
+#[derive(Clone, Copy, Debug, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "action", content = "value")]
+pub(crate) enum ModelHostMutationAction {
+    Advertise,
+    Heartbeat,
+    Withdraw,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ModelHostStatusResponse {
+    pub schema_version: u16,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub validator_account_id: Option<AccountId>,
+    pub active_host_count: u32,
+    #[norito(default)]
+    pub hosts: Vec<SoraModelHostCapabilityRecordV1>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ModelHostMutationResponse {
+    pub action: ModelHostMutationAction,
+    pub status: ModelHostStatusResponse,
+    pub signed_by: String,
 }
 
 #[derive(Clone, Debug, Default, JsonDeserialize)]
@@ -1422,6 +1512,12 @@ pub(crate) struct HfSharedLeaseStatusQuery {
     pub revision: Option<String>,
     pub storage_class: String,
     pub lease_term_ms: u64,
+    #[norito(default)]
+    pub account_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, JsonDeserialize)]
+pub(crate) struct ModelHostStatusQuery {
     #[norito(default)]
     pub account_id: Option<String>,
 }
@@ -2245,6 +2341,15 @@ pub(crate) struct AgentRuntimeReceiptRecord {
     pub emitted_sequence: u64,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
+    pub placement_id: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub selected_validator_account_id: Option<AccountId>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub selected_peer_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub journal_artifact_hash: Option<Hash>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -2821,6 +2926,219 @@ fn hf_shared_lease_pool_id(
         SoracloudError::internal(format!("failed to encode hf shared lease pool id: {err}"))
     })?;
     Ok(Hash::new(payload))
+}
+
+fn hf_profile_http_client() -> Result<reqwest::Client, SoracloudError> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(
+            iroha_config::parameters::defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
+        ))
+        .build()
+        .map_err(|err| {
+            SoracloudError::internal(format!(
+                "failed to build Hugging Face profile-derivation client: {err}"
+            ))
+        })
+}
+
+fn normalize_hf_base_url(base_url: &str) -> Result<reqwest::Url, SoracloudError> {
+    let trimmed = base_url.trim();
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        format!("https://{trimmed}")
+    };
+    let mut url = reqwest::Url::parse(&with_scheme).map_err(|err| {
+        SoracloudError::bad_request(format!("invalid Hugging Face base URL: {err}"))
+    })?;
+    let normalized_path = match url.path().trim_end_matches('/') {
+        "" => "/".to_owned(),
+        path => path.to_owned(),
+    };
+    url.set_path(&normalized_path);
+    Ok(url)
+}
+
+fn hf_model_info_url(
+    repo_id: &str,
+    resolved_revision: &str,
+) -> Result<reqwest::Url, SoracloudError> {
+    let mut url = normalize_hf_base_url(
+        iroha_config::parameters::defaults::soracloud_runtime::hf::API_BASE_URL,
+    )?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| SoracloudError::bad_request("invalid Hugging Face API base URL"))?;
+        for component in ["models"]
+            .into_iter()
+            .chain(repo_id.split('/'))
+            .chain(["revision", resolved_revision].into_iter())
+        {
+            segments.push(component);
+        }
+    }
+    Ok(url)
+}
+
+fn hf_repo_file_url(
+    repo_id: &str,
+    resolved_revision: &str,
+    file_path: &str,
+) -> Result<reqwest::Url, SoracloudError> {
+    let mut url = normalize_hf_base_url(
+        iroha_config::parameters::defaults::soracloud_runtime::hf::HUB_BASE_URL,
+    )?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| SoracloudError::bad_request("invalid Hugging Face Hub base URL"))?;
+        for component in repo_id
+            .split('/')
+            .chain(["resolve", resolved_revision].into_iter())
+            .chain(file_path.split('/'))
+        {
+            segments.push(component);
+        }
+    }
+    Ok(url)
+}
+
+async fn hf_content_length_bytes(
+    client: &reqwest::Client,
+    repo_id: &str,
+    resolved_revision: &str,
+    file_path: &str,
+) -> Result<u64, SoracloudError> {
+    let file_url = hf_repo_file_url(repo_id, resolved_revision, file_path)?;
+    let response = client.head(file_url.clone()).send().await.map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to query Hugging Face file headers from {file_url}: {err}"
+        ))
+    })?;
+    if !response.status().is_success() {
+        return Err(SoracloudError::conflict(format!(
+            "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` returned {}",
+            response.status()
+        )));
+    }
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| {
+            SoracloudError::conflict(format!(
+                "Hugging Face file `{file_path}` for `{repo_id}@{resolved_revision}` is missing Content-Length"
+            ))
+        })
+}
+
+async fn derive_hf_resource_profile(
+    repo_id: &str,
+    resolved_revision: &str,
+) -> Result<SoraHfResourceProfileV1, SoracloudError> {
+    let client = hf_profile_http_client()?;
+    let info_url = hf_model_info_url(repo_id, resolved_revision)?;
+    let response = client.get(info_url.clone()).send().await.map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to fetch Hugging Face model info from {info_url}: {err}"
+        ))
+    })?;
+    if !response.status().is_success() {
+        return Err(SoracloudError::conflict(format!(
+            "Hugging Face model info request for `{repo_id}@{resolved_revision}` returned {}",
+            response.status()
+        )));
+    }
+    let body = response.bytes().await.map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to read Hugging Face model info response from {info_url}: {err}"
+        ))
+    })?;
+    let model_info: norito::json::Value = norito::json::from_slice(&body).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to decode Hugging Face model info JSON for `{repo_id}@{resolved_revision}`: {err}"
+        ))
+    })?;
+    let sibling_paths = model_info
+        .get("siblings")
+        .and_then(norito::json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+
+    let select_paths = |extensions: &[&str]| {
+        sibling_paths
+            .iter()
+            .filter(|path| {
+                let normalized = path.to_ascii_lowercase();
+                extensions
+                    .iter()
+                    .any(|extension| normalized.ends_with(extension))
+            })
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let (backend_family, model_format, weight_files) = if let files @ [_first, ..] =
+        select_paths(&[".gguf"]).as_slice()
+    {
+        (
+            SoraHfBackendFamilyV1::Gguf,
+            SoraHfModelFormatV1::Gguf,
+            files.to_vec(),
+        )
+    } else if let files @ [_first, ..] = select_paths(&[".safetensors"]).as_slice() {
+        (
+            SoraHfBackendFamilyV1::Transformers,
+            SoraHfModelFormatV1::Safetensors,
+            files.to_vec(),
+        )
+    } else if let files @ [_first, ..] = select_paths(&[".bin", ".pt", ".pth"]).as_slice() {
+        (
+            SoraHfBackendFamilyV1::Transformers,
+            SoraHfModelFormatV1::PyTorch,
+            files.to_vec(),
+        )
+    } else {
+        return Err(SoracloudError::conflict(format!(
+            "no supported Hugging Face model weights were found for `{repo_id}@{resolved_revision}`"
+        )));
+    };
+
+    let mut required_model_bytes = 0_u64;
+    for file_path in &weight_files {
+        required_model_bytes = required_model_bytes.saturating_add(
+            hf_content_length_bytes(&client, repo_id, resolved_revision, file_path).await?,
+        );
+    }
+    if required_model_bytes == 0 {
+        return Err(SoracloudError::conflict(format!(
+            "derived Hugging Face model size for `{repo_id}@{resolved_revision}` was zero bytes"
+        )));
+    }
+
+    let disk_cache_bytes_floor = required_model_bytes;
+    let ram_bytes_floor = match backend_family {
+        SoraHfBackendFamilyV1::Gguf => required_model_bytes
+            .saturating_mul(3)
+            .saturating_div(2)
+            .max(required_model_bytes),
+        SoraHfBackendFamilyV1::Transformers => required_model_bytes
+            .saturating_mul(2)
+            .max(required_model_bytes),
+    };
+
+    Ok(SoraHfResourceProfileV1 {
+        required_model_bytes,
+        backend_family,
+        model_format,
+        disk_cache_bytes_floor,
+        ram_bytes_floor,
+        vram_bytes_floor: 0,
+    })
 }
 
 fn sign_generated_bundle_provenance(
@@ -4203,6 +4521,54 @@ fn verify_hf_lease_renew_signature(
     Ok(())
 }
 
+fn verify_model_host_advertise_signature(
+    request: &SignedModelHostAdvertiseRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_model_host_advertise_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "model host advertise provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn verify_model_host_heartbeat_signature(
+    request: &SignedModelHostHeartbeatRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_model_host_heartbeat_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "model host heartbeat provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn verify_model_host_withdraw_signature(
+    request: &SignedModelHostWithdrawRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_model_host_withdraw_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "model host withdraw provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
 fn encode_rollout_signature_payload(
     payload: &RolloutAdvancePayload,
 ) -> Result<Vec<u8>, SoracloudError> {
@@ -4734,6 +5100,49 @@ fn encode_hf_lease_renew_signature_payload(
     .map_err(|err| {
         SoracloudError::internal(format!(
             "failed to encode hf shared-lease renew payload: {err}"
+        ))
+    })
+}
+
+fn encode_model_host_advertise_signature_payload(
+    payload: &ModelHostAdvertisePayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    payload
+        .capability
+        .validate()
+        .map_err(|err| SoracloudError::bad_request(err.to_string()))?;
+    encode_model_host_advertise_provenance_payload(&payload.capability).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode model host advertise payload: {err}"
+        ))
+    })
+}
+
+fn encode_model_host_heartbeat_signature_payload(
+    payload: &ModelHostHeartbeatPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    if payload.heartbeat_expires_at_ms == 0 {
+        return Err(SoracloudError::bad_request(
+            "heartbeat_expires_at_ms must be greater than zero",
+        ));
+    }
+    encode_model_host_heartbeat_provenance_payload(
+        &payload.validator_account_id,
+        payload.heartbeat_expires_at_ms,
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode model host heartbeat payload: {err}"
+        ))
+    })
+}
+
+fn encode_model_host_withdraw_signature_payload(
+    payload: &ModelHostWithdrawPayload,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_model_host_withdraw_provenance_payload(&payload.validator_account_id).map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode model host withdraw payload: {err}"
         ))
     })
 }
@@ -5659,6 +6068,7 @@ fn authoritative_hf_shared_lease_status_response(
             .get(member_key)
             .cloned()
     });
+    let placement = world.soracloud_hf_placements().get(&pool_id).cloned();
     let latest_audit_event = world
         .soracloud_hf_shared_lease_audit_events()
         .iter()
@@ -5666,6 +6076,16 @@ fn authoritative_hf_shared_lease_status_response(
         .map(|(_sequence, event)| event.clone())
         .max_by_key(|event| event.sequence);
     let runtime_projection = authoritative_hf_runtime_projection(app, &source_id);
+    let storage_base_fee_nanos = pool.as_ref().map_or(0, |pool| pool.base_fee_nanos);
+    let compute_reservation_fee_nanos = placement
+        .as_ref()
+        .map_or(0, |placement| placement.total_reservation_fee_nanos);
+    let eligible_host_count = placement
+        .as_ref()
+        .map_or(0, |placement| placement.eligible_validator_count);
+    let warm_host_count = placement
+        .as_ref()
+        .map_or(0, |placement| placement.warm_host_count());
 
     Ok(HfSharedLeaseStatusResponse {
         schema_version: HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1,
@@ -5673,10 +6093,39 @@ fn authoritative_hf_shared_lease_status_response(
         runtime_projection: runtime_projection.clone(),
         pool,
         member,
+        placement: placement.clone(),
         latest_audit_event,
         audit_event_count: authoritative_hf_shared_lease_event_count(world, &pool_id),
+        storage_base_fee_nanos,
+        compute_reservation_fee_nanos,
+        eligible_host_count,
+        warm_host_count,
         importer_pending: hf_importer_pending(&source, runtime_projection.as_ref()),
     })
+}
+
+fn authoritative_model_host_status_response(
+    app: &SharedAppState,
+    validator_account_id: Option<&AccountId>,
+) -> ModelHostStatusResponse {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let mut hosts = world
+        .soracloud_model_host_capabilities()
+        .iter()
+        .filter_map(|(account_id, capability)| {
+            validator_account_id
+                .is_none_or(|validator_account_id| account_id == validator_account_id)
+                .then(|| capability.clone())
+        })
+        .collect::<Vec<_>>();
+    hosts.sort_by(|left, right| left.validator_account_id.cmp(&right.validator_account_id));
+    ModelHostStatusResponse {
+        schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+        validator_account_id: validator_account_id.cloned(),
+        active_host_count: u32::try_from(hosts.len()).unwrap_or(u32::MAX),
+        hosts,
+    }
 }
 
 fn authoritative_training_job_action(action: SoraTrainingJobActionV1) -> TrainingJobAction {
@@ -6620,6 +7069,33 @@ fn authoritative_hf_shared_lease_mutation_response(
         ))
     })?;
     let runtime_projection = authoritative_hf_runtime_projection(app, &source_id);
+    let active_placement = world.soracloud_hf_placements().get(&pool_id).cloned();
+    let placement = if event.action == SoraHfSharedLeaseActionV1::Renew {
+        pool.queued_next_window
+            .as_ref()
+            .filter(|next_window| {
+                next_window.sponsor_account_id == *account_id
+                    && event.lease_expires_at_ms == next_window.window_expires_at_ms
+            })
+            .map(|next_window| next_window.planned_placement.clone())
+            .or(active_placement.clone())
+    } else {
+        active_placement.clone()
+    };
+
+    let storage_base_fee_nanos = if event.action == SoraHfSharedLeaseActionV1::Renew {
+        pool.queued_next_window
+            .as_ref()
+            .filter(|next_window| {
+                next_window.sponsor_account_id == *account_id
+                    && event.lease_expires_at_ms == next_window.window_expires_at_ms
+            })
+            .map_or(pool.base_fee_nanos, |next_window| {
+                next_window.base_fee_nanos
+            })
+    } else {
+        pool.base_fee_nanos
+    };
 
     Ok(HfSharedLeaseMutationResponse {
         schema_version: HF_SHARED_LEASE_STATUS_SCHEMA_VERSION_V1,
@@ -6628,7 +7104,18 @@ fn authoritative_hf_shared_lease_mutation_response(
         runtime_projection: runtime_projection.clone(),
         pool: pool.clone(),
         member,
+        placement: placement.clone(),
         latest_audit_event: Some(event),
+        storage_base_fee_nanos,
+        compute_reservation_fee_nanos: placement
+            .as_ref()
+            .map_or(0, |placement| placement.total_reservation_fee_nanos),
+        eligible_host_count: placement
+            .as_ref()
+            .map_or(0, |placement| placement.eligible_validator_count),
+        warm_host_count: placement
+            .as_ref()
+            .map_or(0, |placement| placement.warm_host_count()),
         importer_pending: hf_importer_pending(&source, runtime_projection.as_ref()),
     })
 }
@@ -7178,6 +7665,9 @@ fn authoritative_agent_runtime_receipt_record(
         result_commitment: receipt.result_commitment,
         certified_by: receipt.certified_by,
         emitted_sequence: receipt.emitted_sequence,
+        placement_id: receipt.placement_id,
+        selected_validator_account_id: receipt.selected_validator_account_id.clone(),
+        selected_peer_id: receipt.selected_peer_id.clone(),
         journal_artifact_hash: receipt.journal_artifact_hash,
         checkpoint_artifact_hash: receipt.checkpoint_artifact_hash,
     }
@@ -9734,6 +10224,10 @@ pub(crate) async fn handle_hf_deploy(
         Ok(source_id) => source_id,
         Err(err) => return err.into_response(),
     };
+    let resource_profile = match derive_hf_resource_profile(&repo_id, &resolved_revision).await {
+        Ok(resource_profile) => resource_profile,
+        Err(err) => return err.into_response(),
+    };
     let generated_bundle = build_soracloud_hf_generated_service_bundle(
         service_name.clone(),
         &source_id.to_string(),
@@ -9776,6 +10270,7 @@ pub(crate) async fn handle_hf_deploy(
             lease_term_ms,
             lease_asset_definition_id,
             base_fee_nanos,
+            resource_profile: Some(resource_profile),
             provenance: request.provenance,
         },
     ));
@@ -9984,6 +10479,10 @@ pub(crate) async fn handle_hf_lease_renew(
         Ok(source_id) => source_id,
         Err(err) => return err.into_response(),
     };
+    let resource_profile = match derive_hf_resource_profile(&repo_id, &resolved_revision).await {
+        Ok(resource_profile) => resource_profile,
+        Err(err) => return err.into_response(),
+    };
     let generated_bundle = build_soracloud_hf_generated_service_bundle(
         service_name.clone(),
         &source_id.to_string(),
@@ -10026,6 +10525,7 @@ pub(crate) async fn handle_hf_lease_renew(
             lease_term_ms,
             lease_asset_definition_id,
             base_fee_nanos,
+            resource_profile: Some(resource_profile),
             provenance: request.provenance,
         },
     ));
@@ -10047,6 +10547,162 @@ pub(crate) async fn handle_hf_lease_renew(
                 Some(service_label.as_str()),
                 apartment_label.as_deref(),
             )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_model_host_status(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoQuery(query): NoritoQuery<ModelHostStatusQuery>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/status").await
+    {
+        return err.into_response();
+    }
+
+    let validator_account_id = match parse_optional_account_id(query.account_id.as_deref()) {
+        Ok(account_id) => account_id,
+        Err(err) => return err.into_response(),
+    };
+    JsonBody(authoritative_model_host_status_response(
+        &app,
+        validator_account_id.as_ref(),
+    ))
+    .into_response()
+}
+
+pub(crate) async fn handle_model_host_advertise(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedModelHostAdvertiseRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/advertise").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_model_host_advertise_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let validator_account_id = request.payload.capability.validator_account_id.clone();
+    let signed_by = signer.authority.to_string();
+
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::AdvertiseSoracloudModelHost {
+            capability: request.payload.capability,
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/model-host/advertise",
+        move |app, _baseline| {
+            Ok(ModelHostMutationResponse {
+                action: ModelHostMutationAction::Advertise,
+                status: authoritative_model_host_status_response(app, Some(&validator_account_id)),
+                signed_by: signed_by.clone(),
+            })
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_model_host_heartbeat(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedModelHostHeartbeatRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/heartbeat").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_model_host_heartbeat_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let validator_account_id = request.payload.validator_account_id.clone();
+    let heartbeat_expires_at_ms = request.payload.heartbeat_expires_at_ms;
+    let signed_by = signer.authority.to_string();
+
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::HeartbeatSoracloudModelHost {
+            validator_account_id: validator_account_id.clone(),
+            heartbeat_expires_at_ms,
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/model-host/heartbeat",
+        move |app, _baseline| {
+            Ok(ModelHostMutationResponse {
+                action: ModelHostMutationAction::Heartbeat,
+                status: authoritative_model_host_status_response(app, Some(&validator_account_id)),
+                signed_by: signed_by.clone(),
+            })
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_model_host_withdraw(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedModelHostWithdrawRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/withdraw").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_model_host_withdraw_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let validator_account_id = request.payload.validator_account_id.clone();
+    let signed_by = signer.authority.to_string();
+
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::WithdrawSoracloudModelHost {
+            validator_account_id: validator_account_id.clone(),
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/model-host/withdraw",
+        move |app, _baseline| {
+            Ok(ModelHostMutationResponse {
+                action: ModelHostMutationAction::Withdraw,
+                status: authoritative_model_host_status_response(app, Some(&validator_account_id)),
+                signed_by: signed_by.clone(),
+            })
         },
     )
     .await
@@ -10831,6 +11487,11 @@ async fn record_authoritative_agent_runtime_receipt(
                     result_commitment: runtime_receipt.result_commitment,
                     certified_by: runtime_receipt.certified_by,
                     emitted_sequence: runtime_receipt.emitted_sequence,
+                    placement_id: runtime_receipt.placement_id,
+                    selected_validator_account_id: runtime_receipt
+                        .selected_validator_account_id
+                        .clone(),
+                    selected_peer_id: runtime_receipt.selected_peer_id.clone(),
                     mailbox_message_id: None,
                     journal_artifact_hash: runtime_receipt.journal_artifact_hash,
                     checkpoint_artifact_hash: runtime_receipt.checkpoint_artifact_hash,
@@ -13557,6 +14218,7 @@ mod tests {
                     model_name: model_name.to_owned(),
                     adapter_id: "hf.shared.v1".to_owned(),
                     normalized_runtime_hash: Hash::new(b"hf-runtime"),
+                    resource_profile: None,
                     status: SoraHfSourceStatusV1::PendingImport,
                     created_at_ms: 10,
                     updated_at_ms: 20,
@@ -13585,6 +14247,35 @@ mod tests {
                                 model_name: "gpt_oss_20b_v2".to_owned(),
                                 lease_asset_definition_id: asset_definition.clone(),
                                 base_fee_nanos: 20_000,
+                                compute_reservation_fee_nanos: 8_000,
+                                planned_placement:
+                                    iroha_data_model::soracloud::SoraHfPlacementRecordV1 {
+                                        schema_version:
+                                            iroha_data_model::soracloud::SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                                        placement_id: Hash::new(b"queued-placement"),
+                                        source_id,
+                                        pool_id,
+                                        status:
+                                            iroha_data_model::soracloud::SoraHfPlacementStatusV1::Selecting,
+                                        selection_seed_hash: Hash::new(b"queued-seed"),
+                                        resource_profile:
+                                            iroha_data_model::soracloud::SoraHfResourceProfileV1 {
+                                                required_model_bytes: 4_096,
+                                                backend_family:
+                                                    iroha_data_model::soracloud::SoraHfBackendFamilyV1::Transformers,
+                                                model_format:
+                                                    iroha_data_model::soracloud::SoraHfModelFormatV1::Safetensors,
+                                                disk_cache_bytes_floor: 8_192,
+                                                ram_bytes_floor: 8_192,
+                                                vram_bytes_floor: 0,
+                                            },
+                                        eligible_validator_count: 0,
+                                        adaptive_target_host_count: 1,
+                                        assigned_hosts: Vec::new(),
+                                        total_reservation_fee_nanos: 8_000,
+                                        last_rebalance_at_ms: 15,
+                                        last_error: None,
+                                    },
                                 sponsored_at_ms: 15,
                                 window_started_at_ms: lease_term_ms + 10,
                                 window_expires_at_ms: (lease_term_ms * 2) + 10,
@@ -13609,6 +14300,9 @@ mod tests {
                         total_paid_nanos: 10_000,
                         total_refunded_nanos: 0,
                         last_charge_nanos: 10_000,
+                        total_compute_paid_nanos: 0,
+                        total_compute_refunded_nanos: 0,
+                        last_compute_charge_nanos: 0,
                         service_bindings: std::collections::BTreeSet::from([
                             "vision_portal".to_owned()
                         ]),
@@ -13716,6 +14410,7 @@ mod tests {
                     model_name: model_name.to_owned(),
                     adapter_id: "hf.shared.v1".to_owned(),
                     normalized_runtime_hash: Hash::new(b"hf-runtime"),
+                    resource_profile: None,
                     status: SoraHfSourceStatusV1::Ready,
                     created_at_ms: 10,
                     updated_at_ms: 30,
@@ -13756,6 +14451,9 @@ mod tests {
                         total_paid_nanos: 13_333,
                         total_refunded_nanos: 0,
                         last_charge_nanos: 3_333,
+                        total_compute_paid_nanos: 0,
+                        total_compute_refunded_nanos: 0,
+                        last_compute_charge_nanos: 0,
                         service_bindings: std::collections::BTreeSet::from([
                             "vision_portal".to_owned()
                         ]),
@@ -13845,6 +14543,7 @@ mod tests {
                     model_name: "gpt_oss_20b".to_owned(),
                     adapter_id: "hf.shared.v1".to_owned(),
                     normalized_runtime_hash: Hash::new(b"hf-runtime"),
+                    resource_profile: None,
                     status: SoraHfSourceStatusV1::PendingImport,
                     created_at_ms: 10,
                     updated_at_ms: 20,
@@ -13925,6 +14624,7 @@ mod tests {
             model_name: "gpt_oss_20b".to_owned(),
             adapter_id: "hf.shared.v1".to_owned(),
             normalized_runtime_hash: Hash::new(b"hf-runtime"),
+            resource_profile: None,
             status: SoraHfSourceStatusV1::Failed,
             created_at_ms: 10,
             updated_at_ms: 20,
@@ -13969,6 +14669,9 @@ mod tests {
                 mailbox_message_id: None,
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
+                placement_id: None,
+                selected_validator_account_id: None,
+                selected_peer_id: None,
             },
         );
         world.soracloud_runtime_receipts_mut_for_testing().insert(
@@ -13987,6 +14690,9 @@ mod tests {
                 mailbox_message_id: None,
                 journal_artifact_hash: None,
                 checkpoint_artifact_hash: None,
+                placement_id: None,
+                selected_validator_account_id: None,
+                selected_peer_id: None,
             },
         );
 
@@ -14087,6 +14793,9 @@ mod tests {
                     mailbox_message_id: None,
                     journal_artifact_hash: Some(Hash::new(b"ops-agent-authoritative-journal")),
                     checkpoint_artifact_hash: Some(Hash::new(br#"{"text":"ok"}"#)),
+                    placement_id: None,
+                    selected_validator_account_id: None,
+                    selected_peer_id: None,
                 },
             );
             world
@@ -14167,6 +14876,9 @@ mod tests {
                     mailbox_message_id: None,
                     journal_artifact_hash: Some(Hash::new(b"ops-agent-authoritative-journal")),
                     checkpoint_artifact_hash: Some(Hash::new(br#"{"text":"ok"}"#)),
+                    placement_id: None,
+                    selected_validator_account_id: None,
+                    selected_peer_id: None,
                 }),
                 workflow_steps: Vec::new(),
                 content_type: Some("application/json".to_owned()),
