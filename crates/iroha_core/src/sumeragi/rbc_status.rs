@@ -522,8 +522,22 @@ fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
     }
 
     let mut selected = None;
+    if let Some(bytes) = main_bytes.as_deref() {
+        match decode_entries(bytes) {
+            Ok(entries) => {
+                selected = Some(entries);
+            }
+            Err(err) => {
+                warn!(?err, ?path, "failed to decode RBC session store");
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
     let mut used_tmp = false;
-    if let Some(bytes) = tmp_bytes.as_deref() {
+    if selected.is_none()
+        && let Some(bytes) = tmp_bytes.as_deref()
+    {
         match decode_entries(bytes) {
             Ok(entries) => {
                 selected = Some(entries);
@@ -532,20 +546,6 @@ fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
             Err(err) => {
                 warn!(?err, ?tmp_path, "failed to decode RBC session temp store");
                 let _ = fs::remove_file(&tmp_path);
-            }
-        }
-    }
-
-    if selected.is_none() {
-        if let Some(bytes) = main_bytes.as_deref() {
-            match decode_entries(bytes) {
-                Ok(entries) => {
-                    selected = Some(entries);
-                }
-                Err(err) => {
-                    warn!(?err, ?path, "failed to decode RBC session store");
-                    let _ = fs::remove_file(path);
-                }
             }
         }
     }
@@ -738,6 +738,61 @@ mod tests {
         assert_eq!(snapshot[0].block_hash, summary.block_hash);
         assert!(file.exists(), "temp store should be promoted");
         assert!(!tmp.exists(), "temp store should be removed");
+    }
+
+    #[test]
+    fn persisted_snapshot_prefers_main_store_over_temp_file() {
+        let dir = tempdir().expect("tempdir");
+        let main_summary = Summary {
+            block_hash: hash(8),
+            height: 8,
+            view: 0,
+            total_chunks: 4,
+            received_chunks: 4,
+            ready_count: 3,
+            delivered: true,
+            payload_hash: Some(Hash::new(b"main")),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let tmp_summary = Summary {
+            block_hash: hash(8),
+            height: 8,
+            view: 0,
+            total_chunks: 4,
+            received_chunks: 2,
+            ready_count: 1,
+            delivered: false,
+            payload_hash: Some(Hash::new(b"tmp")),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        let main_encoded = to_bytes(&vec![StoredEntry {
+            summary: main_summary.clone(),
+            updated_at_ms: 200,
+        }])
+        .expect("encode main store");
+        let tmp_encoded = to_bytes(&vec![StoredEntry {
+            summary: tmp_summary,
+            updated_at_ms: 100,
+        }])
+        .expect("encode temp store");
+        fs::write(&file, main_encoded).expect("write main store");
+        fs::write(&tmp, tmp_encoded).expect("write temp store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0], main_summary);
+        assert!(
+            tmp.exists(),
+            "valid main store should not require temp promotion"
+        );
     }
 
     #[test]

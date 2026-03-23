@@ -1254,8 +1254,12 @@ impl Actor {
                     "preserving committed-height missing request after stale BlockCreated drop"
                 );
             }
-            self.clean_rbc_sessions_for_block(block_hash, height);
             let matches_committed = committed_hash.is_some_and(|hash| hash == block_hash);
+            if matches_committed {
+                self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height);
+            } else {
+                self.clean_rbc_sessions_for_block(block_hash, height);
+            }
             if !matches_committed {
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| *hash != block_hash);

@@ -2,6 +2,42 @@
 
 Last updated: 2026-03-23
 
+## 2026-03-23 Follow-up: NPoS RBC persistence no longer loses delivered summaries across commit races or temp-store reads
+- Fixed the `npos_rbc_persists_payload_across_restart` regression across
+  `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,block_sync.rs,proposal_handlers.rs}`
+  and `crates/iroha_core/src/sumeragi/rbc_status.rs`:
+  - committed-block cleanup now reuses the existing
+    `should_retain_rbc_sessions_after_commit()` policy instead of purging RBC
+    state unconditionally when a peer notices that a block is already committed
+    through an alternate path,
+  - the block-sync commit-QC path now preserves undelivered local RBC sessions
+    until they converge, rather than dropping them immediately after applying
+    the commit, and
+  - stale `BlockCreated` handling at the committed tip now keeps the committed
+    block's undelivered RBC session alive long enough for the final delivered
+    summary to reach disk, and
+  - `rbc_status::read_persisted_snapshot()` now treats `sessions.norito` as the
+    canonical on-disk snapshot and only falls back to `sessions.norito.tmp`
+    when the main file is missing or broken, so readers stop preferring stale
+    in-progress temp snapshots over the delivered summary already committed to
+    the main store.
+- Added focused unit coverage in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and
+  `crates/iroha_core/src/sumeragi/rbc_status.rs` proving that committed
+  cleanup retains undelivered sessions until delivery is settled and that the
+  persisted snapshot reader prefers the canonical main store over a stale temp
+  file.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib persisted_snapshot_prefers_main_store_over_temp_file -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib committed_rbc_cleanup_waits_for_local_delivery -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib retain_rbc_sessions_after_commit_when_undelivered -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_happy_path npos_rbc_large_payload_delivers_and_commits -- --nocapture --exact --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test sumeragi_npos_happy_path npos_rbc_persists_payload_across_restart -- --nocapture --exact --test-threads=1` (pass)
+- Remaining validation gap:
+  - the broader `sumeragi_npos_happy_path` sweep and larger workspace test
+    sweep remain outstanding.
+
 ## 2026-03-23 Follow-up: Generated HF autonomy workflows now emit authoritative apartment execution audits and fail closed by default
 - Extended the generated-HF agent slice across
   `crates/iroha_data_model/src/{isi/soracloud.rs,soracloud.rs,visit/mod.rs,visit/visit_instruction.rs}`,
@@ -73,6 +109,27 @@ Last updated: 2026-03-23
   - `CARGO_TARGET_DIR=target_hf_receipt_torii cargo test -p iroha_torii --lib authoritative_agent_autonomy_status_includes_runtime_recent_runs -- --nocapture` (pass)
   - `CARGO_TARGET_DIR=target_hf_receipt_torii2 cargo test -p iroha_torii --lib authoritative_agent_ -- --nocapture` (pass)
   - `CARGO_TARGET_DIR=target_hf_receipt_had2 cargo test -p irohad execute_apartment_generated_hf_autonomy_run_executes_locally_and_persists_summary -- --nocapture` (pass)
+
+## 2026-03-22 Follow-up: connected-peers startup no longer times out after block 1 is already observable
+- Fixed the flaky startup guard in `crates/iroha_test_network/src/lib.rs`
+  that could fail `extra_functional::connected_peers::connected_peers_with_f_2_1_2`
+  even after every peer had already reached block 1 and was answering `/status`:
+  - `wait_for_block_1_with_watchdog()` and the bootstrap fallback in
+    `start_checked()` now accept the peer's best-effort observed block height,
+    which reuses the same watch/storage snapshot already recorded by the test
+    network instead of depending solely on a narrower storage-sidecar probe at
+    the moment of the wait,
+  - `has_committed_block()` now resolves the active Kura storage directory via
+    the peer startup context instead of assuming `<peer_dir>/storage`, so
+    readiness checks stay correct when tests override the Kura path, and
+  - added focused unit coverage for both the best-effort block-1 watchdog path
+    and the resolved-Kura-path storage probe.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_test_network wait_for_block_1_with_watchdog_uses_ -- --nocapture` (pass)
+  - `cargo test -p iroha_test_network has_committed_block_uses_resolved_kura_store_dir -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_2_1_2 -- --nocapture --exact --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test mod connected_peers_with_f_ -- --nocapture --test-threads=1` (pass)
 
 ## 2026-03-22 Follow-up: Generated HF apartment autonomy runs now persist structured workflow JSON
 - Extended the generated-HF autonomy path across

@@ -52577,6 +52577,79 @@ async fn retain_rbc_sessions_after_commit_when_undelivered() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn committed_rbc_cleanup_waits_for_local_delivery() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let key = Actor::session_key(&block_hash, height, view);
+
+    let payload_hash = Hash::prehashed([0x61; Hash::LENGTH]);
+    let chunk_root = Hash::prehashed([0x62; Hash::LENGTH]);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
+    session.test_note_chunk(0, vec![0xAB; 8], 0);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+
+    assert!(
+        !actor.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height),
+        "undelivered committed RBC sessions should be retained until delivery converges"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "undelivered RBC session should remain cached after committed cleanup"
+    );
+
+    session.delivered = true;
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+
+    assert!(
+        actor.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height),
+        "delivered committed RBC sessions should be purged once settled"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "delivered RBC session should be removed after committed cleanup"
+    );
+    let summary = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&key)
+        .expect("cleanup should retain the final RBC summary");
+    assert!(
+        summary.delivered,
+        "retained summary should preserve delivery"
+    );
+    assert_eq!(
+        summary.received_chunks, summary.total_chunks,
+        "retained summary should preserve complete chunk accounting"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposals_seen_prunes_far_future_heights() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
