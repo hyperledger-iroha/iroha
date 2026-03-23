@@ -2,6 +2,21 @@
 
 Last updated: 2026-03-23
 
+## 2026-03-23 Follow-up: Soracloud test fixtures use deterministic `AccountId` construction again
+- Fixed the `error[E0277]` regression in
+  `crates/iroha_data_model/src/soracloud.rs` test fixtures:
+  - the helper no longer calls `.parse()` on `AccountId`, which no longer
+    implements `FromStr`,
+  - the HF shared-lease sample records now build deterministic domainless
+    `AccountId` values from seeded Ed25519 keys, which matches the current
+    `AccountId` API and avoids the stale `alice@wonderland` / `bob@wonderland`
+    scoped literals that `AccountId::parse_encoded` intentionally rejects.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model --lib rollback_provenance_payload_encodes_canonical_tuple -- --nocapture` (pass)
+- Remaining validation gap:
+  - the broader workspace test sweep was not rerun for this narrow fixture fix.
+
 ## 2026-03-23 Follow-up: NPoS RBC persistence no longer loses delivered summaries across commit races or temp-store reads
 - Fixed the `npos_rbc_persists_payload_across_restart` regression across
   `crates/iroha_core/src/sumeragi/main_loop/{commit.rs,block_sync.rs,proposal_handlers.rs}`

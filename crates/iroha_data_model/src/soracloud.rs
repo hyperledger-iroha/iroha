@@ -6684,7 +6684,7 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
 
     fn sample_hash(seed: u8) -> Hash {
         let mut bytes = [0u8; 32];
@@ -6702,8 +6702,9 @@ mod tests {
         KeyPair::random().public_key().clone()
     }
 
-    fn sample_account_id(account_id: &str) -> AccountId {
-        account_id.parse().expect("valid account id")
+    fn sample_account_id(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn sample_asset_definition_id(asset_definition_id: &str) -> AssetDefinitionId {
@@ -6756,7 +6757,7 @@ mod tests {
             schema_version: SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
             pool_id: sample_hash(23),
             source_id: sample_hash(21),
-            account_id: sample_account_id("alice@wonderland"),
+            account_id: sample_account_id(0xA1),
             status: SoraHfSharedLeaseMemberStatusV1::Active,
             joined_at_ms: 10_000,
             updated_at_ms: 20_000,
@@ -6775,7 +6776,7 @@ mod tests {
             action: SoraHfSharedLeaseActionV1::Join,
             pool_id: sample_hash(23),
             source_id: sample_hash(21),
-            account_id: sample_account_id("bob@wonderland"),
+            account_id: sample_account_id(0xB2),
             occurred_at_ms: 20_000,
             active_member_count: 2,
             charged_nanos: 5_000,
