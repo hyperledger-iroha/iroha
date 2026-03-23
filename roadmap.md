@@ -2,6 +2,26 @@
 
 Last updated: 2026-03-23
 
+Latest sync (2026-03-23 Soracloud request signer bundle-root hashing compiles again):
+`crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`
+now avoids the current Norito tuple-arity ceiling in the uploaded-model
+bundle-root path:
+
+- bundle-root hashing no longer tries to serialize a 15-field tuple directly;
+  the signer now uses a small custom serializer that preserves the intended
+  flat field order for that preimage, and
+- a focused unit test now covers `derive_upload_bundle()` on a minimal staged
+  manifest and checks that the derived bundle root is propagated consistently
+  into the emitted bundle and chunk metadata.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p connect_norito_bridge --bin soracloud_request_signer -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
 Latest sync (2026-03-23 asset integration tests now use explicit display names):
 `integration_tests/tests/asset.rs` now aligns with the current
 `AssetDefinition::{numeric,new}` contract:

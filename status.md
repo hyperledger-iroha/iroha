@@ -2,6 +2,24 @@
 
 Last updated: 2026-03-23
 
+## 2026-03-23 Follow-up: Soracloud request signer bundle-root hashing no longer trips Norito tuple arity limits
+- Fixed the `error[E0277]` regression in
+  `crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`:
+  - the uploaded-model bundle root no longer tries to hash a 15-field Norito
+    tuple, which exceeded the current tuple-serialization arity supported by
+    `norito`,
+  - the signer now uses a small custom serializer that preserves the intended
+    flat field ordering for the bundle-root preimage while staying compatible
+    with the current Norito encoder, and
+  - added focused unit coverage proving `derive_upload_bundle()` can build a
+    minimal staged bundle, propagate the derived bundle root into its chunks,
+    and validate the resulting bundle metadata.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p connect_norito_bridge --bin soracloud_request_signer -- --nocapture` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep was not rerun for this compile fix.
+
 ## 2026-03-23 Follow-up: asset integration tests derive required display names from asset IDs again
 - Fixed the stale asset-definition constructors in
   `integration_tests/tests/asset.rs` so the asset integration suite no longer

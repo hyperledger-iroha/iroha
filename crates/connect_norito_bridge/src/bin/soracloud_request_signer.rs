@@ -389,6 +389,93 @@ struct MutationSigner {
     public_key: PublicKey,
 }
 
+type UploadedModelBundleRootTuple<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    Vec<String>,
+    Hash,
+    SoraUploadedModelRuntimeFormatV1,
+    u64,
+    u64,
+    Hash,
+    Hash,
+    SoraUploadedModelEncryptionRecipientV1,
+    SoraUploadedModelWrappedKeyV1,
+    SoraUploadedModelPricingPolicyV1,
+    &'a str,
+);
+
+/// Canonical preimage for uploaded-model bundle roots.
+///
+/// This keeps the historical flat-tuple field order without depending on
+/// Norito's current tuple arity limit.
+struct UploadedModelBundleRootPayload<'a> {
+    service_name: &'a str,
+    model_id: &'a str,
+    weight_version: &'a str,
+    family: &'a str,
+    modalities: &'a Vec<String>,
+    plaintext_root: Hash,
+    runtime_format: SoraUploadedModelRuntimeFormatV1,
+    plaintext_bytes: u64,
+    ciphertext_bytes: u64,
+    compile_profile_hash: Hash,
+    chunk_manifest_root: Hash,
+    upload_recipient: &'a SoraUploadedModelEncryptionRecipientV1,
+    wrapped_bundle_key: &'a SoraUploadedModelWrappedKeyV1,
+    pricing_policy: &'a SoraUploadedModelPricingPolicyV1,
+    decryption_policy_ref: &'a str,
+}
+
+impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
+    fn schema_hash() -> [u8; 16]
+    where
+        Self: Sized,
+    {
+        norito::core::type_name_schema_hash::<UploadedModelBundleRootTuple<'static>>()
+    }
+
+    fn serialize<W: io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        let current = norito::core::get_decode_flags();
+        let defaults = norito::core::default_encode_flags();
+        let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
+        let static_defaults = defaults & !dynamic_mask;
+        let merged = if current == 0 {
+            defaults
+        } else {
+            let current_dynamic = current & dynamic_mask;
+            let current_static = current & !dynamic_mask;
+            let effective_static = if current_static == 0 {
+                static_defaults
+            } else {
+                current_static | static_defaults
+            };
+            current_dynamic | effective_static
+        };
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged);
+
+        serialize_tuple_field(&mut writer, &self.service_name)?;
+        serialize_tuple_field(&mut writer, &self.model_id)?;
+        serialize_tuple_field(&mut writer, &self.weight_version)?;
+        serialize_tuple_field(&mut writer, &self.family)?;
+        serialize_tuple_field(&mut writer, self.modalities)?;
+        serialize_tuple_field(&mut writer, &self.plaintext_root)?;
+        serialize_tuple_field(&mut writer, &self.runtime_format)?;
+        serialize_tuple_field(&mut writer, &self.plaintext_bytes)?;
+        serialize_tuple_field(&mut writer, &self.ciphertext_bytes)?;
+        serialize_tuple_field(&mut writer, &self.compile_profile_hash)?;
+        serialize_tuple_field(&mut writer, &self.chunk_manifest_root)?;
+        serialize_tuple_field(&mut writer, self.upload_recipient)?;
+        serialize_tuple_field(&mut writer, self.wrapped_bundle_key)?;
+        serialize_tuple_field(&mut writer, self.pricing_policy)?;
+        serialize_tuple_field(&mut writer, &self.decryption_policy_ref)?;
+
+        Ok(())
+    }
+}
+
 struct DerivedUploadBundle {
     bundle: SoraUploadedModelBundleV1,
     compile_profile: SoraPrivateCompileProfileV1,
@@ -844,23 +931,19 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         runtime_step_xor_nanos: manifest.pricing_policy.runtime_step_xor_nanos,
         decrypt_release_xor_nanos: manifest.pricing_policy.decrypt_release_xor_nanos,
     };
-    let bundle_root = hash_encoded(&(
-        service_name.as_ref(),
-        manifest.model_id.as_str(),
-        manifest.weight_version.as_str(),
-        manifest.family.as_str(),
-        manifest.modalities.clone(),
+    let bundle_root = compute_bundle_root(
+        &service_name,
+        manifest,
         plaintext_root,
         runtime_format,
         plaintext_bytes,
         ciphertext_bytes,
         compile_profile_hash,
         chunk_manifest_root,
-        upload_recipient.clone(),
-        wrapped_bundle_key.clone(),
-        pricing_policy,
-        manifest.decryption_policy_ref.as_str(),
-    ))?;
+        &upload_recipient,
+        &wrapped_bundle_key,
+        &pricing_policy,
+    )?;
     for chunk in &mut chunks {
         chunk.bundle_root = bundle_root;
     }
@@ -947,6 +1030,51 @@ where
 {
     let encoded = to_bytes(value).map_err(|err| format!("failed to encode hash payload: {err}"))?;
     Ok(Hash::new(encoded))
+}
+
+fn serialize_tuple_field<W, T>(writer: &mut W, value: &T) -> Result<(), norito::Error>
+where
+    W: io::Write,
+    T: norito::core::NoritoSerialize + ?Sized,
+{
+    let mut payload = Vec::new();
+    value.serialize(&mut payload)?;
+    let len = u64::try_from(payload.len()).map_err(|_| norito::Error::LengthMismatch)?;
+    norito::core::write_len(writer, len)?;
+    writer.write_all(&payload)?;
+    Ok(())
+}
+
+fn compute_bundle_root(
+    service_name: &Name,
+    manifest: &StageUploadManifest,
+    plaintext_root: Hash,
+    runtime_format: SoraUploadedModelRuntimeFormatV1,
+    plaintext_bytes: u64,
+    ciphertext_bytes: u64,
+    compile_profile_hash: Hash,
+    chunk_manifest_root: Hash,
+    upload_recipient: &SoraUploadedModelEncryptionRecipientV1,
+    wrapped_bundle_key: &SoraUploadedModelWrappedKeyV1,
+    pricing_policy: &SoraUploadedModelPricingPolicyV1,
+) -> Result<Hash, String> {
+    hash_encoded(&UploadedModelBundleRootPayload {
+        service_name: service_name.as_ref(),
+        model_id: manifest.model_id.as_str(),
+        weight_version: manifest.weight_version.as_str(),
+        family: manifest.family.as_str(),
+        modalities: &manifest.modalities,
+        plaintext_root,
+        runtime_format,
+        plaintext_bytes,
+        ciphertext_bytes,
+        compile_profile_hash,
+        chunk_manifest_root,
+        upload_recipient,
+        wrapped_bundle_key,
+        pricing_policy,
+        decryption_policy_ref: manifest.decryption_policy_ref.as_str(),
+    })
 }
 
 fn compute_chunk_manifest_root(chunks: &[SoraUploadedModelChunkV1]) -> Result<Hash, String> {
@@ -1078,4 +1206,95 @@ fn _assert_stage_paths_absolute(manifest_path: &Path, chunk_path: &Path) -> Resu
         return Err("stage manifest and chunk paths must be absolute".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn derive_upload_bundle_hashes_bundle_root_without_tuple_arity_regression() {
+        let tempdir = tempdir().expect("create temp dir");
+        let chunk_path = tempdir.path().join("chunk.bin");
+        fs::write(&chunk_path, b"ciphertext-chunk").expect("write ciphertext chunk");
+        let recipient_public_key_bytes = [7_u8; 32];
+
+        let manifest = StageUploadManifest {
+            schema_version: 1,
+            label: None,
+            service_name: "service".to_string(),
+            model_name: "model".to_string(),
+            model_id: "model-id".to_string(),
+            artifact_id: "artifact-id".to_string(),
+            weight_version: "weights-v1".to_string(),
+            family: "test-family".to_string(),
+            modalities: vec!["text".to_string()],
+            runtime_format: "hf".to_string(),
+            privacy_mode: "private".to_string(),
+            plaintext_root: "plaintext-root".to_string(),
+            source_path: None,
+            upload_recipient: StageUploadRecipient {
+                key_id: "recipient-key".to_string(),
+                key_version: 1,
+                kem: "x25519-hkdf-sha256".to_string(),
+                aead: "aes-256-gcm".to_string(),
+                public_key_bytes_base64: BASE64.encode(recipient_public_key_bytes),
+                public_key_fingerprint: Hash::new(recipient_public_key_bytes.as_slice())
+                    .to_string(),
+            },
+            wrapped_bundle_key: StageWrappedBundleKey {
+                recipient_key_id: "recipient-key".to_string(),
+                recipient_key_version: 1,
+                kem: "x25519-hkdf-sha256".to_string(),
+                aead: "aes-256-gcm".to_string(),
+                ephemeral_public_key_base64: BASE64.encode([9_u8; 32]),
+                nonce_base64: BASE64.encode([11_u8; 12]),
+                wrapped_key_ciphertext_base64: BASE64.encode([13_u8; 48]),
+                aad_digest: "wrapped-key-aad".to_string(),
+            },
+            decryption_policy_ref: "policy-ref".to_string(),
+            pricing_policy: StagePricingPolicy {
+                storage_xor_nanos: 11,
+                compile_xor_nanos: 22,
+                runtime_step_xor_nanos: 33,
+                decrypt_release_xor_nanos: 44,
+            },
+            compile_profile: StageCompileProfile {
+                family: "test-family".to_string(),
+                quantization: "q8".to_string(),
+                opset_version: "1".to_string(),
+                max_context: 2048,
+                max_images: 1,
+                vision_patch_policy: "tiles".to_string(),
+                fhe_param_set: "fhe-v1".to_string(),
+                execution_policy: "deterministic".to_string(),
+            },
+            finalize: StageFinalize {
+                dataset_ref: "dataset-ref".to_string(),
+            },
+            chunks: vec![StageChunk {
+                ordinal: 0,
+                offset_bytes: 0,
+                plaintext_len: 15,
+                key_id: "chunk-key".to_string(),
+                key_version: 1,
+                nonce_base64: BASE64.encode([17_u8; 12]),
+                ciphertext_path: chunk_path.display().to_string(),
+                aad_seed: Some("aad-seed".to_string()),
+            }],
+            created_at: None,
+        };
+
+        let derived = derive_upload_bundle(&manifest).expect("derive upload bundle");
+
+        assert_eq!(derived.bundle.bundle_root, derived.bundle_root);
+        assert_eq!(
+            derived.bundle.chunk_manifest_root,
+            derived.chunk_manifest_root
+        );
+        assert_eq!(derived.chunks.len(), 1);
+        assert_eq!(derived.chunks[0].bundle_root, derived.bundle_root);
+        derived.bundle.validate().expect("bundle validates");
+    }
 }
