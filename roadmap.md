@@ -1,6 +1,66 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-21
+Last updated: 2026-03-23
+
+Latest sync (2026-03-23 NPoS RBC persistence no longer loses delivered summaries across commit races or temp-store reads):
+`crates/iroha_core/src/sumeragi/main_loop/{commit.rs,block_sync.rs,proposal_handlers.rs}`,
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`,
+and `crates/iroha_core/src/sumeragi/rbc_status.rs`
+now close the NPoS RBC persistence regressions uncovered in
+`sumeragi_npos_happy_path`:
+
+- committed-block cleanup now preserves undelivered RBC sessions under DA when
+  a peer learns about the commit through block-sync / already-committed paths,
+  so the local RBC state can still converge to a delivered summary instead of
+  being frozen in an undelivered snapshot,
+- the block-sync commit-QC path now uses the same settled-session cleanup rule
+  as the normal commit path, and
+- stale `BlockCreated` cleanup at the committed tip no longer purges that
+  block's undelivered RBC session before the final delivered summary hits disk,
+  and
+- persisted RBC snapshot readers now prefer the canonical `sessions.norito`
+  file over an in-progress `sessions.norito.tmp`, which prevents polling code
+  from repeatedly reading a stale temp snapshot and missing the already-written
+  delivered summary.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_core --lib persisted_snapshot_prefers_main_store_over_temp_file -- --nocapture`
+- `cargo test -p iroha_core --lib committed_rbc_cleanup_waits_for_local_delivery -- --nocapture`
+- `cargo test -p iroha_core --lib retain_rbc_sessions_after_commit_when_undelivered -- --nocapture`
+- `cargo test -p integration_tests --test sumeragi_npos_happy_path npos_rbc_large_payload_delivers_and_commits -- --nocapture --exact --test-threads=1`
+- `cargo test -p integration_tests --test sumeragi_npos_happy_path npos_rbc_persists_payload_across_restart -- --nocapture --exact --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader `sumeragi_npos_happy_path` sweep or `cargo test --workspace`
+  when the long validation budget is available.
+
+Latest sync (2026-03-22 connected-peers startup false timeout fixed):
+`crates/iroha_test_network/src/lib.rs`
+now closes the flaky startup-path false negative that could sink
+`extra_functional::connected_peers::connected_peers_with_f_2_1_2`
+after the 7-peer network was already visibly healthy:
+
+- the bootstrap/block-1 waits now accept the peer's best-effort observed block
+  height, so the harness no longer waits forever when the background watcher
+  has already recorded block 1 but the narrow storage-only probe used by the
+  readiness path has not caught up yet,
+- `has_committed_block()` now consults the resolved Kura store directory from
+  the peer start context rather than assuming `<peer_dir>/storage`, keeping the
+  storage probe aligned with overridden test layouts, and
+- focused unit coverage now exercises both the best-effort watchdog path and
+  the resolved-Kura-path probe.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_test_network wait_for_block_1_with_watchdog_uses_ -- --nocapture`
+- `cargo test -p iroha_test_network has_committed_block_uses_resolved_kura_store_dir -- --nocapture`
+- `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_2_1_2 -- --nocapture --exact --test-threads=1`
+- `cargo test -p integration_tests --test mod connected_peers_with_f_ -- --nocapture --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader integration sweep, or `cargo test --workspace`, when the
+  multi-hour validation budget is available.
 
 Latest sync (2026-03-21 RBC restart recovery survives roster-change reset):
 `crates/iroha_core/src/sumeragi/main_loop/commit.rs`

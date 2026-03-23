@@ -2227,13 +2227,13 @@ impl Network {
         let mut elapsed = Duration::ZERO;
 
         loop {
-            if peer.has_committed_block(1) {
+            if peer.has_observed_block(1) {
                 info!(
                     index,
                     %mnemonic,
                     role,
                     waited = ?elapsed,
-                    "observed block 1 via storage before status polling"
+                    "observed block 1 via best-effort snapshot before status polling"
                 );
                 return Ok(());
             }
@@ -2269,13 +2269,13 @@ impl Network {
                                 return Ok(());
                             }
                             latest_status = Some(status);
-                            if peer.has_committed_block(1) {
+                            if peer.has_observed_block(1) {
                                 info!(
                                     index,
                                     %mnemonic,
                                     role,
                                     waited = ?elapsed,
-                                    "observed block 1 via storage inspection"
+                                    "observed block 1 via best-effort snapshot after status poll"
                                 );
                                 return Ok(());
                             }
@@ -2293,13 +2293,13 @@ impl Network {
                                 ?stderr_log,
                                 "status query failed while waiting for block 1"
                             );
-                            if peer.has_committed_block(1) {
+                            if peer.has_observed_block(1) {
                                 info!(
                                     index,
                                     %mnemonic,
                                     role,
                                     waited = ?elapsed,
-                                    "observed block 1 via storage after status failure"
+                                    "observed block 1 via best-effort snapshot after status failure"
                                 );
                                 return Ok(());
                             }
@@ -2317,13 +2317,13 @@ impl Network {
                                 ?stderr_log,
                                 "status query timed out while waiting for block 1"
                             );
-                            if peer.has_committed_block(1) {
+                            if peer.has_observed_block(1) {
                                 info!(
                                     index,
                                     %mnemonic,
                                     role,
                                     waited = ?elapsed,
-                                    "observed block 1 via storage after status timeout"
+                                    "observed block 1 via best-effort snapshot after status timeout"
                                 );
                                 return Ok(());
                             }
@@ -2344,13 +2344,13 @@ impl Network {
                             status_view_changes = status.view_changes,
                             "still waiting for block 1 after genesis submission"
                         );
-                    } else if peer.has_committed_block(1) {
+                    } else if peer.has_observed_block(1) {
                         info!(
                             index,
                             %mnemonic,
                             role,
                             waited = ?elapsed,
-                            "observed block 1 via storage while status polling failed"
+                            "observed block 1 via best-effort snapshot while status polling failed"
                         );
                         return Ok(());
                     } else {
@@ -6084,12 +6084,12 @@ impl NetworkPeer {
                         has_genesis,
                         elapsed,
                         self.is_running(),
-                        self.has_committed_block(1),
+                        self.has_observed_block(1),
                     ) {
                         warn!(
                             ?elapsed,
                             mnemonic = self.mnemonic(),
-                            "peer startup fallback: block 1 observed before Torii /status readiness"
+                            "peer startup fallback: block 1 observed via best-effort snapshot before Torii /status readiness"
                         );
                         return Ok(());
                     }
@@ -6201,10 +6201,17 @@ impl NetworkPeer {
         if height == 0 {
             return false;
         }
-        let storage_dir = self.dir.join("storage");
+        let storage_dir = self.kura_store_dir();
         pipeline_dirs(&storage_dir)
             .into_iter()
             .any(|dir| self.has_indexed_pipeline_sidecar(&dir, height))
+    }
+
+    fn has_observed_block(&self, height: u64) -> bool {
+        height > 0
+            && self
+                .best_effort_block_height()
+                .is_some_and(|snapshot| snapshot.total >= height)
     }
 
     fn has_indexed_pipeline_sidecar(&self, pipeline_dir: &Path, height: u64) -> bool {
@@ -8271,6 +8278,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn wait_for_block_1_with_watchdog_uses_best_effort_height_without_storage() {
+        let dir = tempdir().expect("tempdir");
+        let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
+        let (block_height, _rx) = tokio::sync::watch::channel(Some(BlockHeight {
+            total: 1,
+            non_empty: 1,
+        }));
+
+        let peer = NetworkPeer {
+            mnemonic: "wait-block-best-effort".to_string(),
+            span: tracing::Span::none(),
+            key_pair: KeyPair::random(),
+            streaming_key_pair: KeyPair::random(),
+            bls_key_pair: None,
+            bls_pop: None,
+            dir: dir.path().to_path_buf(),
+            run: Arc::new(tokio::sync::Mutex::new(None)),
+            runs_count: Arc::new(AtomicUsize::new(0)),
+            is_running: Arc::new(AtomicBool::new(true)),
+            events: events_tx,
+            block_height,
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+            startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
+            start_context: Arc::new(StdMutex::new(None)),
+            port_p2p: Arc::new(AllocatedPort::new()),
+            port_api: Arc::new(AllocatedPort::new()),
+        };
+
+        let mnemonic = peer.mnemonic().to_string();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            Network::wait_for_block_1_with_watchdog(&peer, 0, &mnemonic, "test"),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "wait_for_block_1_with_watchdog should return when best-effort height already reached block 1"
+        );
+    }
+
     /// Restores environment variable to its previous value when dropped.
     struct EnvVarGuard {
         key: &'static str,
@@ -8545,6 +8593,39 @@ mod tests {
         write_sidecar_index(&modern_dir, 1);
         assert!(modern_peer.has_committed_block(1));
         assert!(!modern_peer.has_committed_block(2));
+    }
+
+    #[test]
+    fn has_committed_block_uses_resolved_kura_store_dir() {
+        let env = Environment::new();
+        let peer = NetworkPeer::builder().build(&env);
+        let custom_storage_dir = peer.dir.join("custom-storage");
+        let pipeline_dir = custom_storage_dir
+            .join("blocks")
+            .join("lane_000_default")
+            .join("pipeline");
+        fs::create_dir_all(&pipeline_dir).expect("create custom pipeline dir");
+        write_sidecar_index(&pipeline_dir, 1);
+
+        {
+            let mut context = peer
+                .start_context
+                .lock()
+                .expect("startup context lock should not be poisoned");
+            *context = Some(PeerStartContext {
+                run_num: 1,
+                config_path: peer.dir.join("run-1-config.toml"),
+                genesis_path: None,
+                stdout_path: peer.dir.join("run-1-stdout.log"),
+                stderr_path: peer.dir.join("run-1-stderr.log"),
+                kura_store_dir_key: "kura.store_dir".to_string(),
+                kura_store_dir: custom_storage_dir.clone(),
+                kura_store_dir_value: custom_storage_dir.display().to_string(),
+            });
+        }
+
+        assert!(peer.has_committed_block(1));
+        assert!(!peer.has_committed_block(2));
     }
 
     #[test]

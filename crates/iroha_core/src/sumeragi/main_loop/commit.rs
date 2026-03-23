@@ -2046,11 +2046,9 @@ impl Actor {
             if let Some(witness) = exec_witness_to_emit {
                 self.emit_exec_artifacts(block_hash, pending_height, pending_view, witness);
             }
-            if !self.should_retain_rbc_sessions_after_commit(block_hash, pending_height) {
-                // Commit finished; drop any RBC state for the committed block to avoid replaying
-                // READY/DELIVER once availability is settled.
-                self.clean_rbc_sessions_for_block(block_hash, pending_height);
-            }
+            // Commit finished; keep undelivered RBC sessions alive under DA so peers that
+            // committed through another path can still converge their local RBC status.
+            self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, pending_height);
 
             self.prune_descendants_not_on_tip(pending_height, block_hash);
             let obsolete_missing: Vec<_> = self
@@ -2193,7 +2191,7 @@ impl Actor {
                 block = %block_hash,
                 "pending block already committed; skipping finalize"
             );
-            self.clean_rbc_sessions_for_block(block_hash, pending_height);
+            self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, pending_height);
             if let Some(parent) = pending.block.header().prev_block_hash() {
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
@@ -2921,7 +2919,7 @@ impl Actor {
                 if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
                     self.subsystems.validation.inflight.remove(&hash);
                     self.subsystems.validation.superseded_results.remove(&hash);
-                    self.clean_rbc_sessions_for_block(hash, pending.height);
+                    self.clean_rbc_sessions_for_committed_block_if_settled(hash, pending.height);
                 }
                 continue;
             }
@@ -5402,6 +5400,19 @@ impl Actor {
                     && !session.is_invalid()
                     && !session.delivered
             })
+    }
+
+    pub(super) fn clean_rbc_sessions_for_committed_block_if_settled(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+    ) -> bool {
+        if self.should_retain_rbc_sessions_after_commit(block_hash, height) {
+            return false;
+        }
+
+        self.clean_rbc_sessions_for_block(block_hash, height);
+        true
     }
 
     pub(super) fn refresh_npos_seed(

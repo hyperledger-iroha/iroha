@@ -2946,7 +2946,10 @@ impl Actor {
                                 block_view,
                             );
                             if self.runtime_da_enabled() {
-                                self.clean_rbc_sessions_for_block(block_hash, block_height);
+                                self.clean_rbc_sessions_for_committed_block_if_settled(
+                                    block_hash,
+                                    block_height,
+                                );
                             }
                             qc_apply_commit_ms = u64::try_from(commit_start.elapsed().as_millis())
                                 .unwrap_or(u64::MAX);
