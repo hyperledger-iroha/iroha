@@ -1,6 +1,21 @@
 # Status
 
-Last updated: 2026-03-23
+Last updated: 2026-03-24
+
+## 2026-03-24 Follow-up: multisig integration tests compile against `iroha_torii`'s public API again
+- Fixed the `error[E0603]` regression in
+  `integration_tests/tests/multisig.rs` by exposing the multisig request DTOs
+  that the test uses from the `iroha_torii` crate root instead of reaching
+  through the private `routing` module.
+- Added the missing public-item documentation required for the newly
+  re-exported multisig request DTO fields and derived `Clone` for
+  `MultisigAccountSelectorDto` so the existing test request construction still
+  compiles unchanged.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests multisig --no-run` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep was not rerun for this targeted compile fix.
 
 ## 2026-03-23 Follow-up: `scheduler_telemetry` compiles again with the current `Nexus` config shape
 - Fixed the `error[E0063]` regression in

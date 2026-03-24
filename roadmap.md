@@ -1,6 +1,27 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-23
+Last updated: 2026-03-24
+
+Latest sync (2026-03-24 multisig integration DTO re-export compile fix):
+`crates/iroha_torii/src/{lib.rs,routing.rs}` and
+`integration_tests/tests/multisig.rs` now align the multisig integration test
+with the crate's public API surface again:
+
+- `iroha_torii` now re-exports the multisig selector/cancel/proposals DTOs
+  needed by the integration test instead of requiring a private
+  `iroha_torii::routing` import,
+- the newly exposed request DTO fields now satisfy workspace `missing_docs`
+  linting, and
+- `MultisigAccountSelectorDto` now derives `Clone`, matching the existing
+  multisig integration test request construction.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p integration_tests multisig --no-run`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
 
 Latest sync (2026-03-23 `scheduler_telemetry` `Nexus` fixture refresh):
 `crates/iroha_core/tests/scheduler_telemetry.rs` now initializes the current
